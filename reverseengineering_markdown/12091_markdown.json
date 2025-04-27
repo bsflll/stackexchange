@@ -1,0 +1,43 @@
+{
+  "title": "What checksum algorithm is this network protocol using?",
+  "link": "https://reverseengineering.stackexchange.com/questions/12091/what-checksum-algorithm-is-this-network-protocol-using",
+  "content": "I've been working my way through an undocumented TCP-based protocol by monitoring traffic with tcpdump, Wireshark, and some Python packages (scapy, numpy) with good luck so far, but I've hit a wall with what I think is some sort of checksum/hash/CRC.\n\nWatching a client binary, it sends its first \"hello\" sort of message, gets back a response from the server with some basic things (server version, etc.), then sends a set of commands in the subsequent messages.  It's that second and subsequent message type I can't figure out.  Here's an example:\n\n\n2f c6 00 f2 00 36 01 08  56 cc 80 c4 00 00 00 00\n00 00 00 00 01 04 72 6f  6f 74 00 68 6f 73 74 6e\n61 6d 65 00 6c 6d 67 72  64 00 2f 64 65 76 2f 70\n74 73 2f 30 00 00\n\n\nThe first 22 bytes are what I'm calling the header, since it's a fixed-length segment and after that it's all just null-terminated ASCII strings.  The bytes of that header:\n\nMy question is about the 3rd and 4th byte: what method is the client using to come up with those values, and/or what should I try to figure it out myself?\n\nI can test a wide variety of values by varying the hostname, username, system time, and TTY the client is running under, so I can easily gather gobs of example packets if needed.  So far I've tried a statistical approach with that by looking at a histogram of what values those bytes take on across a wide range of inputs.  I haven't discovered too much from that, except:\n\nAnother method was to give it a few specific values of hostname to see how it behaves.  These things DO change the value of both of those mystery bytes:\n\nI then tried crunching through different types of checksums I've read about (variations on BSD and Fletcher) as well as CRCs (trying a 15-bit polynomial to produce a 14-bit remainder, but, is that actually a thing that's done?) with no luck so far.  Any ideas?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "466",
+  "tags": [
+    "linux",
+    "protocol",
+    "networking",
+    "wireshark"
+  ],
+  "user": "Jesse",
+  "time": "Feb 24, 2016 at 17:26",
+  "comments": [
+    {
+      "user": "ebux",
+      "text": "May be it's a proprietary algorithm and you should reverse the client or server binary.",
+      "time": null
+    },
+    {
+      "user": "Jason Geffner",
+      "text": "See How to analyze packets? and Reverse Engineering a 8 bit CRC checksum.",
+      "time": null
+    },
+    {
+      "user": "Jesse",
+      "text": "Thanks to you both.  Jason, your answer in RS-485 Checksum Reverse Engineering (Watlow EZ-Zone PM) particularly made it clear to me that I'll have to tackle the binary itself to have a real hope here.  I'll post back if I do figure it out.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Got it!\n\nThe algorithm is a CRC with the following parameters, stored in those two bytes as a big-endian short:\n\nTo figure it out, I used my packet capture data, CRC RevEng, and some shell scripting to glue it together.  I then used pycrc to calculate the check values on the fly to make my own network requests check out OK on the server. \n\nI'm considered my question answered since this method reliably gets the server to acknowledge my custom requests, but what Jason and ebux recommended for reverse engineering the binaries still looks to be the only way I'd be able to pin it down any further.  For example, there were a few different CRCs that fit all the data I'm working with. I learned quite a bit with using gdb and objdump, but quickly got in over my head.  Time will tell if I've just delayed the inevitable, I suppose.\n\nMore details:\n\nFirst in Wireshark I selected a good range of packets, some with the same length, some with differing lengths.  For each I exported the raw binary into a file.  (In the Packet Details frame, right-click the Data display, click \"Export selected packet bytes...\".)  Since I didn't know for sure how the bytes were organized, but I had a good guess of which were the CRC, I made modified versions of the files with the check bytes appended instead of at the beginning, with some clunky dd usage show below.  The variant that finally worked was putting the bytes at the end in a little-endian format that reveng would understand.  In a bash shell:\n\n```\ndd if=example bs=1 skip=4 > example_crc_reverse\ndd if=example bs=1 count=1 skip=3 >> example_crc_reverse\ndd if=example bs=1 count=1 skip=2 >> example_crc_reverse\n\n```\nThese modified files were then fed into reveng.  Since I didn't even know for sure the width of the possible CRC polynomial, I looped from 1 to 16 to see what it'd find.  In bash again:\n\n```\nfor width in $(seq 1 16); do reveng -w $width -s -f example*_crc_reverse; done\n\n```\nEven with many packets it finds a number of non-standard CRCs that fit the data, but the one above is the highest-order one that doesn't require strange xor values.  The ones found in the reveng output:\n\n```\nwidth=1  poly=0x1  init=0x0  refin=false  refout=false  xorout=0x0  check=0x1  name=(none)\nwidth=1  poly=0x1  init=0x1  refin=false  refout=false  xorout=0x1  check=0x1  name=(none)\nwidth=1  poly=0x1  init=0x0  refin=true  refout=true  xorout=0x0  check=0x1  name=(none)\nwidth=1  poly=0x1  init=0x1  refin=true  refout=true  xorout=0x1  check=0x1  name=(none)\nwidth=3  poly=0x5  init=0x0  refin=true  refout=true  xorout=0x0  check=0x0  name=(none)\nwidth=4  poly=0x7  init=0x0  refin=true  refout=true  xorout=0x0  check=0xb  name=(none)\nwidth=4  poly=0x7  init=0xd  refin=true  refout=true  xorout=0xb  check=0xb  name=(none)\nwidth=10  poly=0x381  init=0x000  refin=true  refout=true  xorout=0x000  check=0x032  name=(none)\nwidth=11  poly=0x083  init=0x000  refin=true  refout=true  xorout=0x000  check=0x032  name=(none)\nwidth=11  poly=0x083  init=0x781  refin=true  refout=true  xorout=0x40f  check=0x032  name=(none)\nwidth=13  poly=0x058d  init=0x0000  refin=true  refout=true  xorout=0x0000  check=0x1c1f  name=(none)\nwidth=14  poly=0x2e97  init=0x0000  refin=true  refout=true  xorout=0x0000  check=0x3076  name=(none)\nwidth=14  poly=0x2e97  init=0x258d  refin=true  refout=true  xorout=0x2c69  check=0x3076  name=(none)\n\n```\n(I thought the 14-bit one with no xorin/xorout step made the most sense to use, but I don't have a good argument why.) In Python, with a binary request prepared as a list of integer byte values, pycrc can calculate the check value like this:\n\n```\ncrc = pycrc.Crc(width=14, poly=0x2e97, reflect_in=True, xor_in=0, reflect_out=True, xor_out=0)\ncrc_val = crc.table_driven(binary)\n\n```\nThe calculated crc_val from pycrc is already stored with the endianness expected by the server, so it can be placed as-is a the beginning of the message.\n\n",
+      "votes": "3",
+      "user": "Jesse",
+      "time": "Mar 2, 2016 at 21:28",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

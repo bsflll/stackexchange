@@ -1,0 +1,31 @@
+{
+  "title": "Undefined instruction in Go binary compiled for ARM",
+  "link": "https://reverseengineering.stackexchange.com/questions/17665/undefined-instruction-in-go-binary-compiled-for-arm",
+  "content": "I'm reverse engineering an ARM binary written in Go, and the following code sequence occurs fairly often (from runtime.cgoIsGoPointer):\n\n```\nBL  runtime.panicindex\nDCD 0xF7FABCFD\n\n```\nor, from runtime.panicmem:\n\n```\nBL  runtime.gopanic\nDCD 0xF7FABCFD\n\n```\n0xF7FABCFD is an undefined instruction, so I'm curious what it's purpose is.  I think the answer may be related to this question, because compiling for x86 produces the following sequence of instructions in the corresponding functions:\n\n```\ncallq runtime.panicindex\nud2\n\n```\nand\n\n```\ncallq runtime.gopanic\nud2\n\n```\nIt looks like the linux kernel uses different instructions for this purpose.  From arch/arm/include/asm/bug.h:\n\n```\n/*\n * Use a suitable undefined instruction to use for ARM/Thumb2 bug handling.\n * We need to be careful not to conflict with those used by other modules and\n * the register_undef_hook() system.\n */\n#ifdef CONFIG_THUMB2_KERNEL\n#define BUG_INSTR_VALUE 0xde02\n#define BUG_INSTR(__value) __inst_thumb16(__value)\n#else\n#define BUG_INSTR_VALUE 0xe7f001f2\n#define BUG_INSTR(__value) __inst_arm(__value)\n#endif\n\n```\nBut there is reference to 0xf7fabcfd in some of the Go internals.  From cmd/internal/obj/arm/asm5.go:\n\n```\n// This is supposed to be something that stops execution.\n// It's not supposed to be reached, ever, but if it is, we'd\n// like to be able to tell how we got there. Assemble as\n// 0xf7fabcfd which is guaranteed to raise undefined instruction\n// exception.\ncase 96: /* UNDEF */\n        o1 = 0xf7fabcfd\n\n```\nAnyway, can anyone confirm this suspicion and/or shed more light into why this is done?  Also, why not just use 0xe7f001f2 like the linux kernel does?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "740",
+  "tags": [
+    "disassembly",
+    "arm"
+  ],
+  "user": "recvfrom",
+  "time": "Mar 12, 2018 at 16:05",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The (32-bit) ARM architecture has a instruction with opcode UDF whose encodings are guaranteed to be permanently undefined.\nThere are 3 encodings of this instructions one each for Thumb, Thumb-2, and ARM.\nIn hex these are -\n\n```\nThumb   0xDE**       \nThumb2  0xF7F*A***   \nARM     0xE7F***F*   \n*'s are ignored by the processor so can be any value.\n\n```\nThere is also another ARM encoding that the architecture guarantees to be permanently undefined, albeit without giving it an opcode.  This is -\n\n```\nARM     0x*7F***F*\n*'s are ignored by the processor so can be any value.\n\n```\n(Note that the UDF instruction is a special case of this encoding with the condition bits set to AL or 1110.)\n\nThe Linux code you quote is using the UDF opcode encodings for Thumb and ARM. \n\nThe Go code is using the ARM encoding which doesn't have an opcode.\n\nGiven the * bits are ignored by the processor and can be picked at the programmer's discretion, I would expect someone to choose their own values rather than spend time trying to find where other people have used the instruction any picking the same values as them.\n\nIndeed, the Linux code you quote explicitly explains that the value was chosen to avoid conflicts with other deliberate uses of undefined instructions with Linux's undefined instruction hook mechanism.  So, if the Go authors were aware of the Linux usage here, I'd still expect them to choose different values.\n\n",
+      "votes": "1",
+      "user": "Ian Cook",
+      "time": "Mar 16, 2018 at 20:06",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "recvfrom",
+          "text": "That makes sense - so, a unique undefined instruction is desirable because it's effectively a marker noting what body of code wanted to indicate that an error occurred (and if the Go code shared the same undefined instruction as is used by BUG_INSTR, it'd be more difficult to distinguish between errors raised by either.)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

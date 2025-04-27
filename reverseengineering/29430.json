@@ -1,0 +1,37 @@
+{
+    "title": "Reading from buffer and printing output to a text file",
+    "link": "https://reverseengineering.stackexchange.com/questions/29430/reading-from-buffer-and-printing-output-to-a-text-file",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<pre><code>00001f10  2846       mov     r0, r5 \n00001f12  6349       ldr     r1, [pc, #0x18c]  {data_20a0} \n00001f14  7944       add     r1, pc  {data_ce5e, \"OK:%16[^:]:%16[^:]:%d:%d:%d:%d:%…\"} \n00001f16  fff756ea   blx     #sscanf\n00001f1c  4dd1       b     #0x1fba\n</code></pre>\n<p>After disassembling a binary I found the above ARM instructions. As far as I know the <code>sscanf</code> function (at 0x1f16) reads from the buffer using the format obtained from address 0x1f14 and stores the values to addresses contained in other general purpose registers. I want to know the contents of the buffer and so I thought my option is to print the buffer string to a file while the binary is running. Maybe someone can help me achieve this.</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "361",
+    "tags": [
+        "disassembly",
+        "arm"
+    ],
+    "user": "Silent",
+    "time": "Oct 19, 2021 at 21:52",
+    "comments": [
+        {
+            "user": "Silent",
+            "text": "<span class=\"comment-copy\">Sorry for the mistypes. Typing using a mobile device is not that easy.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>the buffer is at data_20a0 as comment next to instruction shows</p>\n<pre><code>&gt;&gt;&gt; hex(0x1f12+2+0x18c)----------'0x20a0'  \n</code></pre>\n<p>are you running it under a debugger if so set a conditional logging breakpoint to print and continue</p>\n<p>if you are not running it under debugger you may need to use some instrumentation framework</p>\n<p>shown below is a windows example see if you can adapt it to your needs</p>\n<pre><code>#include &lt;stdio.h&gt;\nint d[10] = {0};\nint main(int argc, char *argv[])\n{\n    if (argc == 2)\n    {\n        sscanf_s(argv[1], \"%d%d%d%d%d%d%d%d%d\",\n                 &amp;d[0], &amp;d[1], &amp;d[2], &amp;d[3], &amp;d[4], &amp;d[5], &amp;d[6], &amp;d[7], &amp;d[8]);//checkpass(...);\n    }\n    return 0;\n}\n</code></pre>\n<p>on compiling and executing this source assume checkpass(..) does some magic with sscanf_s() result<br/>\nyou need to know the contents of buffer , format string, and resulting output</p>\n<p>install frida ( pip install frida-tools on windows 10 x64)<br/>\ncreate a javascript file as below<br/>\n(since I have pdb (symbols) I can use the symbol name if you don't have the symbol use address<br/>\nsince this is windows x64 the first 4 arguments are passed via registers rcx,rdx,r8,r9 (use appropriate registers/stack for your architecture)</p>\n<pre><code>var myfunc = DebugSymbol.fromName(\"sscanf_s\");\nInterceptor.attach(\n    myfunc.address, {\n        onEnter(args) {\n            this.res = this.context.r8;//save the resultant array address touse onLeave()\n            console.log(\"entered \" + myfunc.name + \"\\n\");\n            console.log(hexdump(this.context.rcx, { length: 0x30 }) + \"\\n\");\n            console.log(hexdump(this.context.rdx, { length: 0x30 }) + \"\\n\");\n            console.log(hexdump(this.context.r8, { length: 0x30 }) + \"\\n\");\n            console.log(hexdump(this.context.r9, { length: 0x30 }) + \"\\n\");\n        },\n        onLeave(args) {\n            console.log(hexdump(this.res,{length:0x30}))\n        }\n\n});\n</code></pre>\n<p>run the compiled binary under frida to log the arguments and return vales as below</p>\n<pre><code>frida --no-pause -l sscanf.js -f sscanf.exe \"1 25 39 401 598 6003 700054 800098 99999999\"\n     ____\n    / _  |   Frida 15.1.4 - A world-class dynamic instrumentation toolkit\n   | (_| |\n    &gt; _  |   Commands:\n   /_/ |_|       help      -&gt; Displays the help system\n   . . . .       object?   -&gt; Display information about 'object'\n   . . . .       exit/quit -&gt; Exit\n   . . . .\n   . . . .   More info at https://frida.re/docs/home/\nSpawned `sscanf.exe 1 25 39 401 598 6003 700054 800098 99999999`. Resuming main thread!\nentered sscanf_s\n\n              0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF\n2306e24efa3  31 20 32 35 20 33 39 20 34 30 31 20 35 39 38 20  1 25 39 401 598\n2306e24efb3  36 30 30 33 20 37 30 30 30 35 34 20 38 30 30 30  6003 700054 8000\n2306e24efc3  39 38 20 39 39 39 39 39 39 39 39 00 00 00 00 00  98 99999999.....\n\n               0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF\n7ff7f3e9f340  25 64 25 64 25 64 25 64 25 64 25 64 25 64 25 64  %d%d%d%d%d%d%d%d\n7ff7f3e9f350  25 64 00 00 00 00 00 00 c0 28 e4 f3 f7 7f 00 00  %d.......(......\n7ff7f3e9f360  78 f3 e9 f3 f7 7f 00 00 b8 f3 e9 f3 f7 7f 00 00  x...............\n\n               0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF\n7ff7f3eb1bd0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n7ff7f3eb1be0  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n7ff7f3eb1bf0  00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00  ................\n\n               0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF\n7ff7f3eb1bd4  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n7ff7f3eb1be4  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n7ff7f3eb1bf4  00 00 00 00 02 00 00 00 00 00 00 00 02 00 00 00  ................\n\n               0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF\n7ff7f3eb1bd0  01 00 00 00 19 00 00 00 27 00 00 00 91 01 00 00  ........'.......\n7ff7f3eb1be0  56 02 00 00 73 17 00 00 96 ae 0a 00 62 35 0c 00  V...s.......b5..\n7ff7f3eb1bf0  ff e0 f5 05 00 00 00 00 02 00 00 00 00 00 00 00  ................\n[Local::sscanf.exe]-&gt; Process terminated\n[Local::sscanf.exe]-&gt;\n\nThank you for using Frida!\n</code></pre>\n<p>check the hexdump of this address 7ff7f3eb1bd0 (shown twice one onEnter() and one onLeave()</p>\n<p>you will notice the buffer is filled with the input onLeave();</p>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Oct 19, 2021 at 16:32",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Silent",
+                    "text": "<span class=\"comment-copy\">Thanks. Actually i was thinking of a way of printing to a text file by modifying the binary and calling the sprintf or something like that because this elf file is for android arm-7-a which does not have many tools for debugging. But thanks amd i will do this when i get access to my pc</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

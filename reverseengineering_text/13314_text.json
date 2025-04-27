@@ -1,0 +1,53 @@
+{
+    "title": "how do I bypass ZwQueryInformationProcess as anti-debugging protection",
+    "link": "https://reverseengineering.stackexchange.com/questions/13314/how-do-i-bypass-zwqueryinformationprocess-as-anti-debugging-protection",
+    "content": "How do I defeat the <pre><code>ZwQueryInformationProcess()</code></pre> anti-debugging protection for the ProcessDebugPort class? \nUnlike <pre><code>isDebuggerPresent()</code></pre> I found this really hard to bypass in my skill... \nDoes anyone know how to bypass this api function?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "ollydbg",
+        "anti-debugging"
+    ],
+    "user": "James Park",
+    "time": "Feb 19, 2017 at 3:48",
+    "comments": [
+        {
+            "user": "peter ferrie",
+            "text": "it requires a driver to intercept the function and change the behavior.  It can't be bypassed at the application level.\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "@peterferrie if it is a query for ProcessDebugPort cant we overwrite the OutBuff  on returning from syscall\n",
+            "time": null
+        },
+        {
+            "user": "peter ferrie",
+            "text": "@blabb, to do that you would have to hook the syscall itself, because anything higher than that can be bypassed, and now you're a driver.  Then you have to track which process is being checked, since remote process with debugger might be legitimate.  Process handle might not be -1, but real handle which would require resolving first.\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "@peterferrie i posted an answer can you please take a look and tell if this cant be done ?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<pre><code>#include \"zwopenproc.h\"\nint main (void) \n{\n    hNtdll=GetModuleHandle(\"ntdll.dll\");\n    if(hNtdll) \n    {\n        *(FARPROC *)&ZwQIP  = GetProcAddress(hNtdll,\"ZwQueryInformationProcess\");\n        hProc=OpenProcess(PROCESS_ALL_ACCESS,FALSE,GetCurrentProcessId());\n        ZwQIP(hProc,ProcessImageFileName,OutBuff,sizeof(OutBuff),&Rlen);\n        printf(\"ImageName=%wZ\n\",OutBuff);\n        ZwQIP(hProc,ProcessDebugPort,&DbgPort,4, &Rlen);\n        switch( DbgPort )\n        {\n        case 0xffffffff:\n            printf(\"some bugs are debugging us\n\");\n            break;\n        case 0x0:\n            printf(\"no bugs are debugging us\n\");\n            break;\n        default:\n            printf (\"who knows if bugs are debugging us\n\");\n            break;\n        }       \n    }\n    return 0;    \n}\n</code></pre>\nexecuting this code without debugger\n<pre><code>zwopenproc.exe\nImageName=\\Device\\HarddiskVolume4\\test\\zwqiproc\\zwopenproc.exe\nno bugs are debugging us\n</code></pre>\nexecuting inside debugger results in detection \n<pre><code>cdb -g -G zwopenproc.exe | tail -2\nImageName=\\Device\\HarddiskVolume4\\test\\zwqiproc\\zwopenproc.exe\nsome bugs are debugging us +++++++++++++++++++++++++++++++++++++++++++++++\n</code></pre>\nexecuting inside debugger and overwriting the return buffer using a script results in no detection\n<pre><code>cdb -G -c \"$$>a< zwqip.txt\" zwopenproc.exe  | tail -6\n\n\n    Process Id  2064\n    Parent Process  3716\n    Base Priority 8\n.  0    id: 810 create  name: zwopenproc.exe\nImageName=\\Device\\HarddiskVolume4\\test\\zwqiproc\\zwopenproc.exe\nno bugs are debugging us  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n\nprintf \"%x\n\" , 2064\n810\n</code></pre>\ncontents of script file\n<pre><code>cat zwqip.txt\nbp ntdll!ZwQueryInformationProcess \".if( poi(@esp+8) != 7 ){gc} .else { !handle poi(@esp+4\n) f ; | ; gu ; ed dbgport 0; gc } \"\ng\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Aug 26, 2016 at 20:36",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">sure, but now change GetCurrentProcessId() to another pid and then debug that pid legitimately.  Unless your script knows which handle refers to your process (can also be -1 for current process, or even a random handle value), you'll either hide the legitimate case and reveal yourself, or fail to report the error and reveal yourself.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,77 @@
+{
+    "title": "How to use sysenter under Linux?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2869/how-to-use-sysenter-under-linux",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I would like to know what are the different ways to perform a system\ncall in x86 assembler under Linux. But, with no cheating, only\nassembler must be used (i.e. compilation with <code>gcc</code> must be done with\n<code>-nostdlib</code>).</p>\n<p>I know four ways to perform a system calls, namely:</p>\n<ul>\n<li><code>int $0x80</code></li>\n<li><code>sysenter</code> (i586)</li>\n<li><code>call *%gs:0x10</code> (vdso trampoline)</li>\n<li><code>syscall</code> (amd64)</li>\n</ul>\n<p>I am pretty good at using <code>int $0x80</code>, for example, here is a sample\ncode of a classic 'Hello World!' in assembler using <code>int $0x80</code> (compile it with <code>gcc -nostdlib -o hello-int80 hello-int80.s</code>):</p>\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  int   $0x80\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  int   $0x80\n</code></pre>\n<p>But the <code>sysenter</code> is often ending with a segmentation fault error. Why ? And, how to use it right ?</p>\n<p>Here is an example with <code>call *%gs:0x10</code> (compiled with <code>gcc -o hello-gs10 hello-gs10.s</code>). Note that I need to go through the <code>libc</code> initialization before calling it properly (that is why I am using <code>main</code> and not anymore <code>_start</code> and, that is also why I removed the option <code>-nostdlib</code> from the compile line):</p>\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\\n\"\n  len = . - msg\n\n.text\n.globl main\n\nmain:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  call  *%gs:0x10\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  call  *%gs:0x10\n</code></pre>\n<p>Also, the <code>syscall</code> is working pretty well also if you know the <a href=\"http://lxr.linux.no/#linux+v2.6.32/arch/x86/include/asm/unistd_64.h\">syscall codes for this architecture</a> (thanks to lfxgroove) (compiled with: <code>gcc -m64 -nostdlib -o hello-syscall hello-syscall.s</code>):</p>\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movq  $len, %rdx\n  movq  $msg, %rsi\n  movq  $1, %rdi\n  movq  $1, %rax\n  syscall\n# and exit\n  movq  $0, %rdi\n  movq  $60, %rax\n  syscall\n</code></pre>\n<p>So, the only problem I have to trigger a system call is this <code>sysenter</code> way. Here is an example with <code>sysenter</code> ending with a segmentation fault (compiled with <code>gcc -m32 -nostdlib -o hello-sysenter hello-sysenter.s</code>):</p>\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n\n  push    final\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n# and exit\nfinal:  \n  movl  $0, %ebx\n  movl  $1, %eax\n\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n</code></pre>\n</div>",
+    "votes": "24",
+    "answers": 1,
+    "views": "10k",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "perror",
+    "time": "Sep 23, 2014 at 10:28",
+    "comments": [
+        {
+            "user": "lfxgroove",
+            "text": "<span class=\"comment-copy\">A first guess for the syscall try is that you've got the wrong syscall numbers as it seems that for 64-bits mode (which it seems syscall is for) the numbers are all scrambled, ie: exit is 60 instead of what you're using right now, see <a href=\"http://lxr.linux.no/#linux+v2.6.32/arch/x86/include/asm/unistd_64.h\" rel=\"nofollow noreferrer\">lxr.linux.no/#linux+v2.6.32/arch/x86/include/asm/unistd_64.h</a> for the numbers</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Indeed, you are right. I was really puzzled but it seems that in my example it was the second <code>syscall</code> that was calling the <code>write</code> (and not the first one, as I was expecting).</span>",
+            "time": null
+        },
+        {
+            "user": "k0ng0",
+            "text": "<span class=\"comment-copy\">Rather than making another QA. @perror would you mind explaining <code>len = . - msg</code> - <i>edit</i> : I know of the purpose by obvious reasons but the semantics of it. - Thanks</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">The '<code>.</code>' in the gas syntax refer to the current address. So, <code>len = . - msg</code> is a way to store in <code>len</code> the size of the string <code>msg</code> (it computes the difference between the current address and the position of the <code>msg</code> label).</span>",
+            "time": null
+        },
+        {
+            "user": "nh2",
+            "text": "<span class=\"comment-copy\">Thank you so much, you have helped me figure out <a href=\"https://github.com/systemd/systemd/issues/11974\" rel=\"nofollow noreferrer\">this systemd assertion failure</a> on a bugged ChromiumOS kernel by layong out the different ways how syscalls can be made and the code example in the answer.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h2>System calls through <code>sysenter</code></h2>\n<p><code>sysenter</code> is a i586 instruction, specifically tight to 32-bits\napplications. It has been subsumed by <code>syscall</code> on 64-bits plateforms.</p>\n<p>One particularity of <code>sysenter</code> is that it does require, in addition\nto the usual register setting, a few manipulations on the stack before\ncalling it. This is because before leaving <code>sysenter</code>, the process\nwill go through the last part of the <code>__kernel_vsyscall</code> assembler\nsnippet (starting from <code>0xf7ffd430</code>):</p>\n<pre><code>Dump of assembler code for function __kernel_vsyscall:\n   0xf7ffd420 &lt;+0&gt;:        push   %ecx\n   0xf7ffd421 &lt;+1&gt;:        push   %edx\n   0xf7ffd422 &lt;+2&gt;:        push   %ebp\n   0xf7ffd423 &lt;+3&gt;:        mov    %esp,%ebp\n   0xf7ffd425 &lt;+5&gt;:        sysenter \n   0xf7ffd427 &lt;+7&gt;:        nop\n   0xf7ffd428 &lt;+8&gt;:        nop\n   0xf7ffd429 &lt;+9&gt;:        nop\n   0xf7ffd42a &lt;+10&gt;:       nop\n   0xf7ffd42b &lt;+11&gt;:       nop\n   0xf7ffd42c &lt;+12&gt;:       nop\n   0xf7ffd42d &lt;+13&gt;:       nop\n   0xf7ffd42e &lt;+14&gt;:       int    $0x80\n=&gt; 0xf7ffd430 &lt;+16&gt;:       pop    %ebp\n   0xf7ffd431 &lt;+17&gt;:       pop    %edx\n   0xf7ffd432 &lt;+18&gt;:       pop    %ecx\n   0xf7ffd433 &lt;+19&gt;:       ret    \nEnd of assembler dump.\n</code></pre>\n<p>So, the <code>sysenter</code> instruction expect to have the stack forged in that\nway:</p>\n<pre><code>0x______0c  saved_eip   (ret)\n0x______08  saved_%ecx  (pop %ecx)\n0x______04  saved_%edx  (pop %edx)\n0x______00  saved_%ebp  (pop %ebp)\n</code></pre>\n<p>That's why, each time we need to call <code>sysenter</code>, we first have to\npush the values of the saved <code>%eip</code>, and the same with<code>%ecx</code>, <code>%edx</code>\nand <code>%ebp</code>. Which leads to:</p>\n<pre><code>.data\nmsg:\n    .ascii \"Hello World!\\n\"\n    len = . - msg\n\n.text\n.globl _start\n_start:\n    pushl  %ebp\n    movl   %esp, %ebp\n# Write the string to stdout\n    movl   $len, %edx\n    movl   $msg, %ecx\n    movl   $1, %ebx\n    movl   $4, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n# and exit\nsysenter_ret:    \n    movl   $0, %ebx\n    movl   $1, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret # Who cares, this is an exit !\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n</code></pre>\n</div>",
+            "votes": "14",
+            "user": "perror",
+            "time": "Oct 6, 2013 at 18:05",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">I really do not know how the Linux kernel can re-route the result of the instruction <code>sysenter</code> to <code>__kernel_vsyscall+16</code>. If somebody can clarify this for me, I would be pleased.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sandun dhammika",
+                    "text": "<span class=\"comment-copy\">it's via the MSR called registers , <a href=\"http://x86.renejeschke.de/html/file_module_x86_id_313.html\" rel=\"nofollow noreferrer\">x86.renejeschke.de/html/file_module_x86_id_313.html</a> , in SYSEXIT they used those registers too. Don't know how they were setten up or what is the source files they were declared in.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">@perror in fact you don't have to push anything on the stack to exit, just make sure <code>ebp</code> has an accessible address, so that the kernel reads ahead the potential 6th syscall argument without #GP (the value doesn't have to mean anything, so no need to push <code>ebp</code> too). I. e. the exit call would reduce to <code>mov eax,1; xor ebx,ebx; mov ebp, esp; sysenter</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Aleksander Alekseev",
+                    "text": "<span class=\"comment-copy\">@Ruslan I'm afraid code you suggested just doesn't work - program terminates with segfault.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">@AleksanderAlekseev what Linux version are you using? And what do you have in <code>esp</code>?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

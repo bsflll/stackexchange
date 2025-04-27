@@ -1,0 +1,51 @@
+{
+    "title": "IDAPython set name of function using string passed to debug logging subfunction",
+    "link": "https://reverseengineering.stackexchange.com/questions/31531/idapython-set-name-of-function-using-string-passed-to-debug-logging-subfunction",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  IDA Pro 7.6\n </p>\n <p>\n  Static disassembly of ARM executable.\n </p>\n <p>\n  This binary has 40K functions or so, and no symbols.  So all the functions are sub_49FFA etc.\n </p>\n <p>\n  However, 90% of these functions have a call to a debug logging function, which says what the function is.\n </p>\n <p>\n  e.g.:\n </p>\n <pre><code>sub_49FFA() {\n     ....do stuff......\n     debug_message(0x9887, \"save_config()\",\"Error:  Cannot save config: %s\",\"No disk space!\");\n     ....do stuff......     \n}\n</code></pre>\n <p>\n  So we know sub_49FFA is really save_config()\n </p>\n <p>\n  As this is ARM, this means arg2 is the r1 register pointing to a string.  This is shown in the disassembly with LDR r1,=save_config ; \"save_config()\" immediately before BL debug_message\n </p>\n <p>\n  Is there a way for a script to find all the code refs to debug_message(), and rename the calling function (if not already named) with the string that names the function?\n </p>\n <p>\n  Spent an hour searching, but I'm not skilled in IDA scripting or python so any help would be appreciated.\n </p>\n <p>\n  Up until now, I've been exporting the binary as pseudo code, parsing it to make an .idc script to name the functions, but it's pretty error prone, takes a long time and I often have to load multiple versions of the executable for analysis.  Must be a better way.\n </p>\n <p>\n  edit: Thanks to Rolf Rolles for their helpful suggestion of some script functions that might help.\n </p>\n <p>\n  I've been able to cobble something together using the below\n </p>\n <pre><code>ref_addr=0x01D7448\n\nargs = idaapi.get_arg_addrs(ref_addr)\nfunc_name = get_func_name(ref_addr)\nfunc_addr = get_name_ea(0, func_name);\n\nprint (\"func_name for %x is %s (%x)\" % (ref_addr,func_name,func_addr))\nif args:\n   arg_offset = args[2]\n   print (\"arg_offset: %x   \" % arg_offset)     \n   debug_func_dcd = idc.get_operand_value(arg_offset, 1) \n   debug_func_addr = idaapi.get_dword(debug_func_dcd)\n   print (\"debug_func_dcd: %x      debug_func_addr: %x    \" % (debug_func_dcd,debug_func_addr))\n   str_type = idc.get_str_type(debug_func_addr)\n   debug_func = get_strlit_contents(debug_func_addr,-1,str_type).decode(\"utf-8\")\n   #print (\"value: %x\" % debug_func)   \n   print (\"value: %s\" % debug_func)\n   set_name(func_addr, str(debug_func), 0)\n</code></pre>\n <p>\n  (I'm sure this isn't best practice and doesn't have error checking etc - just a proof of concept).\n </p>\n <p>\n  However, unlike my original question many of the binaries actually have the debug function string as argument 5.  i.e. not held in a register at time of debug call, but rather placed on the stack.\n </p>\n <pre><code>.text:001D7414                 LDR             R4, =aUsbPower_0 ; \"usb_power_reset\"\n.text:001D7434                 STR             R4, [SP,#0x30+function] ; function\n\n.text:001D7448                 BL              debug_log\n</code></pre>\n <p>\n  arg_offset = args[4] gives 001D7434, but idc.get_operand_value(arg_offset, 1) (i.e. [SP,#0x30+function])  gives 0\n </p>\n <p>\n  I don't think I can read register R4 even though we know what the value always is unless we're in a live debug session.\n </p>\n <p>\n  Can I evaluate this in a different way to get the address of R4 being set?\n </p>\n <p>\n  Not sure about the etiquette here - so if this has to be a separate question please let me know.\n </p>\n <p>\n  edit2:\n </p>\n <p>\n  In the end, I decided to simply use DumpPseudoCode and parse it to find the right strings I need to name the function properly.\n </p>\n <p>\n  That means most of the entire executable gets pseudocode generated for it, and probably isn't terribly efficient.\n </p>\n <p>\n  Additionally, because the debug strings contain the source file name e.g. \"/src/network/upnp/upnp_server.c\" I added logic to create folders for the functions and move all functions to the correct place.\n </p>\n <p>\n  That makes things much better.  I just have an excuse to go and make a coffee while the script runs.\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "664",
+    "tags": [
+        "ida",
+        "idapython",
+        "arm"
+    ],
+    "user": "Tis Me",
+    "time": "Mar 1, 2023 at 2:35",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Sounds like you probably want:\n </p>\n <ul>\n  <li>\n   <code>\n    idautils.CodeRefsTo\n   </code>\n   with\n   <code>\n    flow\n   </code>\n   set to\n   <code>\n    False\n   </code>\n   to get all callers to the logging function\n  </li>\n  <li>\n   <code>\n    ida_typeinf.get_arg_addrs\n   </code>\n   to get the addresses, at some particular call site, of where the function arguments are prepared (pushed or moved into the relevant register / stack slot)\n  </li>\n  <li>\n   <code>\n    idautils.DataRefsFrom\n   </code>\n   to get the address of the string referenced by a particular instruction (the one that prepares the string argument you're interested in)\n  </li>\n  <li>\n   <code>\n    ida_nalt.get_str_type\n   </code>\n   to get the type of the string at a particular address\n  </li>\n  <li>\n   <code>\n    ida_bytes.get_strlit_contents\n   </code>\n   to get the contents of a string by string type and address\n  </li>\n  <li>\n   <code>\n    ida_name.set_name\n   </code>\n   to set the name of the calling function\n  </li>\n </ul>\n <p>\n  In response to your edit, that is a bit of a tricky one. IDA isn't wrong by giving you the answer it gave -- that's the address where the value is moved onto the stack in advance of the call. However, you really want the address where the value is moved into\n  <code>\n   R4\n  </code>\n  . IDA won't give this to you directly; you'd have to employ some hand-written data flow analysis. However, Hex-Rays can give you the information you need.\n </p>\n <ul>\n  <li>\n   Use\n   <code>\n    ida_hexrays.decompile\n   </code>\n   to obtain a\n   <code>\n    cfunc_t\n   </code>\n   object for the calling function\n  </li>\n  <li>\n   Obtain its\n   <code>\n    eamap_t\n   </code>\n   object by calling\n   <code>\n    cfunc_t.get_eamap\n   </code>\n  </li>\n  <li>\n   Use the address where the call to the logging function takes place as a key into the\n   <code>\n    eamap_t\n   </code>\n  </li>\n  <li>\n   Iterate through the vector of\n   <code>\n    cinsn_t\n   </code>\n   objects that you get back looking for an instruction that contains a\n   <code>\n    cot_call\n   </code>\n   object\n  </li>\n  <li>\n   Once you find the call expression\n   <code>\n    x\n   </code>\n   , access its\n   <code>\n    carglist_t\n   </code>\n   object via\n   <code>\n    x.a\n   </code>\n  </li>\n  <li>\n   Extract the string from\n   <code>\n    x.a[N]\n   </code>\n   , where\n   <code>\n    N\n   </code>\n   is the index of the argument you want\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Rolf Rolles",
+            "time": "Feb 13, 2023 at 18:23",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Tis Me",
+                    "text": "<span class=\"comment-copy\">Thanks for this - it was helpful.  Updated my question with a part I am stuck on if you have any further thoughts.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Tis Me",
+                    "text": "<span class=\"comment-copy\">Many thanks for your updated answer.  I didn't realize it would be so simple :P  I'm definitely going to look into this, as well as a few (though probably clunky) idea.  Thanks again</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If you don't want to code yourself such a script, although it looks like it might be the best, you can give a try to the\n  <a href=\"https://github.com/joxeankoret/idamagicstrings\" rel=\"nofollow noreferrer\">\n   IDA Magic Strings\n  </a>\n  plugin (that I wrote myself). It is often smart enough as to get function names from debugging messages.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "joxeankoret",
+            "time": "Feb 13, 2023 at 9:24",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Tis Me",
+                    "text": "<span class=\"comment-copy\">Thanks for this - will look into it :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

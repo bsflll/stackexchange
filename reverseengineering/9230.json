@@ -1,0 +1,66 @@
+{
+    "title": "Return address on ESP?",
+    "link": "https://reverseengineering.stackexchange.com/questions/9230/return-address-on-esp",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've read that the return address of a function call is always pushed on the ESP stack. But the thing when i tried to see that using <code>gdb</code>, I didn't find it. Here's the program written in C I've used :</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n\nvoid test_function(int a, int b, int c, int d) {\nint flag;\nchar buffer[10];\nflag = 31337;\nbuffer[0] = 'A';\n}\n\nint main() {\n  test_function(1, 2, 3, 4);\n}\n</code></pre>\n<p><code>gdb</code> disassemble of this code gives me:</p>\n<pre><code>(gdb) disas main\nDump of assembler code for function main:\n   0x0804846c &lt;+0&gt;: push   ebp\n   0x0804846d &lt;+1&gt;: mov    ebp,esp\n   0x0804846f &lt;+3&gt;: and    esp,0xfffffff0\n   0x08048472 &lt;+6&gt;: sub    esp,0x10\n   0x08048475 &lt;+9&gt;: mov    DWORD PTR [esp+0xc],0x4\n   0x0804847d &lt;+17&gt;:    mov    DWORD PTR [esp+0x8],0x3\n   0x08048485 &lt;+25&gt;:    mov    DWORD PTR [esp+0x4],0x2\n   0x0804848d &lt;+33&gt;:    mov    DWORD PTR [esp],0x1\n=&gt; 0x08048494 &lt;+40&gt;:    call   0x804843d &lt;test_function&gt;\n   0x08048499 &lt;+45&gt;:    leave  \n   0x0804849a &lt;+46&gt;:    ret    \nEnd of assembler dump.\n(gdb) x/8xw $esp\n0xffffd650: 0x00000001  0x00000002  0x00000003  0x00000004\n0xffffd660: 0x080484a0  0x00000000  0x00000000  0xf7e21a83\n</code></pre>\n<p>As you can see , I've put a breakpoint at <code>0x08048494</code> (before the function call). I can see the arguments being pushed on the stack (1,2,3,4) but , I don't see the return address , which in this case should be <code>0x08048499</code>, right ?</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "12k",
+    "tags": [
+        "stack",
+        "address",
+        "esp"
+    ],
+    "user": "HdjoWattever",
+    "time": "Jun 26, 2015 at 15:38",
+    "comments": [
+        {
+            "user": "Rakholiya Jenish",
+            "text": "<span class=\"comment-copy\">Would you give your output of <code>disassemble test_function</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">The <code>call</code> instruction does two things: it jumps to the target address <i>and it pushes the return address on the stack</i>. After reaching your breakpoint, check the stack like you did in your example, then execute <code>stepi</code> in gdb, and check the stack again; <code>esp</code> will have decreased by 4, and <code>0x08048499</code> will be at the top of the stack.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Lets take this small example code:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n\nint foo (int a)\n{\n  return a ? a &lt;&lt; 2: 1000;\n}\n\nint main()\n{\n  printf(\"The result of foo(10) is %d\\n\", foo(10));\n\n  return EXIT_SUCCESS;\n}\n</code></pre>\n<p>Once in assembly we get:</p>\n<pre><code>0000000000400506 &lt;foo&gt;:\n  400506:       55                      push   %rbp\n  400507:       48 89 e5                mov    %rsp,%rbp\n  40050a:       89 7d fc                mov    %edi,-0x4(%rbp)\n  40050d:       83 7d fc 00             cmpl   $0x0,-0x4(%rbp)\n  400511:       74 08                   je     40051b &lt;foo+0x15&gt;\n  400513:       8b 45 fc                mov    -0x4(%rbp),%eax\n  400516:       c1 e0 02                shl    $0x2,%eax\n  400519:       eb 05                   jmp    400520 &lt;foo+0x1a&gt;\n  40051b:       b8 e8 03 00 00          mov    $0x3e8,%eax\n  400520:       5d                      pop    %rbp\n  400521:       c3                      retq   \n\n0000000000400522 &lt;main&gt;:\n  400522:       55                      push   %rbp\n  400523:       48 89 e5                mov    %rsp,%rbp\n  400526:       bf 0a 00 00 00          mov    $0xa,%edi\n  40052b:       e8 d6 ff ff ff          callq  400506 &lt;foo&gt;\n  400530:       89 c6                   mov    %eax,%esi\n  400532:       bf d4 05 40 00          mov    $0x4005d4,%edi\n  400537:       b8 00 00 00 00          mov    $0x0,%eax\n  40053c:       e8 9f fe ff ff          callq  4003e0 &lt;printf@plt&gt;\n  400541:       b8 00 00 00 00          mov    $0x0,%eax\n  400546:       5d                      pop    %rbp\n  400547:       c3                      retq   \n  400548:       0f 1f 84 00 00 00 00    nopl   0x0(%rax,%rax,1)\n  40054f:       00 \n</code></pre>\n<p>Lets take a look at the following <code>gdb</code> session:</p>\n<pre><code>(gdb) break *0x40052b\nBreakpoint 1 at 0x40052b: file frame.c, line 13.\n(gdb) break *0x400530\nBreakpoint 2 at 0x400530: file frame.c, line 13.\n</code></pre>\n<p>We just set a breakpoint before and after the <code>foo</code> procedure call.</p>\n<pre><code>(gdb) break foo\nBreakpoint 3 at 0x40050d: file frame.c, line 7.\n</code></pre>\n<p>We set a breakpoint in the <code>foo</code> procedure.</p>\n<pre><code>(gdb) run\nStarting program: /home/fleury/tmp/tests/frame \n\nBreakpoint 1, 0x000000000040052b in main () at frame.c:13\n13    printf(\"The result of foo(10) is %d\\n\", foo(10));\n</code></pre>\n<p>We start the program and we hit the first breakpoint before the call to <code>foo</code>.</p>\n<pre><code>(gdb) info frame\nStack level 0, frame at 0x7fffffffe0c0:\n rip = 0x40052b in main (frame.c:13); saved rip = 0x7ffff7a54b45\n source language c.\n Arglist at 0x7fffffffe0b0, args: \n Locals at 0x7fffffffe0b0, Previous frame's sp is 0x7fffffffe0c0\n Saved registers:\n  rbp at 0x7fffffffe0b0, rip at 0x7fffffffe0b8\n</code></pre>\n<p>We asked information about the stack frame environment. We can notice that <code>save rip = 0x7ffff7a54b45</code> (which is the return address of the <code>main</code> procedure).</p>\n<pre><code>(gdb) continue\nContinuing.\n\nBreakpoint 3, foo (a=10) at frame.c:7\n7     return a ? a &lt;&lt; 2: 1000;\n</code></pre>\n<p>We continue the execution of the program and got stopped inside the <code>foo</code> procedure (third breakpoint). Lets ask about the stack frame:</p>\n<pre><code> (gdb) info frame\n Stack level 0, frame at 0x7fffffffe0b0:\n  rip = 0x40050d in foo (frame.c:7); saved rip = 0x400530\n called by frame at 0x7fffffffe0c0\n source language c.\n Arglist at 0x7fffffffe0a0, args: a=10\n Locals at 0x7fffffffe0a0, Previous frame's sp is 0x7fffffffe0b0\n Saved registers:\n  rbp at 0x7fffffffe0a0, rip at 0x7fffffffe0a8\n</code></pre>\n<p>Note that <code>saved rip = 0x400530</code> which is exactly the position of the next assembly instruction after the <code>call foo</code>.</p>\n<pre><code>(gdb) continue\nContinuing.\n\nBreakpoint 2, 0x0000000000400530 in main () at frame.c:13\n13    printf(\"The result of foo(10) is %d\\n\", foo(10));\n</code></pre>\n<p>We keep going in the execution and we reach the second breakpoint at the exit of the <code>foo</code> procedure. Again, lets ask for the return address:</p>\n<pre><code>(gdb) info frame\nStack level 0, frame at 0x7fffffffe0c0:\n rip = 0x400530 in main (frame.c:13); saved rip = 0x7ffff7a54b45\n source language c.\n Arglist at 0x7fffffffe0b0, args: \n Locals at 0x7fffffffe0b0, Previous frame's sp is 0x7fffffffe0c0\n Saved registers:\n  rbp at 0x7fffffffe0b0, rip at 0x7fffffffe0b8\n</code></pre>\n<p>It has been restored to the original value when we popped out of <code>foo</code>.</p>\n<p>In fact, the <code>info frame</code> (shortened into <code>i f</code>) also tell where to find the stored return address on the stack:</p>\n<pre><code> Saved registers:\n  rbp at 0x7fffffffe0b0, rip at 0x7fffffffe0b8\n</code></pre>\n<p>And, if you ask <code>gdb</code> to display the content of <code>0x7fffffffe0b8</code> you should see <code>0x7ffff7a54b45</code>:</p>\n<pre><code>(gdb) print /x *0x7fffffffe0b8\n$1 = 0x7ffff7a54b45\n</code></pre>\n</div>",
+            "votes": "4",
+            "user": "perror",
+            "time": "Jun 26, 2015 at 19:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Rakholiya Jenish",
+                    "text": "<span class=\"comment-copy\">Would you explain why in some case the arguments are added first into the stack and then <code>call</code> happens to the function (as in the disassembled code in the question) and in some case, the variables are temporarily copied into the registers and later in the function, those arguments are pushed to stack (as in the disassembled code in your answer). Also, writing the same <code>c</code> program (code as given in question) in my pc, arguments were added to stack later in the function. At first they were just copied into a temporary register. Or should I create a new question, if it would be oftopic over here</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">This is something totally different, it is because the 'calling convention' are specified by the ABI (Application Binary Interface) you are using. And, they are different if you are in i386 and in amd64. In fact, in i386, all the arguments are passed through the stack. In amd64, the 6 first arguments are passed through the registers, and, starting from the 7th argument, the others are pushed onto the stack. In fact, this would deserve a full question by itself. Do not hesitate to ask for more in a more detailed question on this site.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rakholiya Jenish",
+                    "text": "<span class=\"comment-copy\">Thanks, I get it now. BTW, if I want to have a look at ABI code, is it possible or it is stored as executable in my pc, and I will have to search on net. If I need to search on net, please provide a link if you know one.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">Look at the <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions\" rel=\"nofollow noreferrer\">Wikipedia page</a> about ''calling conventions'' in x86 and, you can also find it here for <a href=\"http://www.sco.com/developers/devspecs/abi386-4.pdf\" rel=\"nofollow noreferrer\">SystemV-i386 ABI</a> and <a href=\"http://people.freebsd.org/~obrien/amd64-elf-abi.pdf\" rel=\"nofollow noreferrer\">SystemV-amd64 ABI</a>. But, these comments are too short to make it really clear. Do not fear to ask the question. :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The comment of Guntram Blohm explains your situation. Since you put the breakpoint at <code>call</code>, the instruction is not executed yet, and you do not see the returned address is pushed in the stack yet. But if you let it execute (for example by typing <code>si</code>), then you will see the returned address is pushed into the stack.</p>\n</div>",
+            "votes": "3",
+            "user": "Ta Thanh Dinh",
+            "time": "Jun 26, 2015 at 11:32",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

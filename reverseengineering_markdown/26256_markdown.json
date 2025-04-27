@@ -1,0 +1,49 @@
+{
+  "title": "Converting rep movsd to to C without memcpy",
+  "link": "https://reverseengineering.stackexchange.com/questions/26256/converting-rep-movsd-to-to-c-without-memcpy",
+  "content": "So I am currently in the stages of creating binexact version of functions in decompiled code. I noticed that in this function the rep movsd is called and logically this is translated as Qmemcpy/memcpy when transformed to Pcode in IDA. In order to bin exact this , I cannot use memcopy because a function will be called and the code wont be bin exact. Is there a way to try to force the use of rep movsd ? I understand this is somewhat compiler dependent, but I was thinking I could write this differently to force the same effect.\n\nC code This is what I need to change to match original assembly\n\n```\nBOOL NetSendCmdReq2(BYTE bCmd, BYTE mast, BYTE pnum, TCmdGItem *p)\n{\n    DWORD ticks;\n    TCmdGItem cmd;\n\n    memcpy(&cmd, p, sizeof(cmd));\n    cmd.bCmd = bCmd;\n    cmd.bPnum = pnum;\n    cmd.bMaster = mast;\n\n    ticks = GetTickCount();\n    if (!cmd.dwTime) {\n        cmd.dwTime = ticks;\n    } else if (ticks - cmd.dwTime > 5000) {\n        return FALSE;\n    }\n\n    multi_msg_add((BYTE *)&cmd.bCmd, sizeof(cmd));\n\n    return TRUE;\n}\n\n```\nCompare Assembly: (This is what the C above compiles to)\n\n```\npush ebp\nmov ebp, esp\nsub esp, 0x28\npush ebx\npush esi\npush 0x26\nlea eax, [ebp-0x28]\npush [ebp+0x10]\nmov bl, dl\nmov esi, ecx\npush eax\ncall <imm_fn> <------ This should be rep movsd rather than a call.\nmov al, [ebp+0x0C]\nadd esp, 0x0C\nmov [ebp-0x26], al\nmov al, [ebp+0x08]\ntest esi, esi\nmov [ebp-0x28], bl\nmov [ebp-0x27], al\njnz $+0xF\nand [ebp-0x0E], esi\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\njmp $+0x25\ncall [<indir_fn>]\ncmp dword ptr [ebp-0x0E], 0x00\njnz $+0x5\nmov [ebp-0x0E], eax\njmp $+0xA\nsub eax, [ebp-0x0E]\ncmp eax, 0x1388\njnle $+0xA\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\n\npop esi\npop ebx\nleave\nret 0x0C\n\n```\nOrigional Assembly : This is what should be matched .\n\n```\npush ebp \nmov ebp, esp\nsub esp, 0x28\n\npush esi\nmov esi, [ebp+0x10]\npush edi\nmov eax, ecx\npush 0x09\nlea edi, [ebp-0x28]\npop ecx\nrep movsd < ----- Notice this doesn't make an actual call.\nmov cl, [ebp+0x0C]\nmovsw  \nmov [ebp-0x26], cl\nmov cl, [ebp+0x08]\ntest eax, eax\nmov [ebp-0x28], dl\nmov [ebp-0x27], cl\njnz $+0xF\nand [ebp-0x0E], eax\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\njmp $+0x25\ncall [<indir_fn>]\ncmp dword ptr [ebp-0x0E], 0x00\njnz $+0x5\nmov [ebp-0x0E], eax\njmp $+0xA\nsub eax, [ebp-0x0E]\ncmp eax, 0x1388\njnle $+0xA\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\npop edi\npop esi\n\nleave\nret 0x0C \n\n```\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "535",
+  "tags": [
+    "assembly",
+    "decompilation",
+    "c",
+    "functions"
+  ],
+  "user": "LUser",
+  "time": "Nov 5, 2020 at 20:58",
+  "comments": [
+    {
+      "user": "MazeGen",
+      "text": "movsd intrinsic suits you? docs.microsoft.com/en-us/cpp/intrinsics/movsd?view=msvc-160",
+      "time": null
+    },
+    {
+      "user": "blabb",
+      "text": "Inline attribute will remove the function call and insert rep mov instruction",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "here is a sample code that will emit rep movsd instead of memcpy()  function\n\nthe src const char * is deliberately kept large enough to avoid unrolling and using  simple mov [dest++] ,const\n\nsource\n\n```\n:\\>cat memcopin.cpp\n#include <memory.h>\n#pragma intrinsic( memcpy )\n\nchar *src =\"\\\nI am Source And I Will be truncated by memcpy  \n\\\nI am Source And I Will be truncated by memcpy  \n\";\n\nchar dest[128];\n\nint main(void) {\n    memcpy(dest,src,64);\n    return 0;\n}\n\n```\ncompiled and linked with vscommunity 2017 dev cmd prompt as x86 on x86\n\n```\n:\\>cl /Zi /W4 /analyze /EHsc /Od /nologo memcopin.cpp /link /release\nmemcopin.cpp\n\n```\nexecuted under debugger cdb.exe(windbg console) awk is not a necessity it is there to get only relevent output and awk is availble for windows x86 and x64\n\n```\n:\\>cdb -c \"g memcopin!main;uf .;pt;da /c 64 poi(src);da /c 64 dest;q\" memcopin.exe |awk \"/Reading/,/quit:/\"\n\n0:000> cdb: Reading initial command 'g memcopin!main;uf .;pt;da /c 64 poi(src);da /c 64 dest;q'\ndisassembly  of main()\n\nmemcopin!main:\n01291000 55              push    ebp\n01291001 8bec            mov     ebp,esp\n01291003 56              push    esi\n01291004 57              push    edi\n01291005 b910000000      mov     ecx,10h\n0129100a 8b3500902d01    mov     esi,dword ptr [memcopin!src (012d9000)]\n01291010 bfe0992d01      mov     edi,offset memcopin!dest (012d99e0)\n01291015 f3a5            rep movs dword ptr es:[edi],dword ptr [esi]\n01291017 33c0            xor     eax,eax\n01291019 5f              pop     edi\n0129101a 5e              pop     esi\n0129101b 5d              pop     ebp\n0129101c c3              ret\nsrc \n012d0190  \"I am Source And I Will be truncated by memcpy.I am Source And I Will be truncated by memcpy.\"\ndest\n012d99e0  \"I am Source And I Will be truncated by memcpy.I am Source And I \"\nquit:\n\n```\n",
+      "votes": "0",
+      "user": "blabb",
+      "time": "Nov 6, 2020 at 11:43",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "LUser",
+          "text": "Your idea works. But it wasn't the solution for me . Apparently the original developers just made a pointer to the struct to copy it.",
+          "time": null
+        },
+        {
+          "user": "LUser",
+          "text": "cmd = *pcmditem; instead of memcpy .",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+    "title": "Are there exports with neither ordinal nor name or am I not understanding the PE documentation?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8379/are-there-exports-with-neither-ordinal-nor-name-or-am-i-not-understanding-the-pe",
+    "content": "I don't understand one thing in the export data directory of PE files.\nThe documentation says that there is a set count of exports (let's name it <pre><code>ExportCount</code></pre>, first row of following table) and another count of names/ordinals (name it <pre><code>NameCount</code></pre>, second row in following table). I read it like that the count of export names is the same as the ordinal indices count. At least that's what their documentation says:\n\nI tried parsing a Win8.1.1 x64 Shell32.dll, and I get different results compared to Dependency Walker. I have 933 as <pre><code>ExportCount</code></pre> and 354 as <pre><code>NameCount</code></pre>. So there should be 933 exports in total, with only 354 having an ordinal and/or name. Don't ask me how you would import the remaining 579 exports, as that's what I don't understand.\nIf I open Shell32 in Dependency Walker, it first lists <pre><code>NameCount</code></pre> exports with a name and ordinal, but then it shows the remaining amount of <pre><code>ExportCount - NameCount</code></pre> exports which surprisingly do have ordinals (starting at the blue line here):\n\nTo me, this doesn't make any sense according to the documentation. I tried to read <pre><code>ExportCount</code></pre> ordinals instead of only <pre><code>NameCount</code></pre> ones in sequence, but only rubbish comes out.\nSo my questions are:\n\nIs the documentation wrong / incomplete?\nAm I understanding something wrong in the documentation?\nHow to get the remaining ordinals like Dependency Walker does it?\n",
+    "votes": "4",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "pe",
+        "file-format",
+        "executable"
+    ],
+    "user": "Ray",
+    "time": "Jan 8, 2021 at 15:25",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "If i understand http://win32assembly.programminghorizon.com/pe-tut7.html correctly, the ordinal table lists only the number of exports that actually have a name. So, your program might have the following exports:\n<pre><code>n  name            address\n0  funca           12345678\n1  -- no name --   9abcdef0\n2  funcb           76543210\n3  -- no name --   fedcba98\n</code></pre>\nThis would result in\n<pre><code>address table entries   = 4\nnumber of name pointers = 2\nexport address table    = [ 12345678, 9abcdef0, 76543210, fedcba98 ]\nname pointer table      = [ funca, funcb ]\nordinal table           = [ 0, 2 ]\n</code></pre>\nThere's a 1:1 match between name pointer entries and ordinal table entries, which is why the number of name pointers equals both array sizes. But both tables list only the functions exported by name; exports that are by ordinal only don't appear in either of them. They still appear in the export address table, however.\n(If you want a better/more precise answer, you'll have to wait for Jason Geffner, he's an astonishing source of information for this kind of thing).\n",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Mar 4, 2015 at 13:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ray",
+                    "text": "<span class=\"comment-copy\">I thought similar about this, but that would mean I have no chance to read the ordinals of those unnamed exports, e.g. the <code>-- no name --</code> exports with <code>1</code> and <code>3</code> as ordinals in your example (because they're probably not guaranteed to be in increasing order).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ray",
+                    "text": "<span class=\"comment-copy\">Ah well, I <i>bet</i> you're right. I just didn't get one thing (see my added assumption at the top), that the ordinal is simply the index of the export address table.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Great answer, as always, Guntram. @DebugErr, as I'm sure you've noticed by now, the wording in Microsoft's PE specification document can be rather misleading; I try to rely on the names of the structure fields instead (for example, <code>AddressOfNameOrdinals</code> instead of \"Ordinal Table RVA\"). And as Guntram pointed out, <a href=\"http://win32assembly.programminghorizon.com/tutorials.html\" rel=\"nofollow noreferrer\">Iczelion's tutorials</a> do a fantastic job at explaining many of these PE structures.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "The documentation is correct. Items can be exported by either name or ordinal.\nFor export by name, the ordinal table is used to locate the address in the export table.  The index of the name within the Name table is the index of the ordinal within the Ordinal table.  The value of the ordinal in the Ordinal table is the index into the Address table.\nFor export by ordinal, the value of the ordinal is used to index directly into the Address table (so it is entirely possible to have no names at all, yet many exports).  There is no entry in the ordinal table.  For obvious reasons, export by ordinal is not recommended unless there is an agreement that such exports can never move.\nAs a peculiar edge case, the ExportCount can appear to be higher than the number of exports, until you subtract the Ordinal base.  For example, if I create a DLL with two exports, and whose OrdinalBase is -1, my ExportCount will appear to be 4.\n",
+            "votes": "3",
+            "user": "peter ferrie",
+            "time": "Mar 4, 2015 at 18:15",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "This answer was originally added by me as an edit to my question, I have now separated it from there:\nThanks to Guntrams accepted answer, I found out where my brain was faulty. This is how it really is:\n\nThe ordinal of each exported address is simply the index in the export address array (plus the ordinal base specified in the export directory table however, which may make it differ from simple indices. And that is often the case since ordinals usually start at 1 according to the documentation).\nSome exports have names, and these names are mapped to the export address array with an ordinal, which in turn is the index to the export address array.\nSince some exports have no names, the ordinal is not explicitly specified in the ordinal array, because it would make no sense to map \"no name\" to an export.\n\nMy C# code does it like this, for reference - the output is the same like the one in Dependency Walker:\n<pre><code>private void ReadExportTables(\n    PEFile peFile,\n    BinaryReader reader,\n    DataDirectoryHeader header)\n{\n    // Read export address table which contains RVAs to exported code or forwarder names.\n    ExportEntry[] exportEntries = new ExportEntry[EntryCount];\n    reader.BaseStream.Seek(peFile.GetFileOffset(CodeAddressTableRva), SeekOrigin.Begin);\n    for (int i = 0; i < exportEntries.Length; i++)\n    {\n        exportEntries[i].Ordinal = (ushort)(i + OrdinalStartNumber);\n        exportEntries[i].CodeOrForwarderRva = reader.ReadUInt32();\n    }\n\n    // Read ordinal table containing indices (with base) to named entries in export entry table.\n    reader.BaseStream.Seek(peFile.GetFileOffset(OrdinalTableRva), SeekOrigin.Begin);\n    uint[] ordinals = new uint[NameEntryCount];\n    for (int i = 0; i < ordinals.Length; i++)\n    {\n        // Get name for ordinal, which has the same index as the ordinal array element.\n        ordinals[i] = reader.ReadUInt16();\n    }\n\n    // Read the export name pointer table which contains pointers to names of exports.\n    reader.BaseStream.Seek(peFile.GetFileOffset(NameAddressTableRva), SeekOrigin.Begin);\n    for (int i = 0; i < ordinals.Length; i++)\n    {\n        exportEntries[ordinals[i]].Hint = i;\n        exportEntries[ordinals[i]].NameRva = reader.ReadUInt32();\n    }\n\n    // Read the names of the exports or forwarders.\n    for (int i = 0; i < exportEntries.Length; i++)\n    {\n        if (exportEntries[i].NameRva > 0)\n        {\n            reader.BaseStream.Seek(peFile.GetFileOffset(\n                exportEntries[i].NameRva),\n                SeekOrigin.Begin);\n            exportEntries[i].Name = reader.Read0AsciiString();\n        }\n        // Check if forwarder export (RVA points within export directory to forwarder name).\n        if (exportEntries[i].CodeOrForwarderRva >= header.Rva\n            && exportEntries[i].CodeOrForwarderRva < header.Rva + header.Size)\n        {\n            reader.BaseStream.Seek(\n                peFile.GetFileOffset(exportEntries[i].CodeOrForwarderRva),\n                SeekOrigin.Begin);\n            exportEntries[i].ForwarderName = reader.Read0AsciiString();\n        }\n    }\n}\n</code></pre>\nIn case you wondered: There can still be completely empty exports, with a code address of 0, no name and thus not forwarded. Just sort these out when displaying your exports.\n",
+            "votes": "0",
+            "user": "Ray",
+            "time": "Jan 8, 2021 at 15:25",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

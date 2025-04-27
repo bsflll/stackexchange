@@ -1,0 +1,75 @@
+{
+  "title": "Modifying program using IDA/Hexrays decompilation pseudocode",
+  "link": "https://reverseengineering.stackexchange.com/questions/27163/modifying-program-using-ida-hexrays-decompilation-pseudocode",
+  "content": "A bit long-winded, apologies in advance. Updates to the question are at the end.\n\nI'm experimenting with hooking functions in a program & modifying them based on the decompilation pseudocode from IDA. For this, I wrote a simple, purposeless, 32-bit program (it's not important, no need to try and analyze it):\n\n```\n// main.cpp\n#include <iostream>\n\n\nclass C {\n    public:\n    int a = 0;\n    int b = 0;\n    int c[255];\n    int *d = nullptr;\n    int stuff = 0;\n    C(){\n        std::cout << d << std::endl;\n        d = new int[300];\n        std::cout << d << std::endl;\n        ++stuff;\n        for(int i = 1; i < 255; ++i){\n            c[i] = i;\n            if( i == 254){\n                c[i] = 0;\n            }\n        }\n        for(int i = 1; i < 300; ++i){\n            d[i] = i;\n            if( i == 299){\n                d[i] = 0;\n            }\n        }\n    }\n    ~C(){\n        std::cout << d << std::endl;\n        delete[] d;\n        std::cout << d << std::endl;\n        ++stuff;\n    }\n\n    void play(){\n        bool c_stop, d_stop;\n        c_stop = false;\n        d_stop = false;\n        for(int i = 0;;++i){\n            if(c[i] == 0 && !c_stop){\n                std::cout << \"C had \" << i + 1<< std::endl;\n                c_stop = true;\n            }\n            if(d[i] == 0 && !d_stop){\n                std::cout << \"D had \" << i + 1 << std::endl;\n                d_stop = true;\n            }\n            if(d_stop && c_stop){\n                break;\n            }\n        }\n    }\n};\n\nvoid func(){\n    C clae;\n    std::cout << \"One missisipi \" << clae.stuff << std::endl;\n}\n\nint main(){\n    func();\n    C clae;\n    std::cout << clae.stuff << std::endl;\n    clae.play();\n}\n\n```\nWhile there's no need to try and understand what it does, it will usually result in an output like this:\n\n```\n00000000\n0007D958\nOne missisipi 1\n0007D958\n0007D958\n00000000\n0007D958\n1\nC had 255\nD had 300\n0007D958\n0007D958\n\n```\nI say usually because the addresses will change from execution to execution.\n\nNow, using IDA, I found the subroutine corresponding to void func():\n\n```\nvoid *__thiscall sub_1161000(void *this)\n{\n  int v1; // eax@1\n  int v2; // edx@1\n  int v4; // [sp+0h] [bp-43Ch]@1\n  int v5; // [sp+8h] [bp-434h]@1\n  int v6; // [sp+Ch] [bp-430h]@1\n  int v7; // [sp+10h] [bp-42Ch]@1\n  char v8; // [sp+14h] [bp-428h]@1\n  int v9; // [sp+41Ch] [bp-20h]@1\n  int *v10; // [sp+420h] [bp-1Ch]@1\n  void *v11; // [sp+424h] [bp-18h]@1\n  int (__cdecl *v12)(int, int, int, int); // [sp+428h] [bp-14h]@1\n  int v13; // [sp+42Ch] [bp-10h]@1\n\n  v10 = &v4;\n  v13 = -1;\n  v12 = sub_1161200;\n  v11 = this;\n  v1 = sub_1161280(&v8);\n  v13 = 0;\n  v7 = v1;\n  v6 = sub_11613F0(&unk_119B300, \"One missisipi \");\n  v5 = sub_1161810(v9);\n  sub_1161AB0(sub_1161AD0);\n  sub_1161B30((int)&v8, v2);\n  return v11;\n}\n\n```\nI am certain this is the function at hand, because stepping over the call to this address prints:\n\n```\n00000000\n0007D958\nOne missisipi 1\n0007D958\n0007D958\n\n```\nWhich is what is expected of func() to output. Furthermore, stepping inside this subroutine will print the above but in stages corresponding to the constructor, print, and destructor.\n\nSo, now I have patched the pseudocode into valid C, like so:\n\n```\nvoid *__thiscall func(void *_this) {\n    int v1;                                 // eax@1\n    int v2;                                 // edx@1\n    int v4;                                 // [sp+0h] [bp-43Ch]@1\n    int v5;                                 // [sp+8h] [bp-434h]@1\n    int v6;                                 // [sp+Ch] [bp-430h]@1\n    int v7;                                 // [sp+10h] [bp-42Ch]@1\n    char v8;                                // [sp+14h] [bp-428h]@1\n    int v9;                                 // [sp+41Ch] [bp-20h]@1\n    int *v10;                               // [sp+420h] [bp-1Ch]@1\n    void *v11;                              // [sp+424h] [bp-18h]@1\n    int(__cdecl * v12)(int, int, int, int); // [sp+428h] [bp-14h]@1\n    int v13;                                // [sp+42Ch] [bp-10h]@1\n\n    int *base_addr = (int *)GetModuleHandle(NULL); // Windows function to get the process base address.\n\n    v10 = &v4;\n    v13 = -1;\n    v12 = INT_FUNC(0x1161200);\n    v11 = _this;\n    v1 = INT_FUNC(0x1161280)(&v8);\n    v13 = 0;\n    v7 = v1;\n    v6 = INT_FUNC(0x11613F0)(0x119B300, \"One missisipi \");\n    v5 = INT_FUNC(0x1161810)(v9);\n    PTR_FUNC(0x1161AB0)(PTR_FUNC(0x1161AD0));\n    PTR_FUNC(0x1161B30)((int)&v8, v2);\n    return v11;\n}\n\n```\nWhere INT_FUNC is defined as:\n\n```\n#define PE_BASE 0x1160000\n\n#define OFFSET(x) (int*)(base_addr + ((int*)x - (int*)PE_BASE))\n\n#define PTR_FUNC(x) (((void *(*)())OFFSET(x)))\n#define INT_FUNC(x) (((int (*)())OFFSET(x)))\n\n```\nWhat I did was some pointer arithmetic to convert the addresses from IDA to addresses which would correspond to the proper ones during runtime, and cast them to a function. PE_BASE is the base address of the process in IDA (I know you can rebase them to zero). Note that at this stage, I did not modify the function at all, but only recreated it from the pseudocode.\n\nFinally, to hook my function, I use a debugger to start the program, load a DLL containing my custom func, and then at the start of the target subroutine, I replaced the instructions there with:\n\n```\npush dword my_dll.func\nret\n\n```\nWhich happily jumps to my function whenever the target subroutine is being executed. The thing is though, it just doesn't work. If I run my program now, it only prints:\n\n```\n00000000\n01393FE8\n\n```\nI debugged the program while my function was hooked, and the culprit was this line, which causes a segmentation fault:\n\n\n\nWhich is the first function address that is being called this way (the function before it is not called, but only pass its address to v12). My first thought was that a mistake in my pointer arithmetic caused it to jump to a bad address, but checking the disassembly confirmed that this is not the case:\n\n\n\nWhich is the correct function (based on value of edx in the previous picture):\n\n\n\n\nIt appears everything is where it should be.\n\nSo, my question is: What's going on? Why does it do this? Is my attempt at using IDA's pseudocode a lost cause because it cannot be trusted to be reliable? Or, is there some mistake on my part?\n\nThanks to bart1e's answer, I now fixed the code to reflect the actual size of the variables as commented by IDA (Code is more simplified since the original version, but the issues are still the same):\n\n```\nint func() {\n    char v1[0x408]; // [sp+18h] [bp-414h]@1\n    int v2;  // [sp+420h] [bp-Ch]@1\n\n    int* base_addr = (int*)GetModuleHandle(NULL);\n\n    INT_FUNC(0x331F04)(v1);\n    INT_FUNC(0x3B7E90)(OFFSET(0x3C57C0), \"One missisipi \");\n    INT_FUNC(0x37E7C0)(v2); // <<<<<<<< SEGMENTATION FAULT\n    INT_FUNC(0x37E5C0)(INT_FUNC(0x3B5FD0));\n    return INT_FUNC(0x332044)(v1);\n}\n\n/* int func()\n{\n  char v1; // [sp+18h] [bp-414h]@1\n  int v2; // [sp+420h] [bp-Ch]@1\n\n  sub_331F04((int)&v1);\n  sub_3B7E90((int)&dword_3C57C0, \"One missisipi \");\n  sub_37E7C0(v2);\n  sub_37E5C0(sub_3B5FD0);\n  return sub_332044(&v1);\n} */\n\n```\nNow however, when I try to debug the DLL, it still results in a segmentation fault, and print:\n\n```\n00000000\n015CFFE8\nOne missisipi\n\n```\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "353",
+  "tags": [
+    "ida",
+    "disassembly",
+    "decompilation",
+    "c++",
+    "dll-injection"
+  ],
+  "user": "daedsidog",
+  "time": "Mar 29, 2021 at 22:16",
+  "comments": [
+    {
+      "user": "rec",
+      "text": "Use structures - I've personally just written a very very basic tool that simply copies the frame structure and puts a single variable with that new structure in the beginning of the stack frame - then when you use Hex-Rays it will still occasionally create separate variables but mostly tolerate your structure.",
+      "time": null
+    },
+    {
+      "user": "rec",
+      "text": "Because structures most closely represent what's happening in asm. A stack is a structure not some random variables scattered around.",
+      "time": null
+    },
+    {
+      "user": "daedsidog",
+      "text": "@rec It's funny, right before you said that, I decided to remove the base_addr variable and place it in a structure containing the modified function. I still haven't tested this however. Is this what you mean by using structures? If not, could you elaborate further?",
+      "time": null
+    },
+    {
+      "user": "rec",
+      "text": "I mean right from ida - recreate your stack frame containing a single variable (at the beginning) of structure type containing all the locals. Then you can run hex-rays again. But I don't know if that will help your specific case - however it's one good beginning in the general one.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "If you compare pseudocode returned by decompiler with your own C code you will notice one very important difference - in decompiler's output it is merely a comment, but it's very important. I'm talking about following lines:\n\n```\nint v7;                                 // [sp+10h] [bp-42Ch]@1\nchar v8;                                // [sp+14h] [bp-428h]@1\nint v9;                                 // [sp+41Ch] [bp-20h]@1\n\n```\nLook where variables v7, v8 and v9 are located on the stack:\n\nWhat happens here is, v8 represents space allocated on stack to hold your clae (class C) object  and each such object occupies 0x408 bytes (possibly even more; disassembly line mov dword ptr [eax+408h], 0 of constructor suggests it occupies at least v9's space as well).\n\nBut decompiler doesn't know this and what it sees is that there is some function sub_1161280 (constructor in this case) and it takes some address, which is pointer to a stack memory (in fact, pointer to a newly created object).\n\nDecompiler doesn't have an idea that this pointer actually points to a blob of 0x408 bytes - it sees that just byte at v8 is referenced and isn't sure what other 0x407 bytes are used for; thats why it creates just 1-byte variable v8 and doesn't name remaining 0x407 bytes. It could be char v8[0x408], but as well char v8 and then just any data consistng of 0x407 bytes (some ints maybe, then possibly other chars, etc.).\n\nSo, if you change char v8 to char v8[0x408] it should be fine, but I didn't analyse your code so thoroughly to be sure there aren't any more mistakes.\n\nAnd, by the way, decompilers often produce inaccurate, unreadable or even incorrect results, so you should never fully rely on them; they can be helpful in some cases, but confusing as well. And what they produce is merely a pseudocode which is just a hint on how original function might have looked like, but definitely not fully working code.\n\n",
+      "votes": "3",
+      "user": "bart1e",
+      "time": "Mar 6, 2021 at 16:34",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "daedsidog",
+          "text": "I never would have thought of that, but it makes perfect sense! However, after updating the pseudocode to reflect your insight, it still results in a segmentation fault on the same line, only this time, it actually manages to print \"One missisipi\".",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "Yes, as I wrote, there are possibly more mistakes in decompiled code than this one. If you uploaded your files somewhere and gave a link to them it would be easier to spot other bugs.",
+          "time": null
+        },
+        {
+          "user": "daedsidog",
+          "text": "As per your request, I created a repository for this question: github.com/daedsidog/ida-pseudocode-recompilation-win32",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "@daedsidog It seems each object of your class consists of 0x418 bytes (v9 from first pseudocode is a sfuff variable, v10 is constructor ptr, v11 - destructor ptr and v12 is ptr to play()), so you cannot just get rid of these variables since otherwise return address after a call to constructor will be overwritten by some random data causing segfault. Try changing char v1[0x408] to char v1[0x418] and get rid of v2. That should do the job. I will update my answer if it helps. Didn’t have time to test it yet.",
+          "time": null
+        },
+        {
+          "user": "daedsidog",
+          "text": "I assume you mean for me to do that in the updated pseudocode? v2 is being used by one of the functions later on, but even if I did what you said, it behaves the same way. The new pseudocode is what IDA gave me after I recompiled the program statically.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

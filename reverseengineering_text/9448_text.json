@@ -1,0 +1,34 @@
+{
+    "title": "Globally allocated arrays optimization",
+    "link": "https://reverseengineering.stackexchange.com/questions/9448/globally-allocated-arrays-optimization",
+    "content": "I compile <pre><code>C</code></pre> code snippet with <pre><code>VS2010</code></pre> by two ways:\n<pre><code>int g_arra[3];\n\nint main() {\n  int idx = 2;\n  g_arra[0] = 10;\n  g_arra[1] = 20;\n  g_arra[2] = 30;\n  g_arra[idx] = 40;\n  return 0;\n}\n</code></pre>\n\nWith <pre><code>/O2</code></pre> optimization\nWithout <pre><code>/O2</code></pre> optimization\n\nAbout <pre><code>/O2</code></pre> optimization:\n\nThis option enables optimizations for speed. This is the generally\n  recommended optimization level. The compiler vectorization is enabled\n  at O2 and higher levels. With this option, the compiler performs some\n  basic loop optimizations, inlining of intrinsic, Intra-file\n  interprocedural optimization, and most common compiler optimization\n  technologies.\n\nWhen tried to reverse it:\n\nWith <pre><code>/O2</code></pre> optimization:\n<pre><code>; int __cdecl main(int argc, const char **argv, const char **envp)\n.text:00401000 _main        proc near    ; CODE XREF: ___tmainCRTStartup+11Dp\n.text:00401000              mov     dword_403390, 10\n.text:0040100A              mov     dword_403394, 20\n.text:00401014              mov     dword_403398, 40\n.text:0040101E              xor     eax, eax\n.text:00401020              retn\n.text:00401020 _main        endp\n</code></pre>\nWithout <pre><code>/O2</code></pre>:\n<pre><code> ; int __cdecl main(int argc, const char **argv, const char **envp)\n.text:00401000 _main        proc near    ; CODE XREF: ___tmainCRTStartup+11Dp\n.text:00401000 var_4        = dword ptr -4\n.text:00401000 argc         = dword ptr  8\n.text:00401000 argv         = dword ptr  0Ch\n.text:00401000 envp         = dword ptr  10h\n.text:00401000              push    ebp\n.text:00401001              mov     ebp, esp\n.text:00401003              push    ecx\n.text:00401004              mov     [ebp+var_4], 2\n.text:0040100B              mov     dword_403390, 0Ah\n.text:00401015              mov     dword_403394, 14h\n.text:0040101F              mov     dword_403398, 1Eh\n.text:00401029              mov     eax, [ebp+var_4]\n.text:0040102C              mov     dword_403390[eax*4], 28h\n.text:00401037              xor     eax, eax\n.text:00401039              mov     esp, ebp\n.text:0040103B              pop     ebp\n.text:0040103C              retn\n.text:0040103C _main        endp\n</code></pre>\n\nCode compiled without <pre><code>/O2</code></pre> given me clear explanation about global array, i can compute the size of it(4 byte each <pre><code>[eax*4]</code></pre>) and how many elements it has.\nMy question is, how to deal with the first case? Where is compiler hide other instructions? How to detect, function has a global allocated array or a stack allocated array?\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "196",
+    "tags": [
+        "disassembly",
+        "x86",
+        "c"
+    ],
+    "user": "Roman Kiselenko",
+    "time": "Jul 27, 2015 at 9:51",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "In general case there is no difference between array and sequentially placed variables of the same type. The information about arrays and more complicated data types is lost during compilation.\nHowever there are several ways to restore this information from the context (and none of them will work in your specific case because it is too much simple and thus very much optimize-able).\n\nFrom allocations. If something is allocated using malloc or new [] operator it may be an array or class/structure object, and the element size may be revealed by observing the access to this memory.\nFrom access patterns. If you see a loop accessing the memory it may be an array\nBy not accessed gaps in memory, both stack and global (was previously mentioned as \"holes\"). If compiler will not be able to detect and \"unroll\" the access to the array, it will compute the accessed element's offset on the fly and will add this offset to the address of first element of the array. If you'll try to analyze such kind of code and its variable allocation you'll see the \"base\" of the array and some not referenced memory after it which will be accessed as *(base +computed_offset) = something.\n\nRegarding \"hidden instructions\":\nThey are not needed in optimized code. Both of your variants are functionally equivalent. Compiler just computed the needed index during the compilation, \nso nobody hides anything here.\n",
+            "votes": "5",
+            "user": "w s",
+            "time": "Jul 26, 2015 at 11:00",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "On x86 the <pre><code>ESP</code></pre> and <pre><code>EBP</code></pre> registers are used to access data on the stack. If you see code like  \n<pre><code>mov [ebp - 4], 1\n</code></pre>\nit access the stack. w s's answer tells you how to differentiate between access to single variables or an array.\nNo sane compiler or coder will ever use esp/ebp for anything but the stack, however if you want to be really sure (during runtime) you can get the stack boundaries from the TEB (windows only).  \nAn access to a global variable will always be an access to a fixed memory location.  \n<pre><code>mov     dword_403390, 0Ah\n</code></pre>\nIn this example 403390 is the fixed memory location (whether it is actually fixed or changed due to ASLR/relocations isn't important as this invisible in the disassembly).\nFor further verifiaction you can check wheter that adress lies in the boundaries of the loaded executable or DLL/shared module.\n",
+            "votes": "3",
+            "user": "user45891",
+            "time": "Jul 26, 2015 at 23:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

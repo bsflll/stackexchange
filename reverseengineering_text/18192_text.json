@@ -1,0 +1,66 @@
+{
+    "title": "\"Stepping Into\" Exception Handler",
+    "link": "https://reverseengineering.stackexchange.com/questions/18192/stepping-into-exception-handler",
+    "content": "I have some code which makes use of the Structured Exception Handler in order to employ some anti-debugging voodoo. It executes a series of instructions and I need to get the correct input. I can see the instructions and can reverse the ones that work directly with my input, but there is some background work (which happens at [esi]) - that also plays a part in the challenge. If I could follow the instructions step by step, I could make some great progress.\n\n\n\nAs I was saying, there are sets of instructions which work on my input. Let's say I am at 0x402DC0. The problem is that once I get to 0xCC, the debugger alerts me of the BREAKPOINT_EXCEPTION (I choose to Step Over) and then, instead of taking me (nicely and slowly) to the address 0x402B5D, the debugger skips to 0x402F1E (this behaviour repeats itself with another 8 sets of instructions each with its own exception handler thingy). The instructions get executed though - I figured it out giving the program different inputs.\nI assume the program creates exceptions then just makes the jumps using SEH. The anti-debugging thingy is the fact that it doesn't let me go step by step, I suppose.\nThe question: Can I somehow step into the function at 0x402B5D, then going step by step just like when I am debugging a simple program?\nI have tried modifying EIP and then Stepping Into (also swallowing the exception), but this does not produce the desired result because the instruction at 0x402B6D will produce another exception - I access [esi] which is out of the memory map of the program.\nAlso, is there any way I could find the instructions which make up the Exception Handler (in my program)? \nReading up on it (http://bytepointer.com/resources/pietrek_crash_course_depths_of_win32_seh.htm) gave me a basic understanding of the mechanics under the hood. I've also tried to follow the pointer in the SEH chain, but the kernel functions don't help much.\nThe registers (at least some of them) are clearly modified because the program goes on flawlessly (if I do not modify EIP). Can I find the function which modifies them?\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "seh"
+    ],
+    "user": "Tross",
+    "time": "May 6, 2018 at 20:36",
+    "comments": [
+        {
+            "user": "Johann Aydinbas",
+            "text": "Have you tried setting a bp on <pre><code>0x402B5D</code></pre> and maybe tell OllyDbg to pass on int3 exceptions? I think I did something like this a long time ago, only the actual bps triggered, but not int3 calls.\n",
+            "time": null
+        },
+        {
+            "user": "Tross",
+            "text": "I'll try out your suggestion and come back with feedback.\n",
+            "time": null
+        },
+        {
+            "user": "Tross",
+            "text": "Setting a breakpoint at \"ntdll!ExecuteHandler2\" (as blabb suggested) did the trick.\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "Another trick that might be useful, use the SEH view to see where the debuggee is going whenever an exception happens. At the moment x64dbg is not built to automatically set a breakpoint there but with a simple plugin you could easily do this...\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "from your second screen shot  [ebp+10] will point to _CONTEXT \nebx = [ebp+10] -> \n<pre><code>ebx == CONTEXT->FirstMember ==ContextFlags\nebx+4 ==  CONTEXT->SecondMember  == Dr0 (Debug Register 0)\nebx+a0 ==  Register Esi\nebx + b8 == Eip (this is where the execution will continue )\nebx+b0 == Eax\n</code></pre>\nif you have a hardware breakpoint you will get a different esi (see the xor) \nwhen you resume\nalso your eax is xorred with some magic constant 0xde266de \nand on resuming the ax is used\nbut after this one needs to see the further handlers \nthe second address 402ef6 also seems to end in an int3 but this time the exception handler is 402d95 so you have more spleunking\nyou can single step just set a breakpoint in ntdll!ExecuteHandler2 (win7 32 bit) \nand you will see a call ecx\nthis call will normally call the handler \n<pre><code>0:000> uf ntdll!ExecuteHandler2\nntdll!ExecuteHandler2:\n775371d3 55              push    ebp\n775371d4 8bec            mov     ebp,esp\n775371d6 ff750c          push    dword ptr [ebp+0Ch]\n775371d9 52              push    edx\n775371da 64ff3500000000  push    dword ptr fs:[0]\n775371e1 64892500000000  mov     dword ptr fs:[0],esp\n775371e8 ff7514          push    dword ptr [ebp+14h]\n775371eb ff7510          push    dword ptr [ebp+10h]\n775371ee ff750c          push    dword ptr [ebp+0Ch]\n775371f1 ff7508          push    dword ptr [ebp+8]\n775371f4 8b4d18          mov     ecx,dword ptr [ebp+18h]\n775371f7 ffd1            call    ecx <<<<<<<<<<<<<<<<<<<<<<<<<<<\n775371f9 648b2500000000  mov     esp,dword ptr fs:[0]\n77537200 648f0500000000  pop     dword ptr fs:[0]\n77537207 8be5            mov     esp,ebp\n77537209 5d              pop     ebp\n7753720a c21400          ret     14h\n</code></pre>\ncontext when on handler start\n<pre><code>0:000> r\neax=00000000 ebx=00000000 ecx=0040107f edx=7753720d esi=00000000 edi=00000000\neip=0040107f esp=0012fb90 ebp=0012fbb0 iopl=0         nv up ei pl zr na pe nc\ncs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246\nexcept1!HANDLER:\n0040107f 53              push    ebx\n0:000> ?? (ntdll!_context *) @@masm(poi(ebp+10))\nstruct _CONTEXT * 0x0012fc8c\n   +0x000 ContextFlags     : 0x1003f\n   +0x004 Dr0              : 0\n   +0x008 Dr1              : 0\n   +0x00c Dr2              : 0\n   +0x010 Dr3              : 0\n   +0x014 Dr6              : 0\n   +0x018 Dr7              : 0\n   +0x01c FloatSave        : _FLOATING_SAVE_AREA\n   +0x08c SegGs            : 0\n   +0x090 SegFs            : 0x3b\n   +0x094 SegEs            : 0x23\n   +0x098 SegDs            : 0x23\n   +0x09c Edi              : 0\n   +0x0a0 Esi              : 0\n   +0x0a4 Ebx              : 0x7ffd4000\n   +0x0a8 Edx              : 0x775370f4\n   +0x0ac Ecx              : 0\n   +0x0b0 Eax              : 0\n   +0x0b4 Ebp              : 0x12ff94\n   +0x0b8 Eip              : 0x401072\n   +0x0bc SegCs            : 0x1b\n   +0x0c0 EFlags           : 0x10246\n   +0x0c4 Esp              : 0x12ff70\n   +0x0c8 SegSs            : 0x23\n   +0x0cc ExtendedRegisters : [512]  \"???\"\n</code></pre>\ncheck the address where exception happened in the CONTEXT->Eip\n<pre><code>0:000> u 401072 l1\nexcept1!PROTECTED_AREA+0x1f:\n00401072 f7f1            div     eax,ecx\n</code></pre>\nand you can see both eax , and ecx are 0 \nand you can see the Exception Code \n<pre><code>0:000> dd poi(ebp+8) l1\n0012fc78  c0000094  <<<<<<<<< divide by zero\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "May 6, 2018 at 22:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Tross",
+                    "text": "<span class=\"comment-copy\">I'll have more time on my hands this evening - I'll try out the stuff you have suggested and then make a follow up. Thank you.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Tross",
+                    "text": "<span class=\"comment-copy\">THANK YOU SO MUCH. That's it. That's what I was looking for.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Tross",
+                    "text": "<span class=\"comment-copy\">So, for anyone having the same problem: use \"uf ntdll!ExecuteHandler2\" in WinDBG to get the address of the ExceptionHandler then set a breakpoint at that address (I use x32dbg to debug rather than Ollie or the other debuggers). Now you can use Step Into just like you want, without the debugger skipping over the lines.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">why windbg you can use ctrl+g in x32dbg and type ExecuteHan for selecting the autocomplete  you can setup symbol path in option -&gt; misc</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

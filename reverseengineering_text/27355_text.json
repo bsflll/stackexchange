@@ -1,0 +1,31 @@
+{
+    "title": "Radare2 does not reload payload correctly",
+    "link": "https://reverseengineering.stackexchange.com/questions/27355/radare2-does-not-reload-payload-correctly",
+    "content": "I'm new to Radare2 so i'm trying to learn it by doing some basic buffer overflows. My problem is that, when i try to load some payloads, the stack seems to fake them in some differents ways...\nFor example, trying to load the input by invoking a simple python script\n<pre><code>import struct\n\ndef p (x):\n    return struct.pack('<I',x)\n\nparam = \"\"\nparam += \"A\"*30\n\nparam += p(0xb7e40db0)\nparam += p(0xb7e349e0)\nparam += p(0xb7f61b0b)\n\nprint param\n</code></pre>\nAnd using this for run it.\n<pre><code>r2 -d bufferoverflow `python payload.py` </code></pre>\nI get this stack when overflows.\n\nI don't use to get any problem by running it this way\nHowever, when i've set some breakpoints, customize some views in order to be more confortable, I've try to reload the file by using \"dor\" and \"doo\" commands from Radare2\n\nBut now Radare2 seems to start faking the stack with some random values...\n\nI'm not sure if it's a problem of mine because i'm doing it the wrong way, or if it's caused by a Radare2 behavior that i don't know.\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "202",
+    "tags": [
+        "radare2",
+        "stack"
+    ],
+    "user": "saltmorejo",
+    "time": "Mar 30, 2021 at 12:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I think it's intended behavior as this normal mode (no value prefixes - see later) is probably valid for ascii parameters. Here you are passing a payload that can contain ascii controlling bytes and might cause trouble.\nFrom the broken payload it's clearly visible that there's a missing byte <pre><code>0x0d</code></pre> and this is causing your problems. But why is it missing?\nLet's look at the code that sets the values from the new process from rarun2 profile (so basically from <pre><code>dor</code></pre> command in this case).\nThe profile is being parsed with the following code (<pre><code>libr\\socket\\run.c</code></pre>):\n<pre><code>R_API bool r_run_parse(RRunProfile *pf, const char *profile) {\n    r_return_val_if_fail (pf && profile, false);\n    char *p, *o, *str = strdup (profile);\n    if (!str) {\n        return false;\n    }\n    r_str_replace_char (str, '\\r',0); // <------ (1)\n    p = str;\n    while (p) {\n        if ((o = strchr (p, '\n'))) {\n            *o++ = 0;\n        }\n    r_run_parseline (pf, p);\n    p = o;\n    }\n    free (str);\n    return true;\n}\n</code></pre>\n<pre><code>str</code></pre> is our rarun2 profile (what is passed to <pre><code>dor</code></pre>) and char <pre><code>'\\r'</code></pre> is in fact <pre><code>0xd</code></pre>. It is being removed from the input on line (1) before it's being passed to <pre><code>r_run_parseline</code></pre> that does parsing and setting process environment variables (like args).\nNot sure why the line is there - it might be to unify line endings? (windows/linux)\nWhat can be done to overcome this? Modify your script and use one of the value prefixes. If your script instead of raw bytes prints hexpair strings you can use <pre><code>:</code></pre> to parse it and correctly be passed to your program. So change you script to print like this <pre><code>41414141.....</code></pre>\nand then from <pre><code>r2</code></pre> use <pre><code>:</code></pre> to indicate that the input is a hexpair string.\n<pre><code>dor arg1=:`!python payload.py`\ndoo\n</code></pre>\n",
+            "votes": "1",
+            "user": "Paweł Łukasik",
+            "time": "Apr 12, 2021 at 22:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "saltmorejo",
+                    "text": "<span class=\"comment-copy\">I appreciate your answer so much. That's just what i was looking about.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

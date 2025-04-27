@@ -1,0 +1,68 @@
+{
+    "title": "How to prevent use of Resource editors",
+    "link": "https://reverseengineering.stackexchange.com/questions/1399/how-to-prevent-use-of-resource-editors",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There are variety of tools that allow editing the resources of Windows executables.\nThese tools allow a very easy interface for changing the programs look and feel.\nReplacing icons, text, menus can be easily done without any knowledge in reversing.</p>\n<p>My question is, what option I have to prevent the resources being so easily edited ?</p>\n</div>",
+    "votes": "13",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "pe-resources"
+    ],
+    "user": "Mellowcandle",
+    "time": "Apr 2, 2013 at 21:33",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Resources are just a standard structure with defined constants, but in the end, it's just a recursive structure to a buffer, no matter what it contains (<a href=\"http://www.slideshare.net/ange4771/ange-albertini-hashdays2012extended/56\">here is the standard layout</a>).</p>\n<p>It can theoretically contain anything - any depth, loops, invalid types, etc... but then standard APIs will not work with them.</p>\n<p>So, you need to make sure that, if you encrypt or compress resources, they need to be restored (both the resource directory structure, and their content) before any of these APIs is used, which might not be obvious.</p>\n<p>In particular, some resources will be used by the OS even before the file is executed, such as first icons, manifest and version information - so you probably want to keep these intact.</p>\n<p>A simple way to prevent trivial resource editing would be to run a stream cipher on selected resources, on the final binary (after the linker put them in place and generated the resource entry in the DataDirectory), and to restore these resources on demand or on program initialization.</p>\n<p>If you're looking for a ready-made solution, many good packers such as <a href=\"http://bitsum.com/pecompact.php\">PECompact</a> support resource compression, thus preventing external resource editing.</p>\n</div>",
+            "votes": "10",
+            "user": "Ange",
+            "time": "Mar 30, 2013 at 19:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Brendan Dolan-Gavitt",
+                    "text": "<span class=\"comment-copy\">I wonder though, could some kind of load-time unpacking/decryption work here? Resource editors presumably work with the data on disk, not in memory.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ange",
+                    "text": "<span class=\"comment-copy\">you're right, I edited my answer.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>An elegant and simple solution would be to <a href=\"https://stackoverflow.com/questions/252226/signing-a-windows-exe-file\">sign your executable</a> and <a href=\"http://msdn.microsoft.com/en-us/library/aa382384%28VS.85%29.aspx\" rel=\"nofollow noreferrer\">verify the signature</a> on startup (any change will invalidate the signature). Even if someone patches your signature check, the signature will still be invalid which makes clear that the exe is not the same one you delivered.</p>\n<p>My other thoughts would be to use an exe packer or to take a checksum on the resources (both were already suggested in @angealbertine answer).</p>\n</div>",
+            "votes": "15",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Also, we can exploit bugs in the editors themselves to prevent tampering with our resources.\nThe interesting part here is that most Resource Editors have no idea how to parse non-typical (not very non-typical) PE files. For example, Some editors assume the resource section name must always be <code>.rsrc</code>. Examples:</p>\n<ol>\n<li><p><a href=\"http://www.angusj.com/resourcehacker/\">Resource Hacker</a></p>\n<ul>\n<li><p>Inserting a special resource to cause Resource Hacker to go into an infinite loop. Demo here : <a href=\"http://code.google.com/p/ollytlscatch/downloads/detail?name=antiResHacker.exe\">http://code.google.com/p/ollytlscatch/downloads/detail?name=antiResHacker.exe</a></p></li>\n<li><p>Inserting a special <code>RT_STRING</code> resource to cause Resource Hacker to crash.</p></li>\n<li><p>It assumes the size of the <code>IMAGE_OPTIONAL_HEADER</code> structure is assumed to be <code>sizeof(IMAGE_OPTIONAL_HEADER)</code>, currently <code>0xE0</code> in hex, while it can even be greater. Having the size to be of a greater value causes Resource Hacker to discard the whole PE file.</p></li>\n</ul></li>\n<li><p><a href=\"http://www.bome.com/products/restorator\">Restorator</a></p>\n<ul>\n<li>Same as 1c.</li>\n<li>Uses the <code>NumberOfRvaAndSizes</code> field, which can easily be forged to be <code>0xFFFFFFFF</code>. This causes Restorator to discard the whole PE file.</li>\n<li>Assumes the resource section name must be <code>.rsrc</code>. Change it anything else. This causes Restorator to discard the whole PE.</li>\n<li>Any resource Section with the <code>Characteristics</code> field set to <code>IMAGE_SCN_CNT_UNINITIALIZED_DATA</code> among other characteristics will be discarded by Restorator. </li>\n</ul>\n<p>Demos here : <a href=\"http://pastebin.com/ezsDCaud\">http://pastebin.com/ezsDCaud</a></p></li>\n</ol>\n</div>",
+            "votes": "11",
+            "user": "0xC0000022L",
+            "time": "Apr 22, 2013 at 12:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Remko",
+                    "text": "<span class=\"comment-copy\">Clever! Question though: some of ur suggestions seem to go out of spec for reiurce definitions. This may cause the loader to fail or cause resource functions (eg loadstring) to fail in present or future windows versions?</span>",
+                    "time": null
+                },
+                {
+                    "user": "dyasta",
+                    "text": "<span class=\"comment-copy\">It is unlikely that Microsoft would change the fundamental behavior of its PE loading and traversal code. I've never seen them do this. The only variation in behaviors was back when the win9x kernel was in use, and it varied from the NT kernel. Microsoft is well aware that linkers of all types generate such differing interpretations of the PE file format, that I'm sure they know not to touch anything. In fact, the PE file format is so surprisingly varied, the only constant is compatibility with Window's code. Of course, test well after making mods like these.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Fred Concklin",
+                    "text": "<span class=\"comment-copy\">The link to antiResHacker.exe is dead</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

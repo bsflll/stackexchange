@@ -1,0 +1,76 @@
+{
+    "title": "How to get cross-references to a struct type in IDA by IDAPython and add comments to variables of the struct type",
+    "link": "https://reverseengineering.stackexchange.com/questions/12791/how-to-get-cross-references-to-a-struct-type-in-ida-by-idapython-and-add-comment",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm writing an IDA plugin using idapython in order to add comments (located in database) to variables of struct types. In order to do this, firstly, i need to get the list of cross-references to a given structure type (e.g. struct BITMAPINFO) which can be found in \"Structure\" subview in IDA.\n </p>\n <p>\n  I know IDA provides this function from version 6.2 by right-button mouse clicking on the structure name and selecting \"List cross references to\". A window like the following will be popped-up:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/CBI7A.png\" rel=\"noreferrer\">\n   <img alt=\"example: xrefs to BITMAPINFO picture\" src=\"https://i.sstatic.net/CBI7A.png\"/>\n  </a>\n </p>\n <p>\n  Each item of the list in above picture is either an address where a global variable of type %structure name% (here is BITMAPINFO) is declared or a position where a local variable of type \"structure name\" is defined. The former is like\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/KxBT2.png\" rel=\"noreferrer\">\n   <img alt=\"example: global variable definition of type GUID\" src=\"https://i.sstatic.net/KxBT2.png\"/>\n  </a>\n  (here is type GUID, not BITMAPINFO).\n </p>\n <p>\n  The latter is like\n  <a href=\"https://i.sstatic.net/McC7c.png\" rel=\"noreferrer\">\n   <img alt=\"example: local variable definition of type BITMAPINFO\" src=\"https://i.sstatic.net/McC7c.png\"/>\n  </a>\n  This is the position where IDA declare local variables based on its identified type.\n </p>\n <p>\n  I wonder if there is a way to get these data by IDAPython.\n </p>\n <p>\n  NOTE: This is different from cross-references to a(ll) member(s) of a struct type, which can be got by right-button mouse clicking on the structure member name, shown as the following\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/XIcJe.png\" rel=\"noreferrer\">\n   <img alt=\"example: XrefsTo GUID.DATA1\" src=\"https://i.sstatic.net/XIcJe.png\"/>\n  </a>\n </p>\n <p>\n  Before asking here, i do it like:\n </p>\n <pre><code>#CODE 1\nea = idc.LocByName(%structure name%)  \n\nfrm = [x.frm for x in idautils.XrefsTo(ea)]\n</code></pre>\n <p>\n  I think i have got the whole list of cross-references to %structure name% using my above code. However, i found many EAs in the list seem like ineffective such as '0xff0052c9' (\n  <b>\n   MaxEA is 0x108f800\n  </b>\n  ). However, i guess my code has got the desired result because the length of returned list is equal to the number of items in the list shown as the 1st picture. But i can't explain the result especially the (seemingly) ineffective ones. Also, when i add comments to the addresses in the list using the following code\n </p>\n <pre><code>#CODE 2\nfor ea in xrefs_list:\n    # each cross-reference to the given struc type\n\n    if repeatable:\n        # add repeatable comment 'cmt' at address 'ea'\n        idc.MakeRptCmt(ea, cmt)\n\n    else:\n        # add comment  'cmt' at address 'ea'\n        idc.MakeComm(ea, cmt)\n</code></pre>\n <p>\n  i found i only added comments to the effective addresses which are between\n  <b>\n   idc.MinEA()\n  </b>\n  and\n  <b>\n   idc.MaxEA()\n  </b>\n  , and these addresses are places where global instances of the queried struct type are declared, as shown in the 2nd picture.\n </p>\n <p>\n  My questions are:\n </p>\n <blockquote>\n  <ol>\n   <li>\n    Is my above code (CODE 1) correct to get all cross-references to a struct type?\n  If it is, how to explain those seemingly ineffective addresses (above 0xFF000000)\n   </li>\n   <li>\n    How to add comments to other cross-reference addresses other than the references to global instances of the struct type?\n   </li>\n  </ol>\n </blockquote>\n</div>\n</body></html>",
+    "votes": "9",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "Bingchang",
+    "time": "Jun 8, 2016 at 2:47",
+    "comments": [
+        {
+            "user": "tmr232",
+            "text": "<html><body><span class=\"comment-copy\">\n Seems like those references are stack variable references. I updated my answer to match.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h2>\n  Stack Variable References\n </h2>\n <p>\n  The xrefs you are showing are xrefs from stack variables. As you mentioned, when trying to get the xrefs to the struct, you get two types of results:\n </p>\n <ol>\n  <li>\n   Valid addresses, which are struct instances in the data section\n  </li>\n  <li>\n   <code>\n    0xFF000000\n   </code>\n   and above addresses, where the struct is used as a stack variable.\n  </li>\n </ol>\n <p>\n  In IDA the stack variables for a function are represented internally as a struct, with each stack variable a member of that struct.\n </p>\n <blockquote>\n  <p>\n   idaman struc_t *ida_export get_frame(const func_t *pfn);\n  </p>\n </blockquote>\n <p>\n  <a href=\"https://www.hex-rays.com/products/ida/support/sdkdoc/frame_8hpp.html#a538eae24587b7931ea67d9d110d68193\" rel=\"noreferrer\">\n   Docs link\n  </a>\n </p>\n <p>\n  Knowing that, we can infer that the weird xrefs are member-ids (which they are). To get the names of the containing structs we use\n  <code>\n   fullname = idaapi.get_member_fullname(mid)\n  </code>\n  and get something like\n  <code>\n   $ F4014B0.var_14\n  </code>\n  .\n  <code>\n   $ F4014B0\n  </code>\n  is the netnode name of the stack-frame struct for the function at\n  <code>\n   0xF4014B0\n  </code>\n  .\n </p>\n <pre><code>import idc\nimport idaapi\nimport idautils\n\nsid = idc.GetStrucIdByName('my-struct-name')\nfor xref in idautils.XrefsTo(sid):\n    if 0xFF000000 > xref.frm:\n        # The struct is used as data\n        print 'Data xref from 0x{:X}'.format(xref.frm)\n    else:\n        # The struct is used as a stack variable.\n        mid = xref.frm\n        fullname = idaapi.get_member_fullname(mid)\n        function_ea = int(fullname[2:].split('.')[0], 0x10)\n        print 'Stack xref from 0x{:X}'.format(function_ea)\n</code></pre>\n <h2>\n  Getting Xrefs to member Variables\n </h2>\n <p>\n  (This is here because it was my initial answer, and it contains valuable information.)\n </p>\n <p>\n  You were really close to the solution. Your code gives you the\n  <code>\n   sid\n  </code>\n  , so you only get references to the struct itself. What you need, is references to the different members, and this can be done using the\n  <code>\n   mid\n  </code>\n  . You can get it using fully-qualified member names. However, since there are many members to every struct, enumerating them is usually a better choice.\n </p>\n <pre><code>import idc\nimport idautils\n\ndef get_member_ids(sid):\n    offset = 0\n    while offset != 0xFFFFFFFF:\n        mid = idc.GetMemberId(sid, offset)\n        if mid != -1:\n            yield mid\n        offset = idc.GetStrucNextOff(sid, offset)\n\n\ndef get_member_xrefs(struc_name):\n    sid = idc.GetStrucIdByName(struc_name)\n    for mid in get_member_ids(sid):\n        for xref in idautils.XrefsTo(mid):\n            yield xref.frm\n\n\n# And the usage:\nfor xref in get_member_xrefs('my-struct-name'):\n    print '0x{:X}'.format(xref)\n</code></pre>\n <p>\n  <strong>\n   <em>\n    edit to answer question in comment\n   </em>\n  </strong>\n </p>\n <h2>\n  A Bit on Netnodes\n </h2>\n <p>\n  This next bit is about IDA internals, so I might be off mark here. I am basic the information on SDK docs\n  <a href=\"https://www.hex-rays.com/products/ida/support/sdkdoc/netnode_8hpp.html\" rel=\"noreferrer\">\n   see here\n  </a>\n </p>\n <p>\n  As visible in my code, many APIs that are documented for use on effective addresses (\n  <code>\n   ea\n  </code>\n  s) also work on other IDA primitives - struct ids, member ids - without any difference.\n </p>\n <p>\n  Internally, objects in IDA are mapped to netnodes. Lines in IDA are mapped linearly to netnode numbers, While other objects are mapped to numbers starting at\n  <code>\n   0xFF000000\n  </code>\n  . \nWhile addresses and struct ids might have a different semantic meaning, they are both netnode numbers. In IDA's APIs, this means that they are treated the same way.\n </p>\n <p>\n  I hope this makes things clearer.\n </p>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "tmr232",
+            "time": "Jun 5, 2016 at 19:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Bingchang",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer. What your code return is the union list of cross-references to each structure member, which can also be got by right-button mouse clicking on name of  a structure member. This is different from the list of cross-references to %structure name% and isn't my desired result. I added new information to my question. Besides, I start to know SID and MID can be used as EA. Can you tell me how to explain this?</span>",
+                    "time": null
+                },
+                {
+                    "user": "tmr232",
+                    "text": "<span class=\"comment-copy\">@Bingchang, I edited the reply to address your question about the MID and SID. I don't have an answer to the main question yet. I get the misunderstanding.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bingchang",
+                    "text": "<span class=\"comment-copy\">Your answer is really cool.  Just as you answered, those (seemingly) ineffective addresses are references to stack variables and and each stack variable is a member of a struct which internally represents the stack frame of a function. I have solved my question and updated my question to include my solution. Besides, you open the  door to internals of IDA.</span>",
+                    "time": null
+                },
+                {
+                    "user": "tmr232",
+                    "text": "<span class=\"comment-copy\">@Bingchang I am happy to help. Just notice that your question does no longer match the title. You might want to split it into 2 separate questions for clarity, and so that people can look it up more easily in the future.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bingchang",
+                    "text": "<span class=\"comment-copy\">as you advised, i reedited my question and split it into 2 questions. However, i am not sure if it is suitable or if i need to open a new question.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In order to make the question and answer separate to make things clearer, I added my own solution mainly according to @tmr232's answer.\n </p>\n <p>\n  For the 1st question, just as @tmr232 answered, those (seemingly) ineffective addresses are references to stack variables. In IDA's internals, each stack variable is treated as a member of a struct which represents the stack frame of a function.\n  <b>\n   <em>\n    CODE 1\n   </em>\n  </b>\n  in the question can return all cross-references to a struct type, including cross-references to global instances and local stack instances.\n </p>\n <p>\n  For the 2nd question, comments to be added to references to local stack instances can be added by treating these references as members of a struct.\n </p>\n <p>\n  The code is:\n </p>\n <pre><code>def add_struct_cmt (struct_name, cmt, repeatable):\n\n    # locate ea by structure name, here, ea is identical to sid\n    sid = idc.LocByName(%structure name%)\n\n    if sid == idaapi.BADADDR:\n        return \n\n    # get all cross-references to 'sid' including references to global \n    # struct instances and references to local stack variables\n    frm = [x.frm for x in idautils.XrefsTo(sid)]\n\n    for ea in frm:\n\n        if ea > idc.MaxEA():\n            # references to stack variables\n\n            # IDA 6.8 and above: getting 'member_t' using 'ea' as mid\n            mptr = idaapi.get_member_by_id(ea)\n\n            # IDA 6.8: setting member comment using 'mptr' as index\n            idaapi.set_member_cmt(mptr, cmt, repeatable)\n\n            # IDA 6.9: 'mptr' is type of list\n            #idaapi.set_member_cmt(mptr[0], cmt, repeatable)\n\n        else:\n            # references to global struct instances\n\n            if repeatable：\n                # add repeatable comment\n                idc.MakeRptCmt(ea, cmt)\n\n            else:\n                # add non-repeatable comment\n                idc.MakeCmt(ea, cmt)     \n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Nightforce2",
+            "time": "Jul 9, 2018 at 18:25",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Bingchang",
+                    "text": "<span class=\"comment-copy\">NOTE: 1. API <i>get_member_by_id</i> doesn't exist in IDA 6.6, however, this can be bypassed by other APIs, like <i>sid = idaapi.get_member_struc(idaapi.get_member_fullname(mid))</i> and then enumerating its members</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bingchang",
+                    "text": "<span class=\"comment-copy\">NOTE: in IDA 6.8, <i>idaapi.get_member_by_id</i> returns a proxy of type 'member_t *', however, in IDA 6.9, what it returns is a list and the proxy of type 'member_t *' is the 1st element.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,45 @@
+{
+    "title": "x86 shellcode leads to segmentation fault",
+    "link": "https://reverseengineering.stackexchange.com/questions/21352/x86-shellcode-leads-to-segmentation-fault",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I want to execute\n  <code>\n   execve(\"/bin/dash\", &\"/bin/dash\", NULL)\n  </code>\n  on Ubuntu 64 bit with the following 32 bit shellcode:\n </p>\n <pre><code>global _start\n\n_start:\n    xor eax, eax ; set eax = 0 to push a null without using 0x0\n    push eax ; eax = null pointer\n\n    mov edx, esp ; edx = null pointer\n\n    ; push '/bin/dash' into stack\n    ; but length of string actually needs to be divisible by 4,\n    ; otherwise there will be a 0x00 in the string, so:\n    ; push null pointer first, then\n    ; push '////bin/dash' into stack\n    push eax ; eax = null pointer\n    push 0x68736164\n    push 0x2f6e6962\n    push 0x2f2f2f2f\n\n    mov ebx, esp ; ebx = string pointer '////bin/dash'\n    push ebx\n    mov ecx, esp ; ecx = pointer to string pointer\n    mov eax, 0xfffffff4 \n    not eax ; eax = 0xb = pointer to execve\n    int 0x80 ; interrupt system call\n</code></pre>\n <p>\n  I compile the assembler code with the following line and then extract the machine code:\n </p>\n <pre><code>$ nasm -felf32 shellcode.asm -o x.o && ld -m elf_i386 x.o -o shellcode\n$ objdump -d shellcode -M intel -s\nshellcode:     file format elf32-i386\n\nContents of section .text:\n 8048060 31c05089 e2506864 61736868 62696e2f  1.P..Phdashhbin/\n 8048070 682f2f2f 2f89e353 89e1b8f4 fffffff7  h////..S........\n 8048080 d0cd80                               ..P             \n\nDisassembly of section .text:\n\n08048060 <_start>:\n 8048060:   31 c0                   xor    eax,eax\n 8048062:   50                      push   eax\n 8048063:   89 e2                   mov    edx,esp\n 8048065:   50                      push   eax\n 8048066:   68 64 61 73 68          push   0x68736164\n 804806b:   68 62 69 6e 2f          push   0x2f6e6962\n 8048070:   68 2f 2f 2f 2f          push   0x2f2f2f2f\n 8048075:   89 e3                   mov    ebx,esp\n 8048077:   53                      push   ebx\n 8048078:   89 e1                   mov    ecx,esp\n 804807a:   b8 f4 ff ff ff          mov    eax,0xfffffff4\n 804807f:   f7 d0                   not    eax\n 8048081:   cd 80                   int    0x80\n</code></pre>\n <p>\n  Then I'm trying to execute my shellcode with this c file:\n </p>\n <pre><code>#include <stdio.h>\n#include <string.h>\n\nchar *shellcode = \"\\x31\\xc0\\x50\\x89\\xe2\\x50\\x68\\x64\\x61\\x73\\x68\\x68\\x62\\x69\\x6e\\x2f\\x68\\x2f\\x2f\\x2f\\x2f\\x89\\xe3\\x53\\x89\\xe1\\xb8\\xf4\\xff\\xff\\xff\\xf7\\xd0\\xcd\\x80\";\n\nint main()\n{\n    fprintf(stdout,\"Length: %d\n\",strlen(shellcode));\n    (*(void  (*)()) shellcode)();\n}\n</code></pre>\n <p>\n  I compile this file with:\n </p>\n <pre><code>gcc -m32 -fno-stack-protector test_shellcode.c -o test_shellcode\n</code></pre>\n <p>\n  But this leads to a segmentation fault.\nI debugged my shellcode with gdb and it looks like my shellcode is working fine but the first line that uses the register\n  <code>\n   al\n  </code>\n  or\n  <code>\n   ah\n  </code>\n  leads to the segmentation fault.\n </p>\n <p>\n  How can I fix that?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "assembly",
+        "c",
+        "shellcode"
+    ],
+    "user": "winklerrr",
+    "time": "May 23, 2019 at 20:09",
+    "comments": [
+        {
+            "user": "bart1e",
+            "text": "<html><body><span class=\"comment-copy\">\n When you do mov edx, esp you actually move value of esp into edx; not the value esp is pointing at. To access this value, use mov edx, [esp].\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "winklerrr",
+            "text": "<html><body><span class=\"comment-copy\">\n @bart1e yeah, that was intended because per definition of the function\n <code>\n  edx\n </code>\n needs to point to null not contain null (because it's actually an array with no values inside, so the null pointer terminates it)\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h1>\n  Wrong Parameters\n </h1>\n <p>\n  I was able to solve my problem!\n </p>\n <p>\n  The function\n  <a href=\"https://linux.die.net/man/2/execve\" rel=\"nofollow noreferrer\">\n   <code>\n    execve\n   </code>\n  </a>\n  has the following definition:\n </p>\n <pre><code>int execve(const char *filename, char *const argv[], char *const envp[]);`\n      ^                   ^                    ^                   ^\n     eax                 ebx                  ecx                 edx\n</code></pre>\n <p>\n  So the second parameter\n  <code>\n   argv\n  </code>\n  is not just one pointer it's actually an array of (multiple) pointers. So\n  <code>\n   ecx\n  </code>\n  needs to be null terminated but\n  <strong>\n   that wasn't the case in my code\n  </strong>\n  . I also found out that\n  <code>\n   ecx\n  </code>\n  doesn't need to point to the string\n  <code>\n   /bin/dash\n  </code>\n  instead it can be set to null.\n </p>\n <p>\n  So the parameters need to be set to:\n </p>\n <pre><code>eax = 0x0b\nebx = \"/bin/dash\"\necx = 0x00\necd = 0x00\n</code></pre>\n <h1>\n  Assembler\n </h1>\n <p>\n  My working code with just\n  <strong>\n   29 bytes\n  </strong>\n  now looks like:\n </p>\n <pre><code>global _start\n\n_start:\n    ; set eax = 0 without using 0x00\n    xor eax, eax \n    push eax ; terminating null string & reference for null pointer\n\n    ; set edc = pointer to null\n    ; set edx = pointer to null\n    mov ecx, esp\n    mov edx, esp\n\n    ; push '////bin/dash' into the stack\n    push 0x68736164\n    push 0x2f6e6962\n    push 0x2f2f2f2f\n\n    ; set ebx = string pointer to '////bin/dash'\n    mov ebx, esp\n\n    ; set ecx = pointer to string pointer to '////bin/dash'\n    push ebx\n\n    ; set eax = 0xb (function 'execve')\n    mov al, 0xb\n    int 0x80 ; interrupt system call\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "winklerrr",
+            "time": "May 23, 2019 at 20:08",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I think just replace\n  <code>\n   mov eax, 0xfffffff4\n  </code>\n  and\n  <code>\n   not eax\n  </code>\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Febriyanto Nugroho",
+            "time": "Oct 5, 2019 at 12:39",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

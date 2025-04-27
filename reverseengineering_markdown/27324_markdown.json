@@ -1,0 +1,37 @@
+{
+  "title": "Why a single \"nop\" crashed the game?",
+  "link": "https://reverseengineering.stackexchange.com/questions/27324/why-a-single-nop-crashed-the-game",
+  "content": "I hope answer to my question is not game/app specific and can be answered in communities like this.\n\nSo, I tried to use some internal functions of a game, like pick a target. No malicious intentions, just wanted to do it work and use it once.\nI used \"nop\" as temporally asm code to inject, so I will sure that I do something wrong in my inject method and not in asm code I'm trying to inject. To my surprise is the single \"nop\" been the reason the game crashed.\n\nMy question is why? How can I break something by doing nothing?\n\nThen after \"nop\" I added \"ret\" as Google said me.\nand game didn't crash, tried this on function I was tried to call and also worked fine.\n\nInjector code(c#):\n\n```\n        [DllImport(\"kernel32.dll\", EntryPoint = \"CloseHandle\")]\n        public static extern int CloseHandle(int hObject);\n\n        [DllImport(\"kernel32.dll\")]\n        public static extern Int32 WriteProcessMemory(int hProcess, int lpBaseAddress, byte[] buffer, int size, int lpNumberOfBytesWritten);\n\n\n        [DllImport(\"kernel32\", EntryPoint = \"CreateRemoteThread\")]\n        public static extern int CreateRemoteThread(int hProcess, int lpThreadAttributes, int dwStackSize, int lpStartAddress, int lpParameter, int dwCreationFlags, ref int lpThreadId);\n\n\n        [DllImport(\"kernel32\", EntryPoint = \"WaitForSingleObject\")]\n        public static extern int WaitForSingleObject(int hHandle, int dwMilliseconds);\n\n\n        [DllImport(\"Kernel32.dll\")]\n        public static extern System.Int32 VirtualAllocEx(int hProcess, int lpAddress, int dwSize, int flAllocationType, int flProtect);\n\n        [DllImport(\"Kernel32.dll\")]\n        public static extern System.Int32 VirtualFreeEx(int hProcess, int lpAddress, int dwSize, int flAllocationType);\n\n        [DllImport(\"kernel32.dll\", EntryPoint = \"OpenProcess\")]\n        public static extern int OpenProcess(int dwDesiredAccess, int bInheritHandle, int dwProcessId);\n\n        private const int PAGE_EXECUTE_READWRITE = 0x4;\n        private const int MEM_COMMIT = 4096;\n        private const int MEM_RELEASE = 0x8000;\n        private const int MEM_DECOMMIT = 0x4000;\n        private const int PROCESS_ALL_ACCESS = 0x1f0fff;\n        private const int PROCESS_CREATE_THREAD = 0x2;\n        private const int PROCESS_VM_OPERATION = 0x8;\n        private const int PROCESS_VM_WRITE = 0x20;\n\n\n        public void Inject(byte[] data,int pid)\n        {\n            int hwnd = 0;\n            int addre = 0;\n            int threadhwnd = 0;\n            if (pid != 0)\n            {\n                hwnd = OpenProcess(PROCESS_ALL_ACCESS | PROCESS_CREATE_THREAD | PROCESS_VM_WRITE, 0, pid);\n                if (hwnd != 0)\n                {\n                    addre = VirtualAllocEx(hwnd, 0, data.Length, MEM_COMMIT, PAGE_EXECUTE_READWRITE);\n                    WriteProcessMemory(hwnd, addre, data, data.Length, 0);\n                    int threadid = 0;\n                    threadhwnd = CreateRemoteThread(hwnd, 0, 0, addre, 0, 0, ref threadid);\n                    int res = WaitForSingleObject(threadhwnd,3000);\n                    VirtualFreeEx(hwnd, addre, data.Length, MEM_RELEASE);\n                    CloseHandle(threadhwnd);\n                    CloseHandle(hwnd);\n\n                }\n            }\n        }\n\n```\nThank you in advance!\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "156",
+  "tags": [
+    "windows",
+    "pe",
+    "injection"
+  ],
+  "user": "user224351",
+  "time": "Mar 27, 2021 at 8:38",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "CreateRemoteThread takes 7 arguments and the 4th of them is called lpStartAddress.\n\nNow, from MSDN docs:\n\nSo as you see your parameter addre has to point to some function in remote process. Functions in assembly (x86/x64) look like this:\n\n```\nFUNCTION_NAME:\nFUNCTION_BODY\nret\n\n```\nAnd you call them like this:\n\n```\ncall FUNCTION_NAME\n\n```\nThe ret instruction in the end takes the return address from the stack, which was saved by the call instruction, when call FUNCTION_NAME was executed - it points to the next instruction after that call.\n\nBut what happens when you inject only nop? Since you didn't inject ret, your injected function looks like this:\n\n```\nINJECTED_FUNCTION:\nnop\nSOME_GARBAGE_BYTES\n\n```\nAs you see, the program you inject the code into will try to execute the instruction just after nop (since it didn't encounter ret), which may be either some garbage bytes or may even lie outside process virtual memory and may cause access violation - in both cases the program will crash.\n\n",
+      "votes": "2",
+      "user": "bart1e",
+      "time": "Mar 27, 2021 at 10:11",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user224351",
+          "text": "Thank you. Can I also ask what is lpParameter? Because I saw somewhere it is used and somewhere it is zero. I don't understand especially \"variable to be passed to the thread function\" part. As I know parameters passed with Push instruction like push edx  call edi So, when and how use lpParameter?",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "It is a parameter passed to the function you pass to CreateRemoteThread function. If you don't need to pass anything there, you just set it to NULL. However, it can be a pointer to some data in remote process' memory - it can point, for example, to array of arguments you would normally pass using push instructions",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+    "title": "Reverse Engineering CTF help",
+    "link": "https://reverseengineering.stackexchange.com/questions/31397/reverse-engineering-ctf-help",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am having trouble figuring out this microcorruption challenge in the link below: <a href=\"https://microcorruption.com/debugger/Halifax\" rel=\"nofollow noreferrer\">https://microcorruption.com/debugger/Halifax</a></p>\n<p>Basically, the 0x7f interrupt has been disabled so I must reenable it before inserting a payload that will call it. The program says I need to call the 0x41 interrupt with the 16byte key that is stored in secure memory, which I seemingly don't have access to.</p>\n<p>My main issue is that when I call the 0x41 interrupt, I am not sure which argument I need to supply the pointer to the password into. The second issue is, since I'm not sure I'm supplying the password into the correct argument, I am also unsure I have found the password at all.</p>\n<p><strong>Things I know:</strong> The sha256_internal calls the 0x41 interrupt as well, so I have tried to emulate this with my payloads. When I insert 0x1000 as the second argument (into r14 when using sha256_internal) it gives me the encryption that the program printed out to the screen. When I change that number, the encryption changes. Each time I reset the CPU, all of these encryptions change (except for when I insert 0x0, in which case the sha256 encryption of an empty string is outputted). The max number I can put in is 0x1000, into this argument, as well as into the third argument, and if I exceed 0x1000 then the \"Exceeded SRAM length\" exception is thrown.</p>\n<p><strong>Things I have tried:</strong></p>\n<p>-forcing the pc to restart all the instructions from the initialization of the program, but after having overwritten the instructions for disabling the interrupt. This didn't work since apparently after the interrupt is disabled, it can only be reenabled by using the 0x41 interrupt with the password.</p>\n<p>-I have tried to insert the parts of the internal SRAM hash they keep printing to the screen, its 32bytes and the password is only 16bytes, but unsurprisingly this hasn't worked since its just a hash of the password which doesn't seem to be very useful.</p>\n<p><strong>An example payload I inserted:</strong></p>\n<pre><code>800060301210473012e043301200103012000030124100b0125045301244453041\n</code></pre>\n<p><code>8000</code> refers to where the payload will be written to to be run later</p>\n<p><code>60</code> refers to the length of the payload (I made a large length so I wouldn't have to set it every time)</p>\n<p><code>301210473012e043301200103012000030124100</code> is for pushing all the arguments of the interrupt onto the stack. Here I tried putting the password address as a 5th argument instead</p>\n<p><code>b0125045</code> is for calling the INT function to carry out the interrupt</p>\n<p><code>30124445</code> is to push the address I want to go back to after my payload is about to finish</p>\n<p><code>3041</code> return to the address I just pushed so the program can receive another payload</p>\n<p>My biggest problem is that I am unsure if I am inserting the password tries into the right argument, so even if I have found the password, I am not sure it is being entered. I keep putting in a pointer to it as the third argument (into r15 in sh256_internal), but it seems wrong since this argument also has a length limit of 0x1000.</p>\n<p>Any suggestions, hints, new things to try would be much appreciated.</p>\n</div>",
+    "votes": "3",
+    "answers": 4,
+    "views": "575",
+    "tags": [
+        "assembly",
+        "memory",
+        "encryption"
+    ],
+    "user": "PurpleHacker",
+    "time": "Jan 13, 2023 at 20:41",
+    "comments": [
+        {
+            "user": "pipik",
+            "text": "<span class=\"comment-copy\">Where is the definition of INT 0x33 or other interrupt, I only find this manual:<a href=\"https://microcorruption.com/public/manual.pdf\" rel=\"nofollow noreferrer\">microcorruption.com/public/manual.pdf</a> ,but it doesn't have... I'm stuck in Cold Lake</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Im also stuck. It is a bit weird that, according the the manual, INT 0x41 is to be used to unlock, but in the code it is used to produce a hash of the SRAM... This is what I've tried so far:</p>\n<h2>Other interrupts</h2>\n<p>Maybe there is an undocumented interrupt that would reverse the hardening mode? I couldn't find anything a part from 0x31 which seems to be identical to 0x41, but produces a hash of our working memory instead of the non-addressable SRAM. Can't see how this will help us..</p>\n<h2>Dissecting the SRAM</h2>\n<p>When calling the <code>sha256_internal</code> function, r14 is the length of the data you want to hash and r15 is the offset from start of SRAM. I figured out, by calculating the hash of long sequences of zeroes and comparing that to the output of the sha256_internal, that almost the entire SRAM is filled with zeroes. It seems that there's only non-zero data in the first ~0x100 bytes. I tried to find 16 byte sequences within these 0x100 bytes that didn't differ between tries. If I found any static 16 byte sequence, that must be the key! But no luck...</p>\n<h2>Watchdog</h2>\n<p>Just at the start of the program, there's a function named <code>__watchdog_support</code>. The program also writes 0x5a08 to 0x15c. The value 0x5a08 seems to be connected to the watchdog control register according to the  user manual. I tried to fiddle around with this, but I don't think the watchdog is implemented. At least I didn't get anywhere..</p>\n<p>As there's no information about how to unlock via the 0x41 Interrupt, I'm inclined to think that solving this is done by somehow reversing the hardening process and then issuing the 07f interrupt...</p>\n</div>",
+            "votes": "1",
+            "user": "Gruffalon",
+            "time": "Apr 6, 2023 at 20:35",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To add to your interrupt discussion, you can also do a sha1 hash with 0x30 or a sha512 hash with 0x32.  Not sure how that would help, but maybe there are more interrupts out there?</p>\n</div>",
+            "votes": "1",
+            "user": "jowler",
+            "time": "Apr 9, 2023 at 13:25",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've managed to complete the other challenges but I'm also stalled on Halifax.</p>\n<p>The other interrupts appear to be a dead end. All the interrupts used in St. John are available (sha1, sha256, sha512), but they only hash userspace memory. Maybe they need to be used to hash some data for the final solution once its pulled from SRAM, but none of those functions produce 16 byte outputs so no obvious hints.</p>\n<p>Watchdog appears not to be implemented. If it was, you could potentially trigger a watchdog interrupt with an infinite loop, and overwrite the interrupt vector (in memory at <code>ff80</code>) to execute a handler. Tried it, but it does not work, and I'm not sure it would help if it did.</p>\n<p>Dissecting the SRAM may be a dead end. In brief, using <code>0x41</code> interrupts we can get sha256 hashes of sections of the SRAM and we can use those hashes to create a dump.  Happy to give more detail if anyone needs a few hints to make that work.</p>\n<p>But here's where I'm stalled, since the SRAM is different on each reset. It's mostly 0's, but always starts with a section of apparently random data which is always one of two exact byte lengths. The non-zero byte lengths are strange values, that don't match any standard key or hash lengths.</p>\n<p>So no obvious keys in SRAM, and even if there was one, I don't see a clear way to get a non static key value from SRAM into userspace without a live memory dump (so couldnt do it in the solver). Also,  I don't see a way to call the <code>0x41</code> interrupt to accept a key as input.</p>\n<p>Has anyone solved Halifax yet? The progress page is broken for the newer challenges. For me, it shows that I've solved Halifax already, but not Cold Lake, but it's actually the other way around.</p>\n</div>",
+            "votes": "1",
+            "user": "Viktor",
+            "time": "May 20, 2023 at 20:48",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There is an unfortunate typo in the challenge. You provide the key through the 0x42 interrupt, not the 0x41 interrupt.</p>\n<p>The 16-byte key is actually stored in SRAM. It is not the hash.</p>\n</div>",
+            "votes": "0",
+            "user": "John Doe",
+            "time": "Sep 4, 2023 at 19:59",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

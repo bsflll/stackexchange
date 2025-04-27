@@ -1,0 +1,68 @@
+{
+    "title": "How do I approach this CTF Debugging Program?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16377/how-do-i-approach-this-ctf-debugging-program",
+    "content": "I have an ELF executable I'm working on (got it from a previous CTF competition). The executable simply asks for a password, and then it prints out \"congrats\". \n\n\nThe code snippets and my annotations are long, so I've included them in separate HTML links.\nDecompiled C-Code\nELF Executable\n\n//Gives you an overview of what this program does in C.\nint main(int argc, char ** argv)\n{\n    int32_t result; // success value\n\n\n    if (argc > 1)\n    {\n        setup(); //Allocates an integer array (g1)\n\n        int32_t v1 = 0; //counter\n\n        while (true)\n        {\n            char v2 = *(char *) (*(int32_t *) ((int32_t)argv + 4) + v1); \n            int32_t v3 = *(int32_t *) (4 * v1 + (int32_t) & g1);\n\n            int32_t v4 = v1 + 1; //index in g1 array\n\n            if (check( (int32_t *) v3, (int32_t) v2) != 0)\n            {\n                puts(\"Nope\");\n                return -1;\n            }\n            if (v4 >= 31) //when we've reached our last index in array\n            {\n                break;\n            }\n            v1 = v4;\n        }\n        puts(\"congrats!\");\n        result = 0;\n    }\n    else\n    {\n        puts(\"usage ./smoothie \");\n        result = -1;\n    }\n    return result;\n}\n\n\nI've tried using GDB to debug through the program and IDA to understand the control-flow. My deduction ends up with 3 things:\n\nsetup() generates some sort of integer array\ncheck(int32_t * array, int * array) gets called 31 times to confirm our \"password\" as indicated by the possible while loop\nInside check(...), it goes through each malloc'd array[5] and confirms each \"char\" of our password. \n\n\nHere is IDA's control flow graph of check() (simple - 3 parts): \n\n\n\nHere is the control flow graph of check() click to enlarge:\n\n\nThe majority of check() compares * (array) for the upper half and * (array + 8) for the bottom half plus the passwordIndex comparison.\nIn the main(int argc, char ** argv) of this program, there is a while loop that needs to be executed 31 times (the password is possibly 31 characters long). The while loop will exit if check() returns 1.\n\n\nI think the middle section does some calculations (add, sub, cdq & idiv, imul, and xor) that might be useful towards knowing what to pass as a password.\nPlease guide me in the right direction (with hints if you can). Debugging the program yourself might make my question more clear.\nFalse Lead\n\nIn check(), I'm assuming that the first set of checks \"calculate\" the correct number that my input ascii should match (e.g. calculated 90, so index[i] should equal 'Z' ~ 90).\nIn the second half of check it uses * (array + 8), so that means that its using the array's 3rd number for the 101, 142, ... , number comparisons. We could change the dereferenced value of * (array + 8) to the calculated number (90) to get to the final comparison.\nOnce we reach the final comparison, it compares our input with the calculated number in the first set of checks, so 90 == 90. Since they are equal, the function returns 0 for success.\n\nDespite any char input for the check(int32_t * array, (int32_t) input), the result will be the same regardless because of the pre-set values in the array. What can I do to correct this?\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "assembly",
+        "debugging",
+        "decompilation",
+        "c",
+        "elf"
+    ],
+    "user": null,
+    "time": "Sep 22, 2017 at 17:37",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "so what is your question here?\n",
+            "time": null
+        },
+        {
+            "user": "user21677",
+            "text": "I've added a graph of check()'s entire control-flow. With the checks for 0x65 to 0xfa, they somewhat match the values in the allocated array. The first half of checks correspond to * (array), and the second half corresponds to * (array + 8). Is there something I can do in the GNU-Debugger to pass these checks with the array?\n",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "what CTF was that?\n",
+            "time": null
+        },
+        {
+            "user": "user21677",
+            "text": "CTF-Sparsa. Debugging - 200, or smoothie, wasn't uploaded here: github.com/pchaigno/ctf-sparsa. This was what the competition basically looked like (jeopardy style).\n",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "ok, I've analyzed the binary and know flag w/ 99% probability but the current binary is flawed. For today the only advice I can give is to try to analyze the setup & check (especially how it is related to setup) and you'll get the idea how to get the flag. But again - binary is wrong - I'll post on that later tomorrow (now it's midnight)\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The way of solving this CTF is to analyze both <pre><code>setup()</code></pre> and <pre><code>check()</code></pre> methods (duh!). The first one is quite a long one but when you check what's going on it's quite simple. It's allocating a 20B of memory to store 5 x 4 B of data. It does it 31 times. The values that stored there looks like they are random but they are not. There are only 5 different values that are put in the first spot as well as in 3rd one.\n\n Values in 1st and 3rd slot are operation type values; 3rd, 4th - operands; 5th - operand & result\n\nIf we check the <pre><code>check()</code></pre> function. We see that the parameters that are being passed are: one of the buffers created and filled in the <pre><code>setup()</code></pre> and a <pre><code>char</code></pre> of the flag. Based on the values found in the buffer there are mathematical operations that are conducted the values in the buffer.\n\n More info on the operations. There are few, based on the 1st and 3rd value. add, sub, mod, xor, mul.\n If we take for example the values for the first buffer: 0x01 0x81 0x65 0x0C 0x5A those would be spitted into; 0x01 - mod operation, 0x65 - add; so the char is (0x5A % 0x81) + 0x0C. We do simular (but different operations) on each of the buffers.\n\nWhat is the problem with this binary (or maybe it's intentional)? Well for almost all the cases the value calculated on the operands is not compared with the flag's char and this <pre><code>eax</code></pre> is not correctly set and we get 'None'. What would need to be fixed is to change the jump so that all the cases go through the check if the flag char. What you could do apart from modifying the binary is to trick gdb to behave properly.\n\nSet the breakpoint on <pre><code>leave</code></pre>\n\ntype command\ntype p/c $edx\ntype set $eax=0\ntype end\n\n\nWith this whenever breakpoint is triggered, you will print the calculated char and it will simulate the comparison to be ok and allowed the application to continue. With that you can run the app, hit a few times the 'c' and observe the flags\nAnd finally the flag\n\n flag{HereBeDaFlagForYoDebu?g?h} \n\nAnd a bit of explanation...\n\n for those two '?' it is either the control bytes are wrong or the operands and thus they are calculated wrongly. Maybe I would spend some time to find out and try to calculate them correctly but with current values what we are getting is something outside the ASCII printable.\n",
+            "votes": "3",
+            "user": "Paweł Łukasik",
+            "time": "Sep 22, 2017 at 14:54",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "EDIT : As Paweł Łukasik and DittoPDX stated, the binary is indeed flawed, and thus do not allow any correct flag. However the approach taken bellow is still valid and may help in similar tasks.\n\nI am pretty sure there are many different ways to solve this challenge, and here is one I learnt from other CTF tasks which requires very little reverse engineering.\nThe whole solution lays on the way the main loop is built :\n<pre><code>for ( i= 0; i <= 30; i++)\n{\n    if ( check(ec[i], argv[1][i]) )\n    {\n        puts(\"Nope\");\n        return -1;\n    }\n}\nputs(\"congrats!\");\nresult = 0;\n</code></pre>\nThe only way to reach \"congrats!\" would be by going through the whole loop without hitting that return in the middle.\nThe interresting part is that the check function is called on each char of the input, and the loop exists as soon as it is not valid.\nThis construction has some implication on things you can evaluate during the program execution. One may call this a \"side channel attack\".\n\nSpoiler, below this mark are some more details to solve this task.\n\n\n What I meant is : the number of instruction executed by the binary will increase for every right char you got.\n \n One way to solve this challenge would be to count the number of executed instruction (Hint : PinTools; Source/tools/ManualExamples/inscount), and to bruteforce the input char by char. Everytime you guess the right char, the number of executed instructions will increase.\n\nAn easy way to script all this would be to use the pwntools python module :)\n\nI hope this helped, happy CTF !\n",
+            "votes": "2",
+            "user": "Nxgr",
+            "time": "Sep 22, 2017 at 7:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user21677",
+                    "text": "<span class=\"comment-copy\">Referring to Lukasik's \"flawed binary\" comment way above, I think that even if I did find out the password, the program wouldn't accept it because it requires us to manually debug the program and find out each individual ascii character. If we put in any single input from (0 - 256) on the extended ascii table, the array will return false regardless. In order to pass the 2nd set of checks, we'd have to manually change the array values to match its calculated value.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

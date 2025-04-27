@@ -1,0 +1,31 @@
+{
+    "title": "x86-64 bit Buffer Overflow, help with overwriting %rip",
+    "link": "https://reverseengineering.stackexchange.com/questions/19682/x86-64-bit-buffer-overflow-help-with-overwriting-rip",
+    "content": "I am trying to get a buffer overflow exploit to work on Ubuntu 16.04 LTS 64bit.\nTo this end I use the following vulnerable program:\n<pre><code>#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main(int argc, char* argv[])\n{\n\n    char buffer[256];\n    strcpy(buffer, argv[1]);\n    printf(\"%s\n\", buffer);\n    return 0;\n}\n</code></pre>\nI deactivate ALSR (temporarily set <pre><code>/proc/sys/kernel/randomize_va_space</code></pre> to <pre><code>0</code></pre>) and compile my code with\n<pre><code>gcc vuln.c -o vuln -z execstack -fno-stack-protector\n</code></pre>\nI manage to overwrite <pre><code>rip</code></pre> with 6 <pre><code>B</code></pre>'s using \n<pre><code>gdb$ run $(python -c 'print \"A\"*264 + \"B\"*6')\n</code></pre>\nand get the following result in gdb:\n<pre><code>RSI: 0x602010 ('A' <repeats 200 times>...)\nRDI: 0x1 \nRBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd9d0 --> 0x0 \nRIP: 0x424242424242 ('BBBBBB')\nStopped reason: SIGSEGV\n0x0000424242424242 in ?? ()\n</code></pre>\nWhich makes perfect sense to me.\nI would like to overwrite <pre><code>rip</code></pre> with the beginning of my buffer of \"<pre><code>A</code></pre>\"'s so I can later place my shellcode at the beginning of the buffer (preceeded by some noop's):\nSo, knowing, how many <pre><code>A</code></pre>'s I wrote in the buffer I have a look at <pre><code>rsp</code></pre> minus an offset (I am just playing with the offset until I get a line starting with <pre><code>A</code></pre>'s:\n<pre><code>gdb$ x/20x $rsp-288\n0x7fffffffd8b0: 0x00007fffffffdaa8  0x0000000200000000\n0x7fffffffd8c0: 0x4141414141414141  0x4141414141414141\n0x7fffffffd8d0: 0x4141414141414141  0x4141414141414141\n</code></pre>\nSo, from this I am taking, that my buffer starts at <pre><code>0x7fffffffd8c0</code></pre> on the stack.\nNext I'll redirect <pre><code>rip</code></pre> to <pre><code>0x7fffffffd8c0</code></pre> as follows:\n<pre><code>gdb$ run $(python -c 'print \"A\"*264 + \"\\x7f\\xff\\xff\\xff\\xd8\\xc0\"[::-1]')\n</code></pre>\nWhich works:\n<pre><code>RBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd9d0 --> 0x0 \nRIP: 0x7fffffffd8c0 ('A' <repeats 200 times>...)\n</code></pre>\nAs I am planning to put shellcode at the beginning of the buffer I just assume, my shellcode will be 10 bytes long and see if this works:\n<pre><code>gdb$ run $(python -c 'print \"S\"*10 + \"A\"*254 + \"\\x7f\\xff\\xff\\xff\\xd8\\xc0\"[::-1]')\n</code></pre>\nand now something I don't understand happens: Despite the fact, that I write exactly the same amount of characters into my buffer, the value of <pre><code>rip</code></pre> changes, apparently it no longer points to the start of my buffer:\n<pre><code>RSI: 0x602010 (\"SSSSSSSSSS\", 'A' <repeats 190 times>...)\nRDI: 0x1 \nRBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd980 --> 0x0 \nRIP: 0x7fffffffd8ca ('A' <repeats 182 times>)\n</code></pre>\nInstead of <pre><code>0x7fffffffd8c0</code></pre> <pre><code>rip</code></pre> now contains <pre><code>0x7fffffffd8ca</code></pre>.\nSo it is actually still pointing to the beginning of my <pre><code>A</code></pre>'s instead of the <pre><code>S</code></pre>'s which I injected in my python command:\n<pre><code>gdb-peda$ x/20 $rip-10\n0x7fffffffd8c0: 0x5353535353535353  0x4141414141415353\n0x7fffffffd8d0: 0x4141414141414141  0x4141414141414141\n</code></pre>\nObviously I am just getting started with this stuff.\nWhy is this happening?\nWhat am I missing?\n",
+    "votes": "5",
+    "answers": 1,
+    "views": "8k",
+    "tags": [
+        "buffer-overflow",
+        "amd64"
+    ],
+    "user": "schtopps",
+    "time": "Oct 22, 2018 at 8:38",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "Have you tried with another number of 'S' characters ? Does it work the same or is it really linked to the fact you have 0xa characters ?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Don't worry, the shellcode is executing properly, just that the debugger \"skipped\" past the execution.\nRemember that <pre><code>rip</code></pre> is the instruction pointer and whatever code present at the <pre><code>rip</code></pre> is executed. If the code is invalid however, something will go wrong (for example a SIGSEGV will be raised)\nIn this particular case, a <pre><code>S</code></pre> (byte <pre><code>\\x53</code></pre>) corresponds to a <pre><code>push rbx</code></pre> command (which is valid, and push 8 bytes to the stack), while an <pre><code>A</code></pre> is a <pre><code>rex.B</code></pre> - basically speaking, it causes a SIGSEGV in this case.\nSo in the latter case, ten <pre><code>push rbx</code></pre> commands get executed. (note the <pre><code>esp</code></pre> is decreased by <pre><code>0x7fffffffd9d0 - 0x7fffffffd980 = 0x50</code></pre>, which is 10 times the size of <pre><code>rbx</code></pre>)\nWhat you can do instead: Break at the <pre><code>ret</code></pre> instruction in the <pre><code>main</code></pre> function. After the breakpoint is hit, execute 1 more instruction then the <pre><code>rip</code></pre> should have the desired value.\n",
+            "votes": "6",
+            "user": "user202729",
+            "time": "Oct 22, 2018 at 10:27",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

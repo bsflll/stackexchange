@@ -1,0 +1,71 @@
+{
+    "title": "Dealing With x86 Segmentation Overlaps",
+    "link": "https://reverseengineering.stackexchange.com/questions/21654/dealing-with-x86-segmentation-overlaps",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I load my project into IDA 7 and select 8086 as this rom is a 512kb in the high address space. I apply an offset of 0x80000 and it loads properly.\n </p>\n <p>\n  I then go to 0xFFFF0 and find a far jump to 0xFDAF:0x0 which has far jumps to 0xC000:0x0 and in that segment there are tons of 0xC000:0xNNN (lots of offsets).\n </p>\n <p>\n  It was a nightmare creating and shrinking segments so I greped through the binary dump and pulled the 8 hex values after every far jump (0xEA). I then formatted and calculated the ohysical addresses.\n </p>\n <p>\n  You can see in the segment list that the majority of segments overlap (eg):\n </p>\n <pre><code>0xC000:0x0000 = 0x0C0000\n0xC000:0x12DB = 0x0C12DB\n0xC003:0xA908 = 0x0CA938\n0xC003:0xC908 = 0x0CC938\n0xC007:0x506A = 0x0C50DA\n0xC013:0x0903 = 0x0C0A33\n</code></pre>\n <p>\n  From a running code prospective overlapping segments are irrelevent but IDA can not have overlaps. How am I suppose to walk through the code?\n </p>\n <p>\n  Files:\n  \n\n  <a href=\"https://drive.google.com/file/d/1r1KbKReEaktIh43GC_pUbX1v8OivH5EA/view?usp=sharing\" rel=\"nofollow noreferrer\">\n   ROM.BIN\n  </a>\n  \n\n  <a href=\"https://pastebin.com/K6HGHiRi\" rel=\"nofollow noreferrer\">\n   Segment List\n  </a>\n </p>\n <hr/>\n <p>\n  0x49cdb: ea08a903c0 = jmp 0xc003:a908\n </p>\n <pre><code>00049cb0: 8b36 4a90 8b16 2990 2bf2 5e73 0b8b deb3  .6J...).+.^s....\n00049cc0: 208b f3b0 08a2 8b90 f7c6 2000 7503 e9ab   ......... .u...\n00049cd0: fd8b c6e8 9200 240f 3c07 747e a08a 903c  ......$.<.t~...<\n00049ce0: 0774 05b0 00a2 8a90 a08b 903c 0874 03e9  .t.........<.t..\n00049cf0: 8afd b200 b115 e8d7 45b0 d7e8 820d 8b36  ........E......6\n</code></pre>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "595",
+    "tags": [
+        "ida",
+        "x86",
+        "segmentation"
+    ],
+    "user": "uMinded",
+    "time": "Jul 12, 2019 at 13:33",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n did you account for the instruction encoding  and little endian when extracting values from the dump? I could not find any references to C003 in the binary.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "uMinded",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky Updated question with xdd dump showing a 0XC003 segment. As the instruction length is variable I did not require the EA on a byte boundery. As my script produced knowen good segments I assumed I was onto something, was I wrong?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n Oh I see. the problem is the way you search the dump; actual byte sequence is\n <code>\n  7e a0 8a 90 3c 07\n </code>\n ; you've got it shifted by a nibble.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n P.S. while x86 instruction length is indeed variable, it is of a variable number of\n <i>\n  bytes\n </i>\n , not\n <i>\n  bits\n </i>\n .\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "uMinded",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky I was at working and was thinking byte boundery only made sense... This is my first dissasembly on x86, segmentation is kinda wierd coming from easy z80 asm.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So, a complete answer would be worth a series of blog posts but I'll try to touch the high points:\n </p>\n <ol>\n  <li>\n   <p>\n    While you can use different seg:base pairs to refer to the same location, in real code it rarely happens. Code segments use the same base for all their functions and do not intersect with neighbors. However, they sometimes do not start or end at the exactly 16-byt aligned boundary. An example from this ROM:\n   </p>\n   <ul>\n    <li>\n     segment with the base\n     <code>\n      E0470\n     </code>\n     starts at\n     <code>\n      E047:0008\n     </code>\n     (linear 0xE0478) and ends at\n     <code>\n      E047:FF84\n     </code>\n     (linear 0xF03F4).\n    </li>\n    <li>\n     the following segment uses base\n     <code>\n      F03F\n     </code>\n     and thus starts at\n     <code>\n      F03F:0004\n     </code>\n     (also linear 0xF03F4)\n    </li>\n   </ul>\n  </li>\n  <li>\n   <p>\n    inside a code segment, near jumps and calls normally stay inside the segment, and the functions should not extend beyond the segment's end. This is one of the ways you can determine the real boundaries of a segment. For example, we have for the base E047 we have in the binary:\n   </p>\n   <ul>\n    <li>\n     far call to\n     <code>\n      E047:0008\n     </code>\n     , so probably that's the start of the segment.\n    </li>\n    <li>\n     far call to\n     <code>\n      E047:FF53\n     </code>\n     which is probably the last function of the segment. By disassembling the function and following only the near jumps, we come to the\n     <code>\n      retf\n     </code>\n     at 0xF03F2, or\n     <code>\n      E047:FF82\n     </code>\n     , so looks like the segment ends around there, and we can add the extra zero byte after it that was likely added by the linker for padding, arriving at the final boundary of\n     <code>\n      E047:FF84\n     </code>\n     (linear 0xF03F4).\n    </li>\n   </ul>\n  </li>\n </ol>\n <p>\n  More extended example:\nafter making an initial guess for segment's\n  <code>\n   C84B\n  </code>\n  boundaries to be\n  <code>\n   C84B:0004\n  </code>\n  to\n  <code>\n   C84B:F112\n  </code>\n  , I noticed these instructions in the list of problems:\n </p>\n <pre><code>SEG_C84B:96A2 call    0F2D5h\nSEG_C84B:EF69 jmp     0F395h\nSEG_C84B:F0C8 call    0F3DFh\n</code></pre>\n <p>\n  Since these are near calls and jumps, they should belong to the same segment. Following them gives us the extended end of the segment to be 0xd7894 or C84B:F3E4.\n </p>\n <ol start=\"3\">\n  <li>\n   as an extension of above, data references using\n   <code>\n    cs\n   </code>\n   should point to data inside the segment, and it should make sense in the context. This is most visible with switch statements which look similar to following:\n  </li>\n </ol>\n <pre><code>2E FF A7 B6 59  jmp     cs:off_B000_59B6[bx]\n2E FF A4 8E 76  jmp     cs:off_C000_768E[si]\n</code></pre>\n <p>\n  A good example is this one at 0xf05f1:\n </p>\n <pre><code>2E FF A7 06 02                 jmp     cs:206h[bx]\n68 01                          dw 168h\n6E 01                          dw 16Eh\n74 01                          dw 174h\n80 01                          dw 180h\n86 01                          dw 186h\n</code></pre>\n <p>\n  If we assume that the words following the jump is the jump table, then the segment should start around\n  <code>\n   0206h\n  </code>\n  bytes earlier, and indeed there is a function start at 0xf03f4, so if we make a segment starting there (with base 0xf03f), our switch is nicely recovered:\n </p>\n <pre><code>SEG_F03F:01FD D1 E0          shl     ax, 1\nSEG_F03F:01FF 8B D8          mov     bx, ax\nSEG_F03F:0201 2E FF A7 06 02 jmp     cs:off_F03F_206[bx]\nSEG_F03F:0206 68 01          dw offset loc_F03F_168  ; DATA XREF: sub_F03F_100+101↑r\nSEG_F03F:0208 6E 01          dw offset loc_F03F_16E\nSEG_F03F:020A 74 01          dw offset loc_F03F_174\nSEG_F03F:020C 80 01          dw offset loc_F03F_180\nSEG_F03F:020E 86 01          dw offset loc_F03F_186\nSEG_F03F:0210 95 01          dw offset loc_F03F_195\n</code></pre>\n <p>\n  I don't have the full picture yet, but the following boundaries seem to be close:\n </p>\n <pre><code>B000: 0xB0000-0xC0000 (full 64K)\nC000: 0xC0000-0xC84B4\nC84B: 0xC84B4-0xD7A52 (there is some weird stuff near the end)\nE047: 0xE0478-0xF03F4\nF03F: 0xF03F4-0xFDAF0\nFDAF: 0xFDAF0-0xFFFF0\n</code></pre>\n <p>\n  I added some scripts I used to\n  <a href=\"https://gist.github.com/skochinsky/cb988b42e306ee76473d7b4fb8f7e49e\" rel=\"nofollow noreferrer\">\n   my gist\n  </a>\n  .\n </p>\n <p>\n  Note: some of the addresses printed out by the scanner are false positives and do not indicate real segments. You should consider only those that have multiple matches.\n </p>\n <p>\n  Data in lower segments seems to be compressed.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Jul 12, 2019 at 18:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "uMinded",
+                    "text": "<span class=\"comment-copy\">Thanks so much for the specific examples, really cleared things up and I am moving along nicely! Looking for the call multiples really helps as well. Now locating functions is pretty easy by their telltale 0x5n....0x5n 0xCn push, pop, jmp/ret structure. I even found the ISR vector table and I am pretty sure seg_C000 gets moved to the RAM 0x00000.</span>",
+                    "time": null
+                },
+                {
+                    "user": "uMinded",
+                    "text": "<span class=\"comment-copy\">The first 196k are compressed as the ROM has a dictionary and thesaurus and I don't see any words floating around. From a few hours of poking around it looks like 0xE047 is the \"BIOS\" and the end address are clearly function entry calls as they preserve all the registers before calling lower down.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  igorsk gave a nice reply there\n </p>\n <p>\n  this post is just to illustrate how you can use some standalone disassembler framework to look for proper ljmps instead of your xxd | tr  hacks\n </p>\n <p>\n  I am using capstone below\n </p>\n <pre><code>PS F:\\zzzz> Get-Content .\\rombi.py\nfrom capstone import *\n\nmd = Cs(CS_ARCH_X86, CS_MODE_16)\nfin = open(\"f:\\\\zzzz\\\\rom.bin\" , \"rb\")\nbuf = fin.read()\nfin.close()\nfsiz =  len(buf)\noffset = 0\nwhile (offset < fsiz):\n        offset  =  buf.find(b\"\\xea\",offset)\n        if(offset != -1):\n                patt = buf[offset:offset+5]\n                for i in md.disasm( patt ,(0x80000+offset)):\n                        print(\"0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str))\n                offset = offset + 1\n        else:\n                break\n</code></pre>\n <p>\n  running and analyzing the results\n </p>\n <pre><code>PS F:\\zzzz> $foo = python.exe .\\rombi.py\n\nPS F:\\zzzz> $foo.Count\n484\n\nlast three far jumps\nPS F:\\zzzz> $foo[($foo.Count - 4)..$foo.Count]\n0xfd7ce:        ljmp    0x2d20:0x4f00\n0xfd7e9:        ljmp    0x2d20:0x5800\n0xfdaf8:        ljmp    0xc000:0\n0xffff1:        ljmp    0xfdaf:0\n\nfirst three far jumps\nPS F:\\zzzz> $foo[0..3]\n0x80162:        ljmp    0x507a:0xf0b8\n0x8019c:        ljmp    0x4b48:0x4a6b\n0x801fa:        ljmp    0xdae2:0xaa33\n0x803c0:        ljmp    0x9b74:0xaa4a\nPS F:\\zzzz>\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Jul 13, 2019 at 10:45",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,82 @@
+{
+    "title": "Disassemble ELF - PC is set to 0?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19378/disassemble-elf-pc-is-set-to-0",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I tried to disassemble a ELF file which is a shared object file executed on armv7a (Android). I saw a strange block. It seems  that the <code>PC</code>, program counter register, is set to <code>0</code>. Did I miss something or do something wrong?</p>\n<hr/>\n<p>The process goes into <code>0x1708</code> in ARM mode. Below is the strange block of asm code I disassembled from the ELF file.</p>\n<pre><code>; section: .plt\n; function: function_1708 at 0x1708 -- 0x1718\n0x1708:   04 e0 2d e5       str lr, [sp, #-4]!\n0x170c:   04 e0 9f e5       ldr lr, [pc, #4]\n0x1710:   0e e0 8f e0       add lr, pc, lr\n0x1714:   08 f0 be e5       ldr pc, [lr, #8]!\n; data inside code section at 0x1718 -- 0x171c\n0x1718:   b4 77 00 00                                        |.w..            |\n</code></pre>\n<p>After executing line <code>0x170c</code>, the <code>LR</code> register should be set as the value at the address <code>0x1718</code>. The value is <code>0x77b4</code> (this file is stored in little-endian).  And go ahead.</p>\n<pre><code>0x1710: lr += 0x1710 + 8  // lr = 0x8ecc\n0x1714: pc = *(lr + 8)    // pc = *(0x8ed4)\n        lr += 8  \n</code></pre>\n<p>And 0x8ed4 is in <code>.got</code> section.</p>\n<pre><code>; section: .got\n0x8eac:   00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00   |................|\n0x8ebc:   00 00 00 00 58 70 00 00  e0 6e 00 00 00 00 00 00   |....Xp...n......|\n0x8ecc:   00 00 00 00 00 00 00 00  00 00 00 00 08 17 00 00   |................|\n0x8edc:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8eec:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8efc:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f0c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f1c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f2c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f3c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n</code></pre>\n<p>It seems that the value at <code>0x8ed4</code> is zero. I traced to this strange block from <code>JNI_OnLoad()</code>, so no data should be modified before executing this block.</p>\n<p>Did I do something wrong, or is this a specific behavior of ARM architecture?</p>\n</div>",
+    "votes": "6",
+    "answers": 2,
+    "views": "619",
+    "tags": [
+        "android",
+        "arm",
+        "assembly"
+    ],
+    "user": "IvanaGyro",
+    "time": "Sep 18, 2018 at 5:58",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Are you familiar with GOT/PLT in other assembly languages? (usually, the x86 is better known). Because your question is, in fact, strongly related to the GOT/PLT behavior in general, and related to ARM architecture in particular.</span>",
+            "time": null
+        },
+        {
+            "user": "IvanaGyro",
+            "text": "<span class=\"comment-copy\">No. I am new to reverse engineering. I am googling relative information. Is there any good article for reading?</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Ok, I'll write a complete answer, then.</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Note that this is not trivial! If you do not really understand at first read, this is perfectly normal. Try to fetch a debugger and to step through your program to better understand (and keep faith!).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In fact, the behavior you are describing is coming from the usual behavior of the GOT/PLT sections. They are used to dynamically link the program calls to shared libraries functions at runtime.</p>\n<p>In fact, a shared library can be loaded at any place in the process memory, there is no way to predict statically where it will pop up. So, the GOT/PLT load the address of each library's function dynamically at runtime and cache it for further use.</p>\n<p>The way it works is pretty simple, the PLT (<strong>Procedure Linkage Table</strong>) is just a bunch of small code gadgets (one for each library's function called in the program, plus one generic code located at the beginning of the PLT section).</p>\n<p>And, the GOT (<strong>Global Offset Table</strong>) is just a table used to store (and cache) the addresses of the library's functions.</p>\n<p>At first, the GOT is all set to zero because no function address has been resolved yet. The GOT get filled all along the program is executed and call new functions (some functions may be called only rarely and their address may be only rarely filled in the GOT).</p>\n<p>When a library function get called the program counter goes to the PLT (see the figure below) and executes the code specifically written for this function (each of the code gadget has its own offsets to get the proper address from the GOT). But, at first, the GOT contains only zeroes, so you need to initialize it.</p>\n<p>To initialize it, you jump at the very beginning of the PLT and find the address of library's function the program want to call. You execute this code and, then, you write the address of the function in the GOT.</p>\n<p><a href=\"https://i.sstatic.net/m4Yl3.png\" rel=\"noreferrer\"><img alt=\"PLT/GOT Schema (before)\" src=\"https://i.sstatic.net/m4Yl3.png\"/></a></p>\n<p>Once you cached the address of the function, you do not need anymore to recompute the address if you call your function and you jump directly to it (as in the following picture).</p>\n<p><a href=\"https://i.sstatic.net/sQuX8.png\" rel=\"noreferrer\"><img alt=\"PLT/GOT Schema (after)\" src=\"https://i.sstatic.net/sQuX8.png\"/></a></p>\n<p>In the case of ARM, you have two types of GOT/PLT schemas:</p>\n<ul>\n<li><a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dai0242a/ch07s05s01.html\" rel=\"noreferrer\">Direct PLTs</a></li>\n<li><a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dai0242a/BCGHGBDH.html\" rel=\"noreferrer\">Indirect PLTs</a></li>\n</ul>\n<p>In your case, this is a direct PLT (but it seems to be quite old code, I would suspect an old compiler or so, because new ones better use <code>ip</code> in place of <code>lr</code> for that).</p>\n<pre><code>; section: .plt\n; function: function_1708 at 0x1708 -- 0x1718\n0x1708:   04 e0 2d e5     str lr, [sp, #-4]! &lt;-- Save lr on the stack\n0x170c:   04 e0 9f e5     ldr lr, [pc, #4] &lt;-- Get a point of reference in memory\n0x1710:   0e e0 8f e0     add lr, pc, lr &lt;-- Load offset to the next step\n0x1714:   08 f0 be e5     ldr pc, [lr, #8]! &lt;-- Jump to the next step\n</code></pre>\n<p>Note that the PLT is a static section, therefore the <code>0x170c</code> will always stay the same (and, therefore, the <code>pc</code> will always be loaded with the same value at <code>0x170c</code>).</p>\n<h3>References</h3>\n<ul>\n<li><p><a href=\"https://eli.thegreenplace.net/2011/11/03/position-independent-code-pic-in-shared-libraries/\" rel=\"noreferrer\">Position Independent Code (PIC) in shared libraries</a>, by Eli Bendersky.</p>\n</li>\n<li><p><a href=\"https://thinkingeek.com/2017/04/17/arm-assembler-raspberry-pi-chapter-27/\" rel=\"noreferrer\">ARM assembler in Raspberry Pi – Chapter 27 </a>, by Roger Ferrer Ibáñez.</p>\n</li>\n<li><p><a href=\"https://www.slideshare.net/linaroorg/sfo15406-arm-fdpic-toolset-kernel-libraries-for-cortexm-cortexr-mmuless-cores\" rel=\"noreferrer\">ARM FDPIC toolset, kernel &amp; libraries for Cortex-M &amp; Cortex-R</a>.</p>\n</li>\n</ul>\n</div>",
+            "votes": "7",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">So, in my situation, function_1708 is PLT[0], the code to call resolver, right? How does the linker know where to fill its memory address to the correct address of the shared library? In my case, <code>0x8ed4</code> is not the first address in <code>.got</code>. The first is <code>0x8eac</code>. The strategy of filling the address of the resolver is depended on the format of the ELF file, the running operating system, or the architecture or CPU?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">At the beginning of each run of your program, the linker set the address where the shared library is in the PLT and each function used by the program is given an offset in the current shared library. So that, if you know the address of the shared library in memory and the offset of a specific function you can get the address of the function in the virtual memory. You compute this only once, thanks to the GOT (which cache the result).</span>",
+                    "time": null
+                },
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">I think I asked the wrong questions. However, I got my answer in some ELF specifications. As the same as @Igor Skochinsky♦ answered, the location where the linker chooses to put the address of the resolver is defined in ELF specs. The definition relies on the type of file, ELF. Anyway, you helped me a lot. Thank you!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>While the other answer is not wrong, it does not actually cover the real issue: how come that calling a zero address does not lead to a crash?</p>\n<p>AFAIK there is no official standard or complete documentation for this, but <em>de facto</em> the first few GOT entries are special/reserved and are used by the dynamic loader/linker (sometimes also called <em>interpreter</em>) for its own purposes:</p>\n<ul>\n<li><p><code>GOT[0]</code> points to the <code>_DYNAMIC</code> symbol of the current module which is the start of the list of tags (<code>Elf32_Dyn</code> entries) with the various information necessary for proper resolution of dynamic symbols. See the <a href=\"http://www.sco.com/developers/gabi/latest/ch5.dynamic.html\" rel=\"noreferrer\">ELF specification</a>. </p></li>\n<li><p><code>GOT[1]</code> is populated <em>at runtime</em> with the pointer to the <code>link_map</code> structure containing the list of all dynamic images present in the process. This list resides in the dynamic linker (<code>ld.so</code> on Linux systems and <code>linker</code> binary on Android).</p></li>\n<li><p><code>GOT[2]</code> is also filled in by the dynamic linker and points to the <em>resolver function</em> (<code>_dl_runtime_resolve</code> in glibc, not sure on Android).</p></li>\n</ul>\n<p>The snippet you quoted is the <em>resolver stub</em> which is called on first call of an external symbol (you can see that all GOT entries are initialized to its address, <code>1708</code>). It fetches <code>GOT[2]</code> and jumps to it, which should end up in the dynamic linker, which would look up the symbol, patch the GOT entry and jump to the function as the last step.</p>\n<p>As I said, there are no (AFAIK) official docs on this, just random pieces of the ELF ABI spec, glibc source code and various blog posts. I would suggest you to step through this code in a debugger to see what actually happens, and match it against the source code. In addition to links from @<strong>perror</strong>, I found <a href=\"http://uaf.io/exploitation/misc/2016/04/02/Finding-Functions.html\" rel=\"noreferrer\">this post</a> which explains some of the reserved GOT entries (although for x64 Linux and not ARM Android).</p>\n</div>",
+            "votes": "5",
+            "user": "Igor Skochinsky",
+            "time": "Sep 18, 2018 at 13:43",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">I tried to find the official ELF specifications. According to Wikipedia, there are a lot of different specs. And the organization developed the ELF, UNIX System Laboratories, was defunct. The first spec is released by AT&amp;T. I am curious why so many companies released their ELF spec or included the ELF spec into their ABI specs and what is the historical context. It is interesting.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: I did not know all this! In fact, I assumed that the analysis done by IvenCJ7 was done statically, so the GOT was set to zero originally and set to beginning of PLT afterward. I see now that I was very likely wrong. Nice explanation Igor (once again) and good link, thanks!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,32 @@
+{
+    "title": "IDA Pro shows an array where two varaibles should be",
+    "link": "https://reverseengineering.stackexchange.com/questions/29150/ida-pro-shows-an-array-where-two-varaibles-should-be",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm working in a Delphi binary and found a little issue while generating pseudocode.\nThis is the output (after some clean up) that IDA gives me:\n </p>\n <pre><code>Integer __fastcall LBCommon::TLBMemStream::GetFromId(PLBMemStream Self, Integer Id)\n{\n  int v4[2]; // [esp+0h] [ebp-10h] BYREF\n\n  if ( LBCommon::IndexFromId(Self->FFullData, Id, &v4[1]) )\n    v4[0] = &Self->FFullData[*&Self->FFullData[sizeof(TLBDataEntry) * v4[1] + 0x19] + offsetof(TLBDataItem, FData)];\n  else\n    v4[0] = 0;\n  return v4[0];\n}\n</code></pre>\n <p>\n  As you can see, it is just a simple piece of code where it does some simple math en then returns. But there is a problem: v4 is represented as an array of integers instead of two separated variables.\n </p>\n <p>\n  In theory, v4[0] is a \"Pointer\" to memory that will be returned while v4[1] is a variable that should have a number of times to advance. But IDA thinks of them as an array and just sticks them together. I tried separating them by setting the type to \"int v4\" and it worked, but IDA then told me:\n </p>\n <blockquote>\n  <p>\n   / local variable allocation has failed, the output may be wrong!\n  </p>\n </blockquote>\n <p>\n  It also shows the two variables generated with the color red signaling that something is wrong.\n </p>\n <p>\n  I don't know a lot about how IDA generates the Pseudocode from the ASM, but I believe that the issue is with how the code access the memory regions. For v4[0] it does \"\n  <strong>\n   mov edx, [esp+10h+var_10]\n  </strong>\n  \" and for v4[1] it does \"\n  <strong>\n   mov edx, [esp+10h+var_10+4]\n  </strong>\n  \" so I believe that it is the reason why they are seen as an array.\n </p>\n <p>\n  Here is the function in ASM just in case:\n </p>\n <pre><code>CODE:0046A7E4 var_10          = dword ptr -10h\nCODE:0046A7E4\nCODE:0046A7E4                 push    ebx\nCODE:0046A7E5                 push    esi\nCODE:0046A7E6                 add     esp, 0FFFFFFF8h\nCODE:0046A7E9                 mov     esi, edx\nCODE:0046A7EB                 mov     ebx, eax\nCODE:0046A7ED                 lea     ecx, [esp+10h+var_10+4] ; Index\nCODE:0046A7F1                 mov     edx, esi        ; FId\nCODE:0046A7F3                 mov     eax, [ebx+4]    ; Header\nCODE:0046A7F6                 call    LBCommon::IndexFromId\nCODE:0046A7FB                 test    al, al\nCODE:0046A7FD                 jz      short loc_46A818\nCODE:0046A7FF                 mov     eax, [ebx+4]\nCODE:0046A802                 mov     edx, [esp+10h+var_10+4]\nCODE:0046A806                 mov     eax, [eax+edx*8+19h]\nCODE:0046A80A                 mov     edx, [ebx+4]\nCODE:0046A80D                 lea     eax, [edx+eax]\nCODE:0046A810                 add     eax, 0Dh\nCODE:0046A813                 mov     [esp+10h+var_10], eax\nCODE:0046A816                 jmp     short loc_46A81D\nCODE:0046A818 ; ---------------------------------------------------------------------------\nCODE:0046A818\nCODE:0046A818 loc_46A818:\nCODE:0046A818                 xor     eax, eax\nCODE:0046A81A                 mov     [esp+10h+var_10], eax\nCODE:0046A81D\nCODE:0046A81D loc_46A81D:\nCODE:0046A81D                 mov     eax, [esp+10h+var_10]\nCODE:0046A820                 pop     ecx\nCODE:0046A821                 pop     edx\nCODE:0046A822                 pop     esi\nCODE:0046A823                 pop     ebx\nCODE:0046A824                 retn\n</code></pre>\n <p>\n  Is there a way to fix the issue without generating an error? Because I don't believe the original developers used an array here to do this simple thing and it is a problem that has been repeating itself for a while in some parts.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "hexrays",
+        "delphi"
+    ],
+    "user": "Ricardo",
+    "time": "Aug 17, 2021 at 13:11",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  On the machine level, there is no difference between an int[2] array, a structure with two ints, or two int variables that happen to be placed next to each other.\n </p>\n <p>\n  In addition, sometimes one variable may be stored separately in different locations. For example, when dealing with 64-bit numbers on 32-bit processors, the compiler has to work with 32 bits at a time. A common aproach is to use\n  <code>\n   eax\n  </code>\n  for the low part and\n  <code>\n   edx\n  </code>\n  for the high.\n </p>\n <p>\n  Your sample seems to be behaving quite similarly (low part of\n  <code>\n   var_10\n  </code>\n  is stored in\n  <code>\n   eax\n  </code>\n  and\n  <code>\n   var_10+4\n  </code>\n  in\n  <code>\n   edx\n  </code>\n  ), so possibly it triggers 64-bit math heuristics and the decompiler initially decides that\n  <code>\n   var_10\n  </code>\n  is one 64-bit variable but later replaces it by a two-element array. It's difficult to say what's happening for sure without the database.\n </p>\n <p>\n  One possible way to separate the variables is to edit the stack frame structure. For this, double-click\n  <code>\n   var_10\n  </code>\n  in disassembly view or\n  <code>\n   v4\n  </code>\n  in pseudocode, then edit\n  <code>\n   var_10\n  </code>\n  to be a dword instead of qword an add another dword after it. Normally this should give a hint to the decompiler that they are separate variables.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Aug 17, 2021 at 14:13",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ricardo",
+                    "text": "<span class=\"comment-copy\">Your solution worked perfectly. Thank you very much!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

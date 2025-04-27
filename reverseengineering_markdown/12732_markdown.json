@@ -1,0 +1,97 @@
+{
+  "title": "Target application crashes when using ReadProcessMemory",
+  "link": "https://reverseengineering.stackexchange.com/questions/12732/target-application-crashes-when-using-readprocessmemory",
+  "content": "I have an interesting application that seems to crash whenever a particular region of memory is read using ReadProcessMemory. I know it's not doing anything special with RPM because:\n\nIt's also not a guard region or a region with special protection flags. It's just a private R+W region.\n\nAt first I thought they were installing hardware data breakpoints like those described here, but after checking the debug registers of all threads and seeing that they were all zero made me conclude that another technique is used.\n\nI suspect that they are somehow raising an exception whenever that piece of memory is read. I'm looking to understand what they're doing and how to detect it, or at the very least, make RPM not crash the application.\n\nP.S. I cannot attach a debugger to this application, and the executable is encrypted, but I do know that various TLS callbacks are used along with VEH exception handlers.\n\n",
+  "votes": "2",
+  "answers": 4,
+  "views": "2k",
+  "tags": [
+    "memory",
+    "exception"
+  ],
+  "user": "Dave",
+  "time": "May 25, 2016 at 1:01",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Alright, it would appear that we have an answer to this. And it's a lot simpler than I thought, and actually pretty cool.\n\nBasically, they allocate some pages with no physical backing until the page is accessed. This means that any access whatsoever (even in kernel mode) will validate the page, thus allowing the application to see that the page has been validated and promptly crash the game.\n\nTo avoid this, you can use QueryWorkingSetEx or NtQueryVirtualMemory and if the \"valid\" property of the returned structure is zero, then you probably shouldn't be reading that page.\n\nI can't say for certain that this is the correct answer, but it fits my analysis. If anybody has more information on this technique, specifically how to implement it with something like VirtualAlloc, I would love to learn more.\n\nP.S. The application doesn't appear to have any kernel mode access whatsoever, it's just a regular user mode application.\n\nEDIT: Sample C++ implementation can be found here.\n\n",
+      "votes": "2",
+      "user": "Dave",
+      "time": "Jan 24, 2017 at 3:53",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "JavaMan",
+          "text": "let me guess, the game you were trying to RPM is either Overwatch or Wow from Blizzard? This technique has been discussed in many game cheating websites. And yes, this is the way they detect RPM",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Check if attaching windbg in non-invasive mode works. If yes, check the page permissions of the target address range.\n\n",
+      "votes": "1",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Dave",
+          "text": "Yep, I tried that before, and it still crashed. But I checked the page permission externally and it came up as 0x4 (PAGE_READWRITE).",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@Dave: well, in that case I can only suggest checking what exactly happens using a kernel debugger.",
+          "time": null
+        },
+        {
+          "user": "Dave",
+          "text": "Yep I think I might end up doing that.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Is there any kernel mode anti-debug? The ReadProcessMemory is using KeAttachProcess. Maybe there's an inline hook that stops you.\n\nUsing ARK tools like PCHunter can search hooks in your system easily.\n\nAnd I don't think that the application can detect RPM in user mode. In fact, to detect RPM, either hooking NtReadVirtualMemory or hooking the system page fault handler is need. What's more, even if the page is protected with PAGE_NO_ACCESS, the application shouldn't crash.\n\nSo I suspect that there is kernel mode hooking.\n\n",
+      "votes": "0",
+      "user": "Misty",
+      "time": "May 25, 2016 at 22:53",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Dave",
+          "text": "I'll have to give it a try, but I want to emphesize that it's not only RPM, reading the memory directly through code injection crashes the application as well. Maybe there is some VEH magic going on but I have to read up on it.",
+          "time": null
+        },
+        {
+          "user": "Misty",
+          "text": "@Dave Are you sure that the reading memory operation makes the  application crash? Maybe it crashes when you inject, and that's very usual.",
+          "time": null
+        },
+        {
+          "user": "Misty",
+          "text": "@Dave And what's crash information? You can upload a dump of that program.",
+          "time": null
+        },
+        {
+          "user": "Dave",
+          "text": "I conducted a simple test. I injected a DLL and scanned a regular region. Then I detached the DLL. I attached it again to scan another region I suspected was going to crash and it did, about 4600 bytes in.  The program has a built in crash mailer. It's not so much that it crashes but just hangs until you terminate it.",
+          "time": null
+        },
+        {
+          "user": "Misty",
+          "text": "have you asked in other communities? I googled it and You are trying to deal with Overwatch app.Since it is a game client, I strongly suspect there is kernel mode protect",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "VirtualProtect or WriteProcessMemory are affected by this \n\nbecause windows checks up the Vad Table with \nwith a internal function called \"MiCheckForConflictingNode\"\nwindows reacts to 0x00200000 what is 2 = VVadImageMap = 2\nto value 0x00400000 what is in VadTypeVadWriteWatch = 4 \nto value 0x0008000 this flag is \"NoChange\" yes (1) or no (0) either contains 0 or 1\n\nKeAttachProcess also calls a trigger im uncertain if its a flag or a function that got set\n\nthe trigger from the target is made to delay executed\nit then read out that information that got left from KeAttachProcess\n\nafter this the target prints a error but its only a trigger \n\nto avoid this do not use that functions or either emulate them so they dont call triggers or flags\nthere other ways too\n\nmicrosoft gives a .txt file what includes text that is pure scam and talks like 10 pages about that microsoft is protecting those companys\n\nand saying something like \"stack error\" what is not the case its just scamming and trolling\n\nalso i figured out that this part got added to windows with over a so called \"security update\" what is rather about the take the users away the rights from his own computer\n\nthats why i never liked windbg it has a tons of dependencies\n\nas you can see this problem here \n\n",
+      "votes": "0",
+      "user": "Djuy Doiu",
+      "time": "Feb 13, 2019 at 0:57",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

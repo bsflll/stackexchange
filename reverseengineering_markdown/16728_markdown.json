@@ -1,0 +1,72 @@
+{
+  "title": "Returning value from faux DLL",
+  "link": "https://reverseengineering.stackexchange.com/questions/16728/returning-value-from-faux-dll",
+  "content": "A bit of background; I'm trying to inject my own code into the old game SimTower with the ultimate goal of reverse engineering it in the same way that OpenRCT2 was created.\n\nSince SimTower is distributed as a 16-bit NE executable I'm having a bit of trouble with injecting my own DLL and changing the main method to my own (as in this article https://bwrsandman.wordpress.com/2014/12/27/first-steps-to-reverse-engineering-an-executable/), but I think I've found another way.\n\nOne of the first things that SimTower does is to run WAVEMIXINIT from WAVMIX16.DLL. As far as I can tell, if the return value is 0 it shows a dialog box and disables the sound.\n\n\n\nMy plan now is to simply create a faux wavmix16 dll that will (for now) always return 0 from that function. That should allow me to get an entry point to run my own code, and get the game started.\n\n```\ntypedef void *HANDLE;\n\nHANDLE __far __pascal WAVEMIXINIT() {\n  // while (1) {;};\n  return 0;\n}\n\nvoid __far __pascal STUB4() {}\nvoid __far __pascal STUB5() {}\nvoid __far __pascal STUB6() {}\nvoid __far __pascal STUB7() {}\nvoid __far __pascal STUB9() {}\nvoid __far __pascal STUB10() {}\nvoid __far __pascal STUB11() {}\nvoid __far __pascal STUB12() {}\n\n```\nCompiling this into a dll and naming it wavmix16.dll seems to work, and I can see that the call is coming in to my function, since if I uncomment the while loop the program will be stuck inside it.\n\nFor some reason though, the program crashes as soon as I get to my return statement.\n\n(wine)\n\n(Windows XP)\n\n\n\nThis is the assembly of my DDL function that gets called. I'm a little bit unsure of why there is more stuff than just a mov and retf (like the nop?), but I'm new to all this so maybe that's normal.\n\n\n\nThis is the assembly of the original DLL function:\n\n\n\nReally appreciate any help, thank you!\n\n",
+  "votes": "6",
+  "answers": 1,
+  "views": "313",
+  "tags": [
+    "dll",
+    "calling-conventions"
+  ],
+  "user": "Linus Unnebäck",
+  "time": "Nov 7, 2017 at 7:32",
+  "comments": [
+    {
+      "user": "Nordwald",
+      "text": "Did you check if you are using the correct parameters and calling convention? This seems like a clean-up error.",
+      "time": null
+    },
+    {
+      "user": "Linus Unnebäck",
+      "text": "As far as I can tell I am. Looking at the header file for the wavemix library I can see that the function is defined as HANDLE WINAPI WaveMixInit(void);. HANDLE is defined as a void pointer which I define in the same way in my code. WINAPI, if I understand this article correct is the same as my __far __pascal... I'll add the decompiled function from the original DLL and see if I can spot any differences...",
+      "time": null
+    },
+    {
+      "user": "Linus Unnebäck",
+      "text": "To me it seems like my function is pushing 2 values to the stack before returning, and that the original DLL is pushing 6 and popping 4 values (leaving 2 again) before returning, which to me indicates that the calling conventions should be the same...",
+      "time": null
+    },
+    {
+      "user": "Nordwald",
+      "text": "WINAPI should resolve to __stdcall (on modern systems). On another node, your function does not restore the orginal bp and sp. Really strange convention",
+      "time": null
+    },
+    {
+      "user": "Linus Unnebäck",
+      "text": "So, I'm compiling a 16-bit DLL with an ancient compiler since I haven't found any modern system that outputs 16-bit code :) I'm following this guide from DigitalMars and are using their compiler",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Your faux function is not fixing up the stack on the epilog of the function. It should have \n\n```\npop ds\npop bp\ndec bp\n\n```\nat the end by the calling convention.\n\nIf you look at the original function it fixes up the stack correctly. \n\nLet's say the stack pointer had the value of 1000h coming into the function (after CS:IP is already pushed on the stack for the far call). You would then have in the original function\n\n```\n; sp = 1000h\nmox ax, ds     \n...\npush bp        ; sp = 0ffeh\nmov bp, sp     ; bp = 0ffeh\n...\nlea sp, [bp-2] ; sp = 0ffch\npop ds         ; sp = 0ffeh\npop bp         ; sp = 1000h\nretf\n\n```\nTo make the compiler used in the question, the Digital Mars compiler dmc.exe, generate these instructions when returning from a far function, pass the flag -Wm which will \"Generate INC BP / DEC BP to mark far stack frames\".\n\n",
+      "votes": "6",
+      "user": "Linus Unnebäck",
+      "time": "Nov 9, 2017 at 0:57",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "about inc bp/dec bp: blogs.msdn.microsoft.com/oldnewthing/20110316-00/?p=11203",
+          "time": null
+        },
+        {
+          "user": "Linus Unnebäck",
+          "text": "Thank you! I added xor ax,ax, pop ds, pop bp, dec bp, retf as inline assembly in the function and it solved it!",
+          "time": null
+        },
+        {
+          "user": "Linus Unnebäck",
+          "text": "That being said, if someone could point me in the right direction to get the DigitalMars compiler dmc.exe to output the correct instructions I would be super happy :)",
+          "time": null
+        },
+        {
+          "user": "Linus Unnebäck",
+          "text": "I found it! The flag -Wm will make dmc \"Generate INC BP / DEC BP to mark far stack frames\". Adding this to the answer for completeness. It could potentially be good to add how to do it in other compilers as well :)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "title": "Extract decrypted token from EXE",
+  "link": "https://reverseengineering.stackexchange.com/questions/11928/extract-decrypted-token-from-exe",
+  "content": "EDIT\n\nAs some people have pointed out, this exe file classifies as a 'virus' on some analysers. I can assure you this exe is from a very trusted source, and is actually part of a large puzzle (which contains more questions like this, related to RE, cryptography, etc)\n\nYou are more than welcome to check my stack exchange profile and see I don't really have the \"this guy sends viruses to people and claims its a puzzle\" typecast :-)\n\nI've been debugging using OllyDbg this exe (original version, a simple puzzle) for a while now, yet I still can't find out what input it expects.\n\nWhat it does\n\nOnce executed, it asks you to type in the decrypted token.\nThe program will then tell you if the token is correct or not.\n\nWhat I do know:\n\nThe target is to find out which input one should give to the exe on step 3\n\nWhat I've tried\n\nBasically, as the hash is a 32 byte string, I thought maybe this is plain MD4/MD5. What I did is to give the program a known plain text - \"1111\", and extract the hash it calculates. I then took the hash and tried to run a MD4/MD5 cracker on it, giving it a known candidate - \"1111\". I had no luck in doing that, which negated the MD4/MD5 thoery (probably?)\n\nNext steps\n\nAs RE is new to me, the next logical step to do is to try and figure out which string the exe uses to calculate the target hash on step 1. I did find something in the memory while I debugged step 1 -\na string with the value of \n\n(note the \\t and   \n), but when giving this input to the exe on step 3, the result is incorrect.\n\nThoughts would be appreciated!\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "windows",
+    "c++",
+    "encryption",
+    "crackme",
+    "hash-functions"
+  ],
+  "user": "Shai",
+  "time": "Feb 7, 2016 at 6:44",
+  "comments": [
+    {
+      "user": "Jason Geffner",
+      "text": "DO NOT DOWNLOAD -- the linked EXE is detected as microsoft.com/security/portal/threat/Encyclopedia/…",
+      "time": null
+    },
+    {
+      "user": "Dominik Antal",
+      "text": "Couldn't it be a false positive? I mean it would be common for a crackme. Shai, can you tell me the source of this binary? Where did you get it? Malwr was unable to analyze it. Virustotal and anubis results.",
+      "time": null
+    },
+    {
+      "user": "Jason Geffner",
+      "text": "At the very least, @Shai's link should point to a password-protected ZIP file containing the EXE, with the disclaimer that the EXE may be malicious. Shai, if you want to make those changes then I'll remove my post below and un-flag your question.",
+      "time": null
+    },
+    {
+      "user": "Shai",
+      "text": "@JasonGeffner The exe file is from a trusted source, really :-) this is part of a puzzle I received earlier. Nothing malicious. I see no point in zipping the whole thing?",
+      "time": null
+    },
+    {
+      "user": "ebux",
+      "text": "After checking the binary, it seems to be really only a crackme, which performs suspicious behavior for AVs, such as creating executable code in the memory.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Since it is a crackme, I don't want to spoiler the solution, although I try to give some hint, which may help you.\n\nThe hash function may be MD5 using salt, modified IV or the hash function is used in a different way as you try. However, you neither have to reverse the hash function nor have to find out the exact algorithm. It is because, the crackme calculates the hashes of both the original and the user provided token. So, I think the easiest way if you try to catch the token at the start of the hash function, since at that point it should be in clear text.\n\nThe string you tried as a token is used somehow for the token decryption. This challenge is more trickier than you can find the solution token in the memory at any time during the execution.\n\n",
+      "votes": "3",
+      "user": "ebux",
+      "time": "Feb 4, 2016 at 14:00",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Shai",
+          "text": "Have you done that successfully?",
+          "time": null
+        },
+        {
+          "user": "ebux",
+          "text": "Yes, I know the correct token.",
+          "time": null
+        },
+        {
+          "user": "Shai",
+          "text": "Help me with this one, I have 7 more like these and I'm stuck on the first one :-) At least I'll know where to look next time!",
+          "time": null
+        },
+        {
+          "user": "ebux",
+          "text": "I think the next one will be completely different, so you can learn more if you find the solution by yourself.",
+          "time": null
+        },
+        {
+          "user": "Shai",
+          "text": "Even so, I don't even know if I'm breaking on the right function...",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "The token for this program is 57 characters long, and is encrypted using a 200KB lookup table. The cipher text is embedded in the application as 57 dword indices. Anti-debugging is implemented as a simple check against IsDebuggerAttached, which chooses between 57 good or 57 bad indices. \n\nWhen the app starts the token is decrypted and then hashed one character at a time. Rather than reversing or inspecting the hashing, I was interested in the operation of the lookup table.\n\nThe code that indexes the table is run by the application in a separate thread. The thread proc begins at 0x4037A0, however it includes some invalid opcodes to confuse the disassembler. That invalid code is patched up by filling with NOP prior to executing it (see: 0x403998)\n\nThe table lookup function requires 3 index operations to resolve the encoded key character. Each dword index is modulo 0xc800 to ensure it falls within the 200KB table. The final index operation includes an offset based on the parity of the index.\n\nThe C program that corresponds to the table lookup is:\n\n```\nunsigned int lookup(unsigned char *cipher_table, unsigned int cipher_index)\n{\n    unsigned int parity_check = 0, offset = 0;\n    cipher_index = *((unsigned int *)(cipher_table + (4 * (cipher_index % 0xc800))));\n    cipher_index = *((unsigned int *)(cipher_table + (4 * (cipher_index % 0xc800))));\n    if (cipher_index != 0) {\n        parity_check = cipher_index;\n        do {\n            if (!parity(parity_check & 0xFF)) offset = ~offset;\n            parity_check = parity_check >> 8;\n        } while (parity_check > 0);\n    }\n    cipher_index = *((unsigned int *)(cipher_table + (4 * ((cipher_index % 0xc800) + (offset & 1)))));\n\n    return ((~cipher_index & 0xFE000000) | cipher_index & 0x01FFFFFF) ^ 0xFE000000;\n}\n\n```\nThe following is a complete key decryption routine in C. It requires the \"1.exe\" binary, because it reads the 200KB lookup table from it. \n\n```\n#include <stdio.h>\n#include <stdlib.h>\n\nconst unsigned char xor_data[57] = {\n    0xD1, 0x18, 0x52, 0xF3, 0x4B, 0x29, 0xB5, 0xE6,\n    0x2E, 0x60, 0x10, 0x1B, 0x59, 0x3E, 0x4D, 0xC1,\n    0x27, 0xAB, 0xA4, 0x82, 0x7F, 0x5B, 0x07, 0xA4,\n    0xE3, 0x1C, 0xE3, 0x93, 0x74, 0xBB, 0x3A, 0x62,\n    0x39, 0xE0, 0xDE, 0xE3, 0x85, 0x7A, 0x05, 0x29,\n    0x4F, 0xF1, 0x70, 0x1C, 0x70, 0x5E, 0xB3, 0xBF,\n    0x0A, 0x74, 0x97, 0x49, 0xFB, 0xE4, 0xC8, 0xF6,\n    0x5F \n};\n\nconst unsigned int cipher_index[57] = {\n    0xd12479b8, 0x02802dd4, 0x9390b528, 0x6d13be10,\n    0x38637098, 0xadb0df76, 0x492afd8d, 0x6cda8589,\n    0x3f327fb3, 0xb559ed2c, 0x0d379569, 0xee50590a,\n    0xeffc3faf, 0xb183ff7c, 0x4942fe7a, 0x3f9f0383,\n    0xe5e8796e, 0x4acdb7e3, 0x6f7778ac, 0x9cfbd58d,\n    0x5d58a9d4, 0xb53ee0e8, 0x4f0bc8f7, 0x6ddcf35a,\n    0x0b32d6f3, 0xec181a05, 0xebf6aab4, 0x727beb1b,\n    0xd19b1f42, 0x0cd03ae5, 0xc901c555, 0x9e6123ed,\n    0x4805bbd3, 0x0b4e3b5f, 0xe74991a5, 0x16e56a67,\n    0xcdbf9035, 0x0c3fb795, 0x4e46ed21, 0x3098a99c,\n    0x0be2219a, 0x89008aba, 0xd1e8cb77, 0x8d0a0f39,\n    0xbf93eaae, 0xdd1f5179, 0x27aa29da, 0x0687579f,\n    0xe4961b86, 0x00047b96, 0xdf66fc9d, 0xe4ff21b6,\n    0x056c231b, 0xb94a2217, 0x2e385b22, 0xd9315588,\n    0x975aec60\n};\n\nunsigned int lookup(unsigned char *cipher_table, unsigned int cipher_index);\n\nint main()\n{\n    // read lookup table from 1.exe\n    unsigned char *cipher_table = (unsigned char*)malloc(0x32000);\n    if (cipher_table == NULL) {\n        printf(\"Failed to allocate 200K lookup table\\r  \n\");\n        return -1;\n    }\n    FILE *file = NULL;\n    if (fopen_s(&file, \"1.exe\", \"r\") != 0) {\n        printf(\"Failed to open 1.exe\\r  \n\");\n        return -1;\n    }\n    fseek(file, 0x6430, 0);\n    fread(cipher_table, 4, 0xc800, file);\n    fclose(file);\n\n    // Look up 57 key characters via indexes\n    for (int i = 0; i < 57; i++) {\n        char key = (char)((lookup(cipher_table, cipher_index[i]) >> ((i & 3) * 8)) ^ (xor_data[i]));\n        printf(\"%c\", key);\n    }\n    printf(\"\\r  \n\");\n    free(cipher_table);\n\n    return 0;\n}\n\n// true = even; false=odd\nbool parity(unsigned char check)\n{\n    check = (check & 0x55) + ((check >> 1) & 0x55);\n    check = (check & 0x33) + ((check >> 2) & 0x33);\n\n    return (((check & 0x0F) + ((check >> 4) & 0x0F)) % 2);\n}\n\nunsigned int lookup(unsigned char *cipher_table, unsigned int cipher_index)\n{\n    unsigned int parity_check = 0, offset = 0;\n    cipher_index = *((unsigned int *)(cipher_table + (4 * (cipher_index % 0xc800))));\n    cipher_index = *((unsigned int *)(cipher_table + (4 * (cipher_index % 0xc800))));\n    if (cipher_index != 0) {\n        parity_check = cipher_index;\n        do {\n            if (!parity(parity_check & 0xFF)) offset = ~offset;\n            parity_check = parity_check >> 8;\n        } while (parity_check > 0);\n    }\n    cipher_index = *((unsigned int *)(cipher_table + (4 * ((cipher_index % 0xc800) + (offset & 1)))));\n\n    return ((~cipher_index & 0xFE000000) | cipher_index & 0x01FFFFFF) ^ 0xFE000000;\n}\n\n```\nThe token is (spoiler):\n\n",
+      "votes": "2",
+      "user": "Mike Haboustak",
+      "time": "Feb 6, 2016 at 4:58",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

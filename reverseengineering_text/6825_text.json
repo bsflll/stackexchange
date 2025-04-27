@@ -1,0 +1,58 @@
+{
+    "title": "What does a thread function look like in assembly? (LPTHREAD_START_ROUTINE, CreateRemoteThread) [closed]",
+    "link": "https://reverseengineering.stackexchange.com/questions/6825/what-does-a-thread-function-look-like-in-assembly-lpthread-start-routine-crea",
+    "content": "Closed. This question is off-topic. It is not currently accepting answers.\n                                \n                            \n\n\n\n\n\n\n\n\n\n\n\n Questions on software development are off-topic here, but can be asked on Stack Overflow.\n\n\nClosed 10 years ago.\n\n\n\n\n\n\n\n                        Improve this question\n                    \n\n\n\nUsing CreateRemoteThread we can call a specific kind of function of another process. It has to be application-defined and of type LPTHREAD_START_ROUTINE.\nIf no such function does exist in the target process you have to inject your own and that's where I need your help.\nUsing VirtualAllocEx and WriteProcessMemory I would like to inject such a function as byte code. So I'd like to know, what such a function looks like in raw assembly.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "633",
+    "tags": [
+        "windows",
+        "assembly",
+        "byte-code"
+    ],
+    "user": "Forivin",
+    "time": "10 years ago",
+    "comments": [
+        {
+            "user": "Dominik Antal",
+            "text": "This should help, create the project in an IDE and observe it in a debugger.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This question is a little too broad to answer without more information but I'll cover some general points about what I think you're looking for. I'm also going to assume x86 calling convention on Windows for simplicity's sake.\nThe only thing that really determines what a function \"looks like\" in assembly is its calling convention, but there's no restriction (particularly writing raw byte code) about what a function can do. In the case of using CreateRemoteThread the only restriction is that you don't corrupt the stack (which could crash the target process)\nSo for example, I could write a function in assembly that looks like this:\n<pre><code>nop\nnop\nnop\nnop\nret\n</code></pre>\nAnd it would be 100% valid. But as far as more complicated functionality let's look at the MSDN for CreateRemoteThread:\n<pre><code>LPTHREAD_START_ROUTINE</code></pre> is a #define to the following function definition:\n<pre><code>DWORD WINAPI ThreadProc(\n  _In_  LPVOID lpParameter\n);\n</code></pre>\nWhere WINAPI is another #define to the stdcall calling convention. You can check the wiki for it here but the important part (if you're writing raw assembly\") is that for WINAPI/stdcall functions the callee function cleans up the stack, which means the function that you write which runs in the remote process will have to cleanup its parameter(s). This is done with the ret N set of instructions. For example, if you have:\n<pre><code>WINAPI foo(int x)\n</code></pre>\nThen the foo will have to clean up one parameter on the stack, so the assembly for this function will end with a <pre><code>ret 4</code></pre> instruction, because there was one parameter which means 4 bytes need to be cleaned up on the stack.\nSimilarly, if you had:\n<pre><code>WINAPI bar(int x, int y)\n</code></pre>\nThen the assembly will end with a <pre><code>ret 8</code></pre> instruction, because there are 2 parameters = 8 bytes now. It's also important to note that if I had something like:\n<pre><code>WINAPI foobar(char x, char y, int z)\n</code></pre>\nIt will still end in a <pre><code>ret 0C</code></pre>. Even though the char params only have one byte of data the stack will still be aligned in 4 byte increments.\nGoing back to the API for CreateRemoteThread you can see that one of the paremeters is\n<pre><code>LPVOID lpParameter\n</code></pre>\nWhich is the pointer that gets passed a parameter to your remote function. This means that in your \"remote\" function you'd have to clean up one parameter on the stack using a ret 4 instruction. If you perform some tricks you can write your WINAPI function in C code, have the compiler compile it for you (makes it easier to code and you don't have to worry about cleanup yourself), and find the function at run time to copy it off.\n",
+            "votes": "3",
+            "user": "Fewmitz",
+            "time": "Dec 14, 2014 at 18:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Forivin",
+                    "text": "<span class=\"comment-copy\">Thank you, this was very helpful. So, am I correct, that the function may look like this? <a href=\"http://pastebin.com/rz4cep7f\" rel=\"nofollow noreferrer\">pastebin.com/rz4cep7f</a> Also, can you give me an advice on were to learn the basics about raw assembly? It seems to be quite different from inline assembly and the assembly returned by <a href=\"http://assembly.ynh.io/\" rel=\"nofollow noreferrer\">assembly.ynh.io</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Forivin",
+                    "text": "<span class=\"comment-copy\">I'm also wondering if I need a near or far return. <a href=\"http://x86.renejeschke.de/html/file_module_x86_id_280.html\" rel=\"nofollow noreferrer\">x86.renejeschke.de/html/file_module_x86_id_280.html</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Fewmitz",
+                    "text": "<span class=\"comment-copy\">Near return. Far returns are only used to switch between segments, which in modern OS isn't something you (usually) have to worry about in userspace. Also, in your assembly you're popping the parameter to ECX, which means when you do the RET 4 at the end you will had incremented the stack by one DWORD too many. Instead of a pop you would want to do something like mov ecx,[esp]</span>",
+                    "time": null
+                },
+                {
+                    "user": "Fewmitz",
+                    "text": "<span class=\"comment-copy\">As far as learning Assembly, the best source is really going to be stepping through functions in a debugger. The more you see how contructs, the stack, etc are laid out when you write code an functions the more obvious it will become. The link you put in your comment is in AT&amp;T format which is different than what you have in the pastebin. Both formats result in the same execution but they're displayed differently. If you attach Windbg and debug your assembly that way it will be in Intel format which may clear up some confusion</span>",
+                    "time": null
+                },
+                {
+                    "user": "Fewmitz",
+                    "text": "<span class=\"comment-copy\">Though it might also be helpful to check out a book like Practical Malware Analysis; by reverse engineering some stuff you'll get used to looking at assembly and therefore have a better understanding of what it should look like if you write it</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

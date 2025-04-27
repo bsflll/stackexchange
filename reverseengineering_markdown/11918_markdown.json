@@ -1,0 +1,63 @@
+{
+  "title": "binwalk zlib data [closed]",
+  "link": "https://reverseengineering.stackexchange.com/questions/11918/binwalk-zlib-data",
+  "content": "I'm reversing  firmware and I get some problem with it.\nI used binwalk to reversing the firmware, but binwalk produced different result than to my friend. My friend found some zlib data (see 1), but I could not find these zlib data items (see 2).\n\nI don't understand what is wrong, however I use binwak -e in the same way. I'm so confuse. \n\nMy question is: how can I find the zlib data?\n\nThanks.\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "11k",
+  "tags": [
+    "binary-analysis",
+    "tools",
+    "firmware"
+  ],
+  "user": "Zarados",
+  "time": "9 years ago",
+  "comments": [
+    {
+      "user": "Zarados",
+      "text": "[link] (imgur.com/T8yWsgJ) <= My friend's reversing picture",
+      "time": null
+    },
+    {
+      "user": "Zarados",
+      "text": "[link] (imgur.com/AHFSgsW) <= My reversing picture, and I use binwalk -e command is not different to this picture. I'm so confuse.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The differences between the binwalk results may be caused by the different version of the binwalk you use. So, check the version of your binwalk by simply running binwalk without any parameter.\nRegarding to the firmware, you cannot unpack the content using binwalk. To see why, check the start of the firmware. You will find a 0x20 bytes header starting with the DLA50 string. This magic string and the header is repeated at offset 0x4020, 0x8040 and so on. To see the structure of the header, check the following one from the middle of the firmware file:\n\n\n\nI marked the magic string (DLA50) with yellow, the position of the fragment with green and the size of the fragment with blue.\n\nThe following script can follow the headers and extract the parts from the image:\n\n```\nimport struct\nimport binascii\nimport sys\n\nif (len(sys.argv) < 2):\n    print 'firm.py filename'\n    sys.exit(0)\n\nid = 0\nlast = 0\nidh = None\n\nbf = open(sys.argv[1], 'rb')\nwhile(True):\n    h = bf.read(0x20)\n    if (len(h) < 0x20 or h[0:5] != 'DLA50'):\n        break\n    dpos = struct.unpack('L', h[0x14:0x18])[0]\n    dsize = struct.unpack('L', h[0x18:0x1c])[0]\n    print '%s, pos: %x, size: %x'%(binascii.hexlify(h), dpos, dsize)\n    d = bf.read(dsize)\n\n    if (last != 0x4000):\n        if (idh != None):\n            idh.close()\n        idh = open('%d.bin'%(id), 'wb')\n        id += 1\n\n    idh.write(d)\n    last = dsize\n\nidh.close()\n\n```\nThe above script will extract the following parts:\n\nThe first part is starting with a 0x10 bytes header followed by a high entropy data. The header contains some flags or magic bytes and a data size, which I marked with blue in the next image. I can identify the size data item based on the size of the first part, which is 0x28555 = header size + 0x28545.\n\n\n\nThe next part starts with the following bytes:\n\n\n\nThe area started at 0x60 seems to contain file names, such as 501h1_uk.js and so on, along with other binary data. So, this area may contain file entries. If it is true, the previous data (0x00-0x60) is a directory entry or a header. In this header area, you can found some interesting value in little-endian byte order. The 0x0002e709 (marked with blue) is equal with the file size. The 0x00000060 (marked with yellow) may point to the start of the file entries. The 0x00000d48 (marked with red) after the file entry offset may be another offset inside the file. So, after checking that offset in the file, it see that it points right after the directory entries, so it may by the starting offset of the data area.\n\nWe have some guesses about the structure of the header, so let's check the file entries. If we suppose, that file names are started at the same position always inside a file entry, then we can calculate the size of one entry by subtracting the offset of two consecutive file names. Based on this calculation the file entry size will be 0x16 bytes.\n\nSimilarly to the previous steps, after a little more research, we can conclude that the file entry area starts with the count of the files and every file entry contains the file name, file flags, relative position of the file data and the file size.\n\nPutting all together, the following script can extract the files from the second part of the firmware file:\n\n```\nimport struct\nimport sys\n\nif (len(sys.argv) < 2):\n    print 'parse_fs.py filename'\n    sys.exit(0)\n\nfh = open(sys.argv[1],'rb')\nh = fh.read(0x60)\nfs_size = struct.unpack('L', h[0x08:0x0c])[0]\noffset = struct.unpack('L', h[0x20:0x24])[0]\ndata_start = struct.unpack('L', h[0x24:0x28])[0]\n\nprint 'fs size: %x, dir offset: %x, data start: %x'%(fs_size, offset, data_start)\n\nfh.seek(offset)\nds = data_start-offset\nd = fh.read(ds)\ncount = struct.unpack('H', d[0:2])[0]\nfor i in xrange(count):\n    o = i*0x16+2\n    unk1 = struct.unpack('H', d[o+0x00:o+0x02])[0]\n    fname = d[o+0x02:o+0x0e]+'\\x00'\n    fname = fname[0:fname.find('\\x00')]\n    unk2 = struct.unpack('H', d[o+0x0e:o+0x10])[0]\n    pos = struct.unpack('L', d[o+0x10:o+0x14])[0]+data_start\n    size = struct.unpack('H', d[o+0x14:o+0x16])[0]\n    print '  %s, pos: %x, size: %x, unk1: %x, unk2: %x'%(fname, pos, size, unk1, unk2)\n\n    fh.seek(pos)\n    open('fs_%s'%(fname), 'wb').write(fh.read(size))\n\n```\n",
+      "votes": "5",
+      "user": "JoSSte",
+      "time": "Jun 20, 2021 at 20:19",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Zarados",
+          "text": "Hey, Your response is awesome. I have the other question. How do you judgment fragment that is executable code or file system? In addition, what is the address 0x2865c util 0x286d6 doing? PS:I'm a beginner and I'm not nature speak. I try to express my question hardly. Thanks!!",
+          "time": null
+        },
+        {
+          "user": "ebux",
+          "text": "I edited my answer with some more details about the second part. The address between 0x2865c and 0x286d6 is a 2 byte long fragment, which possibly only a separator.",
+          "time": null
+        },
+        {
+          "user": "Zarados",
+          "text": "Hey, ebux! What tool is use to reversing this firmware? I mean what is the tool let you dismantling three parts? I use binwalk -e just dismantling two html files. I think it's useful. Thanks, and Happy New Year.",
+          "time": null
+        },
+        {
+          "user": "ebux",
+          "text": "I updated the answer with the script I created to parse the parts.",
+          "time": null
+        },
+        {
+          "user": "Zarados",
+          "text": "Hi, ebux! I find some overflow error in line 18. I use os.path.getsize() function and I get the file size is 376264. The offset is 2164228230 byte is larger than the file size. How can I fix the trouble? In fact I am not understand all of the code.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+    "title": "How to show KUSER_SHARED_DATA members in decompiled C code?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26157/how-to-show-kuser-shared-data-members-in-decompiled-c-code",
+    "content": "Here is a sample C code which prints Windows version directly from address\nof KUSER_SHARED_DATA. Tested in Windows 10 only. The raw memory address\ndiffer in Windows version but that's not the point.\n<pre><code>#include <stdio.h>\n\nint main(void)\n{\n    wprintf(\n        L\"Version: %lu.%lu.%lu\n\",\n        *(unsigned int *)(0x7FFE0000 + 0x026C),\n        *(unsigned int *)(0x7FFE0000 + 0x0270),\n        *(unsigned int *)(0x7FFE0000 + 0x0260)\n    );\n}\n</code></pre>\nHere are the decompiled code:\nIn GHIDRA:\n<pre><code>int main(int _Argc,char **_Argv,char **_Env)\n\n{\n    wprintf(L\"Version: %lu.%lu.%lu\n\",\n        (ulonglong)_DAT_7ffe026c,\n        (ulonglong)_DAT_7ffe0270,\n        (ulonglong)_DAT_7ffe0260);\n  return 0;\n}\n</code></pre>\nIn IDA Pro + Hex-Rays:\n<pre><code>int __fastcall main()\n{\n    wprintf(L\"Version: %lu.%lu.%lu\n\",\n        MEMORY[0x7FFE026C],\n        MEMORY[0x7FFE0270],\n        MEMORY[0x7FFE0260]);\n  return 0;\n}\n</code></pre>\nMy question: In decompiled code, is it possible to show the memory address as\nthe member of KUSER_SHARED_DATA? For example, I want to show <pre><code>MEMORY[0x7FFE0260]</code></pre>\nas <pre><code>SharedData.NtBuildNumber</code></pre> or something similar to it.\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "decompilation",
+        "ghidra",
+        "hexrays"
+    ],
+    "user": "Biswapriyo",
+    "time": "Oct 22, 2020 at 19:36",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "For IDA/Hex-Rays:\n\nIn the Loaded Type Libraries window (<pre><code>View->Open subviews->Type libraries</code></pre>), load <pre><code>ntddk_win10</code></pre> (or whatever Windows version you want, back to Windows XP and Windows Server 2003).\n\n\n\nIn the Structures window (<pre><code>View->Open subviews->Structures</code></pre>), import <pre><code>KUSER_SHARED_DATA</code></pre>. You can simply write the name of the type in the dialog box and press OK, as in the following image:\n\n\n\nUnder <pre><code>Edit->Segments->Create segment</code></pre>, create a new segment with that memory range, as in the following image.\n\n\n\nAt the beginning of the new segment, use <pre><code>Edit->Struct var</code></pre>, and select <pre><code>KUSER_SHARED_DATA</code></pre>.\n\n\nThat's it. Now the disassembly listing looks like this:\n\nAnd the decompilation looks like this:\n",
+            "votes": "4",
+            "user": "Rolf Rolles",
+            "time": "Oct 23, 2020 at 4:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">You could write a script to do all of that automatically if you wanted to. Is it really worth the effort, however? It took less than two minutes to do it. Unless you're doing it very frequently for some reason, I personally don't see the point in investing the effort into writing a script. As for whether there's one command to do all of that, why on earth would there be? What would you propose for the name of that command?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "ghidra\n<pre><code>addr = toAddr(0x7ffe0000)\ncurrentProgram.memory.createUninitializedBlock(\"KUSER_SHARED_PAGE\",addr,0x1000,0)\ncreateData(addr,getDataTypes(\"KUSER_SHARED_DATA\")[0])\n</code></pre>\nresult\n<pre><code>undefined8 main(void)\n\n{\n  wprintf((__crt_locale_pointers *)L\"Version: %lu.%lu.%lu\n\",\n          (ulonglong)KUSER_SHARED_DATA_7ffe0000.NtMajorVersion,\n          (ulonglong)KUSER_SHARED_DATA_7ffe0000.NtMinorVersion,\n          (ulonglong)KUSER_SHARED_DATA_7ffe0000.NtBuildNumber);\n  return 0;\n}\n</code></pre>\nMethod 1)\nUse VirtualQuery to get the size\nshown below is a python poc\ncompare the result to (MEMORY_BASIC_INFO *)foo.RegionSize\n<pre><code>:\\>cat vq.py\nfrom ctypes import *\nmeminfo =(c_ulong * 0x8)()\nwindll.kernel32.VirtualQuery(0x7ffe0000,byref(meminfo),sizeof(meminfo))\nfor i in meminfo:\n    print (hex(i))\n\n\n:\\>python vq.py\n0x7ffe0000\n0x7ffe0000\n0x2\n0x1000\n0x1000\n0x2\n0x20000\n0x0\n</code></pre>\nMethod 2)\nuse windbg !vprot to get the same\n<pre><code>:\\>cdb -c \"!vprot 7ffe0000;q\" cdb | awk \"/Reading/,/quit/\"\n0:000> cdb: Reading initial command '!vprot 7ffe0000;q'\nBaseAddress:       7ffe0000\nAllocationBase:    7ffe0000\nAllocationProtect: 00000002  PAGE_READONLY\nRegionSize:        00001000\nState:             00001000  MEM_COMMIT\nProtect:           00000002  PAGE_READONLY\nType:              00020000  MEM_PRIVATE\nquit:\n</code></pre>\nMethod 3)\nuse windbg !address to Get a more Verbose Details of the same Address Space\n<pre><code>:\\>cdb -c \"!address 7ffe0000;q\" cdb | awk \"/Usage:/,/quit/\"\nUsage:                  Other\nBase Address:           7ffe0000\nEnd Address:            7ffe1000\nRegion Size:            00001000 (   4.000 kB)\nState:                  00001000          MEM_COMMIT\nProtect:                00000002          PAGE_READONLY\nType:                   00020000          MEM_PRIVATE\nAllocation Base:        7ffe0000\nAllocation Protect:     00000002          PAGE_READONLY\nAdditional info:        User Shared Data\n\n\nContent source: 1 (target), length: 1000\nquit:\n</code></pre>\n",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Oct 24, 2020 at 6:19",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

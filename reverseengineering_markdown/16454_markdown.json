@@ -1,0 +1,82 @@
+{
+  "title": "Struggling between syscall or sysenter ( Windows )",
+  "link": "https://reverseengineering.stackexchange.com/questions/16454/struggling-between-syscall-or-sysenter-windows",
+  "content": "As I understand, from windows XP, there is a sysenter instruction introduced, instead of int 2e interrupt.\n\nBut on win 10 there is syscall instruction used in ntdll. So is the sysenter used only for x86 windows systems? And syscall only for x64 bit systems?\n\n",
+  "votes": "11",
+  "answers": 3,
+  "views": "9k",
+  "tags": [
+    "windows",
+    "x86",
+    "x86-64",
+    "operating-systems",
+    "system-call"
+  ],
+  "user": "PastaAlaCarbonara",
+  "time": "Dec 29, 2023 at 2:39",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The Intel and AMD instruction sets are similar but not identical.\n\nThere are many examples of that: FMA3/FMA4, AMD-V and VT-x (and their extensions), etc.\n\nThe fast system call interface is yet another difference.\n\nSo as the OSDEV page on the topic says:\n\n1 Intel® 64 and IA-32 architectures software developer's manual volume 2B: Instruction set reference, M-U, p. 4-668\n\n2 Intel® 64 and IA-32 architectures software developer's manual volume 2B: Instruction set reference, M-U, p. 4-666\n\n3 AMD64 Architecture Programmer’s Manual Volume 3: General-Purpose and System Instructions, p. 423\n\n4 AMD64 Architecture Programmer’s Manual Volume 3: General-Purpose and System Instructions, p. 419\n\n",
+      "votes": "16",
+      "user": "conio",
+      "time": "Oct 9, 2017 at 1:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "Comments have been moved to chat.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "64-bit user-space always uses syscall, across all x86-64 OSes.\n\n32-bit user-space under a 32-bit Windows kernel uses sysenter if available.\n\nWoW64 (32-bit user-space aka Windows, on a 64-bit kernel aka Windows64) uses a call far into a 64-bit ntdll which uses 64-bit syscall.\n\nSome other OSes, such as Linux, do enter a 64-bit kernel directly from 32-bit user-space, with sysenter or syscall depending on which the CPU supports (via the VDSO which the kernel maps into the address-space of user-space processes).  See Calling system API from 32-bit processes under Linux 64-bit for more details on syscall vs. sysenter and which modes they're available in on different CPUs, and the fact that legacy-mode (32-bit kernel) syscall is so badly designed (from a Linux kernel perspective at least) that Linux doesn't use it even if that means a fallback to int 0x80.\n\nWoW64's call far / retf nearly doubles the cost of getting into the kernel and back for 32-bit user-space (compared to sysenter), but isn't a big fraction of the total time for most system calls.  This has always seemed like an inefficient design to me, so I wonder if they chose it only because there's no single instruction that works from 32-bit compat mode under a 64-bit kernel on both Intel and AMD x86-64 CPUs.  Or it there's useful stuff that can be done in user-space to avoid calling into the kernel at all, but only with 64-bit code?\n\nA faster system-call instruction is something that OS devs do care about, e.g. Raymond Chen's blog about how on 386, the illegal instruction trap was the fastest way into the kernel so Windows used that.\n\nA call far [mem] / retf pair on i7-6700k Skylake takes 220 core clock cycles when measured in a simple microbenchmark loop.  From 32-bit user-space to 64-bit user-space, or from 32 to 32 costs the same.  NASM source with perf results for a static Linux executable I used to test by running perf on the whole program.  With basically no startup overhead, and running enough iterations to run for over a second, this gives pretty accurate measurements.\n\nA do-nothing system call with an invalid syscall number (EAX=-1) takes 1209 cycles on the same system, Linux kernel 6.5 with Spectre + Meltdown mitigation, including swapping page tables.  So an extra call far + retf is about 18% extra cost for a do-nothing system call in the best case with caches hot.\n\nI also tested call far / 64-bit syscall / retf (1439 cycles) vs. int 0x80 (1772 cycles) vs. sysenter (1305 cycles), average cost in a tight loop.  This is on x86-64 Linux 6.5 on my i7-6700k Skylake, with EAX=-1, so it returns -ENOSYS without dispatching to a sys_whatever function, but still does a bunch of stuff inside the kernel.  (It's optimized for the case of system calls that don't error, so it doesn't check that until it's ready to dispatch to a handler function.)  So WoW64's strategy is better than using int 0x2e, at least on Skylake and probably most CPUs.  But it's worse than using sysenter on CPUs that support that from compat mode.\n\nThe 134 cycle delta between the WoW64 strategy and sysenter isn't as big as call far / retf alone, so maybe 32-bit sysenter is slower than 64-bit syscall, or the Linux kernel internals are different for compat-mode system calls vs. native 64-bit syscalls.\n\n",
+      "votes": "3",
+      "user": "Peter Cordes",
+      "time": "Dec 19, 2023 at 23:27",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "conio",
+          "text": "Wow, great answer. Really knowledgeable. There's quite a lot of information here. Could you cite a reputable source that says that \"32-bit code is still not rare on Windows\" and how common is it? I've spent quite some time looking for public data on this and couldn't find any. On my machine I have 9/405 processes that are 32-bit (4 of those belong to VMware Workstation), which doesn't sounds like a lot. I might actually describe 9 out of 405 as \"rare\". But my machine probably doesn't represent the entire world, and I'm sure you have better data available. Mind you sharing it?",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "@conio: I could be wrong about that!  I was under the impression that a decent amount of 3rd-party software was still 32-bit only, but maybe that's changed in the past several years.  My Linux desktop has zero 32-bit processes, normal for GNU/Linux systems.  In any case, when the WoW64 design-decisions were being made in the early 2000s, 32-bit software was absolutely widespread, and they expected 32-bit user-space to be important for years.  It's probably not worth changing now, but it's interesting to evaluate the choices of different OSes.",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "@conio: In chat linked under your answer, you claimed that it was common for OSes to deprecate 32-bit user-space entirely.  Yes, x86-64 macOS did that for example, and Linux is starting to, but this is a Windows question.  Stack Overflow questions about how to use a 32-bit DLL still get asked in 2023, so people are still actively developing code but wanting to use a 32-bit DLL they have.  Google site:stackoverflow.com 32-bit dll 64-bit (filter to this year) to find Qs like How to link against x86 .lib on x64 machine with rustc (64 bit) on Windows?",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "@conio: And re: Visual Studio (the IDE itself) being 32-bit for performance reasons (or because the codebase took a lot of work to get it 64-bit clean?), that was a true fact for many years. It only changed in 2022!  Before that, no 64-bit version was available!  A 2010 MS blog attempted to justify it (web.archive.org/web/20160309232651/http://blogs.msdn.com/b/…).  But Visual Studio 64 bit? on SO has lots of comments from people unimpressed with a 4GiB limit.",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "@conio: So WoW64 was necessary for one of MS's own flagship apps until 2022. I think that's sufficient evidence of it being relevant.  The major selling point of x86 has historically been backwards-compatibility, and the Windows + x86 software ecosystem has always been more binary-centric than most, and encumbered with legacy binaries that people don't have source for.  As well as some new binaries being built as 32-bit.  That's getting rarer, but due to 32-bit DLLs it's not going away any time soon.  It's implausible that MS would drop WoW64 this decade.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "syscall (created by AMD) and sysenter (created by Intel) are competing implementations of fast switch-to-ring0 instructions.  For compatibility, x64 systems support both types.  That wasn't deemed to be necessary for 32-bit systems.\n\n",
+      "votes": "-1",
+      "user": "0xC0000022L",
+      "time": "Dec 19, 2023 at 10:29",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "conio",
+          "text": "This is wrong. And mentioned in the links I put in my comment on the question. In Long Mode, SYSCALL is the only one supported both on AMD64 and on Intel 64. The AMD manual says explicitly on the page on SYSENTER \"An invalid-opcode exception occurs if this instruction is used in long mode. Software should use the SYSCALL (and SYSRET) instructions in long mode.\"",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

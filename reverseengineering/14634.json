@@ -1,0 +1,53 @@
+{
+    "title": "How to debug packet processing with overlapped socket on Windows",
+    "link": "https://reverseengineering.stackexchange.com/questions/14634/how-to-debug-packet-processing-with-overlapped-socket-on-windows",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The problem is quite complex so i don't want to run into unneccessary details.</p>\n<p>I have a network application, that communicates with multiple clients at once via UDP. I haven't written it and there is no way to get source codes. Its author has abandoned it so i cannot expect any kind of support from his side. That server application contains a bug, that allows anyone to crash it by sending a specificaly malformed packet. I need to develop some kind of fix on my own.</p>\n<p>I'm trying to analyze the program using IDA Free, x64dbg and some other tools. However i am unable to find the code, which is processing the received packets. First i've looked up the API calls and found a call to <code>WSARecvFrom</code> (documentation by <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms741686(v=vs.85).aspx\" rel=\"nofollow noreferrer\">MSDN</a>) and set a breakpoint to it. But inspecting its arguments i found out, it is using overlapped sockets. I learned little bit about this model <a href=\"http://www.winsocketdotnetworkprogramming.com/winsock2programming/winsock2advancediomethod5e.html\" rel=\"nofollow noreferrer\">here</a>. According to that article, the receive operation is performed asynchronously and completed later and there are 2 ways how the program can be notified when it's finished.</p>\n<ol>\n<li>by a pointer to a function lpCompletionRoutine, which gets called when data are ready</li>\n<li>by a HANDLE to an event object, that is set, when data are ready</li>\n</ol>\n<p>However in my application both lpCompletionRoutine and lpOverlapped.hEvent are NULL. Yet the function always return -1 and WSAGetLastError() is 3E5 (WSA_IO_PENDING).\n<a href=\"https://i.sstatic.net/tORA9.png\" rel=\"nofollow noreferrer\"><img alt=\"WSARecvFrom call\" src=\"https://i.sstatic.net/tORA9.png\"/></a></p>\n<p>If lpCompletionRoutine and lpOverlapped.hEvent are both NULL, how does the application know, when to process the received data and more importantly, <strong>how do i find that code, which processes those data??</strong></p>\n<p>EDIT: I have tried searching API call <code>WSAGetOverlappedResult</code>, there isn't any. I also tried setting a hardware breakpoint on that buffer, but it didn't break until exception ACCESS_VIOLATION, where data were already in buffer and being processed.</p>\n<p>I need to find the beginning of the processing, but there is quite a lot of code between.</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "701",
+    "tags": [
+        "windows",
+        "winapi",
+        "networking"
+    ],
+    "user": "Youda008",
+    "time": "Feb 13, 2017 at 14:48",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">This is really more of a programming question, but are there calls to <code>WSAGetOverlappedResult</code>?</span>",
+            "time": null
+        },
+        {
+            "user": "Youda008",
+            "text": "<span class=\"comment-copy\">Unfortunately, there aren't, i have already searched for them, should have written it in the question. I also tried hardware breakpoint on that buffer, but it didn't work and i don't understand why. Look at the edited question.</span>",
+            "time": null
+        },
+        {
+            "user": "Youda008",
+            "text": "<span class=\"comment-copy\">So the problem was, it was using <code>GetQueuedCompletionStatus</code> instead of <code>WSAGetOverlappedResult</code>. I had to find it the hard way - going back in code flow through return addresses on stack and setting hardware memory breakpoints on various places to trace where those data came from.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">maybe you can write up a detailed answer on how exactly you did it?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So the problem was, the network application was using <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/aa364986(v=vs.85).aspx\" rel=\"nofollow noreferrer\">GetQueuedCompletionStatus</a> instead of <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms741582(v=vs.85).aspx\" rel=\"nofollow noreferrer\">WSAGetOverlappedResult</a>. It is explained here: <a href=\"https://support.microsoft.com/cs-cz/help/181611/socket-overlapped-i-o-versus-blocking-nonblocking-mode\" rel=\"nofollow noreferrer\">https://support.microsoft.com/cs-cz/help/181611/socket-overlapped-i-o-versus-blocking-nonblocking-mode</a>. I just somehow missed this article.</p>\n<p>If you're asking how i found it out, well i had to do it the hard way. I started at the instruction causing ACCESS_VIOLATION, and i went backwards in the code flow using return addresses on stack trying to trace the origin the malformed data. Unfortunately the crash was happening in other thread than packet processing, so i also had to use hardware memory breakpoints to find, where are those data copied from, etc.</p>\n<p>One mistery however remains unsolved, and that's: Why didn't a hardware breakpoint put directly in the buffer passed to WSARecvFrom pause my program? When code reaches GetQueuedCompletionStatus, data are clearly there, but it passes my breakpoint and performed this operation without breaking.</p>\n</div>",
+            "votes": "1",
+            "user": "Youda008",
+            "time": "Feb 18, 2017 at 10:21",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Re the last paragraph: hw breakpoints set in user mode won't catch data being written from the kernel mode. You need to use a kernel debugger for that.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+    "title": "How to convert hexadecimal values to 16-bit Unicode in IDA Pro 7.5?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26480/how-to-convert-hexadecimal-values-to-16-bit-unicode-in-ida-pro-7-5",
+    "content": "The context:\nFor a student project which goal is to make us learn reverse engineering and how to use IDA Pro, we have to reverse engineer the APT28 hospitality malware (as described in this blog post: https://blog.xpnsec.com/apt28-hospitality-malware-part-2/)\nFor this matter, we are provided with IDA Educational licenses (version 7.5) and the malicious Word file. After extracting the malware from the Word file, we can start reverse engineering the malware.\nThe problem:\nAs you can see in the blog post, it's possible (some way or the other) to make IDA decode the strings that are set in the <pre><code>load</code></pre> function (the following screenshot is from the blogpost):\n\nHowever, when we tried to reproduce this, we couldn't find a way to do it. If I'm not mistaken, each <pre><code>mov</code></pre> instruction actually puts 2 characters encoded in 16-bit (widechar) unicode (UTF-8) into the specified address (found by applying an offset to <pre><code>ebp</code></pre>). We can confirm this by looking at the malware in Ghidra:\n\nWhat I tried:\nI tried to change the value of the <pre><code>ENCODING</code></pre> variable in <pre><code>ida.cfg</code></pre> so that auto-analysis recognizes UTF-8. (based on this: https://www.hex-rays.com/products/ida/news/7_0/docs/strlits/)\nBased on this page IDA Convert to Unicode I tried 2 things:\n\nSelect the value I wanted to convert, use <pre><code>Alt</code></pre>-<pre><code>A</code></pre>, and choose <pre><code>Unicode C-style (16 bits)</code></pre>\nSelect all the addresses where the values are stored (in the <pre><code>Stack of load</code></pre> section), convert them to a String with <pre><code>A</code></pre>, then try to convert to <pre><code>Unicode C-style</code></pre> again.\n\nWhen I try these 2 things, I end up with the following in the output window:\n<pre><code>Command \"SetStrlitStyle\" failed.\n</code></pre>\nEnd goal:\nUltimately, I can continue the work with Ghidra, but the goal is to actually learn new things about IDA and be able to use it correctly. There must be something I don't understand and I would love to increase my knowledge about this tool. We tried asking the teacher but he didn't know how to do it either.\nAny help would be really appreciated.\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "encodings",
+        "strings",
+        "pe32"
+    ],
+    "user": "DisplayNeth",
+    "time": "Dec 8, 2020 at 15:12",
+    "comments": [
+        {
+            "user": "bart1e",
+            "text": "Have you tried pressing <pre><code>r</code></pre> while having cursor at hex value?\n",
+            "time": null
+        },
+        {
+            "user": "DisplayNeth",
+            "text": "Tried it right now, and it doesn't change anything\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@DisplayNeth hi and welcome to RE.SE. That's odd. The <pre><code>r</code></pre> trick should work, it's essentially the way you can change the \"base\" of a value and also make it appear as a character. I think you can define somewhere in the settings which string types you expect, perhaps this affects how you can convert to characters as well?!\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The page you linked states that the <pre><code>ENCODING</code></pre> directive in the cfg file only applies to 1-byte-per-unit (1bpu) encodings, which this is not. UTF-16 is a 2bpu format.\nThe <pre><code>ENCODING</code></pre> directive is important because 1bpu characters are encoded differently depending on your culture. The values in the character table between 32 and 126 are usually the same, matching ASCII, but the low values and extended half (127-255) depend on  the which alphabet encoding is being used, which is defined by the current culture. These encodings are defined in ISO 8859, which defines 14 different encodings for different cultures. ISO 8859-1 (Latin-1) is the most widely used, but other notable parts include 8859-5 (Cyrillic), 8859-6 (Arabic), and 8859-8 (Hebrew).\nThis then gets a little more complicated, because each implementation of these character sets (often referred to as codepages) is a little different. While ISO 8859-1 \"Latin-1\" is commonly considered to be the defining standard for Latin languages, you're significantly more likely to see Windows-1252 in practice, which is backward-compatible with ISO 8859-1 but includes many extended characters and defines encodings for control codes like <pre><code>\\r</code></pre> and <pre><code>\n</code></pre>.\nAs you can imagine, this is effectively impossible to guess at the time of analysis. It's also tricky because UTF-8 is a variable length multibyte encoding that uses 1bpu a lot of the time for basic ASCII-range characters. The word <pre><code>cafe</code></pre> encodes to the same bytes in ASCII, ISO 8859-1, Windows-1252, and UTF-8. But add an accent on the e, to get <pre><code>café</code></pre>, and the encodings vary, with plain ASCII having no codepoint for <pre><code>é</code></pre>, ISO 8859-1 and Windows-1252 both encoding it as <pre><code>E9</code></pre>, and UTF-8 encoding it as <pre><code>C3A9</code></pre>. If you try to do this in reverse, ISO 8859-1 and Windows-1252 will turn <pre><code>C3A9</code></pre> into <pre><code>Ã©</code></pre>, which is completely valid but obviously not what was intended.\nWhen you load a binary, IDA attempts to guess which 1bpu encoding was used based on the OS's current language settings. It uses that detected encoding (e.g. Windows-1252) in order to decode any 1bpu string literal bytes that it finds, into readable characters. If it can't guess, it defaults to UTF-8.\nIf the detected encoding isn't UTF-8, IDA then picks a culture based on the character encoding it picked. Each culture is defined in a <pre><code>.clt</code></pre> file and defines a number of common characters that exist outside of the common (ASCII-like) range for that particular culture. This is then used when detecting if a sequence of bytes might be a string literal. If the culture is incorrectly detected, IDA will still be able to identify ASCII strings, but strings with extended characters (e.g. <pre><code>café</code></pre>) might just show up as hexadecimal.\nIn short: for 1bpu strings, IDA detects the encoding in order to be able to turn bytes into readable strings, and (unless it's UTF-8) it uses a culture definition to detect string literals that contain extended codepoints.\nThe reason that UTF-8 is unaffected by these issues is that UTF-8 is just UTF-8 - the codepoints are the same everywhere regardless of the current culture or language.\nIDA offers two config directives that can affect this process. The first is <pre><code>ENCODING</code></pre>, which overrides that first step and provides a specific character encoding to be used for decoding 1bpu characters. The second is <pre><code>CULTURE</code></pre>, which tells IDA which <pre><code>.clt</code></pre> file to use in order to detect which literals might be strings in the program.\nYour situation is entirely unaffected by this, so setting <pre><code>ENCODING</code></pre> or <pre><code>CULTURE</code></pre> won't help you. UTF-16 is a 2bpu encoding that, like UTF-8, does not have different encodings depending on culture.\nUnfortunately, I'm unclear as to why you're having that specific problem. The first thing to check is that you haven't selected the \"character terminated\" option in the string literal style dialog, as those individual instruction operands are not terminated strings. The only other thing I would suggest is attempting to interpret the strings as big-endian (UTF16-BE) in case IDA is attempting to convert the byte order incorrectly.\n",
+            "votes": "2",
+            "user": "Polynomial",
+            "time": "Dec 8, 2020 at 20:38",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "DisplayNeth",
+                    "text": "<span class=\"comment-copy\">I think I understand what you mean. When I hover over <code>Unicode C-style (16 bits)</code> there is a text that says <code>0-terminated string</code>, so it seems it cannot understand these 4 bytes because they are not 0-terminated. However, being the IDA noob that I am, I have no idea how to change this. Looking for answers, I only stumbled upon this page  <a href=\"https://www.hex-rays.com/products/ida/support/idadoc/613.shtml\" rel=\"nofollow noreferrer\">hex-rays.com/products/ida/support/idadoc/613.shtml</a> and I have no clue how to use the information within.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "The main problem is that all of the string literals options or commands apply to string literals, i.e. a sequence of characters or code points. In your sample there is no complete literal; it’s built from pieces into a stack variable. For 8-bit (ASCII) strings you could use the R hot key to convert numbers into character constants (e.g. 65h -> ‘A’), however this does not work for UTF-16 fragments because of embedded zeroes.\nI think the best you can do is collect the values copied onto the stack contiguously (e.g. ebp-14h, then ebp-10h etc.), reconstruct the corresponding array in another memory area or a script and then decode that as UTF-16.\n",
+            "votes": "0",
+            "user": "Igor Skochinsky",
+            "time": "Dec 9, 2020 at 16:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

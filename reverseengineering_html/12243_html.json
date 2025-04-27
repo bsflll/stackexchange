@@ -1,0 +1,62 @@
+{
+    "title": "UPX packing/unpacking information preservation",
+    "link": "https://reverseengineering.stackexchange.com/questions/12243/upx-packing-unpacking-information-preservation",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If I pack an executable using UPX and then unpack the executable using UPX -d, the executables are not the same. I understand techniques for unpacking executables that are packed using UPX, but I was wondering - what happens to the executable during packing/unpacking? How does this affect the preservation of information inside the executable? (For example, if I compile C code and then decompile it I'll have lost a lot of variable name information.)\n </p>\n <p>\n  EDIT: I've verified that after UPX packing/repacking the binary is not the same. The state machine looks something like:\n </p>\n <p>\n  #1 (Original) ----UPX Pack----> #2 (Packed)\n </p>\n <p>\n  #2 (Packed) -----UPX Unpack----> #3 (Unpacked)\n </p>\n <p>\n  #3 (Unpacked) -----UPX Pack-----> #4 (Repacked)\n </p>\n <p>\n  #4 (Repacked) -----UPX Unpack----> #3 (Unpacked)\n </p>\n <p>\n  Where #1, #2, #3, and #4 all have different hashes.\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "unpacking",
+        "upx"
+    ],
+    "user": "dingo_kinznerhook",
+    "time": "Mar 18, 2016 at 14:08",
+    "comments": [
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n I may not understand your question, but AFAIK if we unpack with\n <code>\n  upx -d\n </code>\n then we receive the\n <b>\n  same binary\n </b>\n as before packed (since this procedure does not depend on the unpacking stub embedded in the packed binary)? Otherwise, if we let the stub unpack the binary, then the received binary is different (either we need fix IAT and OEP, or the stub is not standard, then it can modify the packed data)\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "dingo_kinznerhook",
+            "text": "<html><body><span class=\"comment-copy\">\n See my edit to the original question. I was going to clarify this in a comment, but all the formatting was stripped out. Before making any assumptions about what the packer does, do a controlled test and take a hash of the binary at each step.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n Aha, you compare the hash values :)\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n Have you considered using a hexdump to visualize (to yourself and to us) the differences between those four stages? Because there's a lot that can be done to yield what's more or less semantically (within certain limits) the same binary, but with that binary being different from another. Two files built at different times will also yield a different binary (and hence hash) depending on the linker used.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "dingo_kinznerhook",
+            "text": "<html><body><span class=\"comment-copy\">\n Yeah, I used vbindiff to confirm that there were differences in the binaries. I've also used CFFExplorer to see some of the differences, like reordering of the imports. The files have more than just different timestamps - there are different sections in the executable and the imports are ordered differently.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If you compare the hash values of original/unpacked files, then they are different since\n  <code>\n   upx -d\n  </code>\n  does not restore bit-by-bit of the original file. Indeed,\n  <code>\n   UPX\n  </code>\n  parses the original file and\n  <em>\n   keeps only information so that the packed data, after being unpacked, can be executed exactly the same as the original one\n  </em>\n  , i.e. the original/unpacked files are semantically equivalent but not physically equivalent^^.\n </p>\n <p>\n  That is understandable since there is information that not affect to the execution of the binary, a trivial instance is the data between the end of DOS stub and the begin of PE header. For more detail, you may refer to the function\n  <code>\n   pack\n  </code>\n  of the class, for example,\n  <code>\n   PackW32Pe\n  </code>\n  (in\n  <code>\n   p_w32pe.h/cpp\n  </code>\n  ) for PE and the function\n  <code>\n   unpack\n  </code>\n  of the class\n  <code>\n   Packer\n  </code>\n  (in\n  <code>\n   packer.h/cpp\n  </code>\n  ).\n </p>\n <p>\n  For example, we can see that\n  <code>\n   UPX\n  </code>\n  modifies the (DOS and PE) header of the unpacked file using the following code (I have renamed some variables for more comprehensible). First, it decompresses and extracts the header:\n </p>\n <pre><code>// decompress\ndecompress(input_buffer, output_buffer);\nupx_byte *extrainfo = output_buffer + get_le32(output_buffer + ph.u_len - 4);\n\nmemcpy(&output_header, extrainfo, sizeof (output_header));\n</code></pre>\n <p>\n  then modifies slightly the header:\n </p>\n <pre><code>...\noutput_header.headersize = rvamin;\noutput_header.chksum = 0;\n\n//NEW: disable reloc stripping if ASLR is enabled\nif(input_header.dllflags & IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE)\n    opt->win32_pe.strip_relocs = false;\n\n// FIXME: ih.flags is checked here because of a bug in UPX 0.92\nif ((opt->win32_pe.strip_relocs && !isdll) || (input_header.flags & RELOCS_STRIPPED))\n{\n  output_header.flags |= RELOCS_STRIPPED;\n  ODADDR(PEDIR_RELOC) = 0;\n  ODSIZE(PEDIR_RELOC) = 0;\n}\n\n// write decompressed file\nif (output_file)\n{\n...\n</code></pre>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Ta Thanh Dinh",
+            "time": "Mar 20, 2016 at 0:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Viktor",
+                    "text": "<span class=\"comment-copy\">But why does packing and unpacking it twice still result in different files? What is kept during the first/pack unpack round, that is removed the second time around?</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">@Viktor, after packing and unpacking the first time, things such as the import table are rebuilt rather than restored.  This change causes the next packing to pack the file a bit differently, resulting in the table being rebuilt differently after unpacking.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

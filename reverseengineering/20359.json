@@ -1,0 +1,46 @@
+{
+    "title": "Function names syntax returned by radare2's afl?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20359/function-names-syntax-returned-by-radare2s-afl",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Radare2's afl command returns function names with a specific syntax that I could not find documentation on:</p>\n<p>For example:</p>\n<pre><code>radare2 -2 -A -q -c \"aflj\" C:/Windows/system32/advapi32.dll\n\n0x77cce13c   22 280          sub.ntdll.dll_RtlNtStatusToDosError_13c\n0x77cce259    7 62           fcn.77cce259\n0x77cce29c   10 88           sub.KERNEL32.dll_lstrcmpiW_29c\n0x77cce2f9   24 463          sub.KERNEL32.dll_lstrlenW_2f9\n0x77c617b4    1 40           sym.imp.KERNEL32.dll_LocalAlloc\n0x77c6abe5    5 92   -&gt; 130  sub.KERNEL32.dll_LocalAlloc_be5\n0x77c7edd5    1 20           sub.KERNEL32.dll_LocalAlloc_dd5\n</code></pre>\n<ul>\n<li>What is the meaning of the hexadecimal number after the function name ?</li>\n<li>Why is the core difference between the prefixes \"sym.\" and \"sub.\" of DLL function names ?</li>\n<li>What is the difference between library names in lower or uppercase ?</li>\n</ul>\n<p>The DLL file names are all in lowercase:</p>\n<ul>\n<li>C:\\Windows\\System32\\ntdll.dll</li>\n<li>C:\\Windows\\System32\\kernel32.dll</li>\n</ul>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "922",
+    "tags": [
+        "radare2"
+    ],
+    "user": "remi.chateauneu",
+    "time": "Jan 13, 2019 at 18:52",
+    "comments": [
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">The last 3 hex digits are taken from the address. As for the capitalization: did you compare this with the names of those DLL's?</span>",
+            "time": null
+        },
+        {
+            "user": "remi.chateauneu",
+            "text": "<span class=\"comment-copy\">So, the 3 hex digits are taken from the address of what ? How is it possible to point to a DLL \"sub.*\" function \"sub.*\" which is not an exported symbole \"sym.*\" ?   Is there a relation between sym.imp.KERNEL32.dll_LocalAlloc and  sub.KERNEL32.dll_LocalAlloc_be5 ?  Here are the file names, they are in lowercase:  - \"C:\\Windows\\System32\\ntdll.dll\"  - \"C:\\Windows\\System32\\kernel32.dll\"</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I will start by answering your specific three questions, and then will shed more light about the naming structure of functions in radare2.</p>\n<blockquote>\n<p>What is the meaning of the hexadecimal number after the function name?</p>\n</blockquote>\n<p>The meaning of the 3 hexadecimal digits at the end of function names like \"sub.KERNEL32.dll_lstrlenW_2f9\" are the last 3 digits of the function address. The confusion here is because this is not an imported function name, but a regular function. This naming caused by the <code>aan</code> command which you probably used when you executed <code>aaa</code> or opened a file with th <code>-A</code> flag: <code>$ r2 -A &lt;filename&gt;</code>. </p>\n<p>As stated in the radare2 documentation:</p>\n<pre><code>...\naan                 autoname functions that either start with fcn.* or sym.func.*\n...\n</code></pre>\n<p>The <code>aan</code> command will auto-generate a name, based on the flags being used in the function. This should ease the analysis for the user before analyzing the function.</p>\n<p>So let's have a look at a function which is called <code>sub.KERNEL32.dll_DisableThreadLibraryCalls_18002a860</code>. You can see that an import function called \"DisableThreadLibraryCalls\" is being called. This is why the function was renamed by <code>aan</code>:</p>\n<pre><code>[0x18002a860]&gt; pdf\n╭ (fcn) sub.KERNEL32.dll_DisableThreadLibraryCalls_18002a860 35\n│   sub.KERNEL32.dll_DisableThreadLibraryCalls_18002a860 ();\n│           ; arg unsigned int arg3 @ rdx\n│           0x18002a860      4883ec28       sub rsp, 0x28\n│           0x18002a864      83fa01         cmp edx, 1\n│       ╭─&lt; 0x18002a867      7510           jne 0x18002a879\n│       │   0x18002a869      48833dff1f00.  cmp qword [0x18002c870], 0 ; [0x18002c870:8]=0\n│      ╭──&lt; 0x18002a871      7506           jne 0x18002a879\n│      ││   0x18002a873      ff159f170000   call qword sym.imp.KERNEL32.dll_DisableThreadLibraryCalls \n│      ╰╰─&gt; 0x18002a879      b801000000     mov eax, 1\n│           0x18002a87e      4883c428       add rsp, 0x28\n╰           0x18002a882      c3             ret\n[0x18002a860]&gt;\n</code></pre>\n<hr/>\n<blockquote>\n<p>Why is the core difference between the prefixes \"sym.\" and \"sub.\" of DLL function names?</p>\n</blockquote>\n<p><code>sym</code> stands for \"Symbol\". This is a symbol taken from the binary's <a href=\"https://en.wikipedia.org/wiki/Symbol_table\" rel=\"noreferrer\">Symbol Table</a>.\n<code>sub.</code> stands for \"Subroutine\". This can by a standalone function but most likely a part of a function, like JMPTABLE blocks, addresses in pointer table, etc.</p>\n<hr/>\n<blockquote>\n<p>What is the difference between library names in lower or uppercase?</p>\n</blockquote>\n<p>In general, radare2 keeps the case of the libraries as shown in the Import Address Tables. But I think sometimes it is being modified in favor of readability and to make it easier to differentiate between an import function, and a renamed function (<code>aan</code>).</p>\n<hr/>\n<h2>ASCII-ART Time</h2>\n<p>I made some ASCII-arts for you, hope this would make things clearer.</p>\n<p><strong>Regular Function</strong></p>\n<pre><code>fcn.77cce259\n|      |\n|      |__ The function's address\n|\n|__ stands for \"Function\"\n</code></pre>\n<p><strong>Imported function</strong></p>\n<pre><code>sym.imp.KERNEL32.dll_LocalAlloc\n |   |     |            |\n |   |     |            |__ The imported function name, \"LocalAlloc\"\n |   |     |\n |   |     |__ the Library name. In this case, \"kernel32.dll\"\n |   |\n |   |\n |   |___ \"Import\", this is an imported function\n |\n |___ \"Symbol\", taken from the Symbol Table\n</code></pre>\n<p><strong>Auto-Generated Name</strong></p>\n<pre><code>sub.ntdll.dll_RtlNtStatusToDosError_13c\n |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n |                   |\n |                   |__ auto-generated name based on flags that being used\n |                       the 3 digits at the end are the function's address\n |__ \"Subroutine\"\n</code></pre>\n</div>",
+            "votes": "6",
+            "user": "Megabeets",
+            "time": "Jan 14, 2019 at 15:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "remi.chateauneu",
+                    "text": "<span class=\"comment-copy\">If I have well understood, the function sub.KERNEL32.dll_DisableThreadLibraryCalls_18002a860 is not strictly related to the import sym.imp.KERNEL32.dll_DisableThreadLibraryCalls, except that the former might call the latter, along with possibly other imports.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Megabeets",
+                    "text": "<span class=\"comment-copy\">Yes, exactly! This is the auto generated name based on an one Imported function that was used in this function.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

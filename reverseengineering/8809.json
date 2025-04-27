@@ -1,0 +1,51 @@
+{
+    "title": "KiUserExceptionDispatcher hook",
+    "link": "https://reverseengineering.stackexchange.com/questions/8809/kiuserexceptiondispatcher-hook",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>i am analyzing a piece of malware in which first the address to \"KiUserExceptionDispatcher\" is obtained(using the Export Name Table, going to Export Ordinal Table and then finally to Export Address Table). Once the address(7773A408) is received, the malware overwrites the first 6 bytes with the following lines :</p>\n<pre><code>      (here is the finding part)\n                ...\n   mov BYTE PTR DS:[EDX], 68             -&gt; EDX contains ntdll.KiUserExceptionDispatcher\n   mov DWORD PTR DS:[EDX+1], malware.004035C2\n   mov BYTE PTR DS:[EDX+5], 0C3\n   ....\n</code></pre>\n<p>So, the hex window at 7773A408 (address of KiUserExceptionDispatcher) changes in the following way:</p>\n<pre><code>  7773A408   FC 8B 4C 24 | 04 8B .... (and so on)    &lt;- original\n\n  7773A408   68 C2 35 40 | 00 C3 .....(and so on)    &lt;- after overwriting\n</code></pre>\n<p>So, what happens then is that the malware reaches a \"UD2\" instruction. I looked it up: it raises an invalid opcode exception. \nThen the malware jumps to </p>\n<pre><code> 7773A40D   RETN    \n</code></pre>\n<p>which then leads me to:</p>\n<pre><code>004035C2  DB 8B     &lt;- clear, because 004035C2 starts at 7773A40D (hex window)\n</code></pre>\n<p>and then finally to another place where a whole new function begins.\nSo, my question would be: Is it right to assume that the malware tries to change exception handler by overwriting it with 004035C2 to redirect the excetion flow? Why is the exception handler of UD2 the first 6 bytes of KiUserExceptionDispatcher? </p>\n<p>best regards,</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "assembly",
+        "exception"
+    ],
+    "user": "user3097712",
+    "time": "May 4, 2015 at 14:18",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The malware overwrites the usermode exception dispatcher (<code>KiUserExceptionDispatcher()</code>) with the following:</p>\n<pre><code>PUSH malware.004035C2\nRETN\n</code></pre>\n<p>The code above is equivalent to <code>JMP malware.004035C2</code>.</p>\n<p>Now whenever any usermode exception occurs in the process, the function at <code>malware.004035C2</code> will be executed instead of (or at least before) the registered <a href=\"http://en.wikipedia.org/wiki/Microsoft-specific_exception_handling_mechanisms#Structured_Exception_Handling\" rel=\"nofollow\">SEH</a> functions.</p>\n<p>The malware likely uses this \"trick\" in combination with the <code>UD2</code> instruction in order to confuse disassemblers, since most disassemblers won't automatically figure out that the <code>UD2</code> instruction now effectively jumps to <code>malware.004035C2</code>. This type of obfuscation trick is often used to make automated static analysis of code-flow more difficult.</p>\n</div>",
+            "votes": "3",
+            "user": "Jason Geffner",
+            "time": "May 4, 2015 at 15:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">aaah, ok. Now I also understand the values. 68 for PUSH and C3 for RETN...ok. Thanks</span>",
+                    "time": null
+                },
+                {
+                    "user": "see ya",
+                    "text": "<span class=\"comment-copy\">I wonder if this technique still applied? Any alteration of any system library(even in-memory) would cause AV activation and malicious process would be terminated isn't it?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">@seeya - No, that's not how Windows works.</span>",
+                    "time": null
+                },
+                {
+                    "user": "see ya",
+                    "text": "<span class=\"comment-copy\">Maybe I'm wrong to put the AV(could be interpreted as Access Violation) but I meant the Anti-virus proactive detection. In other words, Anti-virus detects hook and terminates the process that initiated it. That's why I've asked if this still used in the wild because if there is no detection for this kind of trick it would be extremely strange. Correct if wrong, but they set the interception of this type of API using <code>ObRegisterCallback</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Detection based solely on this specific hook would likely result in countless false-positives, which is why it's very unlikely for AV software to base a detection on this. And <code>ObRegisterCallback()</code> cannot be used to receive notifications of patches made to memory.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

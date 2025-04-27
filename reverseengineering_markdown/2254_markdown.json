@@ -1,0 +1,110 @@
+{
+  "title": "Patching a .Net 4.0 Binary in Olly or CFF Explorer",
+  "link": "https://reverseengineering.stackexchange.com/questions/2254/patching-a-net-4-0-binary-in-olly-or-cff-explorer",
+  "content": "I have a challenge compiled in C# .net 4.0. I can see the source completely fine in Reflector. I'd like to change the source. I guess I do this by patching some bytes in the binary.\n\nThe problem I'm facing is when loading the binary in Ildasm.exe I cannot convert these ID_xxxx addresses to RVA or find their corresponding bytes in CFF Explorer. What is the typical way to patch a .net exe in this fashion? I read some of lena's tutorials so normally I'd load it in Olly, and I tried this but I cannot see any useful code and most actions seem to happen in various Windows .dll's and not in the .exe itself. \n\nI would most appreciative if someone could give advice or point me to a tutorial. Thank you. \n\n",
+  "votes": "7",
+  "answers": 3,
+  "views": "4k",
+  "tags": [
+    ".net",
+    "patching"
+  ],
+  "user": "4r4r4r",
+  "time": "Jun 14, 2013 at 17:07",
+  "comments": [
+    {
+      "user": "4r4r4r",
+      "text": "And more specifically, I want to patch one call inside of a try block. Ildasm.exe reports the address of IL_0039 (which doesn't correspond in CFF)",
+      "time": null
+    },
+    {
+      "user": "dna",
+      "text": "A bit off topic but what I generally do when the assembly isn't obfuscated is : Use ildasm to disassemble the assembly, modify the IL as I need and reassemble using ilasm.",
+      "time": null
+    },
+    {
+      "user": "4r4r4r",
+      "text": "Yes that sounds like a good idea. Couldn't find any tutorials or figure out how to modify from Ildasm.exe, could you please explain a bit more?",
+      "time": null
+    },
+    {
+      "user": "4r4r4r",
+      "text": "Also, I'm trying to NOP out one call. The bytes in question are 28 85. I understand the 28 byte implies a \"CALL\". I tried changing them to 00, which I think is a NOP (normal 90 byte) for this language but it screwed up.",
+      "time": null
+    },
+    {
+      "user": "dna",
+      "text": "I let you figure out how to NOP the call yourself!",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "There is a plugin called Reflexil for Reflector which makes it very easy to patch a .NET binary. \n\nI did a write-up on my blog recently with an example.\n\n",
+      "votes": "7",
+      "user": "Remko",
+      "time": "Jun 15, 2013 at 13:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "4r4r4r",
+          "text": "Nice writeup. I think Reflexil is definitely the easiest way to do get the job done but it's good to know how to do other ways too.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Consider the following .NET 4.5 Console application :\n\n```\nusing System;\n\nnamespace ReversingMSIL101\n{\n    class Program\n    {\n        static void Main(string[] args) {\n            if (args.Length > 0 && args[0] == \"Secret\")\n                Authenticated();\n            else\n                Anonymous();\n        }\n\n        private static void Authenticated() {\n            Console.WriteLine(\"Gold for the people!\");\n        }\n\n        private static void Anonymous() {\n            Console.WriteLine(\"Give them copper ...\");\n        }\n    }\n}\n\n```\nCompile and open Ildasm . We will start by loading the executable (File->Open). Once done : dump it (File->Dump). Ildasm respond with a nice dialog full of checkboxes, since we want as much information as it's possible, check everything!\n\nNow let's have a look at our disassembled IL instructions, fire up your preferred editor and open the previously generated dump. We are especially interested in the if statement since it controls if the supplied password is correct; note that you can easly spot it using the generated comments.\n\n```\n//000009:             if (args.Length > 0 && args[0] == \"Secret\")\nIL_0001:  /* 02   |                  */ ldarg.0\nIL_0002:  /* 8E   |                  */ ldlen\nIL_0003:  /* 69   |                  */ conv.i4\nIL_0004:  /* 16   |                  */ ldc.i4.0\nIL_0005:  /* 31   | 12               */ ble.s      IL_0019\nIL_0007:  /* 02   |                  */ ldarg.0\nIL_0008:  /* 16   |                  */ ldc.i4.0\nIL_0009:  /* 9A   |                  */ ldelem.ref\nIL_000a:  /* 72   | (70)000001       */ ldstr      \"Secret\" /* 70000001 */\nIL_000f:  /* 28   | (0A)000011       */ call       bool [mscorlib/*23000001*/]System.String/*01000013*/::op_Equality(string, string) /* 0A000011 */\nIL_0014:  /* 16   |                  */ ldc.i4.0\nIL_0015:  /* FE01 |                  */ ceq\nIL_0017:  /* 2B   | 01               */ br.s       IL_001a\nIL_0019:  /* 17   |                  */ ldc.i4.1\nIL_001a:  /* 00   |                  */ nop\nIL_001b:  /* 0A   |                  */ stloc.0\nIL_001c:  /* 06   |                  */ ldloc.0\nIL_001d:  /* 2D   | 08               */ brtrue.s   IL_0027\n\n```\nI let to the reader the task to reverse and analyse the instructions. We will continue by looking at the last one. Long story short : if the first argument isn't the string \"Secret\" we will take the branch and end up at IL_0027 : \n\n```\nIL_0027:  /* 28   | (06)000003       */ call       void ReversingMSIL101.Program/*02000002*/::Anonymous() /* 06000003 */\n\n```\nPretty bad heh? So we will simply tweak a bit that last instruction, moreover by replacing it by brfalse.s :\n\n```\nIL_001d:  /* 2B   | 08               */ brfalse.s   IL_0027\n\n```\nAnd that's it, we are done! Save the file and open a shell, navigate to the folder containing the IL dump and issue ilasm ReversingMSIL101.il inorder to reassemble the dump into an executable!\n\nNow it's the time to verify our work :\n\n```\nC:\\Users\\dna\\Documents\\Visual Studio 2012\\Projects\\ReversingMSIL101\\ReversingMSIL101\\bin\\Debug>ReversingMSIL101.exe IdoNotKnow\nGold for the people!\n\n```\n",
+      "votes": "2",
+      "user": "dna",
+      "time": "Jun 14, 2013 at 20:42",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "4r4r4r",
+          "text": "Great tutorial! Thanks for taking the time to write it. I ended up using the bytecode charts at resources.infosecinstitute.com/…. From there, it's an odd scheme but you can rebuilt the sequences of bytes displayed in ILDasm.exe and search for them in a hex editor and change them, but if they aren't changed to an acceptable byte it messes up the program. Still never got the call to nop out properly and will continue searching. Crazy how in these .net programs you can just view the bare source code!!",
+          "time": null
+        },
+        {
+          "user": "dna",
+          "text": "Well a CALL instruction is 0x28 + <4 bytes token> so you have to NOP(0x00) 5 bytes in total.",
+          "time": null
+        },
+        {
+          "user": "4r4r4r",
+          "text": "After some testing I've found that depending on the call, you can't just nop the 5 call bytes themselves. You have to get the ldloc & stloc calls before it or whatever pushes args, especially if the function looks like Test(test1, test2(test3)).Testing() in .net. I don't like this intermediary language so much. I'd also like to know how to do dynamic analysis in Olly, I can't make much sense of it and I think patching cmp/jnz's would be easier than this.",
+          "time": null
+        },
+        {
+          "user": "dna",
+          "text": "Make sense, I totally forgot to mention unwinding the stack. Well I never done this in Olly but you will have to spot the JIT when he compiles the MSIL methods into native instructions. It might not be that smart since you will loose portability and time but it should be pretty interesting :)",
+          "time": null
+        },
+        {
+          "user": "4r4r4r",
+          "text": "Reflexil handles some type of signing routine automatically, something MS put there to prevent patching that needs to be addresses when changing bytes like this too.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "As much as dna answer is great and well explained, this is often impractical for real-world executables, unless they are very simple and short. Dumping something, changing it and \"recompiling\" is error-prone, especially in obfuscated assemblies and so on.\n\nI would suggest you download Reflexil, it's a Reflector plugin: you can see the IL of the functions you're viewing through Reflector, change whatever you need to change in a very simple way and then just save the modified exe. This is much much less error-prone, since you're not dumping and rebuilding the program from scratch. Also, you can inject anything into the assembly this way, be it classes, new methods, structures.\n\n",
+      "votes": "1",
+      "user": "asheeshr",
+      "time": "Jun 15, 2013 at 7:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "dna",
+          "text": "The OP requested a non obfuscated example and in that precise situation, relying on the assembler is less error prone! Since errors will be detected during the assembling process. The injection part is interesting, I usually rely on Cecil (mono-project.com/Cecil) since it's open source and allow to you to add/remove/modify anything in an assembly and save the patched one!",
+          "time": null
+        },
+        {
+          "user": "José Tomás Tocino",
+          "text": "Just a quick reminder that Reflexil not only works with Reflector but ILSpy (which is open source) and JustDecompile as well.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

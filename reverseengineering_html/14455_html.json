@@ -1,0 +1,41 @@
+{
+    "title": "Cleaning HexRays Output",
+    "link": "https://reverseengineering.stackexchange.com/questions/14455/cleaning-hexrays-output",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  My HexRays decompiler output often looks like:\n </p>\n <pre><code>  v0 = LoadLibraryW(L\"wininet.dll\");\n  v1 = v0;\n  if ( !v0 )\n    goto LABEL_1;\n  v2 = GetProcAddress(v0, \"InternetOpenW\");\n  v3 = GetProcAddress(v1, \"InternetConnectW\");\n  v4 = v2;\n  v5 = v4;\n</code></pre>\n <p>\n  To me, there's just a couple variables here.  v0, v2, and v3.  The rest are entirely duplicate.  Is it possible to clean up my decompiler output to eliminate these extraneous variables?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "939",
+    "tags": [
+        "ida",
+        "hexrays"
+    ],
+    "user": "omghai2u",
+    "time": "Jan 20, 2017 at 5:27",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Locate cursor at v1 and press\n  <kbd>\n   =\n  </kbd>\n  . If I remember it correctly since IDA 6.6 it will allow you to define that some variable is actually same as other.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "w s",
+            "time": "Jan 20, 2017 at 12:07",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Starting from v6.6, IDA supports\n  <a href=\"http://www.hexblog.com/?p=107\" rel=\"nofollow noreferrer\">\n   decompiler API\n  </a>\n  . The documentation is poor, almost non-existing. Yet, in theory, it should be possible to write a plugin to perform static analysis on the abstract syntax tree (AST) produced by the decompiler, thereby eliminating useless unit assignments.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "sherlock",
+            "time": "Jan 20, 2017 at 6:05",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  A brief tl;dr code sample on how to map, rename and re-type variables programmatically in python.\n </p>\n <p>\n  <em>\n   edit: added code to set_lvar_type to allow usage of strings for types (took me ages to work that one out).  now you can do things like:\n  </em>\n </p>\n <pre><code>mapping = [ 'accum', 'v7', 'v4', 'shift', 'v5', 'v6', 'ptr', 'v2', 'v3' ]\nfor n, x, y in chunk_tuple(mapping, 3):\n    if map_lvar(x, y, ea) and              \\\n       set_lvar_type(y, 'int32_t', ea) and \\\n       rename_lvar(y, n, ea):\n            print(\"set {}\".format(n))\n</code></pre>\n <p>\n  <a href=\"https://i.sstatic.net/SQbUN.gif\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/SQbUN.gif\"/>\n  </a>\n </p>\n <p>\n  <em>\n   just be aware that\n   <code>\n    int\n   </code>\n   as a type won't work, but\n   <code>\n    int32_t\n   </code>\n   will\n  </em>\n </p>\n <p>\n  see\n  <a href=\"https://github.com/sfinktah/sfida/blob/main/hexrayfracker.py\" rel=\"nofollow noreferrer\">\n   github\n  </a>\n  for the rest of the code.  don't expect this to work on IDA 6.x, though maybe it will.  i've never tried.\n </p>\n <pre><code>import re\nfrom itertools import islice\n\nimport ida_hexrays\nimport idaapi\nimport idautils\nimport idc\n\n\ndef map_lvar(src, dst, ea):\n    func = idaapi.get_func(ea)\n    if func:\n        ea = func.start_ea\n        vu = idaapi.open_pseudocode(ea, 0)\n\n        lvars1 = [n for n in vu.cfunc.lvars if n.name == src]\n        lvars2 = [n for n in vu.cfunc.lvars if n.name == dst]\n        if len(lvars1) == 1 and len(lvars2) == 1:\n            print(\"mapping {} to {}\".format(lvars1[0].name, lvars2[0].name))\n            # we might need to change the lvar type?\n            vu.set_lvar_type(lvars1[0], lvars2[0].type())\n            vu.map_lvar(lvars1[0], lvars2[0])\n        else:\n            print(\"couldn't find one of the vars {} or {}\".format(src, dst))\n\ndef set_lvar_type(src, t, ea):\n    if isinstance(t, str):\n        type_tuple = idaapi.get_named_type(None, t, 1) \n        tif = idaapi.tinfo_t()\n        tif.deserialize(None, type_tuple[1], type_tuple[2])\n        if tif:\n            t = tif\n        else:\n            print(\"couldn't convert {} into tinfo_t\".format(t))\n            return False\n\n    func = idaapi.get_func(ea)\n    if func:\n        ea = func.start_ea\n        vu = idaapi.open_pseudocode(ea, 0)\n        if not vu:\n            return False\n        lvars = [n for n in vu.cfunc.lvars if n.name == src]\n        if len(lvars) == 1:\n            print(\"changing type of {} to {}\".format(lvars[0].name, t))\n            return vu.set_lvar_type(lvars[0], t)\n        else:\n            print(\"couldn't find var {}\".format(src))\n    return False\n\ndef rename_lvar(src, dst, ea):\n    def make_unique_name(name, taken):\n        if name not in taken:\n            return name\n        fmt = \"%s_%%i\" % name\n        for i in range(3, 1024):\n            tmpName = fmt % i\n            if tmpName not in taken:\n                return tmpName\n        return \"i_give_up\"\n\n    func = idaapi.get_func(ea)\n    if func:\n        ea = func.start_ea\n        vu = idaapi.open_pseudocode(ea, 0)\n        names = [n.name for n in vu.cfunc.lvars]\n        if dst in names:\n            dst = make_unique_name(dst, names)\n        lvars = [n for n in vu.cfunc.lvars if n.name == src]\n        if len(lvars) == 1:\n            print(\"renaming {} to {}\".format(lvars[0].name, dst))\n            vu.rename_lvar(lvars[0], dst, 1)\n            # how to close the view without a widget object?\n            #     idautils.close_pseudocode (nope)\n            #     ida_kerwin.close_widget   (nope)\n        else:\n            print(\"couldn't find var {}\".format(src))\n\n\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Orwellophile",
+            "time": "Mar 11, 2021 at 11:28",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,73 @@
+{
+  "title": "Reversing a 3D file format from 2001",
+  "link": "https://reverseengineering.stackexchange.com/questions/13331/reversing-a-3d-file-format-from-2001",
+  "content": "This is a korean MMORPG released back in 2001. The game and the company no longer exists. I've been analyzing the file formats as a personal project for awhile now. \n\nI have already decoded the textures and script files. I only have 2 more files left to decode: .ani and .obj. With the extensions, I would guess that the .ani contains the animation and .obj contains the 3d models. As the title of my question would suggest. I'm currently working on the .obj file. \n\n.obj files are actually archives that contains one or more models. But exclusively 3D models (biped) because the textures are found on another archive with the extension .t16 or .tex.\n\nI'll take the 22nd model inside the file def.obj as an example. I have also taken it out of the archive and saved it as a file called `def_022.obj.\n\nFrom here on, I'll call the 22nd model Armor of Eagle. The next image is the texture for the Armor of Eagle found on def.t16:\n\n\n\nThe Armor of Eagle in-game:\n\n\n\nA def_inf.txt file has this related line:\n\n```\nfilename    LODstep polycnt\narmor_eagle 0       313     // eagle = index 22\n\n```\nIn general, the structure of .obj is:\n\n```\n06 00 00 00 03 00     // don't know what\n3C 00                 // total number of models in this list\n01 00 9E 00 00 00 9E 00 00 00 78 00 00 00 78 00 00 00 // the first model on the list with 0x9E polygons and 0x78 verticies\n01 00 64 00 00 00 64 00 00 00 61 00 00 00 61 00 00 00 // the 2nd model\n....... // continues until you reach the end of the headers\n....... // then the bodies start, actual 3d data\n\n```\nThis is how the headers looks:\n\n\n\nThe face indices start at 0x4C [00 00 01 00...]\nand by the looks of it ends at 0x7A2 [...A2 00 A3 00]\n\nI was using the tool called hex2obj 0.24c but didn't have any luck in guessing the starting points of the vertices and uv list.\n\n\n\nThis is all considering that I just analyze the binary and not debug the client itself to see how the client is taking the data.\n\nI noticed a few new things on the file I'm analyzing def_022.obj. A bytearray gets repeated a lot of times. Although, I'm still not sure of the significance YET. 00 00 80 3F is also the bytes that each model start with, which I thought was the chunk marker:\n\n\n\nBased on the notes Mr @RadLexus has kindly provided. I was also able to plot the vertices and imported into blender:\n\n\n\nAdded the normals and UV:\n\n```\nv -13.531700 37.445000 2.338600\nvn -0.687800 0.725000 -0.036200\nvt 0.583800 0.086300\n\n```\nThen I tried adding the faces:\n\n```\nf 1 2 3\nf 1 3 4\nf 5 6 7\nf 5 7 8\nf 9 10 11\n...\n\n```\n\n\nBut still can't figure out how to apply the textures.\n\nSo I tried changing my .obj file to include a few more info about the face values like (just duplicated the value as x/x/x):\n\n```\nf 1/1/1 2/2/2 3/3/3\nf 1/1/1 3/3/3 4/4/4\nf 5/5/5 6/6/6 7/7/7\n\n```\nI finally got this:\n\n\n\nAlthough it's still wrong, I guess I'm a bit closer.\n\nHave figured it out. Although, I still don't know what the unknown1 and unknown2 are but it looks good enough:\n\n\n\nDownload Related Files Here\n\n",
+  "votes": "6",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "binary-analysis",
+    "file-format",
+    "hex"
+  ],
+  "user": "majidarif",
+  "time": "Aug 25, 2016 at 19:43",
+  "comments": [
+    {
+      "user": "Jongware",
+      "text": "Can you add a link to original files to download and inspect?",
+      "time": null
+    },
+    {
+      "user": "majidarif",
+      "text": "@RadLexus thank you for your interest. I've added updated the question to include a link to the related files. I've also included related scripts I wrote for extracting data.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "Just FYI: you are on the right track with those 'repeated sequences'. Look up how a 4-byte float is stored. Recognizing these is a huge and important step in reversing a 3D format.",
+      "time": null
+    },
+    {
+      "user": "majidarif",
+      "text": "@RadLexus I'm digging more into it. But I'm still not sure what the pattern is about. Although, a quick search showed that 3f80 0000 = 1 or 0000 803f in little endian (which is what the file uses).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Some preliminary notes only – may evolve into a complete answer.\n\nMy approach was the following. Clearly, the numbers at the end are floating point numbers. Also, they are not all floating point; the sequence 0C 00 00 00 a few bytes in is not a reasonable floating point number. Counting off to the next \"unreasonable\" value (which happened to be 0C 00 00 00 again, but there are other values as well) told me the stride of this data was 28 bytes. (Which is 40 in decimal, but for documentation I strongly prefer hex.) If you have a capable hex viewer of which you can adjust the view width, you can see that this is correct if you set its view width to 40 characters.\n\nCounting back from the end in 40-byte steps gave me the most likely starting point of this sequence.\n\nThe digits right before it are clearly at least 2-byte (unsigned short), and sort of increase from the start to the end. As this is a 3D model, I had a strong hunch they form triangle data, so at least they should contain a, b, and c vertex indices, and possibly additional triangle attributes. This turned out, by trial and error, to be not the case. (The \"trial and error\" consisted of dumping them into a display program. As that worked straight away, further numerical investigations were unnecessary.)\n\nSince this information is (1) enough to display an object, and (2) covers all of the data in the file apart from the few bytes at the start – which can be anything – I went on writing a full display program.\n\nThe first 004A bytes are unknown. They contain some floating point numbers (00 00 80 3F is 1.0, as a little endian 4 byte floating point number), and they could be anything. (A scale is likely.)\n\nThe next 2 bytes form the number 0016, which is in decimals 22. This could be the internal 'object number'.\n\nThen, starting at 004C, 113h (313, in decimal) triangle definitions follow. A single triangle definition consists of 3 unsigned short indices a,b,c, which point to 3 coordinates. The largest index in this list is 0117, a significant number!\n\nRight after this, 0118 3D points follow. Each 3D point has the following structure:\n\n```\nfloat x\nfloat y\nfloat z\nfloat unknown (usually 1.0?)\nunsigned int unknown\nfloat normal_x\nfloat normal_y\nfloat normal_z\nfloat u   \\\nfloat v   / correct; see bottom update\n\n```\nAffirming that the 3 normal_* variables indeed form a normal can be done by adding their squares together; they should hover around a value of 1.0. That is correct for the first hundred or so of these coordinates, up to 3 decimals of accuracy:\n\n```\n1.000004\n1.000080\n0.999935\n1.000076\n0.999936\n(and so on)\n\n```\nAdding up the sizes of all coordinate elements leads to a total size of 28 bytes (40, in decimal), and:\n\nThe significance of the 'highest index' in the triangle list is therefore proven :) They are indeed coordinate indices.\n\nWhere do these numbers 139h and 118h come from? They appear in the header part of the entire file!\n\nHere is the proof that the first 3 elements are indeed x, y, and z. I plotted x and y only, with y inverted (negative towards the bottom of the screen). You can clearly recognize the 'body' part of your in-game image.\n\n\n\nNot all coordinates are quite the same. The unknown_1 float value is 1.000 for the first 173 coordinates, then jumps to other values for the remainders. Similarly, the integer unknown_2 hovers between values from 4 to 43 for these, and then jumps to a much higher value. This needs some further investigation.\n\nThe u,v values can be mapped onto the source image directly. They are expressed in a floating point range from 0..1 so you need to multiply them by the source image's width and height. Here is an image of that:\n\n\n\nThe unused parts of the image are presumably used by other 3D models.\n\n",
+      "votes": "4",
+      "user": "Jongware",
+      "time": "Aug 23, 2016 at 22:42",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "majidarif",
+          "text": "I'm starting to understand the format. Although, I'm confused about UV and mapping the texture. And also how to guess what part is the face indices if the \"scrambled alphabet\" isn't recognizable.",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "@majidarif: My idea about u,v was correct, see the update. I'm not sure what you mean with \"scrambled alphabet\" though. Are you referring to the original hex dump?",
+          "time": null
+        },
+        {
+          "user": "majidarif",
+          "text": "Thanks, I'll try the update about the u,v now. About the scrambled alphabet, I read somewhere that the easiest way to find the face indices is by finding a segment of scrambled alphabets as shown here. But I'm just thinking what if that's not the case? Is there a more concrete definition of the face indices? Like, maybe, values that are between 1-255 only?",
+          "time": null
+        },
+        {
+          "user": "majidarif",
+          "text": "When you say u,v, when using .obj is it the vp? I can't make it work on my end. This is how I did it: \"vt %f %f\" % (u*width, v*height), I'm not sure if this is what you meant by multiplying by the source image dimensions.",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "@majidarif: multiplying is only necessary when your library does not already do it for you. Reading a few topics on Blender seems to suggest it's not necessary, but of course you could ask on there and refer to this question.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

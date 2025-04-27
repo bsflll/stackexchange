@@ -1,0 +1,41 @@
+{
+  "title": "Ghidra interpreting stack pointers wrongly",
+  "link": "https://reverseengineering.stackexchange.com/questions/23540/ghidra-interpreting-stack-pointers-wrongly",
+  "content": "Why is Ghidra interpreting this incorrectly? The example is very simple.\n\nIn this stack:\n\n```\n0019FF58  $-8      0019FF58        00000002     LOCAL 2\n0019FF5C  $-4      0019FF5C        00000001     LOCAL 1\n0019FF60  $ ==>    0019FF60        0019FF80     OLD EBP\n0019FF64  $+4      0019FF64      | 00401025     return to layout.00401025 from layout.sub_40102C\n0019FF68  $+8      0019FF68      | 00000041     PARAM 3\n0019FF6C  $+C      0019FF6C      | 0000BABE     PARAM 2\n0019FF70  $+10     0019FF70      | 0000CAFE     PARAM 1\n\n```\nGhidra obtains:\n\n```\nundefined4        Stack[0x4]:4   param_1                                 XREF[1]:     00401040 (R)   \nundefined4        Stack[0x8]:4   param_2                                 XREF[1]:     00401043 (R)   \nundefined4        Stack[0xc]:4   param_3                                 XREF[1]:     00401046 (R)   \nundefined4        Stack[-0x8]:4  local_8                                 XREF[1]:     00401032 (W)   \nundefined4        Stack[-0xc]:4  local_c                                 XREF[1]:     00401039 (W)  \n00401032 C745FC01000000            MOV        dword ptr [EBP  + local_8 ],0x1\n00401039 C745F802000000            MOV        dword ptr [EBP  + local_c ],0x2\n00401040 8B5D08                    MOV        EBX ,dword ptr [EBP  + param_1 ]\n00401043 8B4D0C                    MOV        ECX ,dword ptr [EBP  + param_2 ]\n00401046 FF7510                    PUSH       dword ptr [EBP  + param_3 ]\n\n```\nWhereas IDA correctly gets:\n\n```\n.text:0040102C var_8           = dword ptr -8\n.text:0040102C var_4           = dword ptr -4\n.text:0040102C arg_0           = dword ptr  8\n.text:0040102C arg_4           = dword ptr  0Ch\n.text:0040102C arg_8           = dword ptr  10h\n.text:00401032                 mov     [ebp+var_4], 1\n.text:00401039                 mov     [ebp+var_8], 2\n.text:00401040                 mov     ebx, [ebp+arg_0]\n.text:00401043                 mov     ecx, [ebp+arg_4]\n\n```\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "5k",
+  "tags": [
+    "ghidra",
+    "stack-variables"
+  ],
+  "user": "user1156544",
+  "time": "Mar 26, 2020 at 21:10",
+  "comments": [
+    {
+      "user": "mumbel",
+      "text": "what calling conventions are Ghidra and IDA using in your example",
+      "time": null
+    },
+    {
+      "user": "user1156544",
+      "text": "Default ones, Ghidra reports \" __stdcall\" and I suppose IDA too. In any case, the call is pretty standard to be identified by the tool, with a RET  0xC",
+      "time": null
+    },
+    {
+      "user": "R4444",
+      "text": "see this question - github.com/NationalSecurityAgency/ghidra/issues/998",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "TL;DR:\n\nAs pointed by R4444, Ghidra shows variable offsets relative to the entry stack-pointer and are not frame-based offsets.\n\nHerein, Ghidra assigns variable names based on ESP (or corresponding stack pointer) at the time the function is entered, without considering the coming PUSH EBP, basically following this:\n\n```\n0019FF58  $-C      0019FF58        00000002     LOCAL 2\n0019FF5C  $-8      0019FF5C        00000001     LOCAL 1\n0019FF60  $-4      0019FF60        0019FF80     will store the OLD EBP\n0019FF64  $ ==>    0019FF64      | 00401025     return to layout.00401025 from layout.sub_40102C\n0019FF68  $+4      0019FF68      | 00000041     PARAM 1\n0019FF6C  $+8      0019FF6C      | 0000BABE     PARAM 2\n0019FF70  $+C      0019FF70      | 0000CAFE     PARAM 3\n\n```\nThis is how Ghidra obtained the values:\n\n```\nStack[0x4]  -> param_1\nStack[0x8]  -> param_2\nStack[0xc]  -> param_3\nStack[-0x8] -> local_8\nStack[-0xc] -> local_c\n\n```\nIt must be considered that this is just a variable naming, the actual instruction is addressing the data with the correct offset. If we navigate to one of the offensive instructions, we can see that Ghidra provides the correct instruction at the bottom right corner, in this case, EBP-4 for the named variable local_8 ([-0x8]):\n\n\n\nThis default Ghidra behavior can be modified permanently via: Edit > Tool Options > Listing Fields > Operands Field > Markup Stack Variable References, and then Ghidra will display:\n\n```\n     undefined4        Stack[0x4]:4   param_1                                 XREF[1]:     00401040 (R)   \n     undefined4        Stack[0x8]:4   param_2                                 XREF[1]:     00401043 (R)   \n     undefined4        Stack[0xc]:4   param_3                                 XREF[1]:     00401046 (R)   \n     undefined4        Stack[-0x8]:4  local_8                                 XREF[1]:     00401032 (W)   \n     undefined4        Stack[-0xc]:4  local_c                                 XREF[1]:     00401039 (W)   \n\n00401032 C745FC01000000            MOV        dword ptr [EBP  + -0x4 ]=> local_8 ,0x1\n00401039 C745F802000000            MOV        dword ptr [EBP  + -0x8 ]=> local_c ,0x2\n00401040 8B5D08                    MOV        EBX ,dword ptr [EBP  + 0x8 ]=> param_1\n00401043 8B4D0C                    MOV        ECX ,dword ptr [EBP  + 0xc ]=> param_2\n00401046 FF7510                    PUSH       dword ptr [EBP  + 0x10 ]=> param_3\n\n```\nThis is the REASON for the values mismatch and the HOW the values are obtained, but WHY is Ghidra naming variables based on the function entry? @emteere explains that:\n\nSo, I imagine that the explanation is that one normally would wish to have frame-based variable naming, like seen in IDA, at least for some of the most extended architectures/compilers. However, Ghidra names variables with a general policy, and they decided to harmonise behaviour of different architectures/compilers by offseting variables based on the stack-pointer at the time the function is entered.\n\nSources:\n\n",
+      "votes": "8",
+      "user": "user1156544",
+      "time": "Mar 27, 2020 at 18:48",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+    "title": "What other methods can be used to find file paths in an executable?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17078/what-other-methods-can-be-used-to-find-file-paths-in-an-executable",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm hacking a game in my library (Mirror's Edge) to re-route where the save data is located. I've done this with\n  <strong>\n   many\n  </strong>\n  other games successfully, but this one has me stumped. Normally, I start with HxD and search for standard or unicode strings. If I can't find the string I'm looking for with a simple program like HxD, I move to more advanced programs like OllyDbg. In OllyDbg I use either the memory map or I search for all referenced strings in the CPU window. The game was obfuscated and had protection initially but I have since (successfully) removed it. I can't find the string with any of the methods I know, is there another tool or options with HxD or OllyDbg that can find strings that are stored differently?\n </p>\n <p>\n  Currently the game saves it's data in:\n </p>\n <pre><code>%USERPROFILE%\\Documents\\EA Games\\Mirror's Edge\n</code></pre>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "322",
+    "tags": [
+        "windows",
+        "ollydbg",
+        "strings"
+    ],
+    "user": "Mr. Mendelli",
+    "time": "Dec 30, 2017 at 5:55",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<html><body><span class=\"comment-copy\">\n maybe try to locate methods that operate on paths and see how the value is populated to them? Maybe it will give you the clue where to look form them.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Mr. Mendelli",
+            "text": "<html><body><span class=\"comment-copy\">\n That\n <i>\n  sounds\n </i>\n promising, but I wouldn't know where to start with that... I apologize, I'm still a novice at OllyDbg. I know this isn't a \"Give me my answer\" website but could you point me in the right direction perhaps?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "<html><body><span class=\"comment-copy\">\n well, I whodunit use Olly for that. Probably with some disassembler, I would check imports for some known API that operates on paths, from that found out the addresses and maybe then put bps on those in Olly and debug.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  there are API's that are required to write to a file\n  \n\n  an example of documented apis used to open and write to a file are \nfile open  -> kernel32.CreateFile \nfile write -> kernel32!WriteFile\n </p>\n <p>\n  these apis require kernelmode transition and it happens at \nntdll.NtCreateFile and ntdll!NtWriteFile\n </p>\n <p>\n  you can use ctrl+g in ollydbg to follow these apis and set a breakpoint there\n </p>\n <p>\n  assuming you have a file open an file write as in code below\n </p>\n <pre><code>#define _CRT_SECURE_NO_WARNINGS\n#include <stdio.h>\n#include <string.h>\nvoid main(void) {\n    char *foo = \"lets open a file and write in it something\n\";\n    FILE *fp =NULL;    \n    if((fp = fopen(\"c:\\\\somewrite.text\" , \"wb\")) != NULL) {\n        fwrite(foo,strlen(foo),1,fp);\n        printf(\"we wrote this %s\n\" , foo);\n        fclose(fp);\n    }\n} \n</code></pre>\n <p>\n  open the compiled exe in ollydbg v2.0\n </p>\n <pre><code>ctrl+g -> ntdll.NtCreateFile -> follow -> f2-> f9\n</code></pre>\n <p>\n  you should break here\n </p>\n <pre><code>CPU Stack\nAddress  Comments\nESP ==>  ; /RETURN to KERNELBASE.CreateFileW+1D1\nESP+4    ; |Arg1 = 26F614\nESP+8    ; |Arg2 = 40100080\nESP+C    ; |Arg3 = 26F5B8\nESP+10   ; |Arg4 = 26F5FC\nESP+14   ; |Arg5 = 0\nESP+18   ; |Arg6 = 80\nESP+1C   ; |Arg7 = 3\nESP+20   ; |Arg8 = 5\nESP+24   ; |Arg9 = 60\nESP+28   ; |Arg10 = 0\nESP+2C   ; \\Arg11 = 0\n</code></pre>\n <p>\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff566424(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   ZwCreateFile\n  </a>\n  is Documented as\n </p>\n <pre><code>NTSTATUS ZwCreateFile(\n  _Out_    PHANDLE            FileHandle,\n  _In_     ACCESS_MASK        DesiredAccess,\n  _In_     POBJECT_ATTRIBUTES ObjectAttributes,\n  _Out_    PIO_STATUS_BLOCK   IoStatusBlock,\n  _In_opt_ PLARGE_INTEGER     AllocationSize,\n  _In_     ULONG              FileAttributes,\n  _In_     ULONG              ShareAccess,\n  _In_     ULONG              CreateDisposition,\n  _In_     ULONG              CreateOptions,\n  _In_opt_ PVOID              EaBuffer,\n  _In_     ULONG              EaLength\n);\n</code></pre>\n <p>\n  the third argument is Pointer to\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff557749(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   _OBJECT_ATTRIBUTES\n  </a>\n  which has a member ObjectName which is a pointer to\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff564879(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   _UNICODE_STRING\n  </a>\n </p>\n <pre><code>typedef struct _OBJECT_ATTRIBUTES {\n  ULONG           Length;\n  HANDLE          RootDirectory;\n  PUNICODE_STRING ObjectName;\n  ULONG           Attributes;\n  PVOID           SecurityDescriptor;\n  PVOID           SecurityQualityOfService;\n}  OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;\n\n\ntypedef struct _UNICODE_STRING {\n  USHORT Length;\n  USHORT MaximumLength;\n  PWSTR  Buffer;\n} UNICODE_STRING, *PUNICODE_STRING;\n</code></pre>\n <p>\n  so 0x26f5b8 is pointer to OBJECT_ATTRIBUTES\n </p>\n <pre><code>CPU Dump\nAddress   Hex dump                                         ASCII\n0026F5B8  18 00 00 00|00 00 00 00|F4 F5 26 00|42 00 00 00|        ôõ& B\n0026F5C8  00 00 00 00|E0 F5 26 00|                             àõ&\n</code></pre>\n <p>\n  the third member of this struct 0x0026f5f4 is a pointer to unicode string\n </p>\n <pre><code>CPU Dump\nAddress   Hex dump                                         ASCII\n0026F5F4  2A 00 1A 02|88 99 40 00|                         * ˆ™@\n</code></pre>\n <p>\n  the wide char buffer is 0x00409988\n </p>\n <pre><code>CPU Dump\nAddress   Hex dump                                         ASCII\n00409988  5C 00 3F 00|3F 00 5C 00|63 00 3A 00|5C 00 73 00| \\ ? ? \\ c : \\ s\n00409998  6F 00 6D 00|65 00 77 00|72 00 69 00|74 00 65 00| o m e w r i t e\n004099A8  2E 00 74 00|65 00 78 00|74 00 00 00|             . t e x t\n</code></pre>\n <p>\n  you can use follow in dump to follow and find the path \nyou can look at the call stack using ctrl+k \nand locate function that may manipulate or create the paths prior to this\n </p>\n <p>\n  you can also use this shortcut for this specific function when you have broken on this API in dump window\n  <code>\n   type ctrl+g and type in  [[[esp+c]+8]+4]\n  </code>\n  deference third argument (esp+c) then deference the third member and then deference the second member\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "blabb",
+            "time": "Dec 31, 2017 at 8:14",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Mr. Mendelli",
+                    "text": "<span class=\"comment-copy\">Thank you @blabb for your answer. I apologize for the late response, some of this is beyond my skill set in OllyDbg but I plan on returning to this when I have more experience in the program.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

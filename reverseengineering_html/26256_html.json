@@ -1,0 +1,49 @@
+{
+    "title": "Converting rep movsd to to C without memcpy",
+    "link": "https://reverseengineering.stackexchange.com/questions/26256/converting-rep-movsd-to-to-c-without-memcpy",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So I am currently in the stages of creating binexact version of functions in decompiled code. I noticed that in this function the\n  <code>\n   rep movsd\n  </code>\n  is called and logically this is translated as Qmemcpy/memcpy when transformed to Pcode in IDA. In order to bin exact this , I cannot use memcopy because a function will be called and the code wont be bin exact. Is there a way to try to force the use of\n  <code>\n   rep movsd\n  </code>\n  ? I understand this is somewhat compiler dependent, but I was thinking I could write this differently to force the same effect.\n </p>\n <p>\n  <strong>\n   C code This is what I need to change to match original assembly\n  </strong>\n </p>\n <pre><code>BOOL NetSendCmdReq2(BYTE bCmd, BYTE mast, BYTE pnum, TCmdGItem *p)\n{\n    DWORD ticks;\n    TCmdGItem cmd;\n\n    memcpy(&cmd, p, sizeof(cmd));\n    cmd.bCmd = bCmd;\n    cmd.bPnum = pnum;\n    cmd.bMaster = mast;\n\n    ticks = GetTickCount();\n    if (!cmd.dwTime) {\n        cmd.dwTime = ticks;\n    } else if (ticks - cmd.dwTime > 5000) {\n        return FALSE;\n    }\n\n    multi_msg_add((BYTE *)&cmd.bCmd, sizeof(cmd));\n\n    return TRUE;\n}\n</code></pre>\n <p>\n  <strong>\n   Compare Assembly: (This is what the C above compiles to)\n  </strong>\n </p>\n <pre><code>push ebp\nmov ebp, esp\nsub esp, 0x28\npush ebx\npush esi\npush 0x26\nlea eax, [ebp-0x28]\npush [ebp+0x10]\nmov bl, dl\nmov esi, ecx\npush eax\ncall <imm_fn> <------ This should be rep movsd rather than a call.\nmov al, [ebp+0x0C]\nadd esp, 0x0C\nmov [ebp-0x26], al\nmov al, [ebp+0x08]\ntest esi, esi\nmov [ebp-0x28], bl\nmov [ebp-0x27], al\njnz $+0xF\nand [ebp-0x0E], esi\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\njmp $+0x25\ncall [<indir_fn>]\ncmp dword ptr [ebp-0x0E], 0x00\njnz $+0x5\nmov [ebp-0x0E], eax\njmp $+0xA\nsub eax, [ebp-0x0E]\ncmp eax, 0x1388\njnle $+0xA\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\n\npop esi\npop ebx\nleave\nret 0x0C\n</code></pre>\n <p>\n  <strong>\n   Origional Assembly : This is what should be matched .\n  </strong>\n </p>\n <pre><code>push ebp \nmov ebp, esp\nsub esp, 0x28\n\npush esi\nmov esi, [ebp+0x10]\npush edi\nmov eax, ecx\npush 0x09\nlea edi, [ebp-0x28]\npop ecx\nrep movsd < ----- Notice this doesn't make an actual call.\nmov cl, [ebp+0x0C]\nmovsw  \nmov [ebp-0x26], cl\nmov cl, [ebp+0x08]\ntest eax, eax\nmov [ebp-0x28], dl\nmov [ebp-0x27], cl\njnz $+0xF\nand [ebp-0x0E], eax\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\njmp $+0x25\ncall [<indir_fn>]\ncmp dword ptr [ebp-0x0E], 0x00\njnz $+0x5\nmov [ebp-0x0E], eax\njmp $+0xA\nsub eax, [ebp-0x0E]\ncmp eax, 0x1388\njnle $+0xA\nmov dl, 0x26\nlea ecx, [ebp-0x28]\ncall <imm_fn>\npop edi\npop esi\n\nleave\nret 0x0C \n</code></pre>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "535",
+    "tags": [
+        "assembly",
+        "decompilation",
+        "c",
+        "functions"
+    ],
+    "user": "LUser",
+    "time": "Nov 5, 2020 at 20:58",
+    "comments": [
+        {
+            "user": "MazeGen",
+            "text": "<html><body><span class=\"comment-copy\">\n movsd intrinsic suits you?\n <a href=\"https://docs.microsoft.com/en-us/cpp/intrinsics/movsd?view=msvc-160\" rel=\"nofollow noreferrer\">\n  docs.microsoft.com/en-us/cpp/intrinsics/movsd?view=msvc-160\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "<html><body><span class=\"comment-copy\">\n Inline attribute will remove the function call and insert rep mov instruction\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  here is a sample code that will emit rep movsd instead of memcpy()  function\n </p>\n <p>\n  the src const char * is deliberately kept large enough to avoid unrolling and using  simple mov [dest++] ,const\n </p>\n <p>\n  source\n </p>\n <pre><code>:\\>cat memcopin.cpp\n#include <memory.h>\n#pragma intrinsic( memcpy )\n\nchar *src =\"\\\nI am Source And I Will be truncated by memcpy\n\\\nI am Source And I Will be truncated by memcpy\n\";\n\nchar dest[128];\n\nint main(void) {\n    memcpy(dest,src,64);\n    return 0;\n}\n</code></pre>\n <p>\n  compiled and linked with vscommunity 2017 dev cmd prompt as x86 on x86\n </p>\n <pre><code>:\\>cl /Zi /W4 /analyze /EHsc /Od /nologo memcopin.cpp /link /release\nmemcopin.cpp\n</code></pre>\n <p>\n  executed under debugger cdb.exe(windbg console) awk is not a necessity it is there to get only relevent output and awk is availble for windows x86 and x64\n </p>\n <pre><code>:\\>cdb -c \"g memcopin!main;uf .;pt;da /c 64 poi(src);da /c 64 dest;q\" memcopin.exe |awk \"/Reading/,/quit:/\"\n\n0:000> cdb: Reading initial command 'g memcopin!main;uf .;pt;da /c 64 poi(src);da /c 64 dest;q'\ndisassembly  of main()\n\nmemcopin!main:\n01291000 55              push    ebp\n01291001 8bec            mov     ebp,esp\n01291003 56              push    esi\n01291004 57              push    edi\n01291005 b910000000      mov     ecx,10h\n0129100a 8b3500902d01    mov     esi,dword ptr [memcopin!src (012d9000)]\n01291010 bfe0992d01      mov     edi,offset memcopin!dest (012d99e0)\n01291015 f3a5            rep movs dword ptr es:[edi],dword ptr [esi]\n01291017 33c0            xor     eax,eax\n01291019 5f              pop     edi\n0129101a 5e              pop     esi\n0129101b 5d              pop     ebp\n0129101c c3              ret\nsrc \n012d0190  \"I am Source And I Will be truncated by memcpy.I am Source And I Will be truncated by memcpy.\"\ndest\n012d99e0  \"I am Source And I Will be truncated by memcpy.I am Source And I \"\nquit:\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Nov 6, 2020 at 11:43",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "LUser",
+                    "text": "<span class=\"comment-copy\">Your idea works. But it wasn't the solution for me . Apparently the original developers just made a pointer to the struct to copy it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "LUser",
+                    "text": "<span class=\"comment-copy\">cmd = *pcmditem; instead of memcpy .</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

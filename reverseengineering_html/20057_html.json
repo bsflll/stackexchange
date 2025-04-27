@@ -1,0 +1,52 @@
+{
+    "title": "Call instruction changed while running",
+    "link": "https://reverseengineering.stackexchange.com/questions/20057/call-instruction-changed-while-running",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  While debugging and reverse-engineering my exe, I have found a very weird thing.\n </p>\n <pre><code>call ds:GetModuleFileNameA\n</code></pre>\n <p>\n  This call instruction is formed with below hex bytes in IDA.\n </p>\n <pre><code>FF 15 24 C0 41 00\n</code></pre>\n <p>\n  (I think that 0x41C024 means the index of Import Table)\n </p>\n <p>\n  But when I looked this call instruction while debugging it looks as follow.\n </p>\n <pre><code>FF 15 24 C0 1A 00\n</code></pre>\n <p>\n  (Of course, image base is changed 190000 from 400000)\n </p>\n <p>\n  But what I don't understand is how OS (I use win10) automatically changed all offsets in code area.\n </p>\n <p>\n  Can anybody explain?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "437",
+    "tags": [
+        "assembly",
+        "x86",
+        "c++"
+    ],
+    "user": "Luis Bergmann",
+    "time": "Dec 10, 2018 at 13:47",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It is Called Relocation\n  \n\n  Every Executable has a section called .reloc\n </p>\n <p>\n  this Section contains details about all addresses that needs to be patched if the imagebase changes\n </p>\n <p>\n  the loader uses this section to change all the modified base address\n </p>\n <p>\n  for example win7 x86 32 bit calc.exe\n </p>\n <p>\n  disassembly from cdb.exe (randomised image base )\n </p>\n <pre><code>002616a3 ff15f4132600    call    dword ptr [calc!_imp__LoadStringW (002613f4)]\n</code></pre>\n <p>\n  disassembly from dumpbin (default imagebase)\n </p>\n <pre><code>C:\\>dumpbin  /nologo c:\\Windows\\System32\\calc.exe /disasm /range:0x10016A2,0x10016b1\n\n  010016A2: 50                 push        eax\n  010016A3: FF 15 F4 13 00 01  call        dword ptr [__imp__LoadStringW@16]\n</code></pre>\n <p>\n  if you look at the .reloca section you will notice a HIGHLOW entry for address\n  <strong>\n   6A5\n  </strong>\n </p>\n <pre><code>Offset(h) 00 01\n\n000B9C00  00 10  ..\n000B9C02  00 00  ..\n000B9C04  B4 00  ´.\n000B9C06  00 00  ..\n000B9C08  41 36  A6\n000B9C0A  52 36  R6\n000B9C0C  A5 36  ¥6 <<<<<\n000B9C0E  B3 36  ³6\n</code></pre>\n <p>\n  so the loader can patch the address at RVA ( ImageBase + base of Section + address )\n </p>\n <pre><code>imagebase = 0x1000000 + base of section = 0x1000 + HIGHLOW address = 6a5 \n= 0x10016a5\n</code></pre>\n <p>\n  at this address dumpbin has\n  <strong>\n   F4 13 00 01\n  </strong>\n  whereas cdb has\n  <strong>\n   f4 13 26 00\n  </strong>\n </p>\n <p>\n  the loader has patched it according to the image base\n </p>\n <p>\n  <a href=\"https://reverseengineering.stackexchange.com/questions/11233/dumpbin-correlating-thunk-jumps-in-reloc-to-disassembly/11235#11235\">\n   this post of mine has more details about what is patched\n  </a>\n </p>\n <p>\n  update wrt comment some exes dont have .reloc\n </p>\n <p>\n  yes it is entirely possible to have exes without reloc\n  \n\n  infact there is a msvc linker switch /FIXED if passed produces exes without relocations\n </p>\n <p>\n  in most of the cases exes can survive without relocations because they are the first to be loaded in Process Address Space\n  \n\n  so they tend to get their Preferred ImageBase always\n </p>\n <p>\n  Relocations matter most with Dlls especially those dlls that woud be Dynamically Loaded or loaded as a dependency to another dll\n </p>\n <p>\n  in this case clashes can happen and os needs a mechanism to relocate  the binary in question\n </p>\n <p>\n  if windows cant relocate the dll it crashes the application with\n </p>\n <pre><code>C:\\>cdb -c \"!error c0000018;q\" cdb | tail -n 3\n0:000> cdb: Reading initial command '!error c0000018;q'\nError code: (NTSTATUS) 0xc0000018 (3221225496) - {Conflicting Address Range}  The specified address range conflicts with\n the address space.\nquit:\n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Dec 6, 2018 at 17:09",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Did you mean <a href=\"https://en.wikipedia.org/wiki/Address_space_layout_randomization\" rel=\"nofollow noreferrer\">ASLR</a>?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Luis Bergmann",
+                    "text": "<span class=\"comment-copy\">Perfect answer!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Luis Bergmann",
+                    "text": "<span class=\"comment-copy\">Hi, blabb, You seem to know the process of windows execution. Can you please help me to run exe from memory? I need to load executable from network and save it to memory and execute it without creating new exe instance. Thanks in advance.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Luis Bergmann",
+                    "text": "<span class=\"comment-copy\">I have looked some executables with pe explorer and some of them haven't reloc section. In that case, how loader relocate the address?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@LuisBergmann  wrt running exe from memory is kinda frowned upon and today os also have been much hardened to resist such process creation  so it isnt a cut and dried recipe  wrt to no reloc section i have edited my answer and added some details take a look</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

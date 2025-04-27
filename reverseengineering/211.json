@@ -1,0 +1,90 @@
+{
+    "title": "Decryping TLS packets between Windows 8 apps and Azure",
+    "link": "https://reverseengineering.stackexchange.com/questions/211/decryping-tls-packets-between-windows-8-apps-and-azure",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In Windows Store application development for Windows 8, there is a class called remoteSettings that lets a developer store batches of data so that the user will have access to it across several machines, as long as they are logged in with the same account. </p>\n<p>I hooked up WireShark and discovered that the packet is stored in Azure, and is secured with TLS. I would like to MITM myself so that I can decrypt the packet and see if the data in encrypted on Azure.</p>\n<p>I obviously don't have the private key for Azure, so I'd like to know if anyone has an idea on how to accomplish that MITM analysis.</p>\n</div>",
+    "votes": "14",
+    "answers": 5,
+    "views": "2k",
+    "tags": [
+        "decryption",
+        "windows-8"
+    ],
+    "user": "Bill Sempf",
+    "time": "Mar 23, 2013 at 23:42",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If the data is being passed as HTTPS you could try the classic <a href=\"http://www.fiddler2.com/fiddler2/\" rel=\"noreferrer\">Fiddler</a> man-in-the-middle approach. I'm not sure whether the Windows store respects the proxy settings or whether it has a pinned certificate. If it does respect the proxy settings, which it should, and it doesn't have a pinned certificate you should be able to trivially man-in-the-middle it with Fiddler.</p>\n<p>If the data isn't HTTPS and the cerificate isn't pinned, one option is to proxy the secure connection using <a href=\"http://www.gomor.org/bin/view/GomorOrg/SslNetcat\" rel=\"noreferrer\">SSLNetcat</a>. What you do is that you change your hosts file so that the Store executable connects to SSLNetcat running locally, then you set up SSLNetcat such that it uses a cerificate for which you have the private key. Then you either just have SSLNetcat forward the data directly to a program of your choice or enter the private keys into Wireshark and use it to sniff the traffic.</p>\n<p>If the data isn't HTTPS, if the cerificate in the binary is pinned and not stored in a file, you can either patch the Windows Store executable and replace the certificate with your own for which you have the private key. OpenSSL should be able to generate a replacement certificate for you easily. This private key can then be entered into Wireshark which will then decrypt the traffic.</p>\n<p>You're fairly close to copy protection territory so you might run into a number of complications.</p>\n</div>",
+            "votes": "10",
+            "user": "Peter Andersson",
+            "time": "Mar 27, 2013 at 6:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Bill Sempf",
+                    "text": "<span class=\"comment-copy\">Let me be clear - I am doing this to my own app, to see if the data in Azure is stored encrypted or not. Not breaking someone else's app.  I tried Fiddler, but I may have done it wrong, so I'll research that. I wasn't familiar with SSLNetcat, so thank for that too. Awesome answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Andersson",
+                    "text": "<span class=\"comment-copy\">Oh, I assumed as much. I just meant that you could run into issues where the communication is heavily protected due to copy protection. It complicates matters a bit since you're more likely to run into pinned certificates, self verifying executables and even kernel level integrity checks. I'm unfamiliar with the Microsoft Store so I can't advice further than generalizations.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bill Sempf",
+                    "text": "<span class=\"comment-copy\">Your advice is pretty awesome though. I'll get to work once I am done watching basketball here ...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>One other thing that you could do, which is perhaps overkill but is useful in other scenarios, is to intercept the creation of the 48-byte TLS master secret. For many Windows applications (including IE), this happens in <code>lsass.exe</code> in the following function (taken from Win7 SP1 32-bit):</p>\n<pre><code>Caller:  ncrypt!_Tls1ComputeMasterKey@32+0x57 \nEIP:     ncrypt!_PRF@40+0x11a\n</code></pre>\n<p>You can then decrypt the captured packets after the fact in Wireshark by setting <code>(Pre)-Master-Secret log filename</code> in the SSL preferences to a file file that looks like:</p>\n<pre><code>RSA Session-ID:87492B3586DE289FAE1598B0A19CC7BCCB69371993F2C0DF32438034E06FE3FB\nMaster-Key:F58C0EFA2BF87602646B318400DFEB0C8CCDE59408C9F13C6D923F6208743BD34EA8BA17BCE02B9BD8DFED5A58036068\n</code></pre>\n<p>The session ID here can be found in the TLS headers (unencrypted) for the stream you're interested in. (Don't be fooled by the RSA -- this works for all TLS connections regardless of the ciphersuite in use.)</p>\n<p>The advantage of this method is that, since you're not doing a man in the middle, the client application doesn't have to trust your CA, which is especially handy if you're trying to reverse some malware that actually does crypto right.</p>\n<p>The downside is that you need to be able to debug <code>lsass.exe</code>, which can be tricky; there's some information on how to do that <a href=\"https://docs.microsoft.com/en-us/archive/blogs/alejacma/how-to-debug-lsass-exe-process\" rel=\"nofollow noreferrer\">here</a>.</p>\n</div>",
+            "votes": "12",
+            "user": "Glorfindel",
+            "time": "Mar 16, 2021 at 21:23",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Abdullah Mohamed",
+                    "text": "<span class=\"comment-copy\">Couldn't I just use Frida to intercept and hppl the call to <code>ncrypt!_Tls1ComputeMasterKey</code> in <code>lsass.exe</code> and get the TLS secret?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There are a number of approaches you could take with extracting the local key being used by Windows Store and feeding that into Wireshark, however, I think your best bet is to inject a DLL that hooks the Network IO functions <code>send()</code> and <code>recv()</code>  out of your process. </p>\n<p>You could try to do this on a \"low level\" yourself, but in the interest of pragmatism you'd be wise to examine Microsoft Detours for hooking, there are so many examples that utilize it - it's easy enough now that knowing your function prototype is the only essential requirement.</p>\n</div>",
+            "votes": "5",
+            "user": "zetavolt",
+            "time": "Mar 24, 2013 at 2:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Bill Sempf",
+                    "text": "<span class=\"comment-copy\">Not sure I can get to the Network IO functions in WinRT - maybe with some C++ hacking since this isn't exactly going through certification. Hadn't heard about Detours yet - thanks for that.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Abdullah Mohamed",
+                    "text": "<span class=\"comment-copy\">Wouldn't hooking <code>send()</code> and <code>recv()</code> also end up logging encrypted traffic? Most probably the encryption happens then sent/received through the socket API, right?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You could also try <a href=\"http://code.google.com/p/ospy\" rel=\"nofollow\">oSpy</a> which basically hooks the appropriate API calls and lets you see the data before and after it has been encrypted/decrypted.  </p>\n<blockquote>\n<p>oSpy is a tool which aids in reverse-engineering software running on the Windows platform. [...] when the sniffing is done on the API level it allows a much more fine-grained view of what's going on. [...] if an application uses encrypted communication it's easy to intercept these calls as well. oSpy already intercepts one such API, and is the API used by MSN Messenger, Google Talk, etc. for encrypting/decrypting HTTPS data.</p>\n</blockquote>\n</div>",
+            "votes": "4",
+            "user": "Jesper.Reenberg",
+            "time": "Mar 27, 2013 at 13:55",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Most probably Windows 8 is using <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/aa385483%28v=vs.85%29.aspx\" rel=\"nofollow\">WinINet</a> to connect with the App Store. If this is the case, you can see the unencrypted streams hooking into the wininet.dll instead of using a proxy. <a href=\"https://code.google.com/p/hookme/\" rel=\"nofollow\">HookME</a> does this and it was presented last year in BlackHat.</p>\n<p>Probably you need to make some minor changes to compile and use it under Windows 8.</p>\n</div>",
+            "votes": "2",
+            "user": "sw.",
+            "time": "Jun 10, 2014 at 12:44",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

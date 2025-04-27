@@ -1,0 +1,38 @@
+{
+    "title": "Radare2 debugging - How to get into lazy imported functions?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18819/radare2-debugging-how-to-get-into-lazy-imported-functions",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a linux binary that imports functions from an external library (shared object). The functions are\n  <a href=\"https://en.wikipedia.org/wiki/Lazy_loading\" rel=\"nofollow noreferrer\">\n   lazy loaded\n  </a>\n  and not available when rip is at\n  <code>\n   @main\n  </code>\n  or\n  <code>\n   @entry\n  </code>\n  . When i step into such a function (like\n  <code>\n   call sym.imp.<function>\n  </code>\n  ) it goes into plt->got->linker->function. Doing this manually (step-into) is very time consuming and uncomfortable. None of the analysis functions (\n  <code>\n   aaa\n  </code>\n  ) seem to register any functions (\n  <code>\n   afl ~ <function>\n  </code>\n  ) of the lazy loaded library so there is no way to gather the function start address (until the linker fills the plt/got).\n </p>\n <p>\n  The only way i figured out so far is to break at the\n  <code>\n   call\n  </code>\n  , look up the mapped memory (\n  <code>\n   dm\n  </code>\n  ) of the (now loaded) library and adding the offset of the function (gathered by directly/statically loading the library beforehand). This finally leads to the target function start address.\n </p>\n <p>\n  Even though this works i think its still too complicated for such a basic task and there might be a much easier way. I can remember that IDA/Windows allowed to prepare a static environment (load binary, libs, add comments, annotations and such) and once going into the debugger the initialization phase (linker) detected the prepared libs and asked to use/overload them in the dynamic session. There, you could easily set breakpoints on the functions and the debugger stopped successfully.\n </p>\n <p>\n  The question is: How to get into lazy loaded imported functions without going over plt/got/linker in radare2?\n </p>\n <p>\n  Edit:\nHere is a specific example:\n </p>\n <pre><code>r2 -d /usr/bin/rar\naaa\ndb sym.imp.__swprintf_chk\ndc\n</code></pre>\n <p>\n  Then you end up in the\n  <code>\n   .plt\n  </code>\n  (twice) and then in\n  <code>\n   map.usr_lib_ld_2.27.so.r_x + 50055\n  </code>\n  .\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "debugging",
+        "linux",
+        "radare2",
+        "dynamic-linking"
+    ],
+    "user": "Maniaxx",
+    "time": "Jul 17, 2018 at 19:44",
+    "comments": [
+        {
+            "user": "Megabeets",
+            "text": "<html><body><span class=\"comment-copy\">\n Can you please share your binary and point to the specific locations. This way we will be able to give you the best answer.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Maniaxx",
+            "text": "<html><body><span class=\"comment-copy\">\n I've added an example.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The\n  <code>\n   sym.imp.*\n  </code>\n  symbols are pointing to the\n  <code>\n   plt\n  </code>\n  and this is intended. In order to locate a specific function of a loaded module/library, you need to use the\n  <code>\n   dmi\n  </code>\n  command and its subcommands.\n </p>\n <p>\n  To follow your example, in the following steps I'll demonstrate how to reach the address of\n  <code>\n   __swprintf_chk\n  </code>\n  .\n </p>\n <p>\n  First, open a binary in a debug mode. I'm using the\n  <em>\n   same\n  </em>\n  binary as you.\n </p>\n <pre><code>$ r2 -d /usr/bin/rar\n\nProcess with PID 8617 started...\n= attach 8617 8617\nbin.baddr 0x00400000\nUsing 0x400000\nasm.bits 64\n -- This computer has gone to sleep.\n[0x7f1f85401090]>\n</code></pre>\n <p>\n  <code>\n   __swprintf_chk\n  </code>\n  is part of\n  <em>\n   libc\n  </em>\n  so we need the library to be loaded in the memory first. By default, radare2 breaks before\n  <code>\n   libc\n  </code>\n  is loaded into the memory so let's quickly continue the execution until we reach the program's entrypoint using\n  <code>\n   dcu\n  </code>\n  (\n  <strong>\n   d\n  </strong>\n  ebug\n  <strong>\n   c\n  </strong>\n  ontinue\n  <strong>\n   u\n  </strong>\n  ntil):\n </p>\n <pre><code>[0x7f1f85401090]> dcu entry0\nContinue until 0x00403000 using 1 bpsize\nhit breakpoint at: 403000\n</code></pre>\n <p>\n  Now that we are at the program's entrypoint, we can simply execute the following command:\n </p>\n <pre><code>[0x00403000]> dmi libc __swprintf_chk\n235 0x001335f0 0x7f1f845c35f0 GLOBAL   FUNC  162 __swprintf_chk\n</code></pre>\n <p>\n  We received the address of\n  <code>\n   __swprintf_chk\n  </code>\n  which is\n  <code>\n   0x7f1f845c35f0\n  </code>\n  . We can use radare2's internal grep (\n  <code>\n   ~\n  </code>\n  ) to take only this value:\n </p>\n <pre><code>[0x00403000]> dmi libc __swprintf_chk~[2]\n0x7f1f845c35f0\n</code></pre>\n <p>\n  We can also print it as a radare2 commands using\n  <code>\n   dmi*\n  </code>\n  :\n </p>\n <pre><code>[0x00403000]> dmi* libc __swprintf_chk\nf sym.__swprintf_chk 162 0x7f1f845c35f0\n</code></pre>\n <p>\n  And if you want to execute the command, simply prepend it with a dot:\n </p>\n <pre><code>[0x00403000]> .dmi* libc __swprintf_chk\n[0x00403000]> f~sym.__swprintf_chk\n0x7f1f845c35f0 162 sym.__swprintf_chk\n</code></pre>\n <p>\n  As you can see, the address was added as a flag named \"sym.__swprintf_chk\".\n </p>\n <p>\n  For more help you can execute\n  <code>\n   dmi?\n  </code>\n  and\n  <code>\n   dm?\n  </code>\n  and read the help for these commands.\n  \n\n  More information can be found in the\n  <a href=\"https://radare.gitbooks.io/radare2book/content/debugger/memory_maps.html\" rel=\"nofollow noreferrer\">\n   \"Memory Maps\"\n  </a>\n  chapter I wrote for r2book.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Megabeets",
+            "time": "Jul 17, 2018 at 20:35",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

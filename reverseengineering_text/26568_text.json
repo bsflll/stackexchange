@@ -1,0 +1,36 @@
+{
+    "title": "Understanding ARMv7 seemingly overly verbose disassembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/26568/understanding-armv7-seemingly-overly-verbose-disassembly",
+    "content": "I’m working with a disassembled ARMv7 binary. There are several instances where groups of instructions seem sub-optimal, but this one really caught my attention:\n<pre><code>00009086         movw       r3, #0x4f36\n0000908a         movt       r3, #0x1                                            ; ledTimer\n0000908e         ldrh       r3, [r3]                                            ; ledTimer\n00009090         subs       r3, #0x1\n00009092         uxth       r2, r3\n00009094         movw       r3, #0x4f36\n00009098         movt       r3, #0x1                                            ; ledTimer\n0000909c         strh       r2, [r3]                                            ; ledTimer\n0000909e         movw       r3, #0x4f36\n000090a2         movt       r3, #0x1                                            ; ledTimer\n000090a6         ldrh       r3, [r3]                                            ; ledTimer\n000090a8         cmp        r3, #0x0\n000090aa         bne.w      loc_9250\n</code></pre>\nSince <pre><code>loc_9250</code></pre> is the beginning of the epilogue, I interpreted this section as:\n<pre><code>if (--ledTimer != 0) {\n    return;\n}\n</code></pre>\nAm I missing something about the ARMv7 architecture that makes all these instructions necessary (besides my disassembler not substituting the pseudo-<pre><code>mov32</code></pre> for the <pre><code>movw</code></pre>/<pre><code>movt</code></pre> pairs)? It seems like a very inefficient way of going about this sequence of operations. Or perhaps this is just the result of a compiler with optimisation settings cranked right down.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "124",
+    "tags": [
+        "disassembly",
+        "arm"
+    ],
+    "user": "MTCoster",
+    "time": "Dec 16, 2020 at 23:32",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This is probably because <pre><code>*ledTimer</code></pre> is volatile.  Here's a short bit of code that produces a similar result:\n<pre><code>int main() {\n    volatile unsigned short *ledTimer{(unsigned short *)0x14f36};\n    for (--(*ledTimer); *ledTimer; --(*ledTimer));\n}\n</code></pre>\nNow compile with gcc 8.3.1 with <pre><code>-march=armv7 -O1</code></pre> and we get something that starts to resemble what you've listed:\n<pre><code>main:\n        movw    r2, #20278\n        movt    r2, 1\n        ldrh    r3, [r2]\n        subs    r3, r3, #1\n        uxth    r3, r3\n        strh    r3, [r2]        @ movhi\n        ldrh    r3, [r2]\n        uxth    r3, r3\n        cbz     r3, .L2\n        movw    r2, #20278\n        movt    r2, 1\n.L3:\n        ldrh    r3, [r2]\n        subs    r3, r3, #1\n        uxth    r3, r3\n        strh    r3, [r2]        @ movhi\n        ldrh    r3, [r2]\n        uxth    r3, r3\n        cmp     r3, #0\n        bne     .L3\n.L2:\n        movs    r0, #0\n        bx      lr\n</code></pre>\nYou can try it live.\n",
+            "votes": "3",
+            "user": "Edward",
+            "time": "Dec 17, 2020 at 13:59",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "MTCoster",
+                    "text": "<span class=\"comment-copy\">This is just the kind of insight I was looking for, thank you! I hope you don’t mind if I wait a day or so to accept your answer, just in case someone else has other ideas.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">No, I don't mind at all.  Others may very well provide more detailed answers or create code that exactly matches what you've disassembled.  Glad I could be of help!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

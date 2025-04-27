@@ -1,0 +1,58 @@
+{
+    "title": "Does the loader fill the IAT table of an .exe in load time by checking the corresponding export tables or during run time?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22070/does-the-loader-fill-the-iat-table-of-an-exe-in-load-time-by-checking-the-corre",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I came upon this question : </p>\n<p><a href=\"https://reverseengineering.stackexchange.com/questions/22066/can-we-hook-the-nt-or-zw-functions-using-iat-hooking-or-just-inline-hooking\">Can we hook the Nt or Zw functions using IAT hooking, or just inline hooking?</a></p>\n<p>and it got me wondering, lets say for some reason some function was not in the IAT of our target PE in virtual memory, like the above question which is Zw/NtQuerySystemInformation (I'm still not sure why this is not included in IAT tho), so in this case if we wanted to hook the IAT, would it be possible to hook the export table of kernel32.dll or ntdll.dll and do it like that instead? because i assume this function has to be there at least</p>\n<p>so this takes me back to the question, will the loader fill our IAT when its loading the PE into memory by checking the export tables, or when our program uses it? because if its the first case then I assume there is no way to hook the export table right?</p>\n<p>also does anyone know why functions like ZwQuerySystemInformation dont get included in IAT but stuff like Sleep and GetProcAddress Does?</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "x86",
+        "patching",
+        "patch-reversing",
+        "x86-64"
+    ],
+    "user": "Max",
+    "time": "Sep 7, 2019 at 12:18",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>the Apis like Sleep are documented  a header file is provided in the sdk a library to link against is provided  by sdk  (windows.h ,kernel32.lib)</p>\n<p>api s like Zwxxx are internal or advanced user apis they or either undocumented or semidocumented  or documented for usage in a kernel mode<br/>\n these apis are not to be taken for granted to be either forward compatible  or backward compatible  </p>\n<p>so if you use them then all the care that is required is to be taken by the one who is using them </p>\n<p>so they are designed to be dynamically called  using load library , getting the procedure address  , casting the return as a typedeffed function pointer </p>\n<p>they dont reside in IAT or loader doesnot resolve them</p>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Sep 7, 2019 at 14:55",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Max",
+                    "text": "<span class=\"comment-copy\">So there is no way to IAT hook or hook the export table of a Zwxxx or Ntxxx function? i mean if the only way to use them is loadlibrary/GetProcAddr then can't we just hook it in the export table of Ntdll and therefore when task manager tries to use it we win?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h1>When does the PE loader fill in the IAT?</h1>\n<p>The IAT is updated at load time by the PE Loader [1], this is called <em>Load-time dynamic linking</em>, as opposed to <em>Run-time dynamic linking</em>, where <code>LoadLibrary/GetProcAddress</code> are necessary.</p>\n<h1>Hooking an API not included in Import Address Table</h1>\n<p>There are several ways to do that actually, and Export Address Table hooking is one of them. However, your hook must be installed before the target application looks up the API you want to hook.</p>\n<h1>Include Nt/Zw APIs in the IAT</h1>\n<blockquote>\n<p>also does anyone know why functions like ZwQuerySystemInformation dont get included in IAT but stuff like Sleep and GetProcAddress Does?</p>\n</blockquote>\n<p>The only reason <code>ZwQuerySystemInformation</code> is not included in the IAT is because you didn't tell your linker to do it for you. You need need to link against ntdll import library (available by default in VS2017), or you can build you own.</p>\n<p>On my system with <code>mingw</code> and <code>clang</code> installed, I was able to take the code from [2], remove any <code>GetProcAddress/LoadLibrary</code> calls, and build it. This gives:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;windows.h&gt;\n#include &lt;winternl.h&gt;\n\nint main(void) {\n    \n    /* load the ntdll.dll */\n    PVOID Info;\n    /* create the string in the right format */\n    UNICODE_STRING filename;\n    RtlInitUnicodeString(&amp;filename, L\"C:\\\\temp.txt\");\n\n    /* initialize OBJECT_ATTRIBUTES */\n    OBJECT_ATTRIBUTES obja;\n    InitializeObjectAttributes(&amp;obja, &amp;filename, OBJ_CASE_INSENSITIVE, NULL, NULL);\n\n    /* call NtOpenFile */\n    IO_STATUS_BLOCK iostatusblock;\n    HANDLE file = NULL;\n    NTSTATUS stat = NtOpenFile(&amp;file, FILE_WRITE_DATA, &amp;obja, NULL, NULL, NULL);\n    if(NT_SUCCESS(stat)) {\n        printf(\"File successfully opened.\\n\");\n    }\n    else {\n        printf(\"File could not be opened.\\n\");\n    }\n\n    getchar();\n    return 0;\n}\n</code></pre>\n<p>To build, I use:</p>\n<pre><code>clang -target x86_64-w64-windows-gnu toto.c -o toto.exe -lntdll\n</code></pre>\n<p>Then, <em>IDA Free 7.0</em> allows us to see that <code>NtOpenFile</code> was successfully included in the IAT:</p>\n<p><a href=\"https://i.sstatic.net/NSKXI.png\" rel=\"nofollow noreferrer\"><img alt=\"NTDLL APIs in the IAT\" src=\"https://i.sstatic.net/NSKXI.png\"/></a></p>\n<h1>References</h1>\n<p>[1]: The Rootkit Arsenal, Bill Blunder, Chapter 11, p.480</p>\n<p>[2]: Calling NTDLL functions directly, <a href=\"https://resources.infosecinstitute.com/calling-ntdll-functions-directly\" rel=\"nofollow noreferrer\">https://resources.infosecinstitute.com/calling-ntdll-functions-directly</a></p>\n</div>",
+            "votes": "4",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Max",
+                    "text": "<span class=\"comment-copy\">Thanks for answer! but doesn't ntdll gets mapped into every loaded PE automatically? i mean i don't even need the load the ntdll library to call these functions, i just need to get its handle and use getproc so this means its already there, right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "plowsec",
+                    "text": "<span class=\"comment-copy\">Yes, ntdll and a bunch of other libraries are automatically loaded. Using LoadLibrary on an already loaded library generally returns its handle (there are corner cases though, keep that in mind if you don't understand why your handle is invalid).</span>",
+                    "time": null
+                },
+                {
+                    "user": "plowsec",
+                    "text": "<span class=\"comment-copy\">@Max does this answer your question? If so, please mark as accepted, or else edit your original question so that we can help you further ;)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

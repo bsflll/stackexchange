@@ -1,0 +1,78 @@
+{
+  "title": "Do I have to consider virtual function declaration order?",
+  "link": "https://reverseengineering.stackexchange.com/questions/12271/do-i-have-to-consider-virtual-function-declaration-order",
+  "content": "I loaded a shared library (I don't know the source of that) and made a header for that with IDA.\n\nIs this\n\n```\nclass Tester {\n    public:\n    virtual void test();\n    virtual void replay();\n};\n\n```\ndifferent from this?\n\n```\nclass Tester {\n    public:\n    virtual void replay();\n    virtual void test();\n};\n\n```\n",
+  "votes": "3",
+  "answers": 3,
+  "views": "397",
+  "tags": [
+    "ida",
+    "vtables"
+  ],
+  "user": "user160368",
+  "time": "Mar 22, 2016 at 10:47",
+  "comments": [
+    {
+      "user": "rec",
+      "text": "I guess it depends on the compiler?",
+      "time": null
+    },
+    {
+      "user": "Ta Thanh Dinh",
+      "text": "I think also that it should depend on the compiler.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The order of virtual functions is significant; altering the order in the source code will alter the order in the generated machine code. In your example, the two source samples will generate different machine code.\n\nEdit: using the sample code provided by @tathanhdinh below, MSVC generates the two vtables as follows:\n\n```\n;   COMDAT ??_7B@@6B@\nCONST   SEGMENT\n??_7B@@6B@ DD   FLAT:??_R4B@@6B@            ; B::`vftable'\n    DD  FLAT:?bust@B@@UAEXXZ\n    DD  FLAT:?test@B@@UAEXXZ\nCONST   ENDS\n;   COMDAT ??_7A@@6B@\nCONST   SEGMENT\n??_7A@@6B@ DD   FLAT:??_R4A@@6B@            ; A::`vftable'\n    DD  FLAT:?test@A@@UAEXXZ\n    DD  FLAT:?bust@A@@UAEXXZ\nCONST   ENDS\n\n```\nNote that the order of the member function pointers in the two vtables differs. As I mentioned, the order in which virtual functions matters in at least one compiler.\n\n",
+      "votes": "2",
+      "user": "John Källén",
+      "time": "Mar 23, 2016 at 16:52",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user160368",
+          "text": "How about normal functions?",
+          "time": null
+        },
+        {
+          "user": "John Källén",
+          "text": "Non-virtual member functions won't affect the layout of your class or its vtable in memory. It's the linker that will decide what offset the function bodies will be located in.",
+          "time": null
+        },
+        {
+          "user": "user160368",
+          "text": "+ Can I omit one or more virtual function declarations?",
+          "time": null
+        },
+        {
+          "user": "John Källén",
+          "text": "You need to make sure that you don't misalign the vtable. You may omit any virtual function declarations that appear after the function(s) you wish to have disassembled.",
+          "time": null
+        },
+        {
+          "user": "Ta Thanh Dinh",
+          "text": "@JohnKällén Thanks for you answer, but it seems to me unintuitive the idea that the order virtual function in source affects the order in machine code. It is hard to me to believe that somewhere in C++ standard (or even in C++ ABI) says that, I think that it should be compiler dependent.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "i dont think you mean using the same class name if so it may generate redefinition error if not  the order should be considered \n\n```\n#include <iostream>\nusing namespace std;\nclass A {\n    public:\n    virtual void test() { cout<<\"class A test virtual function   \n\"; }\n    virtual void bust() { cout<<\"class A bust virtual function   \n\"; }\n};\nclass B {\n    public:\n    virtual void bust() { cout<<\"class B bust virtual function   \n\"; }\n    virtual void test() { cout<<\"class B test virtual function   \n\"; }\n};\nint main(void) {\n    A *foo = nullptr;\n    B *bla = nullptr;\n    try{        \n    foo = new(A);\n    bla = new(B);\n    foo->bust();\n    bla->bust();\n    delete foo;\n    delete bla;\n    } catch(...){\n    delete foo;\n    delete bla; \n    }\n    return 0;\n}\n\n```\ncompiled & linked with \n\n```\ncl /nologo /Zi /EHsc /O1 /analyze /W4 *.cpp /link /release\n\n```\nexecuted will result in \n\n```\nclassmagic.exe\nclass A bust virtual function\nclass B bust virtual function\n\n```\n",
+      "votes": "0",
+      "user": "blabb",
+      "time": "Mar 22, 2016 at 10:42",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Since I do not think the order of virtual functions in source could affect their order in machine code, I try to give a counter example. The main idea is first to give a layout for the vtable of a base class\n\n```\nstruct A\n{\n  void virtual test() {};\n  void virtual replay() {};\n}\n\n```\nthen using two classes which inherit A, but with different order of virtual functions:\n\n```\nstruct B : public A\n{\n  void virtual test() {};\n  void virtual replay() {};\n}\n\nstruct C : public A\n{\n  void virtual replay() {};\n  void virtual test() {};\n}\n\n```\nIf the order of virtual functions in B and C affects their machine code order, then their pointers in corresponding vtables should be different. But the following generated machine code (I have used clang as the compiler) shows that they are not:\n\n```\n.rodata:0804888C ; vtable for B\n.rodata:0804888C _ZTV1B db    0                   ; DATA XREF: B::B(void)+1Co\n ...\n.rodata:08048894 dd offset _ZN1B4testEv           ; B::test(void)\n.rodata:08048898 dd offset _ZN1B6replayEv         ; B::replay(void)\n ...\n ... \n.rodata:08048904 ; vtable for C\n.rodata:08048904 _ZTV1C db    0                   ; DATA XREF: C::C(void)+1Co\n ...\n.rodata:0804890C dd offset _ZN1C4testEv           ; C::test(void)\n.rodata:08048910 dd offset _ZN1C6replayEv         ; C::replay(void)\n\n```\nThe order of virtual functions in B and C are indeed the same (and respects one in A).\n\n",
+      "votes": "0",
+      "user": "Ta Thanh Dinh",
+      "time": "Mar 22, 2016 at 14:02",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

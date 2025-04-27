@@ -1,0 +1,39 @@
+{
+    "title": "Intel PIN: How to log the value of the fs and gs registers at every instruction?",
+    "link": "https://reverseengineering.stackexchange.com/questions/13643/intel-pin-how-to-log-the-value-of-the-fs-and-gs-registers-at-every-instruction",
+    "content": "I modified the pinatrace pintool example and managed to log all values of the \"regular\" registers:\n<pre><code>VOID Instruction(INS ins, VOID *v)\n{\n ...\n // Instrument REGISTER writes using a predicated call, i.e.\n // the call happens iff the register store will be actually executed\n UINT32 maxNumWRegs;\n maxNumWRegs = INS_MaxNumWRegs(ins);\n for (UINT32 i=0; i<maxNumWRegs; i++)\n {\n     // --> BEFORE\n     INS_InsertPredicatedCall(\n        ins, IPOINT_BEFORE, (AFUNPTR)SaveRegWrite,\n        IARG_INST_PTR,\n        IARG_UINT32,\n        INS_RegW(ins, i),\n        IARG_END);\n    \n    if (INS_HasFallThrough(ins))\n    {\n        // --> AFTER\n        INS_InsertCall(\n            ins, IPOINT_AFTER, (AFUNPTR)LogRegWrite,\n            IARG_INST_PTR,\n            IARG_UINT32,\n            INS_RegW(ins, i),\n            IARG_CONTEXT, // to access the register value\n            IARG_END);\n    }\n    if (INS_IsBranchOrCall(ins))\n    {\n        INS_InsertCall(\n            ins, IPOINT_TAKEN_BRANCH, (AFUNPTR)LogRegWrite,\n            IARG_INST_PTR,\n            IARG_UINT32,\n            INS_RegW(ins, i),\n            IARG_CONTEXT, // to access the register value\n            IARG_END);\n    }        \n}\n</code></pre>\nI read here that\n\nYou can't actually be sure that fs is not zero by looking at the EA, because the value in fs is an index into the table of segment descriptors, not a pointer in its own right... The pointer value is taken from the segment descriptor, but is mirrored in the Pin virtual register REG_SEG_FS_BASE.\n\nI am not sure how to get the value using this virtual register.\nRelated info from the official manual:\n\nWhen IARG_CONTEXT is used in probe mode,it is impossible to get certain register values correct. The values in these registers are meaningless when IARG_CONTEXT is used in probe mode:\nREG_SEG_GS_BASE\nREG_SEG_FS_BASE\nREG_INST_G0 - REG_INST_G19\nUsing IARG_RETURN_REGS and IARG_REG_REFERENCE is not supported in Probe mode.\n\nHow do I print the value of the fs and gs regsiters after every instruction execution?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "x86",
+        "pintool",
+        "register",
+        "segmentation",
+        "amd64"
+    ],
+    "user": "langlauf.io",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "joxeankoret",
+            "text": "Are you using probe mode (aka hooking)? If not, doesn't this work for you?    auto reg = PIN_GetContextReg(ctx, REG_SEG_FS);\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "Are you on x64 because there you cannot change segment registers.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<pre><code>const CONTEXT *ctx; (from the arguments of LogRegWrite...)\nPIN_REGISTER regval;\nPIN_GetContextRegval(ctx, REG_SEG_GS, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_FS, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_GS_BASE, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_FS_BASE, reinterpret_cast<UINT8*>(&regval));\n</code></pre>\nYou use use <pre><code>PIN_GetContextRegval</code></pre> API to get register value of <pre><code>fs</code></pre>/<pre><code>gs</code></pre>. As mentioned in a question on the Pinheads Yahoo group [1], <pre><code>REG_SEG_GS</code></pre> will only get the value of <pre><code>fs</code></pre>/<pre><code>gs</code></pre>, in other word, the index to GDT, <pre><code>REG_SEG_GS_BASE</code></pre> will get the base address of the corresponding entry of GDT.\n[1] https://beta.groups.yahoo.com/neo/groups/pinheads/conversations/topics/5444, retrieved through Wayback machine\n\nI think you're probably after REG_SEG_FS_BASE, which is the address of the base of the F segment.\n\nI know fs is not zero by obtaining the memop effective address (0x7ffff7fd4728 in my case).\n\nYou can't actually be sure that fs is not zero by looking at the EA, because the value in fs is an index into the table of segment descriptors, not a pointer in its own right...\nThe pointer value is taken from the segment descriptor, but is mirrored in the Pin virtual register REG_SEG_FS_BASE.\n",
+            "votes": "1",
+            "user": "canihavesomecoffee",
+            "time": "Apr 1, 2021 at 15:00",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

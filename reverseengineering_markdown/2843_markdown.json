@@ -1,0 +1,44 @@
+{
+  "title": "Using Python CTypes to get to the IAT",
+  "link": "https://reverseengineering.stackexchange.com/questions/2843/using-python-ctypes-to-get-to-the-iat",
+  "content": "I'm trying to get to IAT of a PE file.  My plan is eventually overwrite some values so I can hook some stuff to help with unpacking, etc.  I'm using this post https://stackoverflow.com/questions/7673754/pe-format-iat-questions as a guide.  I'm currently on number 4 and that's where things are getting a little fuzzy for me.  I'm able to get a pointer to an entry within the DataDirectory array.  I chose the 13th entry because from my research http://msdn.microsoft.com/en-us/library/windows/desktop/ms680305%28v=vs.85%29.aspx it looks like that will lead me to the IAT.  I'm not sure I'm on the right track because this DataDirectory has the value for size = 0 and virtualaddress = 172.  Is the virtualsize of 172 an offset that must be added to some base address?  I'm just working with a simple C program with no debug info that prints, \"Hello World\".  Any help is greatly appreciated.  Not sure how much showing the code will help my methodology but I'll post the relevant parts below.  Any help is appreciated.  Thanks!\n\n```\npDOSHeader = ctypes.cast(hModule, ctypes.POINTER(IMAGE_DOS_HEADER)).contents\n\ne_lfanew_offset = pDOSHeader.e_lfanew\n\noffset_to_NTHeaders = e_lfanew_offset + hModule\npNTHeaders = ctypes.cast(offset_to_NTHeaders,ctypes.POINTER(IMAGE_NT_HEADERS)).contents\n\npImage_NT_Headers = pNTHeaders.OptionalHeader\npDataDirectory = pImage_NT_Headers.DataDirectory\npDataDirectory_IAT = pDataDirectory[13]\n\n```\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "python",
+    "iat"
+  ],
+  "user": "user2743",
+  "time": "May 23, 2017 at 12:37",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Don't rely on the IAT entry in the PE Data Directory to be accurate. The only truly accurate way to find the IAT(s) is to find actual calls from the disassembled code to statically imported API functions.\n\nLet's use the following code in IDA as an example:\n\n```\nFF 15 44 60 03 01    call    ds:GetVersion\n\n```\nThe actual disassembly of FF 15 44 60 03 01 is call dword ptr ds:[1036044h], but IDA knows this points to GetVersion(), so it shows the \"pretty\" disassembly instead. In this example, the address 1036044h is actually the virtual address of GetVersion()'s entry in the IAT for kernel32.dll. As such, you can now look \"up\" and \"down\" in memory near virtual address 1036044h to find the beginning and end of the IAT for kernel32.dll.\n\n99% of the time, all IATs will be back-to-back in memory, so you should be able to find all IATs knowing only a single IAT entry address.\n\nI recommend the method above instead of relying on content in the PE Import Tables since relying on the PE Import Tables will fail if the disassembled code had been packed, whereas the method above will work on packed and non-packed samples.\n\n",
+      "votes": "7",
+      "user": "Jason Geffner",
+      "time": "Sep 26, 2013 at 21:52",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Note: only applicable if reading the PE from disk\n\nYou could simplify your code if you used pefile rather than Python ctypes. Here's a quick script for getting the hex address of some API name. \n\n```\nimport pefile\n\ntry:\n        pe = pefile.PE(f)\n    except:\n        print 'could not load file...exiting'\n        return\nep = pe.OPTIONAL_HEADER.AddressOfEntryPoint\nep_ava = ep+pe.OPTIONAL_HEADER.ImageBase\nAPI_addr = None\nfor entry in pe.DIRECTORY_ENTRY_IMPORT:\n      for imp in entry.imports:\n          if 'SOME_API' in imp.name:\n               API_addr = hex(imp.address).lower()\n\n```\nIf you have questions about pefile check out the usage examples.\n\n",
+      "votes": "3",
+      "user": "0xC0000022L",
+      "time": "Sep 27, 2013 at 11:50",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jason Geffner",
+          "text": "This will fail if the disassembled code had been packed; it's more reliable to find IAT references made from the code itself.",
+          "time": null
+        },
+        {
+          "user": "alexanderh",
+          "text": "@JasonGeffner You are right, I didn't realize he was referencing a memory handle. Maybe next time the user asks a question here he will add a little more details like in this other question... stackoverflow.com/questions/19018906/…",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

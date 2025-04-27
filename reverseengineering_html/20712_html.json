@@ -1,0 +1,34 @@
+{
+    "title": "What's this assembly doing?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20712/whats-this-assembly-doing",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have been trying to figure out the assembly for part of a DOS game and there is an operation that keeps getting called that uses all 4 registers.  I can see what each line does but I can't for the life of me figure out what all the code together is meant be doing.\n </p>\n <p>\n  Can anyone give me some idea?\n </p>\n <p>\n  The code is:\n </p>\n <pre><code>seg000:3825 some_math_op_on_regs proc far; CODE XREF: sub_72C6+19FP\nseg000:3825                              ; sub_72C6+1DDP ...\nseg000:3825       cmp     cl, 10h\nseg000:3828       jnb     short loc_383A ; Jump if CF=0\nseg000:382A       mov     bx, dx         ; c register is < 16; move d to b\nseg000:382C       shr     ax, cl         ; Shift a right by value in c (logical)\nseg000:382E       sar     dx, cl         ; Shift d right by value in c (arithmetic)\nseg000:3830       neg     cl             ; Negate c (2's complement)\nseg000:3832       add     cl, 10h        ; Add 16 to c\nseg000:3835       shl     bx, cl         ; Shift b left by value in c (logical)\nseg000:3837       or      ax, bx         ; OR a and b, store result in a\nseg000:3839       retf\nseg000:383A ; --------------------------------------------------------------------\nseg000:383A\nseg000:383A loc_383A:                    ; CODE XREF: some_math_op_on_regs+3j\nseg000:383A       sub     cl, 10h        ; c register is >= 16; subtract 16 from c\nseg000:383D       xchg    ax, dx         ; Switch values in a and d\nseg000:383E       cwd                    ; Convert word to doubleword\nseg000:383F       sar     ax, cl         ; Shift a right by value in c (arithmetic)\nseg000:3841       retf\nseg000:3841 some_math_op_on_regs endp\n</code></pre>\n</div>\n</body></html>",
+    "votes": "7",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "x86",
+        "dos"
+    ],
+    "user": "Jez",
+    "time": "Feb 25, 2019 at 19:27",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This looks like a 32-bit\n  <em>\n   shift right\n  </em>\n  compiler helper. In 16-bit era, 32-bit numbers were represented by a pair of registers, in this case\n  <code>\n   ax:dx\n  </code>\n  . The check for 16 is an optimization: if the shift is over 16, the low register value is lost completely, so it can be discarded and replaced by\n  <code>\n   dx>>(shift-16)\n  </code>\n  , while the high register is filled with the sign bit as the result of the\n  <code>\n   cwd\n  </code>\n  instruction. Here's the (lightly) commented source code from the Borland C runtime library which seems to match yours:\n </p>\n <pre><code>;[]-----------------------------------------------------------------[]\n;|      H_LRSH.ASM -- long shift right                               |\n;[]-----------------------------------------------------------------[]\n\n;\n;       C/C++ Run Time Library - Version 5.0\n; \n;       Copyright (c) 1987, 1992 by Borland International\n;       All Rights Reserved.\n; \n\n        INCLUDE RULES.ASI\n\n_TEXT   segment public byte 'CODE'\n        assume  cs:_TEXT\n        public  LXRSH@\n        public  F_LXRSH@\n        public  N_LXRSH@\n\nN_LXRSH@:\n        pop     bx                      ;fix up for far return\n        push    cs\n        push    bx\nLXRSH@:\nF_LXRSH@:\n        cmp     cl,16\n        jae     lsh@small\n        mov     bx,dx                   ; save the high bits\n        shr     ax,cl                   ; now shift each half\n        sar     dx,cl\n;\n;                       We now have a hole in AX where the lower bits of\n;                       DX should have been shifted.  So we must take our\n;                       copy of DX and do a reverse shift to get the proper\n;                       bits to be or'ed into AX.\n;\n        neg     cl\n        add     cl,16\n        shl     bx,cl\n        or      ax,bx\n        retf\nlsh@small:\n        sub     cl,16                   ; for shifts more than 15, do this\n                                        ; short sequence.\n        xchg    ax,dx                   ;\n        cwd                             ; We have now done a shift by 16.\n        sar     ax,cl                   ; Now shift the remainder.\n        retf\n_TEXT   ends\n        end\n</code></pre>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Igor Skochinsky",
+            "time": "Feb 25, 2019 at 20:35",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It appears to be a 32 bit right shift with the 32 bit number provided in\n  <code>\n   dx:ax\n  </code>\n  , and\n  <code>\n   cl\n  </code>\n  being the number of bits to shift.\n </p>\n <p>\n  If you assume\n  <code>\n   cl\n  </code>\n  is over 16, a right shift by more than 16 bit only needs to care about the upper 16 bit, which are stored in\n  <code>\n   dx\n  </code>\n  , because the lower 16 bit are shifted out anyway.\n </p>\n <p>\n  So that's exactly what the 2nd block does. If\n  <code>\n   cl\n  </code>\n  larger than 16, move\n  <code>\n   dx\n  </code>\n  (upper 16 bit) into\n  <code>\n   ax\n  </code>\n  and convert it to a 32 bit number, subtract 16 from\n  <code>\n   cl\n  </code>\n  because this is implicitly done by ignoring the lower 16 bit, then shift the upper part (which is now\n  <code>\n   dx:ax\n  </code>\n  thanks to the\n  <code>\n   cwd\n  </code>\n  ) by that number.\n </p>\n <p>\n  I didn't try to understand the top part, but my assumption is it does exactly the same for shift widths below 16 bits.\n </p>\n <p>\n  Basically, it's a 32 bit right shift done in 16 bit architecture.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Johann Aydinbas",
+            "time": "Feb 25, 2019 at 20:33",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

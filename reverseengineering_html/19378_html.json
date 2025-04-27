@@ -1,0 +1,82 @@
+{
+    "title": "Disassemble ELF - PC is set to 0?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19378/disassemble-elf-pc-is-set-to-0",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I tried to disassemble a ELF file which is a shared object file executed on armv7a (Android). I saw a strange block. It seems  that the\n  <code>\n   PC\n  </code>\n  , program counter register, is set to\n  <code>\n   0\n  </code>\n  . Did I miss something or do something wrong?\n </p>\n <hr/>\n <p>\n  The process goes into\n  <code>\n   0x1708\n  </code>\n  in ARM mode. Below is the strange block of asm code I disassembled from the ELF file.\n </p>\n <pre><code>; section: .plt\n; function: function_1708 at 0x1708 -- 0x1718\n0x1708:   04 e0 2d e5       str lr, [sp, #-4]!\n0x170c:   04 e0 9f e5       ldr lr, [pc, #4]\n0x1710:   0e e0 8f e0       add lr, pc, lr\n0x1714:   08 f0 be e5       ldr pc, [lr, #8]!\n; data inside code section at 0x1718 -- 0x171c\n0x1718:   b4 77 00 00                                        |.w..            |\n</code></pre>\n <p>\n  After executing line\n  <code>\n   0x170c\n  </code>\n  , the\n  <code>\n   LR\n  </code>\n  register should be set as the value at the address\n  <code>\n   0x1718\n  </code>\n  . The value is\n  <code>\n   0x77b4\n  </code>\n  (this file is stored in little-endian).  And go ahead.\n </p>\n <pre><code>0x1710: lr += 0x1710 + 8  // lr = 0x8ecc\n0x1714: pc = *(lr + 8)    // pc = *(0x8ed4)\n        lr += 8  \n</code></pre>\n <p>\n  And 0x8ed4 is in\n  <code>\n   .got\n  </code>\n  section.\n </p>\n <pre><code>; section: .got\n0x8eac:   00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00   |................|\n0x8ebc:   00 00 00 00 58 70 00 00  e0 6e 00 00 00 00 00 00   |....Xp...n......|\n0x8ecc:   00 00 00 00 00 00 00 00  00 00 00 00 08 17 00 00   |................|\n0x8edc:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8eec:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8efc:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f0c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f1c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f2c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n0x8f3c:   08 17 00 00 08 17 00 00  08 17 00 00 08 17 00 00   |................|\n</code></pre>\n <p>\n  It seems that the value at\n  <code>\n   0x8ed4\n  </code>\n  is zero. I traced to this strange block from\n  <code>\n   JNI_OnLoad()\n  </code>\n  , so no data should be modified before executing this block.\n </p>\n <p>\n  Did I do something wrong, or is this a specific behavior of ARM architecture?\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 2,
+    "views": "619",
+    "tags": [
+        "android",
+        "arm",
+        "assembly"
+    ],
+    "user": "IvanaGyro",
+    "time": "Sep 18, 2018 at 5:58",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you familiar with GOT/PLT in other assembly languages? (usually, the x86 is better known). Because your question is, in fact, strongly related to the GOT/PLT behavior in general, and related to ARM architecture in particular.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "IvanaGyro",
+            "text": "<html><body><span class=\"comment-copy\">\n No. I am new to reverse engineering. I am googling relative information. Is there any good article for reading?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<html><body><span class=\"comment-copy\">\n Ok, I'll write a complete answer, then.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<html><body><span class=\"comment-copy\">\n Note that this is not trivial! If you do not really understand at first read, this is perfectly normal. Try to fetch a debugger and to step through your program to better understand (and keep faith!).\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In fact, the behavior you are describing is coming from the usual behavior of the GOT/PLT sections. They are used to dynamically link the program calls to shared libraries functions at runtime.\n </p>\n <p>\n  In fact, a shared library can be loaded at any place in the process memory, there is no way to predict statically where it will pop up. So, the GOT/PLT load the address of each library's function dynamically at runtime and cache it for further use.\n </p>\n <p>\n  The way it works is pretty simple, the PLT (\n  <strong>\n   Procedure Linkage Table\n  </strong>\n  ) is just a bunch of small code gadgets (one for each library's function called in the program, plus one generic code located at the beginning of the PLT section).\n </p>\n <p>\n  And, the GOT (\n  <strong>\n   Global Offset Table\n  </strong>\n  ) is just a table used to store (and cache) the addresses of the library's functions.\n </p>\n <p>\n  At first, the GOT is all set to zero because no function address has been resolved yet. The GOT get filled all along the program is executed and call new functions (some functions may be called only rarely and their address may be only rarely filled in the GOT).\n </p>\n <p>\n  When a library function get called the program counter goes to the PLT (see the figure below) and executes the code specifically written for this function (each of the code gadget has its own offsets to get the proper address from the GOT). But, at first, the GOT contains only zeroes, so you need to initialize it.\n </p>\n <p>\n  To initialize it, you jump at the very beginning of the PLT and find the address of library's function the program want to call. You execute this code and, then, you write the address of the function in the GOT.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/m4Yl3.png\" rel=\"noreferrer\">\n   <img alt=\"PLT/GOT Schema (before)\" src=\"https://i.sstatic.net/m4Yl3.png\"/>\n  </a>\n </p>\n <p>\n  Once you cached the address of the function, you do not need anymore to recompute the address if you call your function and you jump directly to it (as in the following picture).\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/sQuX8.png\" rel=\"noreferrer\">\n   <img alt=\"PLT/GOT Schema (after)\" src=\"https://i.sstatic.net/sQuX8.png\"/>\n  </a>\n </p>\n <p>\n  In the case of ARM, you have two types of GOT/PLT schemas:\n </p>\n <ul>\n  <li>\n   <a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dai0242a/ch07s05s01.html\" rel=\"noreferrer\">\n    Direct PLTs\n   </a>\n  </li>\n  <li>\n   <a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dai0242a/BCGHGBDH.html\" rel=\"noreferrer\">\n    Indirect PLTs\n   </a>\n  </li>\n </ul>\n <p>\n  In your case, this is a direct PLT (but it seems to be quite old code, I would suspect an old compiler or so, because new ones better use\n  <code>\n   ip\n  </code>\n  in place of\n  <code>\n   lr\n  </code>\n  for that).\n </p>\n <pre><code>; section: .plt\n; function: function_1708 at 0x1708 -- 0x1718\n0x1708:   04 e0 2d e5     str lr, [sp, #-4]! <-- Save lr on the stack\n0x170c:   04 e0 9f e5     ldr lr, [pc, #4] <-- Get a point of reference in memory\n0x1710:   0e e0 8f e0     add lr, pc, lr <-- Load offset to the next step\n0x1714:   08 f0 be e5     ldr pc, [lr, #8]! <-- Jump to the next step\n</code></pre>\n <p>\n  Note that the PLT is a static section, therefore the\n  <code>\n   0x170c\n  </code>\n  will always stay the same (and, therefore, the\n  <code>\n   pc\n  </code>\n  will always be loaded with the same value at\n  <code>\n   0x170c\n  </code>\n  ).\n </p>\n <h3>\n  References\n </h3>\n <ul>\n  <li>\n   <p>\n    <a href=\"https://eli.thegreenplace.net/2011/11/03/position-independent-code-pic-in-shared-libraries/\" rel=\"noreferrer\">\n     Position Independent Code (PIC) in shared libraries\n    </a>\n    , by Eli Bendersky.\n   </p>\n  </li>\n  <li>\n   <p>\n    <a href=\"https://thinkingeek.com/2017/04/17/arm-assembler-raspberry-pi-chapter-27/\" rel=\"noreferrer\">\n     ARM assembler in Raspberry Pi – Chapter 27\n    </a>\n    , by Roger Ferrer Ibáñez.\n   </p>\n  </li>\n  <li>\n   <p>\n    <a href=\"https://www.slideshare.net/linaroorg/sfo15406-arm-fdpic-toolset-kernel-libraries-for-cortexm-cortexr-mmuless-cores\" rel=\"noreferrer\">\n     ARM FDPIC toolset, kernel & libraries for Cortex-M & Cortex-R\n    </a>\n    .\n   </p>\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">So, in my situation, function_1708 is PLT[0], the code to call resolver, right? How does the linker know where to fill its memory address to the correct address of the shared library? In my case, <code>0x8ed4</code> is not the first address in <code>.got</code>. The first is <code>0x8eac</code>. The strategy of filling the address of the resolver is depended on the format of the ELF file, the running operating system, or the architecture or CPU?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">At the beginning of each run of your program, the linker set the address where the shared library is in the PLT and each function used by the program is given an offset in the current shared library. So that, if you know the address of the shared library in memory and the offset of a specific function you can get the address of the function in the virtual memory. You compute this only once, thanks to the GOT (which cache the result).</span>",
+                    "time": null
+                },
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">I think I asked the wrong questions. However, I got my answer in some ELF specifications. As the same as @Igor Skochinsky♦ answered, the location where the linker chooses to put the address of the resolver is defined in ELF specs. The definition relies on the type of file, ELF. Anyway, you helped me a lot. Thank you!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  While the other answer is not wrong, it does not actually cover the real issue: how come that calling a zero address does not lead to a crash?\n </p>\n <p>\n  AFAIK there is no official standard or complete documentation for this, but\n  <em>\n   de facto\n  </em>\n  the first few GOT entries are special/reserved and are used by the dynamic loader/linker (sometimes also called\n  <em>\n   interpreter\n  </em>\n  ) for its own purposes:\n </p>\n <ul>\n  <li>\n   <p>\n    <code>\n     GOT[0]\n    </code>\n    points to the\n    <code>\n     _DYNAMIC\n    </code>\n    symbol of the current module which is the start of the list of tags (\n    <code>\n     Elf32_Dyn\n    </code>\n    entries) with the various information necessary for proper resolution of dynamic symbols. See the\n    <a href=\"http://www.sco.com/developers/gabi/latest/ch5.dynamic.html\" rel=\"noreferrer\">\n     ELF specification\n    </a>\n    .\n   </p>\n  </li>\n  <li>\n   <p>\n    <code>\n     GOT[1]\n    </code>\n    is populated\n    <em>\n     at runtime\n    </em>\n    with the pointer to the\n    <code>\n     link_map\n    </code>\n    structure containing the list of all dynamic images present in the process. This list resides in the dynamic linker (\n    <code>\n     ld.so\n    </code>\n    on Linux systems and\n    <code>\n     linker\n    </code>\n    binary on Android).\n   </p>\n  </li>\n  <li>\n   <p>\n    <code>\n     GOT[2]\n    </code>\n    is also filled in by the dynamic linker and points to the\n    <em>\n     resolver function\n    </em>\n    (\n    <code>\n     _dl_runtime_resolve\n    </code>\n    in glibc, not sure on Android).\n   </p>\n  </li>\n </ul>\n <p>\n  The snippet you quoted is the\n  <em>\n   resolver stub\n  </em>\n  which is called on first call of an external symbol (you can see that all GOT entries are initialized to its address,\n  <code>\n   1708\n  </code>\n  ). It fetches\n  <code>\n   GOT[2]\n  </code>\n  and jumps to it, which should end up in the dynamic linker, which would look up the symbol, patch the GOT entry and jump to the function as the last step.\n </p>\n <p>\n  As I said, there are no (AFAIK) official docs on this, just random pieces of the ELF ABI spec, glibc source code and various blog posts. I would suggest you to step through this code in a debugger to see what actually happens, and match it against the source code. In addition to links from @\n  <strong>\n   perror\n  </strong>\n  , I found\n  <a href=\"http://uaf.io/exploitation/misc/2016/04/02/Finding-Functions.html\" rel=\"noreferrer\">\n   this post\n  </a>\n  which explains some of the reserved GOT entries (although for x64 Linux and not ARM Android).\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Igor Skochinsky",
+            "time": "Sep 18, 2018 at 13:43",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "IvanaGyro",
+                    "text": "<span class=\"comment-copy\">I tried to find the official ELF specifications. According to Wikipedia, there are a lot of different specs. And the organization developed the ELF, UNIX System Laboratories, was defunct. The first spec is released by AT&amp;T. I am curious why so many companies released their ELF spec or included the ELF spec into their ABI specs and what is the historical context. It is interesting.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: I did not know all this! In fact, I assumed that the analysis done by IvenCJ7 was done statically, so the GOT was set to zero originally and set to beginning of PLT afterward. I see now that I was very likely wrong. Nice explanation Igor (once again) and good link, thanks!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,87 @@
+{
+  "title": "Why are GOT and PLT still present in Linux static stripped binaries?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2172/why-are-got-and-plt-still-present-in-linux-static-stripped-binaries",
+  "content": "I am looking at statically linked linux x86 stripped binary. I noticed that there are .got and .plt sections.\n\nI wonder what does a statically linked binary need got and plt sections for ? Anyone ?\n\n",
+  "votes": "20",
+  "answers": 2,
+  "views": "6k",
+  "tags": [
+    "linux",
+    "binary-analysis",
+    "elf"
+  ],
+  "user": "daehee",
+  "time": "Oct 30, 2013 at 10:48",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "They shouldn't have these sections at all. I did try on my own and I confirm that the section .got and .got.plt are still present even when -static is given to the compiler. But, the .dynamic section is not present. My guess is that they are just empty sections when -static is given.",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "static is dead, a relevant stack overflow question: stackoverflow.com/questions/3430400/…",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "@Nirlzr: Interesting, I didn't know that. So, in fact, the only way to get rid of the got/plt tables is to use the -nostdlib option.",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "@perror: ill give -nodefaultlibs a try first. but you might have to provide your own implementations of any standard functions the compiler might require (memcpy, etc...)",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "@Nirtlzr: Yes, with this option you will have to rebuild the whole libc (no printf, scanf, and so on).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "There are a plethora of things programmers do not know about how ELF binaries work internally. And, unfortunately, there's almost no solid references apart from two or three which broadly cover the subject. Many tools (linkers, loaders, assemblers, debuggers, ...) remain a mystery for most of you. When it comes to linkers and loaders, the main reference is Linkers and Loaders by John R. Levine (http://linker.iecc.com/). Another reliable source of information is the official ELF binary format documentation. But these are merely introductions to how a certain, or most, technologies work.\n\nNow, here's an answer to your question (why are the GOT and PLT sections still included in static ELF binaries?): PERFORMANCE.\n\nMore explanations ... Suppose you have this C code:\n\n```\n    #include <stdio.h>\n    #include <string.h>\n\n    int main(int argc, char **argv)\n    {\n        char str[1024];\n\n        strcpy(str, argv[1]);\n        printf(\"%s  \n\", str);\n\n        return 0;\n    }\n\n```\nNo need to be a genius to figure out that all it does is copy a command line parameter into a string and print it out. Here's the main function in assembly:\n\n```\n     000000000040105e <main>:\n     40105e:   55                      push   rbp\n     40105f:   48 89 e5                mov    rbp,rsp\n     401062:   48 81 ec 10 04 00 00    sub    rsp,0x410\n     401069:   89 bd fc fb ff ff       mov    DWORD PTR [rbp-0x404],edi\n     40106f:   48 89 b5 f0 fb ff ff    mov    QWORD PTR [rbp-0x410],rsi\n     401076:   48 8b 85 f0 fb ff ff    mov    rax,QWORD PTR [rbp-0x410]\n     40107d    48 83 c0 08             add    rax,0x8\n     401081:   48 8b 10                mov    rdx,QWORD PTR [rax]\n     401084:   48 8d 85 00 fc ff ff    lea    rax,[rbp-0x400]\n     40108b:   48 89 d6                mov    rsi,rdx\n     40108e:   48 89 c7                mov    rdi,rax\n     401091:   e8 3a f2 ff ff          call   4002d0 <__rela_iplt_end+0x38>\n     401096:   48 8d 85 00 fc ff ff    lea    rax,[rbp-0x400]\n     40109d:   48 89 c7                mov    rdi,rax\n     4010a0:   e8 fb 09 00 00          call   401aa0 <_IO_puts>\n     4010a5:   b8 00 00 00 00          mov    eax,0x0\n     4010aa:   c9                      leave\n     4010ab:   c3                      ret\n     4010ac:   0f 1f 40 00             nop    DWORD PTR [rax+0x0]\n\n```\nNotice that at the address 401091 you have a call to a function stored in the PLT (the label is more expressive). Amazingly, at this address 4002d0 you'll find a jump to something stored in the GOT (see below).\n\n```\n     4002d0:   ff 25 f2 2f 2c 00       jmp QWORD PTR [rip+0x2c2ff2] # 6c32c8 <_GLOBAL_OFFSET_TABLE_+0x20>\n\n```\nAt that exact location in the GOT, you'll find calls to functions stored in sections such as the following:\n\n```\n    00000000004187d0 <handle_amd>:\n    4187d0:    53                      push   rbx\n    4187d1:    b8 00 00 00 80          mov    eax,0x80000000\n    4187d6:    0f a2                   cpuid\n    4187d8:    81 ff c4 00 00 00       cmp    edi,0xc4\n    4187de:    7f 40                   jg     418820 <handle_amd+0x50>\n    4187e0:    31 d2                   xor    edx,edx\n    4187e2:    81 ff bf 00 00 00       cmp    edi,0xbf\n    4187e8:    0f 9d c2                setge  dl\n    4187eb:    81 ea fb ff ff 7f       sub    edx,0x7ffffffb\n    4187f1:    39 c2                   cmp    edx,eax\n    4187f3:    77 2b                   ja     418820 <handle_amd+0x50>\n    4187f5:    89 d0                   mov    eax,edx\n    4187f7:    0f a2                   cpuid\n    4187f9:    81 ff bb 00 00 00       cmp    edi,0xbb\n    4187ff:    7e 27                   jle    418828 <handle_amd+0x58>\n    418801:    81 ef bc 00 00 00       sub    edi,0xbc\n    418807:    83 ff 08                cmp    edi,0x8\n    41880a:    0f 87 48 01 00 00       ja     418958 <handle_amd+0x188>\n    418810:    48 8d 35 c9 0b 08 00    lea    rsi,[rip+0x80bc9]        # 4993e0 <__PRETTY_FUNCTION__.4767+0x20>\n    418817:    48 63 04 be             movsxd rax,DWORD PTR [rsi+rdi*4]\n    41881b:    48 01 c6                add    rsi,rax\n    41881e:    ff e6                   jmp    rsi\n    418820:    31 c0                   xor    eax,eax\n    418822:    5b                      pop    rbx\n    418823:    c3                      ret\n\n```\nFirst, look at the section's name. Second, if you look closely at the code you'll notice that this function identifies the CPU - by dissecting the return values of the cpuid instruction (4187d6 and 4187f7) - (more accurately the micro architecture and other features such as cache size, ...) you're running your ELF binary on, and then decides which implementation suites that configuration best. This way, the strcpy function called in the above C code will always be the fastest possible, whatever architecture you're on (Intel: Nehalem, Sandy Bridge, Ivy Bridge, Haswell, ...; AMD: Phenom, Opteron, ...; ...). Keep in mind that those fast implementations have been hand optimized and fine tuned for each of the possible target architectures. \n\nSo that's what the PLT and GOT sections are used for in your static ELF binary file.\n\nNow, if you want to investigate this yourself, you should compile the C code above with GCC version 4.9 (which is the one I used) using the -static and -g3 (debug symbols) flags. Then, disassemble the binary file using objdump and the -D switch in order to have all the ELF sections. You can then go through all the sections and explore the assembly code. You can also run the binary file using gdb and set breakpoints at key locations and run the program step by step.\n\n",
+      "votes": "14",
+      "user": "NirIzr",
+      "time": "Sep 12, 2017 at 8:40",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Joseph Garvin",
+          "text": "Is there a way to avoid the overhead of checking the CPU, and just having it assume a particular CPU implementation?",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "@JosephGarvin Yes! You can do cpu dispatching at compile time using C macros. But this means the programmer has to provide the optimized functions' codes or libraries. Another way is to use a compiler flag. With gcc and icc you can set the -march=native and the -mtune=native. The compiler/language documentations should cover such cases.",
+          "time": null
+        },
+        {
+          "user": "Noah",
+          "text": "@JosephGarvin worth noting you need to also compile with -fno-plt if you want to remove all indirection. i.e gcc -fno-plt -static -march=<target> -mtune=<target> ...",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "@yaspr's answer is great, since this question got some bounty of \"Looking for an answer drawing from credible and/or official sources.\", let me try to provide some references here.\n\nGenerally in my understanding, .PLT and .GOT tables are required here because of performance issues.\n\nBinCFI is published on last year's top 2 computer security conference.\n\nSome other references on how to leverage this feature are listed here.\n\n",
+      "votes": "6",
+      "user": "0xC0000022L",
+      "time": "Mar 1, 2023 at 20:00",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "yaspr",
+          "text": "Well, I avoided citing those references because they can be quite confusing. They are centered around the ifunc attribute which was not the subject of this question, rather the existence of GOT and PLT in a statically linked binary (Agner's CPU blog is a valuable source of info). But of course, additional information is always good, if used wisely ! The thing is, everything I've written in my post I discovered way before the references you posted when I was working on patching/instrumenting static ELF binaries for performance evaluation.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "Relevant: these \"gnu indirect functions\" are known as GNU_IFUNC and you can find some more info over on SO.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

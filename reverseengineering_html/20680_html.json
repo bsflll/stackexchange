@@ -1,0 +1,32 @@
+{
+    "title": "Executing CMP DS:[] by inline assembly inline hooks",
+    "link": "https://reverseengineering.stackexchange.com/questions/20680/executing-cmp-ds-by-inline-assembly-inline-hooks",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I need to execute some instructions of library I'm using (ws2_32.dll) inside my C code, but I have a problem with a simple cmp instruction. \nFollowed by IDA, this instruction is:\n </p>\n <pre><code>cmp off_41AE7048, offset sub_41AC2E29\n</code></pre>\n <p>\n  When I run my application in debugger, this above pice of code becomes:\n </p>\n <pre><code>CMP DWORD PTR DS:[77517048],WS2_32.774F2E29\n</code></pre>\n <p>\n  What does this excatly mean? \nWhere this address(?) 77517048 came from?\n </p>\n <p>\n  I code comething like this\n </p>\n <pre><code>mov eax, DWORD ptr DS:[0x41AE7048]\ncmp eax, DWORD ptr DS:[0x41AC2E29]\n</code></pre>\n <p>\n  but as I expected it doesn't work -> program crashes.\n </p>\n ###### EDIT\n <p>\n  A little bit of explanation. I'm doing inline hook on listen function  from ws2_32.dll library.\n </p>\n <p>\n  I have my own dll  - hook.dll, which will be loaded into remote process. \nInside this dll I have funcion called listen_hook_wrapper;\n </p>\n <p>\n  After the dll is loaded into remote process, inside dllMain I'm overriding a few first instructions of 'listen' function, by loading my own code which is simple jump into 'listen_hook_wrapper'. To simplify, let's called this jump as trampoline.\n </p>\n <p>\n  Inside listen_hook_wrapper I'm taking listen's arguments, process them, and after all I would like to return executing to listen function, but before I will jump into listen function, I must execute listen's instructions which were overrided by my 'trampoline'.\n </p>\n <p>\n  The instructions of listen function, which were overriden by my trampoline are:\n </p>\n <pre><code>mov edi, edi\npush ebp\nmov ebp, esp\npush ecx\ncmp off_41AE7048, offset sub_41AC2E29 \n</code></pre>\n <p>\n  After I execute this set of instruction I can jump back into listen function, and it should continue executing properly.\n </p>\n <p>\n  When I was writing this post I couldn't figure out what excatly is (what it is doing):\n </p>\n <blockquote>\n  <p>\n   cmp off_41AE7048, offset sub_41AC2E29\n  </p>\n </blockquote>\n <p>\n  and why executing this inside my trampoline causes errors, but now I think that it's because relocations.\n </p>\n <p>\n  As I mentioned above, when I take a look inside listen function during execution, the instrucion above becomes:\n </p>\n <blockquote>\n  <p>\n   CMP DWORD PTR DS:[77517048],WS2_32.774F2E29\n  </p>\n </blockquote>\n <p>\n  Let's compare this two addresses:\n </p>\n <blockquote>\n  <p>\n   41AE7048 and 77517048.\n  </p>\n </blockquote>\n <p>\n  They have common part which is ****7048. \nAs I know the 4**** is the default base address assigned during compile process, and the 7**** is address where usually dlls are loaded. So I think I need just update the instruction:\n </p>\n <blockquote>\n  <p>\n   cmp off_41AE7048, offset sub_41AC2E29\n  </p>\n </blockquote>\n <p>\n  by applying relocations, using the base address which was assigned in runtime by aslr mechanism.\n </p>\n <p>\n  I can't test it right now, but I think that it makes sense isn't it?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "282",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "function-hooking"
+    ],
+    "user": "bielu000",
+    "time": "Feb 22, 2019 at 7:28",
+    "comments": [
+        {
+            "user": "Nordwald",
+            "text": "<html><body><span class=\"comment-copy\">\n What are you trying to accomplish and what is the function in question?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Thanks for your ellaborations. All I had was the Win10 (64bit) version of winsock. The start of the listen function looks like this:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/ob4m2.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"listen function prolog\" src=\"https://i.sstatic.net/ob4m2.png\"/>\n  </a>\n </p>\n <p>\n  As you can see, the cmp instruction compares a fixed 32bit value (\n  <code>\n   0x4f7902a0\n  </code>\n  ) to something in the\n  <code>\n   .data\n  </code>\n  -section of the library. As you can see, in the case they are not equal, there is another check of a data value and in the end its seems to decide whether to set a local variable to zero.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/XwQPo.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"data section\" src=\"https://i.sstatic.net/XwQPo.png\"/>\n  </a>\n </p>\n <p>\n  As you can see, the global variable which is checked contains the right value as per default. I can only speculate what is does... When you use the acutal pdb, you can see that it is a function pointer (PrologPointer).\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/egdQh.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"data section with pdb\" src=\"https://i.sstatic.net/egdQh.png\"/>\n  </a>\n </p>\n <p>\n  But back to the core question. Without any meta information, when we decompile the instruction in question, we get the following output:\n </p>\n <pre><code>8b3500507c4f   mov    esi,DWORD PTR [rip+0x4f7c5000]\n</code></pre>\n <p>\n  The library wants to be loaded at\n  <code>\n   0x4f780000\n  </code>\n  . And the data is supposed to be read from\n  <code>\n   rip+0x4f7c5000\n  </code>\n  . Basically, this code is position independent and utilized a fixed offset between the dll base and its code section.\n </p>\n <p>\n  Normally, you should be able to install your hook in less than 9 bytes. Windows functions conveniently always utilize the standard function preamble, which is pretty easy to hook (e.g. with a far jump (5 bytes)). If that is not the case, you'll have to account for the relative address or skip the check altogether.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Nordwald",
+            "time": "Feb 22, 2019 at 11:49",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,60 @@
+{
+    "title": "Hauwei E586 firmware",
+    "link": "https://reverseengineering.stackexchange.com/questions/2765/hauwei-e586-firmware",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm working on unpacking Hauwei E586 MiFi firmware. I downloaded firmware update pack which is available as Windows EXE, then used Hauwei Modem Flasher to unpack real firmware from installer.</p>\n<p>I've got 4 files:</p>\n<pre><code>01.bin: data\n02.bin: ELF 32-bit LSB executable, ARM, version 1, statically linked, not stripped\n03.bin: data\n04.bin: ELF 32-bit LSB executable, ARM, version 1, statically linked, not stripped\n</code></pre>\n<p>As we can see <code>02</code> and <code>04</code> are executable files. <code>01</code> is probably some kind of bootloader (I assume it from string analysis). <code>03</code> is some kind of pseudo FS.</p>\n<p>I started from analyzing <code>03</code> (I posted it <a href=\"http://czlug.icis.pcz.pl/~pbm/03.bin\" rel=\"noreferrer\">here</a>):</p>\n<p>There is header part</p>\n<pre><code>02 00 EE EE  50 BA 6E 00  20 00 00 00  D0 A2 02 00\n7B 02 00 00  00 00 00 00  00 00 00 00  00 00 00 00\n</code></pre>\n<p><code>7B 02</code> as 16 bits gives 635 which is number of files in binary (verified using <code>strings</code>). Then there are 635 parts describing each file (call it directory) and at the end there is content of files.</p>\n<p>There is directory entry for first GIF file which I found. I choosed GIF because it's easy to identify (there is header GIF8X and footer 0x3B).</p>\n<pre><code>77 77 77 5C  75 6D 5C 70  75 62 6C 69  63 5F 73 79\n73 2D 72 65  73 6F 75 72  63 65 73 5C  42 75 74 74\n75 6E 5F 43  75 72 72 65  6E 74 2E 67  69 66 00 00\nlot of zeros\n18 22 11 00  10 02 00 00  00 00 00 00  00 00 FF EE\n</code></pre>\n<p>We can see its name: <code>www\\um\\public_sys-resources\\Buttun_Current.gif</code> and in last line there is offset of file in binary and file size, but I'm not really sure how to interpret this values.</p>\n<p>I found first GIF after directory and extracted it manually (from header to footer) which gives me file of size 528 bytes, so reading <code>10 02</code> as 16 bit unsigned gives me that number. I tried to treat <code>18 22</code> as 16 bit unsigned to get offset, but it was different from offset that I manually read from file. Bu there was constant difference between offset and real offset of file of <code>1286864</code>. So I created script for unpacking this binary (I'm getting offset and adding to it <code>1286864</code>).</p>\n<p>Script worked only partially. It recreated directory structure, but was able only to extract files in one particular directory (directory with GIF which I was using as reference). After check on different part of file it seems that offset of offset in different subdirectories is another that in this GIF directory. So, my guess is that I'm interpreting offset wrong (but treating it as 32 bits gives nothing useful).</p>\n<p>There is unpack script:</p>\n<pre><code>import sys, struct, os\n\ndef main(args):\n    outdir = args[1]\n    f = open(args[0], 'rb')\n    f2 = open(args[0], 'rb')\n    header = f.read(32)\n    print(len(header[16:]))\n    number_of_files = struct.unpack(\"h\", header[16:18])[0]\n    print(number_of_files)\n\n    for i in range(number_of_files):\n        body = f.read(272)\n        file_, rest = body.split(b'\\x00', 1)\n        offset = struct.unpack(\"H\", body[256:258])[0] + 1286864\n        size = struct.unpack(\"H\", body[260:262])[0]\n        file_ = file_.decode(encoding='UTF-8').replace('\\\\', '/')\n        dirname = os.path.join(outdir, os.path.dirname(file_))\n        filename = os.path.basename(file_)\n        print(filename, size, offset, dirname)\n        try:\n            os.makedirs(dirname)\n        except OSError:\n            pass\n\n        outfile = open(os.path.join(dirname, filename), \"wb\")\n        f2.seek(offset)\n        outfile.write(f2.read(size))\n        outfile.close()\n\nif __name__=='__main__':\n    sys.exit(main(sys.argv[1:]))\n</code></pre>\n<p>Usage: <code>./script.py 03.bin output_directory</code></p>\n<p>So my question is: what I'm doing wrong? Maybe I should read some another data type as offset/size? Which one?</p>\n</div>",
+    "votes": "9",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "file-format",
+        "firmware",
+        "embedded"
+    ],
+    "user": "pbm",
+    "time": "Sep 8, 2013 at 18:53",
+    "comments": [
+        {
+            "user": "pbm",
+            "text": "<span class=\"comment-copy\">This file is partly similar to one which is described in article: <a href=\"http://www.devttys0.com/2011/06/mystery-file-system/\" rel=\"nofollow noreferrer\">devttys0.com/2011/06/mystery-file-system</a> but files inside are not packed and I also cannot match offset and size in directory.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I managed to solve problem.</p>\n<p>First file in directory is <code>ZSP.bin</code>. It doesn't matter if offset of this file is 16 or 32 bit because in both cases is 0. As I know where directory ends and first file after directory should be ZSP.bin.</p>\n<p>Below there is last two lines of last directory entry and first line of which I suspected should be <code>ZSP.bin</code>.</p>\n<pre><code>00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00 \nFC 94 6D 00  53 25 01 00  00 00 00 00  00 00 FF EE\n11 00 10 00  30 00 00 00  10 00 00 00  00 00 00 00\n</code></pre>\n<p>Each directory entry ends with <code>FF EE</code>, so I checked offset of next byte and assumed that it will be begin of <code>ZSP.bin</code>. Offset of it was <code>0x2a2d0</code>. Then I checked size of <code>ZSP.bin</code>.</p>\n<p>I know that where it is, but I didn't know if it is 16 bits or 32 bits (<code>B4 C3</code> or <code>B4 C3 0C 00</code>). When I added <code>B4 C3</code> as 16 bits unsigned to my known offset <code>0x2a2d0</code> I landed at address <code>0x36684</code> which doesn't look like beginning of XML file (which is third in directory, but second one have 0 length). So I tried adding <code>0xcc3b4</code> (32 bits value) to my offset, which gives me <code>0xf6684</code> and at this address there was beginning of XML file... :)</p>\n<p>So I modified my code:</p>\n<pre><code>offset = struct.unpack(\"I\", body[256:260])[0] + 172752\nsize = struct.unpack(\"I\", body[260:264])[0]\n</code></pre>\n<p>After manual check of some random not binary files all of them were ok (proper begins and ends of HTML and XML, GIFs identified as GIFs)...</p>\n<p>BTW, idea of checking first file in directory not this GIFs was first thought that got to my mind after I woke up... :)</p>\n</div>",
+            "votes": "5",
+            "user": "pbm",
+            "time": "Sep 8, 2013 at 7:42",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I couldn't get a comment to format right .. so forgive this being a new reply.\nHere is the header format:  </p>\n<pre><code>offset:length   description\n-------------   -----------\n0x00 : 4        unknown, probably 2 16-byte words for a version or file ID\n0x04 : 4        size of the data block containing file data\n0x08 : 4        unknown\n0x0C : 4        offset to the data block\n0x10 : 4        number of file entries\n0x14 : 12       unknown / padding\n</code></pre>\n<p>The file header can be read using this:  </p>\n<pre><code>size_of_data, offset_to_data, number_of_files = struct.unpack(\"&lt; 4x L 4x L L 12x\", header)  \n</code></pre>\n<p>Each file entry looks like:  </p>\n<pre><code>offset:length   description\n-------------   -----------\n0x000 : 256     file path\n0x100 : 4       offset to file in data block\n0x104 : 4       size of file data\n0x108 : 8       unknown\n</code></pre>\n<p>Then for each file entry:  </p>\n<pre><code>filepath, offset, size = struct.unpack(\"&lt; 256s L L 8x\", body)  \n</code></pre>\n<p>The final offset for a file is:</p>\n<pre><code>offset = offset + offset_to_data\n</code></pre>\n</div>",
+            "votes": "5",
+            "user": "David",
+            "time": "Sep 8, 2013 at 18:21",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "pbm",
+                    "text": "<span class=\"comment-copy\">Thanks for feedback. It should be reasonable to assume that there is offset of data block in header, I don't know why I haven't think of it. But when I found it I never looked at header again. About entries in directory: it is weird to me that at the end of every entry there is \"end mark\": <code>FF EE</code>, because all entries are have the same length. In fact you could calculate length of each directory entry from <code>offset_to_data / number_of_files</code>, so this separator is not needed... Thanks again. Your code will definitely help make my script more beautiful... :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I know this is an old thread, but I just wanted to add that your Hauwei E586 is probably based on the HiSierrra Chipset and Firmware. (That is, Huawei firmwares starting with \"21.\" when using the <a href=\"http://forum.gsmhosting.com/vbb/f804/huawei-modem-universal-flasher-1495518/\" rel=\"nofollow\">Huawei Modem Flasher</a>. ) This is using an embedded linux server, unlike those MiFi's based on the Qualcomm chips with firmwares strting with \"11.\". <a href=\"http://forum.xda-developers.com/showthread.php?t=2396752\" rel=\"nofollow\">Here</a> is another interesting thread on reversing the firmware on one of these (E589). </p>\n<p>My question is, did you also have to deal with a checksum for the entire binary? \n(Do you know how to calculate it, and where it's located?)</p>\n<p><sub>PS. This was meant as a comment, but I still don't have the required Rep. to do that.</sub></p>\n</div>",
+            "votes": "1",
+            "user": "not2qubit",
+            "time": "Mar 6, 2014 at 12:02",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "pbm",
+                    "text": "<span class=\"comment-copy\">My router wasn't Linux - it was VxWorks and I'm sure about it. I didn't changed anything in files so there was no need to recalculate checksum and I have no idea where it was located...</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

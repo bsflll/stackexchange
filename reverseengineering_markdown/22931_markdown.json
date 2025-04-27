@@ -1,0 +1,44 @@
+{
+  "title": "Is there a handy assembly to mock app conversion tool?",
+  "link": "https://reverseengineering.stackexchange.com/questions/22931/is-there-a-handy-assembly-to-mock-app-conversion-tool",
+  "content": "It might be too silly of a question, but here you go.\n\nSuppose you have some software that contains a tricky nested assembly sequence (like this one) you try to reverse engineer. brain*[pen&paper] totally rocks, but you would like to consult IDA (or anything similar), but you cannot directly drag&drop into IDA for (whatever reason, maybe a bug). \n\nYou have the assembly code for that assembly sequence, and as a work around, you can theoretically compile a program that would contain the following (in C-code),\n\n```\nint main(int argc, char *argv[])\n{\n  // your tricky assembly sequence here, then\n  // perhaps puts(eax), puts(ebx) etc\n  return(0)\n}\n\n```\nSeems like a fair an easy task. But in practice, how could I compile such a quick and dirty program in practice? Preferably via gcc?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "96",
+  "tags": [
+    "ida",
+    "c",
+    "binary",
+    "assembly"
+  ],
+  "user": "TAbdiukov",
+  "time": "Jan 7, 2020 at 14:10",
+  "comments": [
+    {
+      "user": "blabb",
+      "text": "what do you have in hand  0x55 or push ebp fir first try capstone for second try key stone",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I would assemble the code and then analyze it using emulation.\n\nExample assembly taken from the link:\n\n```\nmov     rax, QWORD PTR [rbp-16]   ; Move i (=9) to RAX\nmovabs  rdx, -3689348814741910323 ; Move some magic number to RDX (?)\nmul     rdx                       ; Multiply 9 by magic number\nmov     rax, rdx                  ; Take only the upper 64 bits of the result\nshr     rax, 2                    ; Shift these bits 2 places to the right (?)\nmov     QWORD PTR [rbp-8], rax    ; Magically, RAX contains 9/5=1 now, \n                                  ; so we can assign it to j\n\n```\nCode to be emulated:\n\n```\nmov     rax, 9                    ;                         \nmovabs  rdx, -3689348814741910323 ;      \nmul     rdx                       ;                            \nmov     rax, rdx                  ;                       \nshr     rax, 2                    ;\n\n```\nOutput of emulation:\n\n```\nInitial state:\nRAX = 0x0\nRDX = 0x0\n=================================================\n>>> 0x1000000:  mov rax, 9\nRAX = 0x9\nRDX = 0x0\n=================================================\n>>> 0x1000007:  movabs  rdx, 0xcccccccccccccccd\nRAX = 0x9\nRDX = 0xcccccccccccccccd\n=================================================\n>>> 0x1000011:  mul rdx\nRAX = 0x3333333333333335\nRDX = 0x7\n=================================================\n>>> 0x1000014:  mov rax, rdx\nRAX = 0x7\nRDX = 0x7\n=================================================\n>>> 0x1000017:  shr rax, 2\nRAX = 0x1\nRDX = 0x7\n\n>>>Emulation complete.\n\n```\nAs we can see, RAX holds 1, which is the value computed for 9 / 5. Emulation allows us to easily view the results of every step of the computation in order to understand what is happening.\n\nThe program performing the emulation is included below. A colorized gist can be found here.\n\nIt consists of 3 major components:\n\nA callback function registered with the emulation engine allows us to print information such as register values to STDOUT for each instruction in the instruction stream that is executed. \n\n```\n#!/usr/bin/python3    \n\nfrom keystone import *\nfrom capstone import *\nfrom unicorn import *\nfrom unicorn.x86_const import *\n\n\n# 9 divided by 5\nASM =  \"mov rax, 9;                         \\\n        movabs  rdx, -3689348814741910323;  \\\n        mul rdx;                            \\\n        mov rax, rdx;                       \\\n        shr rax, 2;\"\n\n\n# Use Keystone Engine to assemble\ndef assemble_snippet():\n\n    try:\n        ks = Ks(KS_ARCH_X86, KS_MODE_64) # initialize assembler object\n        encoding, count = ks.asm(ASM)    # save results of assembly\n    except KsError as e:\n        print(\"ERROR: %s\" %e)\n\n    return bytes(encoding)               # return assembled object code\n\n\n\n\n# callback for tracing instructions\n# Use Capstone Engine to disassemble\ndef hook_code(uc, address, size, user_data):\n\n    # print contents of registers of interest\n    print(\"RAX = 0x%x\" % uc.reg_read(UC_X86_REG_RAX))\n    print(\"RDX = 0x%x\" % uc.reg_read(UC_X86_REG_RDX))\n    print(\"=================================================\")\n\n    # print disassembly of intruction stream\n    instruction = uc.mem_read(address, size)\n    md = user_data\n    for i in md.disasm(instruction, address):\n        print(\">>> 0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str))\n\n\n\n# from https://github.com/unicorn-engine/unicorn/blob/8621bca53758532ad6a4ec5d17684fcdb9923cc6/bindings/python/sample_x86.py#L475\ndef emulate():\n\n    ADDRESS = 0x1000000                      # memory address where emulation starts\n    CODE = assemble_snippet()                # object code to emulate\n\n    mu = Uc(UC_ARCH_X86, UC_MODE_64)         # Initialize emulator in X86-64bit mode\n\n    mu.mem_map(ADDRESS, 2 * 1024 * 1024)     # map 2MB memory for this emulation\n    mu.mem_write(ADDRESS, CODE)              # map machine code to be emulated to memory\n    mu.reg_write(UC_X86_REG_RSP, ADDRESS + 0x200000) # set up stack\n\n    md = Cs(CS_ARCH_X86, CS_MODE_64)         # initialize disassembler\n\n    mu.hook_add(UC_HOOK_CODE, hook_code, md)\n\n    print(\"Initial state:\")\n\n    try:\n        # emulate machine code in infinite time\n        mu.emu_start(ADDRESS, ADDRESS + len(CODE))\n    except UcError as e:\n        print(\"ERROR: %s\" % e)\n\n    # final state\n    print(\"RAX = 0x%x\" % mu.reg_read(UC_X86_REG_RAX))\n    print(\"RDX = 0x%x\" % mu.reg_read(UC_X86_REG_RDX))\n    print(\"  \n>>>Emulation complete.\")\n\n\nif __name__ == \"__main__\":\n    emulate()\n\n```\n",
+      "votes": "2",
+      "user": "julian",
+      "time": "Jan 10, 2020 at 17:54",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "TAbdiukov",
+          "text": "correct me if I'm wrong, but you appear to suggest another strategy. I noted it and upvoted the answer, but any ideas on how to force-compile an executable that would perform the assembly code?",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@tabdiukov I have used extended asm in the past. It is an example of inline assembly. There is some discussion of this on stackoverflow",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

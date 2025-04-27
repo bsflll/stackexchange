@@ -1,0 +1,40 @@
+{
+  "title": "Reverse decryption algorithm",
+  "link": "https://reverseengineering.stackexchange.com/questions/8311/reverse-decryption-algorithm",
+  "content": "I've been working to disassemble a decryption algorithm for a particular software. The way it works is that the serial key contains all the appropriate information, gets crunched in the algorithm which outputs plaintext data (It's actually binary data but this is not that important here).\n\nI now want to create an algorithm which will re-encrypt arbitrary data.\n\nAfter some work I managed to greatly reduce the code base for the decryption process. Here is how it works :\n\n```\nBigUnsigned hash_func(BigUnsigned serial, BigUnsigned running_value, BigUnsigned encrypt_key)\n{\n    return (serial * running_value) - (((serial * running_value) / encrypt_key) * encrypt_key);\n}\n\nvoid do_the_thing()\n{\n    BigUnsigned key1 = hash_func(buSerial, buSerial, buEncryptKey);\n    BigUnsigned key2 = hash_func(buSerial, key1, buEncryptKey);\n\n    BigUnsigned result = 1;\n    int key_select = 0;\n    unsigned int weird_number = 0xc3530000;\n    for(int i = 0; i < 8; ++i, weird_number *= 4){\n        result = hash_func(result, result, buEncryptKey);\n        result = hash_func(result, result, buEncryptKey);\n        if(weird_number >> 30){\n            key_select++;\n            if(key_select < 3){\n                result = hash_func(result, key2, buEncryptKey);\n            }else{\n                result = hash_func(result, buSerial, buEncryptKey);\n                if(key_select == 4){\n                    key_select = 0;\n                }\n            }\n        }\n    }\n}\n\n```\nboth buSerial and buEncryptKey are 16 unsigned int (512-bits). I don't get how I can create an algorithm that encrypt new data from this. The problem I have is that key2 is generated from the final result which I don't know beforehand.\n\nI'm using this BigInt library\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "762",
+  "tags": [
+    "cryptography"
+  ],
+  "user": "Eric",
+  "time": "Feb 22, 2015 at 12:22",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Do you have any more information, especially, one or two examples for buEncryptKey? Is that a prime number?\n\nThe reason i'm asking is: your hash_func is a modulo function, it calculates (serial*running_value) % encrypt_key. This makes key1 = serial^2%encrypt_key and key2 = serial*(serial^2%encrypt_key)%encrypt_key = serial^3 % encrypt_key. And polynomials modulo prime numbers are often used in CRC calculations, or Fletcher's checksum.\n\nThe rest of the loop calculates (result^4 % encrypt_key), and then result*(serial^3) % encrypt_key, or (result*serial % encrypt_key), depending on some bits in weird_number.\n\nHowever, your key_select seems a bit fishy - could you please make sure that key_select is calculated this way, and isn't just (weird_number >> 30) & 0x03 ? The way weird_number is treated in the loop would make it logical to check 2 bits of it in each round (which coincides with the multiplication with 4), and i'd expect 2 of the bits in weird_number to be used to select one of your if-else cases; in your code right now, it doesn't make sense to use 2 bits of weird_number at once. (Also, it doesn't make sense NOT to mask the higher bits away, but as weird_number is just a 2-byte integer anyway, they'll get thrown away with each shift).\n\nOnce you get the maths of your function right, you might be able to find it on the internet, or maybe the people of math.stackexchange.com or crypto.stackexchange.com might have a pointer where this algorithm is used, and how to create a matching reverse function.\n\nUPDATE\n\n<rant>\n\n</rant>\n\nFrom Wikipedia about signing messages using RSA: \n\nThis is exactly what your algorithm is doing. It optimizes the math a bit, by calculating x^4 in each loop, and then factoring in x or x^3 depending on 2 bits of the exponent. This seems to be a variation on Montgomery's ladder technique, that uses 2 bits at once instead of one bit.\n\ne is your weird_number (50003, only the high 16 bits are used), and n is your encrypt_key. (You might want to make sure i'm correct by letting your BigInteger library calculate serial^50003 % encrypt_key) and compare the result to your \"plaintext data\", i didn't actually check it.)\n\nTo calculate the input, you'll need the signing algorithm, from the same paragraph in Wikipedia:\n\nTo calculate the input, you need n (which you have) and d (which you don't have). To calculate d, you need to factor n into its two generating prime numbers (p, q) where n=pq. This fits with Wolfram Alpha saying n is not a prime, but, unfortunately, finding these numbers is hard - after all, the algorithm is designed to be uncrackable. However, 512 bits isn't state of the art anymore, and the crypto.stackexchange.com guys say factorization of a 512 bit number is quite feasible today.\n\nStill, you'll probably have to invest a lot more time to reach your goal. Sorry to deliver bad news. \n\n",
+      "votes": "2",
+      "user": "Community",
+      "time": "Apr 13, 2017 at 12:48",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Eric",
+          "text": "Thanks for the help. Wolfram alpha reports that ecryptKey is not a prime. key_select is indeed not the original. The original disassembly generated was very ugly and I resorted to a few shortcuts.",
+          "time": null
+        },
+        {
+          "user": "Eric",
+          "text": "serial^50003 is VERY long. I saw a... piece of software for this particular program that would... encrypt new information which would be decrypted correctly afterwards by the program (if you know what I mean). Maybe I overlooked something in the simplification process.",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "serial^50003 is VERY long, true. But you just need (serial^50003)%encrypt_key. As an easier example, imagine you want to calculate (7^11)%5. This is equal to ((7^3)*(7^3)*(7^3)*(7^2))%5. But this is also equal to (((7^3)%5) * ((7^3)%5) * ((7^3)%5) * ((7^2)%5))%5 - taking the remainder after each step makes the numbers much smaller and doesn't change the result. This is basically what the algorithm you disassembled does.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

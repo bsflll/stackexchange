@@ -1,0 +1,72 @@
+{
+  "title": "Understanding a C code including CRT functions, decompiled with Ghidra",
+  "link": "https://reverseengineering.stackexchange.com/questions/30090/understanding-a-c-code-including-crt-functions-decompiled-with-ghidra",
+  "content": "I am trying to learn software reverse engineering with Ghidra, though I have never used Visual Studio Compilers or the C runtime (CRT). I have a piece of decompiled C code:\n\n```\n<typeName> <functionName>(<typeName>)\n{\n  ulonglong myVar;\n\n  __security_init_cookie();\n\n  myVar = __scrt_initialize_crt(1);\n\n  if ((char)myVar == '\\0') {\n    // some code\n  }\n}\n\n```\nwhere ulonglong is Unsigned Long Long Integer with a length of 8 according to Ghidra Decompiler.\n\nI tried reading the __security_init_cookie() documentation here, to no avail. And there is not much documentation about the __scrt_initialize_crt() function.\n\nI would appreciate it if you could help me understand what the above piece of code does.\n\nP.S.1. More information about the __scrt_initialize_crt() function here, and its input type __scrt_module_type here.\n\nP.S.2. I posted a follow-up question here on SO.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "c",
+    "ghidra",
+    "msvc"
+  ],
+  "user": "Foad",
+  "time": "Mar 6, 2022 at 18:18",
+  "comments": [
+    {
+      "user": "ddddavidee",
+      "text": "Some  info here: stackoverflow.com/questions/19945479/…",
+      "time": null
+    },
+    {
+      "user": "Foad",
+      "text": "@ddddavidee I had actually seen that post, though me being unfamiliar with MSVC, I do not comprehend the jargon.",
+      "time": null
+    },
+    {
+      "user": "fpmurphy",
+      "text": "Typically, when reversing an executable, you ignore the CRT routines unless you suspect a custom CRT0, CRT1, etc.  Reversing these routines usually adds no value to your understanding of the executable.",
+      "time": null
+    },
+    {
+      "user": "Foad",
+      "text": "@fpmurphy yeah, after a couple of days reading documentation and blog posts... I am coming to the same conclusion. There doesn't seem to be any relation between the __security_init_cookie() and the __scrt_initialize_crt() instructions. The former seems to just insure functions have no side effects on the stack, and the latter just check if the instructions are called from a .dll file or a .exe executable.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The documentation can be read in some of the header files which are bundled with Visual Studio. In my case I have the 2019 Community the files are here\n\n```\nC:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.16.27023\n\n```\nAdditionally you can also reverse msvcrt.lib files which are present in my case at\n\n```\nC:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.16.27023\\lib\\spectre\\onecore\\x86\n\n```\nNow according to the headers at multiple locations for __security_init_cookie\n\n```\n// src\\vcruntime\\gs_cookie.c\n/*\n * The global security cookie.  This name is known to the compiler.\n * Initialize to a garbage non-zero value just in case we have a buffer overrun\n * in any code that gets run before __security_init_cookie() has a chance to\n * initialize the cookie to the final value.\n */\n\n// src\\vcruntime\\gs_support.c\n/*\n*Purpose:\n*       Define __security_init_cookie, which is called at startup to initialize\n*       the global buffer overrun security cookie used by the /GS compile flag.\n*/\n\n// src\\vcruntime\\vcruntime_dllmain.cpp\n// The /GS security cookie must be initialized before any exception\n// handling targetting the current image is registered.  No function\n// using exception handling can be called in the current image until\n// after __security_init_cookie has been called.\n\n```\nFor __scrt_initialize_crt\n\n```\n// src\\vcruntime\\vcstartup_internal.h\n// These are called during startup and termination to initialize or uninitialize\n// the CRT.  When the CRT is statically linked, these actually perform complete\n// CRT initialization, calling into each part of the CRT initialize them.  When\n// the CRT DLLs are used, the CRT DLLs initialize themselves when they are loaded.\n// However, some initialization is still required, to bind the module-specific\n// VCRuntime DLL to the global AppCRT DLL.\nextern \"C\" bool __cdecl __scrt_initialize_crt(__scrt_module_type module_type);\n\n// src\\vcruntime\\utility.cpp\n//-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+\n//\n// CRT Initialization\n//\n//-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+\nstatic bool is_initialized_as_dll;\n\nextern \"C\" bool __cdecl __scrt_initialize_crt(__scrt_module_type const module_type)\n{\n    if (module_type == __scrt_module_type::dll)\n    {\n        is_initialized_as_dll = true;\n    }\n\n    __isa_available_init();\n\n    // Notify the CRT components of the process attach, bottom-to-top:\n    if (!__vcrt_initialize())\n    {\n        return false;\n    }\n\n    if (!__acrt_initialize())\n    {\n        __vcrt_uninitialize(false);\n        return false;\n    }\n\n    return true;\n}\n\n\n```\n",
+      "votes": "3",
+      "user": "sudhackar",
+      "time": "Mar 1, 2022 at 7:48",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Foad",
+          "text": "did you just reverse the .lib files? 🤔 the content of the __scrt_initialize_crt function is identical to what I have mentioned in the P.S. above.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "i looked up at the follow up question in SO and i am posting a reply that lets you compile what you asked\n\nI am not sure what purpose this can solve  the header you are including vcxxx is a c only header and is to be used only to build crt and not to be used as a public header\n(vs2019 x64 190xx sdk vc src)\n\ncode compilation disassembly  as follows\n\n```\nD:\\test\\scrt>dir /b\nscrt.cpp\n\nD:\\test\\scrt>type scrt.cpp\n#define _VCRT_BUILD\n#include <vcstartup_internal.h>\nint __CRTDECL main(\n        _In_                     int    argc,\n        _In_reads_(argc) _Pre_z_ char** argv,\n        _In_z_                   char** envp\n        )\n{\n        UNREFERENCED_PARAMETER(argc);\n        UNREFERENCED_PARAMETER(argv);\n        UNREFERENCED_PARAMETER(envp);\n        unsigned long long myVar;\n        __security_init_cookie();\n        myVar = __scrt_initialize_crt((__scrt_module_type)1);\n        return 0;\n}\n\n```\ncompilation on vs2019 x64 19xxxx sdk crt src\n\n```\nD:\\test\\scrt>cl /Zi /W4 /analyze:autolog- /I d:\\vs\\VC\\Tools\\MSVC\\14.29.30133\\crt\\src\\vcruntime scrt.cpp /link /release\nMicrosoft (R) C/C++ Optimizing Compiler Version 19.29.30140 for x64\nCopyright (C) Microsoft Corporation.  All rights reserved.\n\nscrt.cpp\nMicrosoft (R) Incremental Linker Version 14.29.30140.0\nCopyright (C) Microsoft Corporation.  All rights reserved.\n\n/out:scrt.exe\n/debug\n/release\nscrt.obj\n\nD:\\test\\scrt>dir /b\nscrt.cpp\nscrt.exe\nscrt.obj\nscrt.pdb\nvc140.pdb\n\n```\ndisassembly\n\n```\nD:\\test\\scrt>cdb -c \"uf scrt!main;q\" scrt.exe\n\nMicrosoft (R) Windows Debugger Version 10.0.19041.685 AMD64\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n0:000> cdb: Reading initial command 'uf scrt!main;q'\nscrt!main:\n00007ff7`322b1000 4c89442418      mov     qword ptr [rsp+18h],r8\n00007ff7`322b1005 4889542410      mov     qword ptr [rsp+10h],rdx\n00007ff7`322b100a 894c2408        mov     dword ptr [rsp+8],ecx\n00007ff7`322b100e 4883ec38        sub     rsp,38h\n00007ff7`322b1012 e885000000      call    scrt!__security_init_cookie (00007ff7`322b109c)\n00007ff7`322b1017 b901000000      mov     ecx,1\n00007ff7`322b101c e837030000      call    scrt!__scrt_initialize_crt (00007ff7`322b1358)\n00007ff7`322b1021 0fb6c0          movzx   eax,al\n00007ff7`322b1024 4889442420      mov     qword ptr [rsp+20h],rax\n00007ff7`322b1029 33c0            xor     eax,eax\n00007ff7`322b102b 4883c438        add     rsp,38h\n00007ff7`322b102f c3              ret\nquit:\n\n```\n",
+      "votes": "3",
+      "user": "blabb",
+      "time": "Mar 6, 2022 at 20:48",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Foad",
+          "text": "This is great. Thanks a lot. Can you be kind to post it on the other question? This post is meant to understand what those functions do, and the other question is an attempt to replicate the code and compiler options that generate an identical assembly code.",
+          "time": null
+        },
+        {
+          "user": "Foad",
+          "text": "I did not say that I am going to delete the question, but the temporary answer. these are two different questions on different forums. the question on this page was to understand the decompiled C code. And the question on SO is to replicate the original C/C++ code and the compiler options as much as possible.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

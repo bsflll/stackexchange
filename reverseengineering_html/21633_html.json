@@ -1,0 +1,57 @@
+{
+    "title": "anti-debugger techniques for shared library",
+    "link": "https://reverseengineering.stackexchange.com/questions/21633/anti-debugger-techniques-for-shared-library",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm adding copyright protection to a demo version of a shared library.  I've seem some recommendations to add timing around license violation detection codes -- which would be debugger + patch targets -- for example RDTSC, GetTickCount(), etc.  Unfortunately this shared library doesn't have timing related codes, so adding would stand out and make them relatively easy to find (I see that IDAPro can find all all occurrences of a single instruction such as RDTSC, so I assume OllyDbg can also).  Another suggestion is to strip section headers, but that seems applicable only for an exe, not a shared library.\n </p>\n <p>\n  Currently, what is the leading edge way to either prevent a debugger from handling a shared library, or detect inside the lib that's it being debugged ?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "anti-debugging",
+        "shared-object"
+    ],
+    "user": "Jeff Brower",
+    "time": "Jul 8, 2019 at 23:37",
+    "comments": [
+        {
+            "user": "bart1e",
+            "text": "<html><body><span class=\"comment-copy\">\n Do you have the source code of this library (so you can modify it) or only compiled version? Which operating systems is it created to run on?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jeff Brower",
+            "text": "<html><body><span class=\"comment-copy\">\n @bart1e, yes I have source (mostly C, a couple of C++ files).  Linux\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't know whether the advice I'll give you is the \"leading edge way\", but I will describe some steps that you can perform in order to protect your software.\n </p>\n <h1>\n  Is it possible to protect it such that no one will be able to crack it?\n </h1>\n <p>\n  <strong>\n   No\n  </strong>\n  , and it's important to know that and keep in mind that what you really want to do is to\n  <strong>\n   keep it as hard to crack as possible\n  </strong>\n  and dishearten potential violator from doing that. So, you want to make it so complex and obfuscated that it would require a lot of work to change anything both statically and during the runtime.\n </p>\n <h1>\n  Anti-debugging techniques\n </h1>\n <ul>\n  <li>\n   <p>\n    <strong>\n     Software breakpoints detection\n    </strong>\n   </p>\n   <p>\n    As you probably know, to trigger a software breakpoint, debuggers use\n    <code>\n     int 3\n    </code>\n    instruction, i.e. when you put a software breakpoint at some address, debugger will overwrite the byte at that address to\n    <code>\n     0xCC\n    </code>\n    (\n    <code>\n     int 3\n    </code>\n    opcode) and when this instruction triggers the interrupt, a debugger will restore the byte that was previously there. That means that every software breakpoint\n    <strong>\n     will change some byte\n    </strong>\n    in the code section, so to detect it, you may create a function searching for\n    <code>\n     0xCC\n    </code>\n    .\n   </p>\n  </li>\n  <li>\n   <p>\n    <strong>\n     Control sum checking\n    </strong>\n   </p>\n   <p>\n    It's a generalization of the previous technique. Instead of detecting only\n    <code>\n     0xCC\n    </code>\n    , you will detect any change made in code, including fragments replaced by\n    <code>\n     NOP\n    </code>\n    s. You want to apply it\n    <strong>\n     at the end\n    </strong>\n    of protection process so that you don't need to change required control sum value at each change made in the code. I would advise you to put functions checking checksums at many different places in your code and if possible make each of them slightly different (so that it's not so easy to find them all at once).\n   </p>\n  </li>\n  <li>\n   <p>\n    <strong>\n     Hardware breakpoint detection\n    </strong>\n   </p>\n   <p>\n    Since hardware breakpoints don't require any changes in a process image, they cannot be detected using the above mentioned methods. They are implemented using\n    <code>\n     DR\n    </code>\n    registers and it's possible to create\n    <code>\n     4\n    </code>\n    of them as a maximum at given moment. To defend against them, you can just reset their values from time to time.\n    <a href=\"https://en.wikipedia.org/wiki/X86_debug_register\" rel=\"nofollow noreferrer\">\n     More info about debug registers\n    </a>\n    .\n   </p>\n  </li>\n  <li>\n   <p>\n    <strong>\n     Time / cycles checking\n    </strong>\n   </p>\n   <p>\n    Since you have the source code, you can import other libraries even during runtime. On Linux you can do it via\n    <code>\n     dlopen\n    </code>\n    (to load library) and\n    <code>\n     dlsym\n    </code>\n    to get specific procedure from it.. Of course you should encrypt every string so that it's not straightforward to find out which functions you are using for measuring the time elapsed.\n   </p>\n  </li>\n </ul>\n <h1>\n  Other tricks\n </h1>\n <ul>\n  <li>\n   <p>\n    <strong>\n     Inlining every function\n    </strong>\n   </p>\n   <p>\n    That will stop debuggers from recognising library functions, thus will be very annoying for everyone who wants to analyse your code. Of course, using\n    <code>\n     C++\n    </code>\n    templates will also help. ;)\n   </p>\n  </li>\n  <li>\n   <p>\n    <strong>\n     Inserting junk code\n    </strong>\n   </p>\n   <p>\n    You can put (and inline of course) many garbage functions that won't change your program behaviour, but it won't be obvious for person analysing disassembly. You don't have to write them yourself - you may use library functions as well.\n   </p>\n  </li>\n  <li>\n   <p>\n    <strong>\n     Being nasty\n    </strong>\n   </p>\n   <p>\n    Of course, if someone is determined enough, he will eventually find all your control sum / breakpoint checking functions and\n    <code>\n     NOP\n    </code>\n    them out. But what if you put there some code that will have an impact on the rest of application? Consider:\n   </p>\n  </li>\n </ul>\n <pre><code>  bool isBeingDebugged\n  {\n    if (controlSum(address) & rand() == requiredValue)\n      return true;\n    return false;\n  }\n</code></pre>\n <p>\n  Above function not only checks for code integrity, but also modifies the\n  <strong>\n   global state\n  </strong>\n  of a program. For instance, if you use later on some string decoding function relying on\n  <code>\n   rand()\n  </code>\n  results, the application will likely behave differently if that function is simply replaced by\n  <code>\n   NOP\n  </code>\n  s.\n </p>\n <ul>\n  <li>\n   <p>\n    <strong>\n     Being creative\n    </strong>\n   </p>\n   <p>\n    The best anti debugging technique is such that no one expects, so search, experiment and apply your own ideas.\n   </p>\n  </li>\n </ul>\n <p>\n  <a href=\"https://reverseengineering.stackexchange.com/questions/43/anti-debug-techniques-on-unix-platforms\">\n   Additional information\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jeff Brower",
+                    "text": "<span class=\"comment-copy\">excellent, comprehensive answer.  How do I mark it as the accepted answer ?  Can you clarify one thing:  in your \"bool isBeingDebugged ... \" example, I don't understand the use of rand().  Are you saying (a) rand() is the C lib rand() and would return a sequence of values the same for every Linux and could thus be used as part of a license violation detection code, and (b) it would be difficult for someone to nop out just part of that code, because then the expected rand() value sequence would change ?  Thanks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">To accept an answer, you can click \"tick\" symbol next to (under?) upvote panel.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">a) That was just an example, you can use some other function instead. Yes, I mean just rand() function that will return pseudorandom values, thus the same among program executions (for the same starting seed).</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">b) No, but it can be surprising first of all, because usually debugger detecting functions will not affect the global state - just check for debugger. And potential hacker will have to be very careful not to nop some important part of code, so he has to fully understand it, which may be very time consuming and difficult.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

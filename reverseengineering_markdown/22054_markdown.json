@@ -1,0 +1,49 @@
+{
+  "title": "Why address 7FFE0308 always gets compared in 64bit applications before making a syscall in Ntdll?",
+  "link": "https://reverseengineering.stackexchange.com/questions/22054/why-address-7ffe0308-always-gets-compared-in-64bit-applications-before-making-a",
+  "content": "So there was a question asked before about this :\n\nWhat are the difference syscall and int 0x2E instructions?\n\nand it has two answer, one says that is just a way to check if we are in a 32 bit or 64 bit windows! \n\nif this is the actual answer, then why do we need to check if we are in a 32 bit system in a 64 bit app! it wont even start if its in a 32 bit system, and this check doesn't happen on the 32 bit version of the app\n\nand if the other answer is true, then i couldn't find anything clear on the relation of this address and \"virtualization security\", can anyone elaborate a bit more on this? why is this check happens? :\n\n```\ntest    byte ptr ds:7FFE0308h, 1\njnz     short loc_a\nsyscall\nretn\n\n```\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "windows",
+    "x86",
+    "x86-64",
+    "security",
+    "windows-10"
+  ],
+  "user": "OneAndOnly",
+  "time": "Sep 5, 2019 at 17:58",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "During Kernel Initialization  ntKiSystemCallSelector is Initialized from LOADER_PARAMETER_BLOCK \n\n```\n0: kd> dt nt!_LOADER_PARAMETER_BLOCK Extension->VsmConfigured\n   +0x0f0 Extension                : \n      +0x074 VsmConfigured            : Pos 8, 1 Bit\n\n```\nif SystemCallSelector is Set to True \n\nKUSER_SHARED_DATA->SystemCall is also set to true and int 2E is used \nelse syscall is used\n\n```\nIsVsmConfigured = Loader_Param_Block->Extension->_bitfield_116;\nif ((IsVsmConfigured & 8) != 0) {\n  _KiBootDebuggerActive = 1;\n  IsVsmConfigured = Loader_Param_Block->Extension->_bitfield_116;\n}\nif ((IsVsmConfigured >> 8 & 1) != 0) {\n  _KiSystemCallSelector = 1;\n}\nKiInitializeIdt(lVar7,0);\nHalInitializeBios(0xffffffff,Loader_Param_Block);\nInbvDriverInitialize(0xffffffff,Loader_Param_Block,0);\n\n```\nBased On the Extension->VsmConfigured kuser->SysstemCall is set\n\n```\n  if (((param_5 == 0) &&\n      (local_2a0 = param_1, local_280 = param_3, local_278 = param_2, local_270 = param_2,\n      local_268 = param_4, HvlPhase0Initialize(param_6), _KiSystemCallSelector == 1)) &&\n     ((HvlEnlightenments & 0x80000) != 0)) {\n    _kuser->SystemCall = 1;\n  }\n\n```\nWindows Details \n\n```\nC:\\>wmic os get Caption,OsArchitecture,Version /format:list\n\nCaption=Microsoft Windows 10 Pro\nOSArchitecture=64-bit\nVersion=10.0.17763\n\n```\ndetails of the global KiSystemCallSelector  and its usage in module ntkrnlmp \n\n```\n0: kd> x /v /t nt!*ki*sys*sel*\npub global fffff805`4fa23164    0 <NoType> nt!KiSystemCallSelector = <no type information>\n\n\n0: kd> lm m nt\nBrowse full module list\nstart             end                 module name\nfffff805`4f016000 fffff805`4fa87000   nt (pdb symbols)   \n   \ntkrnlmp.pdb\\9A729548AB1A93E90D0A48528CE30B7A1  \ntkrnlmp.pdb\n\n\n0: kd> # *nt!KiSystemCallSelector* fffff805`4f016000 l?(fffff805`4fa87000-fffff805`4f016000)\n\nnt!KiInitializeBootStructures+0x224:\nf805`4f5865a4 44892db9cb4900  mov dword ptr [nt!KiSystemCallSelector (f805`4fa23164)],r13d \nnt!KiInitializeKernel+0x5be:\nf805`4f587e6e 443935efb24900  cmp dword ptr [nt!KiSystemCallSelector (f805`4fa23164)],r14d\nnt!KiInitializeIdt+0x169:\nf805`4f58954d 833d109c490001  cmp dword ptr [nt!KiSystemCallSelector (f805`4fa23164)],1\n\n```\nBack And Forward Disassembly of Search Hits\n\n```\n0: kd> ub fffff805`4f5865a4\nnt!KiInitializeBootStructures+0x206:\nf805`4f586586 488b96f0000000  mov rdx,qword ptr [rsi+0F0h] <<<<;LPARMBLOCK->Extension\nf805`4f58658d 8b4274          mov eax,dword ptr [rdx+74h] <<<<;LPARMEXT->@#74\nf805`4f586590 a808            testal,8\nf805`4f586592 740a            je  nt!KiInitializeBootStructures+0x21e (fffff805`4f58659e)\nf805`4f586594 44892d81d04900  mov dword ptr [nt!KiBootDebuggerActive (f805`4fa2361c)],r13d\nf805`4f58659b 8b4274          mov eax,dword ptr [rdx+74h]\nf805`4f58659e 0fbae008        bt  eax,8           <<<< bittesting bit 8 \nf805`4f5865a2 7307            jae nt!KiInitializeBootStructures+0x22b (fffff805`4f5865ab)\n\n0: kd> $$ rsi = LOADER_PARAMETER_BLOCK\n\n0: kd> dt nt!_LOADER_PARAMETER_BLOCK -y Exten\n   +0x0f0 Extension : Ptr64 _LOADER_PARAMETER_EXTENSION\n\n0: kd> dt nt!_LOADER_PARAMETER_EXTENSION -y vsm\n   +0x074 VsmConfigured : Pos 8, 1 Bit\n\n0: kd> $$ r13d = 1\n\n0: kd> u fffff805`4f5865a4\nnt!KiInitializeBootStructures+0x224:\n;set if vsmConfigured\nf805`4f5865a4 44892db9cb4900  mov dword ptr [nt!KiSystemCallSelector (f805`4fa23164)],r13d\nf805`4f5865ab 33d2            xor edx,edx\nf805`4f5865ad 498bcf          mov rcx,r15\nf805`4f5865b0 e82f2e0000      call nt!KiInitializeIdt (fffff805`4f5893e4)\nf805`4f5865b5 83cbff          or ebx,0FFFFFFFFh\nf805`4f5865b8 488bd6          mov rdx,rsi\nf805`4f5865bb 8bcb            mov ecx,ebx\n\n```\nntKiSystemStartup Calls nt!KiInitializeKernel post nt!KiInitializeBootStructures\nwhere this global is used again \n\n```\n0: kd> uf /c nt!KiSystemStartup\nnt!KiSystemStartup (fffff805`4f57c010)\n  nt!KiSystemStartup+0x2d (fffff805`4f57c03d):\n    call to nt!KdInitSystem (fffff805`4f92d140)\n  nt!KiSystemStartup+0x14b (fffff805`4f57c15b):\n    call to nt!KiInitializeBootStructures (fffff805`4f586380)\n  nt!KiSystemStartup+0x167 (fffff805`4f57c177):\n    call to nt!KdInitSystem (fffff805`4f92d140)\n  nt!KiSystemStartup+0x17e (fffff805`4f57c18e):\n    call to nt!KiInitializeXSave (fffff805`4f589850)\n  nt!KiSystemStartup+0x204 (fffff805`4f57c214):\n    call to nt!KiInitializeKernel (fffff805`4f5878b0)\n  nt!KiSystemStartup+0x284 (fffff805`4f57c294):\n    call to nt!KiIdleLoop (fffff805`4f1cd920)\n\n```\nDisassembly Of nt!KiInitializeKernel\n\n```\n0: kd> u fffff805`4f587e6e\nnt!KiInitializeKernel+0x5be:\nf805`4f587e6e 443935efb24900  cmp dword ptr [nt!KiSystemCallSelector (f805`4fa23164)],r14d\nf805`4f587e75 0f85affaffff    jne nt!KiInitializeKernel+0x7a (f805`4f58792a)\nf805`4f587e7b e902660000      jmp nt!KiInitializeKernel+0x6bd2 (fffff805`4f58e482)  <<<<---\n\n\n\n0: kd> u fffff805`4f58e482 <<<<----\nnt!KiInitializeKernel+0x6bd2:\nf805`4f58e482 f70550aefcff00000800 test dword ptr [nt!HvlEnlightenments (f805`4f5592dc)],80000h\nf805`4f58e48c 0f849894ffff    je nt!KiInitializeKernel+0x7a (f805`4f58792a)\nf805`4f58e492 418bc6          mov eax,r14d\nf805`4f58e495 a30803000080f7ffff mov   dword ptr [FFFFF78000000308h],eax  <<<<<------\nf805`4f58e49e e98794ffff      jmp nt!KiInitializeKernel+0x7a (f805`4f58792a)\n\n```\nthe Address FFFFF78000000308h is part of KUSER_SHARED_MAP\n\n```\n0: kd> dt nt!_KUSER_SHARED_DATA -y SystemCall fffff78000000000\n   +0x308 SystemCall : 0  <<<<\n   +0x30c SystemCallPad0 : 0\n   +0x310 SystemCallPad : [2] 0\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Sep 6, 2019 at 12:11",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "Can you explain the relationship between the address in question and the structures you describe?",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "@ igorsk a little prod on what you want me describe would help me put it in words these are all global variables in ntos and searchable with windbg",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "what does 7FFE0308 map to? what exactly is the assembly checking? You dumped a bunch of structs but I'm not seeing how it connects to the question. Maybe it's obvious to you but not everyone is spending every day in windbg",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "@igorsk Edited the post see if it makes sense now or needs more explanation",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

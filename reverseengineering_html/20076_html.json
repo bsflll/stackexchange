@@ -1,0 +1,60 @@
+{
+    "title": "Manually unpacking DarkTequila, stumped. Can anyone help?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20076/manually-unpacking-darktequila-stumped-can-anyone-help",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <a href=\"https://i.sstatic.net/QXBJr.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"Packed w/ UPX - can see 0/1 in sections\" src=\"https://i.sstatic.net/QXBJr.png\"/>\n  </a>\n </p>\n <p>\n  The malware is packed w/ UPX - can see 0/1 in sections.\n </p>\n <p>\n  Sure, I can can a tool or even use UPX -d -o flags .exe to create an unpacked copy with a >97% ratio, however I want to MANUALLY unpack it to keep practicing my skills and to get better.\n </p>\n <p>\n  Opening the .exe (MD5 for malware: 9fbdc5eca123e81571e8966b9b4e4a1e) with OllyDbg brings us right to the POPAD instruction and several usual follow-on calls on the stack that also let us know it's typical UPX stuff.\n </p>\n <p>\n  The problem is, when I step-over the PUSHAD and land on the MOV instruction, if I follow the ESP register through the dump, the first four hex dump bytes are zeroed out.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/HENHk.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"Zeroed bytes.\" src=\"https://i.sstatic.net/HENHk.png\"/>\n  </a>\n </p>\n <p>\n  With this said, I still set the HWBP on access just to see what it would lead me to, and it brings me to this:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/LZLmv.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"After hardware breakpoint\" src=\"https://i.sstatic.net/LZLmv.png\"/>\n  </a>\n </p>\n <p>\n  And this is where I get stumped. If I try and step through to the JUMP instruction, it will only go to the conditional jump (JNZ) before it falls back to the PUSH instruction. I can manually click my way to the JMP instruction and run the program again, which leads me to the CMP ESP, EAX. If I run the program one more time, it brings me to 0139BC0E which looks like this:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/eMgWO.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"After CMP instruction\" src=\"https://i.sstatic.net/eMgWO.png\"/>\n  </a>\n </p>\n <p>\n  There's a few kernel32 function calls that you\n  <em>\n   might\n  </em>\n  see at the beginning of a program, but honestly I am not sure if I am where I need to be for this unpacking. I doubt it.\n </p>\n <p>\n  All in all, I could use some help.\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "671",
+    "tags": [
+        "ollydbg",
+        "malware",
+        "unpacking"
+    ],
+    "user": "ajdbnabad13",
+    "time": "Dec 7, 2018 at 18:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This may either be packed multiple times or contain additional obfuscations or anti-analysis.  Use the \"PUSHAD, breakpoint on ESP, run\" method to find the tail transition, as you have.  Then set a breakpoint on the tail transition (in your case, JMP 0002A99E) and run to that.  The single-step to take the jmp and you'll be at the OEP, or the next stage of packing.\n </p>\n <p>\n  One way to figure out if you have it unpacked is to dump at this point (using\n  <a href=\"https://low-priority.appspot.com/ollydumpex/\" rel=\"nofollow noreferrer\">\n   OllyDumpEx\n  </a>\n  , for example) and load it in your typical tools (IDA, exeinfo, PEiD, etc) to see what it looks like.\n </p>\n <p>\n  When I do this with your binary, I'm seeing what looks like some typical setup code, but then after the call to initterm, at 0040A7F2 there is a call using a memory address that contains zeros (hover over the dword_xxxx value to see).  If you look back just a little bit, you'll see a call to a sub_xxxx that takes as an argument that dword_xxxx address.  Diving into that function and the functions it calls, it looks like there is some parsing of the PE header (see cmp's with immediate values 5A4Dh and 4550h).  In malware, this is typically done to find where kernel32 or other modules are in memory.\n </p>\n <p>\n  In addition to that, look at the Imports and you can see that there are references to LoadLibrary and GetProcAddress.  If you look for those cross-references (aka xrefs), then you'll find functions that look like they have encoded values (a bunch of xor instructions in a row with immediates), so possibly dynamically rebuilding the IAT.\n </p>\n <p>\n  That's more info than you need to get past the UPX unpacking stage, but this malware has more anti-analysis techniques than just UPX packing, so you might have additional questions.  The\n  <a href=\"https://nostarch.com/malware\" rel=\"nofollow noreferrer\">\n   Practical Malware Analysis book\n  </a>\n  has a good description of what you'll want to do next, and is generally a good reference, but feel free to start more questions on stackexchange if you want more help!\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "knowmalware",
+            "time": "Jan 5, 2019 at 17:58",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So to your first problem, the last two elements of the stack are 0 because\n  <code>\n   PUSHAD\n  </code>\n  pushes the registers in the following order on the stack.\n  <strong>\n   EAX, ECX, EDX, EBX, EBP, ESP, EBP, ESI, EDI\n  </strong>\n </p>\n <p>\n  Since\n  <code>\n   ESI\n  </code>\n  and\n  <code>\n   EDI\n  </code>\n  are both 0 in your case, the two values on top of the stack are also 0.\n </p>\n <p>\n  In general, UPX is one of the easier ones to unpack, because it was not designed for security but compression.\n </p>\n <p>\n  So the way to go here, is to find the tail jump. This one can be recognized by the following zeroes and the jump to a far address.\n </p>\n <p>\n  I don't get your problem exactly, because you found the tail jump already. See at address\n  <code>\n   001026B1\n  </code>\n  the jump to\n  <code>\n   0002A99E\n  </code>\n  . Consequently, your program starts at\n  <code>\n   0002A99E\n  </code>\n  and this is your OEP. You can then remove the hardware breakpoint, set a breakpoint at the jump, continue running until it stops at the JMP and then step with F7, to debug the unpacked program.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "pudi",
+            "time": "Dec 9, 2018 at 12:21",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "ajdbnabad13",
+                    "text": "<span class=\"comment-copy\">Sorry for any confusion. What I am trying to find out is, how do I know when the program is unpacked and ready to be dumped to be rebuilt with Import Reconstructor? For example, I tried following your advice of setting a breakpoint on the JMP instruction after clearing the prior breakpoint, but what type of breakpoint do I set on that JMP instruction? Options are: Toggle, conditional, conditional log, run to selection, memory (on access), memory (on write), and hardware (on execution).</span>",
+                    "time": null
+                },
+                {
+                    "user": "pudi",
+                    "text": "<span class=\"comment-copy\">The program is ready when it hits the breakpoint on the jmp. You don't need necessarily Import Reconstructor, OllyDbg is able to dump the process and create the import table with a plugin called 'OllyDump'. A simple breakpoint is enough, so either press F2 when the targeted line is highlighted oder right click and choose toggle breakpoint.</span>",
+                    "time": null
+                },
+                {
+                    "user": "ajdbnabad13",
+                    "text": "<span class=\"comment-copy\">Thank you for your knowledge so far, I am learning quite a bit. So I toggled the breakpoint on the JMP instruction and then pressed F7 to step into it, and it leads me to the condition jump (JNZ) right above that you can see in that image. At this point, what do I do? I tried dumping the program using OllyDump from this highlighted conditional jump, and it states that it's unable to read the memory of the debugging process, and a bad DOS signature.  Are we dealing with more obfuscation than UPX within the program, or is the conditional jmp just not the correct place to dump the program?</span>",
+                    "time": null
+                },
+                {
+                    "user": "pudi",
+                    "text": "<span class=\"comment-copy\">Probably the problem is, that your instruction pointer is not pointing to the instruction with the unconditional jump. After your program stops because of the hardware breakpoint, you need to set the breakpoint at the JMP and then continue running (F9) until your program stops again at the JMP. Then you can press F7 or F8, to get to the first instruction of the unpacked program. Btw, google \"ollydbg upx unpack\" or something similar, there are some good tutorials outside that should clear your problems.</span>",
+                    "time": null
+                },
+                {
+                    "user": "ajdbnabad13",
+                    "text": "<span class=\"comment-copy\">I think this malware in particular is using anti-VM/debug. I followed your instructions yet I continue to get bad dos/unable to get memory for dumping the process. I tried dumping it automatically also using UPX in cmd and it throws an access violation upon execution. Strange... not really sure how to proceed.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

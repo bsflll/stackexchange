@@ -1,0 +1,52 @@
+{
+    "title": "Custom UI buttons",
+    "link": "https://reverseengineering.stackexchange.com/questions/4724/custom-ui-buttons",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I just started using IDA and OllyDbg, although I am experienced developer but before this I was reverse engineering only Java and .Net code which is much more easy task comparing of what I need to do now.</p>\n<p>I have an application which has some buttons that are not accessible by Spy++ and WinInspector and all other tools that I tried. Spy++ sees only the <code>selectorclass</code> which is the whole panel where buttons are placed. I've managed to find where the <code>WndProc</code> of this selector is and even the method wich takes hwnd of <code>SelectorControl</code> from <code>GetPropA</code> method, but I have trouble identifying the click itself, so i don't know where the actual button is clicked and where there the app knows what exact button is clicked and what handler to use. </p>\n<p>I would like to ask for some tips which are maybe useful to know but are not known by newbies like me. What are strategies that can be used here?</p>\n<p>Maybe there are some ways to identify what framework was used, so I can play with that framework to know what to look for.</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "ollydbg",
+        "c++"
+    ],
+    "user": "Andriy Kizym",
+    "time": "Jun 27, 2014 at 14:02",
+    "comments": [
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\">Your question covers a wide range of topics. As a starter examine the file through a PE identification tool like PEiD, Detect It Easy, RDG Packer Detector, exeinfope etc. That will give you some hints about the compiler &amp; framework used.</span>",
+            "time": null
+        },
+        {
+            "user": "Andriy Kizym",
+            "text": "<span class=\"comment-copy\">but i have ida pro and ollydbg, isn't it possible to do that with them?</span>",
+            "time": null
+        },
+        {
+            "user": "Andriy Kizym",
+            "text": "<span class=\"comment-copy\">Detect it easy said Microsoft C/C++(2005)</span>",
+            "time": null
+        },
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\">Run <code>strings</code> on it. Study the application behaviour.</span>",
+            "time": null
+        },
+        {
+            "user": "nrz",
+            "text": "<span class=\"comment-copy\">In any decent debugger, hook OS API calls triggered by buttons and do backtrace when you're inside the OS API. See my answer to <a href=\"http://reverseengineering.stackexchange.com/questions/2717/attaching-gdb-to-hidden-library-process/2719#2719\" title=\"attaching gdb to hidden library process\">reverseengineering.stackexchange.com/questions/2717/…</a> Learn assembly. Trace the code with single-stepping and/or breakpoints. Learn how assembly is related to C++. Modify the executable. Profit ;)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If the surrounding window seems to be a genuine window, but the individual buttons are not, I'd assume that</p>\n<ul>\n<li>The surrounding window displays a bitmap, or does whatever else is needed to display the individual buttons</li>\n<li>The surrounding window reacts on mouse clicks</li>\n<li>And, the surrounding window determines itself which \"button\" is used by looking at the mouse coordinates at the time of the mouse click.</li>\n</ul>\n<p>So, what we want to do is, start the program in a debugger, and use a breakpoint that is triggered when the mouse click occurs. The problem is, the window procedure gets called a lot of times, with all kind of messages, while you want to break on some of them (for example, <code>WM_LBUTTONDOWN</code>), but not on most of the others (for example, <code>WM_PAINT</code>).</p>\n<ul>\n<li>Ollydbg can do this directly - place a conditional breakpoint that triggers depending on the window message.</li>\n<li>If, for whatever reason, you can't use that feature, you need to disassemble (and partially understand) the window procedure. It will receive 4 parameters on the stack, the 2nd of which is the window message (see <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms633570%28v=vs.85%29.aspx\" rel=\"nofollow\">Using Window Procedures</a>). The window procedure will, at some point, compare this parameter to the values of well-known window message IDs. You might be interested in <code>WM_LBUTTONDOWN</code> (<code>0x0201</code>) or one of the other <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms645533%28v=vs.85%29.aspx\" rel=\"nofollow\">Mouse Input Events</a>). Check where the code branches to when it receives one of those \"interesting\" messages, and place a breakpoint on that branch.</li>\n</ul>\n<p>After placing a suitable breakpoint, run your application in the debugger, click the mouse, and hope the debugger actually hits the breakpoint. If it doesn't, check which mistake you've made.</p>\n<p>Single-Step your code. It will probably fetch parameter 4 from the stack, which encodes the X and Y coordinates of the mouse, and compare these parameters to something - chances are, there's an array of structures that defines rectangles and jump addresses, and a loop that checks against each entry.</p>\n<p>Once you've found that, you're finished.</p>\n<p>Sounds too easy? It probably is, because, depending on your framework, the actual comparisons might be buried deeply in stuff that was a bunch of C++ classes in the original source, and there might be various calls, some of them indirect (in the case of C++ class methods) until you get to the \"interesting\" position.</p>\n<ul>\n<li><p>Sometimes it's easier to use Ollydbg to resolve this. Single-Step the source after your breakpoint, using \"step over\" to step over function calls. Whenever you see something interested happened within the function call, note the address. Restart your program, run to your breakpoint, run to the address you noted, and \"step into\" the function this time. This will allow you to put the finger on the interesting code relatively quickly, while stepping over all the <code>strcmp()</code> and <code>malloc()</code> and <code>WriteALotOfStuffToSomeFileIfDebuggingIsOn()</code> functions.</p></li>\n<li><p>Sometimes it's easier to use IDA. Generate a call tree from your window procedure, focus on the first 3-5 levels. Search your code for occurrences of magic numbers, like the <code>0x0201</code> above. Check if one of these is a <code>CMP XX, 0x0201</code> in one of the functions in your call tree. This might be just the position you're looking for.</p></li>\n<li><p>Make a screen shot, and paste it into some image viewer program (I like <code>Irfanview</code> for that). Get the pixel coordinates of the button within the frame window. Search, in the data section, for those values, surrounded by what looks like a table of similar data. This might be your coordinate/jump table. If you find something, place a hardware breakpoint on it to find out when that memory gets accessed, or use the IDA cross reference list to get respective addresses in your code.</p></li>\n</ul>\n</div>",
+            "votes": "4",
+            "user": "perror",
+            "time": "Jun 27, 2014 at 19:57",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

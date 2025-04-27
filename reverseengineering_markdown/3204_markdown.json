@@ -1,0 +1,69 @@
+{
+  "title": "Non-ASLR DLL Has Randomized Base per Runtime",
+  "link": "https://reverseengineering.stackexchange.com/questions/3204/non-aslr-dll-has-randomized-base-per-runtime",
+  "content": "I have a question about how a DLL which is marked as non-ASLR compatible can have a different base address every time I run the program that loads it.\n\nBasically, this DLL, which is not ASLR compatible (confirmed via both WinDbg-narly and dumpbin) shows a different starting address every time it's run. I've done some research, and the only thing I see that would cause this sort of behavior would be the loader putting the library at a different address at runtime to account for two libraries that have the same preferred base address. However, every time I run the service (with the same config, same startup sequence, etc), I show a different base address for the library in question, and this base address never repeats (in the 20+ times I've tested it). I had assumed that if the loader were moving the library for a non-ASLR purpose, that the final base address would at least be the same every once in a while, or would be somewhat deterministic.\n\nDoes anyone have an idea of what could cause this sort of behavior?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "windows"
+  ],
+  "user": "TheTwitchy",
+  "time": "Dec 17, 2013 at 4:04",
+  "comments": [
+    {
+      "user": "Jason Geffner",
+      "text": "What version of Windows are you using?",
+      "time": null
+    },
+    {
+      "user": "TheTwitchy",
+      "text": "This is a pretty standard Windows 7 x64 install.",
+      "time": null
+    },
+    {
+      "user": "Jason Geffner",
+      "text": "Does the registry value MoveImages exist in registry key HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management, and if so, what's its value?",
+      "time": null
+    },
+    {
+      "user": "TheTwitchy",
+      "text": "@JasonGeffner The registry value MoveImages does not exist.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "Have you installed EMET? Also, what is the software you're running?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The DYNAMIC_BASE flag of the DllCharacteristics bitmask only holds bearing with the system loader. If set, the kernel implementation of NtCreateSection will choose a randomized base which will be used for every subsequent time the image is loaded and will continue to be used until the last remaining image using those pages is unloaded.\n\nIf that image is reloaded again after that point, it's base address is reset and the underlying pages are relocated again.\n\nBut who is to say the base which the kernel implementation chose is a valid VA range in your user process? It might not be, this is why ntdll.dll also adds its own relocation layer. The ntdll.dll loader routine will call NtMapViewOfSection; this function will attempt to map the pages at the base specified by the underlying section object, if it cannot, it will map them anyway but at any open VA range. In this case NtMapViewOfSection will return with STATUS_IMAGE_NOT_AT_BASE.\n\nIf the usermode based ntdll.dll loader routine sees this as a return value, it will make an attempt to look up a relocation table for the image and process the table, if a table does not exist, it will (in the case of Windows 7) silently unmap the image.\n\nSo in your case, you also need to set IMAGE_FILE_RELOCS_STRIPPED as well as remove the relocation table RVA and size fields.\n\nI suspect you are using VS, in which case the linker option /nodynamicbase (see here) for DLLs effectively does nothing except for what I mentioned above, the compiler still builds a relocation table anyway. \n\n",
+      "votes": "4",
+      "user": "0xC0000022L",
+      "time": "Dec 17, 2013 at 20:17",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Since it's a DLL, it is free to be relocated by the loader, since DLLs are designed to be relocatable.  It also loads after the base process has been mapped, which might be ASLR-enabled.  If it's a DLL that is referenced late in the import table, then it will load after the DLLs before it, any one (or all) of which might also be ASLR-enabled.  For all of those ASLR-enabled objects, any one of them might end up occupying the address that your DLL requested, forcing your DLL to be moved to another (randomly chosen) location.\n\n",
+      "votes": "1",
+      "user": "peter ferrie",
+      "time": "Dec 17, 2013 at 19:47",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "TheTwitchy",
+          "text": "Yes that did occur to me, but given the same startup every time the service starts, I assumed there would be some sort of pattern, or would be somewhat predictable. The behavior I saw looked like it was getting a completely random base every time. This was indeed the case, as referenced above.",
+          "time": null
+        },
+        {
+          "user": "peter ferrie",
+          "text": "There won't be any pattern if every other object (+heap +stack) has ASLR applied to it and causes an address conflict every time.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

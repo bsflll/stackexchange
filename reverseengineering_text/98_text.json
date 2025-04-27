@@ -1,0 +1,153 @@
+{
+    "title": "How can I analyse an executable with no read permission?",
+    "link": "https://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission",
+    "content": "I have a binary on a Linux (Kernel 2.6) which I can execute, but can't read (chmod 0711). Therefore no static analysis is possible.\n<pre><code>user1: $ ls -l bin \n-r-s--x--- user2 user1 bin\nuser1: $ file bin\nsetuid executable, regular file, no read permission\n</code></pre>\nI'm looking for different dynamic techniques to gather as much information as possible.\nFor example <pre><code>strace</code></pre> works with this executable.\n\nUPDATE : I was able to resolve the issue. See answer.\nThank you all <3 this new reverseengineering community rocks!\n",
+    "votes": "37",
+    "answers": 5,
+    "views": "11k",
+    "tags": [
+        "linux",
+        "dynamic-analysis"
+    ],
+    "user": "samuirai",
+    "time": "Apr 13, 2017 at 12:49",
+    "comments": [
+        {
+            "user": "JMcAfreak",
+            "text": "Are you looking only for a dynamic analysis technique, or are you looking for a solution in general?\n",
+            "time": null
+        },
+        {
+            "user": "samuirai",
+            "text": "I guess only dynamical analysis techniques work here. But I am open to anything that can help to understand what the executable does. I have no \"physical\" access to filesystem and so forth.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "If <pre><code>strace</code></pre> works, try attaching with GDB and dumping memory (see here)\n",
+            "time": null
+        },
+        {
+            "user": "George V. Williams",
+            "text": "@IgorSkochinsky, I just tried it on my machine, no luck. GDB refuses to attach with: <pre><code>Could not attach to process. ... try again as the root user.</code></pre> It depends on <pre><code>ptrace</code></pre> (which gives the same error) so <pre><code>ltrace</code></pre> doesn't work either.\n",
+            "time": null
+        },
+        {
+            "user": "Gilles 'SO- stop being evil'",
+            "text": "@IgorSkochinsky If you run <pre><code>strace ./bin</code></pre>, it runs the program with no extra privileges. If you start the program normally, it runs with elevated privileges, and you then can't ptrace it without having elevated privileges yourself.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I initially thought you wouldn't be able to dump the program, but it turns out that you can — see the second section of this answer.\nRunning the program\nMost of the usual methods won't work because the executable is setuid. If you start the program normally, it runs with elevated privileges (euid ≠ ruid), and most debugging facilities are reserved to root. For example, anything that relies on attaching to the program with <pre><code>ptrace</code></pre> is reserved to root. This includes just about anything you could do in a debugger. Linux lets you dump the memory of a running process (with <pre><code>ptrace</code></pre> or through <pre><code>/proc/$pid/maps</code></pre> and <pre><code>/proc/$pid/mem</code></pre>), but that too is disabled for a setuid executable.\nYou can run <pre><code>strace ./bin</code></pre>, and see what system calls the program makes. However, this runs the program without any extra privileges. It may well stop early and complain that it can't read a file, or that it isn't running as the right user.\nYou can see statistics like CPU usage, IO usage, network usage, memory usage, etc. in <pre><code>/proc/$pid</code></pre>: files like <pre><code>status</code></pre>, <pre><code>sched</code></pre> and <pre><code>net/netstat</code></pre> are world-readable (whether the program is actually started with extra privileges or not, the setuid restrictions apply). The one interesting thing I see is the program's network connections. The really juicy stuff, like memory contents (<pre><code>mem</code></pre>) and even open files (<pre><code>fd</code></pre>) is disabled either way. Preloading a library with <pre><code>LD_PRELOAD</code></pre> or running the program with a different <pre><code>LD_LIBRARY_PATH</code></pre> is also disabled either way. Nor will you get a core dump.\nSo what works? You can see open network connections, maybe one of them will give you a clue or will be spoofable. You can try to figure out what files the program accesses by modifying them when you can, or by running the program from another directory (try making a symbolic link).\nIf you have access to a chroot jail on the machine, try running the program from there. If you can run a virtual machine which implements shared folders (e.g. VMware or VirtualBox), see if you can access the program from there. This is all about subverting the security of the system: the permissions are designed to hinder you in your task.\nAn advanced technique is to observe the program under heavy load and try to deduce what it does from the time it takes. Pollute the disk caches and see what files become quickly accessible. See how the swap usage varies depending on what the program does (so you get an idea of how many different pages are in its working set, not just how much total memory it's using). A lot of trial and error will be required. When you know the code and are trying to obtain the data, this is a well-known side channel attack. When you don't know the code, I expect it to be very difficult to obtain useful information this way.\nDumping the memory contents\nI initially thought you couldn't dump the memory of the program because of the setuid bit (which usually wouldn't be a problem because you'd just copy the executable, but here this isn't possible because the executable is not readable). This turns out to be wrong. If you attach to the program with <pre><code>ptrace</code></pre> before calling <pre><code>execve</code></pre> (like running <pre><code>strace ./bin</code></pre> does), you do have access to <pre><code>ptrace</code></pre> in all its glory, including <pre><code>PTRACE_PEEKDATA</code></pre> and <pre><code>PTRACE_PEEKEXEC</code></pre>. That doesn't run the program setuid, so it may behave differently, but the code and static data loaded into memory are the same either way.\nKudos to samuirai for pointing this out.\nHere's an overview of how you can dump the program's memory:\n\nFork, and call <pre><code>ptrace(PTRACE_TRACEME, ...)</code></pre> in the child then execute the program (<pre><code>execl(\"./bin\", \"./bin\", NULL)</code></pre>).\nIn the parent, call <pre><code>waitpid</code></pre> to wait for the child to return from <pre><code>execve</code></pre>.\nFigure out the address at which the code is loaded. The value of the IP register (obtained through <pre><code>PTRACE_GETREGS</code></pre>) should give a clue, and you can look for file format headers.\nRead the child's memory word by word (<pre><code>PTRACE_PEEKTEXT</code></pre>, <pre><code>PTRACE_PEEKDATA</code></pre>).\nReconstruct the file format (e.g. make an ELF binary from text and data sections) if needed. Dump out the data into a file.\nKill the child — it won't even get to execute anything.\n\nDougall pointed out a working proof-of-concept tool for ELF executables: xocopy.\n",
+            "votes": "28",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">Actually I think I can use <code>ptrace</code> not as root. gdb works fine with other executables. The problem is that the executable is not readable, and therefore gdb won't load the file. I thought because I can execute it, I could run it under my privileges and debug it that way (and accept that privileges required running with setuid wont work). But again. gdb won't work because it's not readable.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@samuirai: you can't attach to the process once it's running?</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: I tried it, but I am too slow. The executable finishes very fast.</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">Working PoC <a href=\"https://gist.github.com/Samuirai/5217680\" rel=\"nofollow noreferrer\">gist.github.com/Samuirai/5217680</a> and a small update in my question</span>",
+                    "time": null
+                },
+                {
+                    "user": "Gilles 'SO- stop being evil'",
+                    "text": "<span class=\"comment-copy\">@samuirai Good idea deducing interesting addresses from registers. I'll try to upgrade my code to something that works this week-end.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I found a small tool which uses ptrace to single step instructions from a forked child which executed another program:\nhttp://pastebin.com/yHbkc0Je\nThis worked perfectly. I got a dump of all the instructions used. I know that it didn't run with the setuid privileges, but it will probably help me anyway. Now I only need something to disassemble the instruction trace.\n\nPoC (https://gist.github.com/Samuirai/5217680) based on this.\n<pre><code>/*\nThis tool was developed through the awesome community effort on reverseengineering.stackexchange.com\n\nThe Thread: http://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission\n\nSpecial thanks to:\n + igor-skochinsky who pointed at this Phrack article and gave the initial idea: http://www.phrack.com/issues.html?issue=63&id=12&mode=txt\n + gilles for his engagement and enthisiasm about this question and his code attempt\n + and all others who were involved\n\nThis new stackexchange reverseengineering community is F**KING AWESOME!!! <3\n\n*/\n#include <stdio.h>\n#include <sys/ptrace.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <sys/user.h>\n#include <sys/syscall.h>\n\nint main()\n{\n    pid_t pid;\n\n    pid = fork();\n    if(pid == 0) {\n        ptrace(PTRACE_TRACEME, 0, NULL, NULL);\n        execl(\"./bin\", \"./bin\", NULL);\n    }\n    else {\n        int status;\n        struct user_regs_struct regs;\n\n        // single stepping until it reached the real code segment\n        while(1) {\n\n            wait(&status);\n            if(WIFEXITED(status))\n                break;\n\n            // get registers for the instruction pointer\n            ptrace(PTRACE_GETREGS, pid, NULL, &regs);\n\n            // strace ./bin\n            // brk(0) = 0x804a000\n            if(regs.eip>0x804a000)\n            {\n                printf(\"in code section at EIP=%lx\n\",regs.eip);\n                unsigned int i;\n\n                // Dump code\n                for(i=0; i<0x1000; i+=4) {\n                    long data = ptrace(PTRACE_PEEKTEXT, pid, regs.eip+i, 0);\n                    printf(\"%lx\",data);\n                }\n            }\n\n            // single step in child process\n            ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL);\n        }\n    }\n    return 0;\n}\n</code></pre>\nAs Gilles pointed out, you can't read <pre><code>/proc/<pid>/maps</code></pre> to get the adresses of the code area, but I recognized that <pre><code>strace</code></pre> has this nice single line <pre><code>brk(0) = 0x804a000</code></pre>.\nI single step through the child process, until EIP is around this value; then, I dump 0x1000 bytes.\n",
+            "votes": "11",
+            "user": "asheeshr",
+            "time": "Jun 20, 2013 at 16:32",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Why not just modify it to dump memory instead of tracing? There is already a read using <code>PTRACE_PEEKTEXT</code>, you just need to modify it to read all process memory. See some sample code <a href=\"http://unix.stackexchange.com/a/9068\">here</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "user187",
+                    "text": "<span class=\"comment-copy\">On SE, we usually like to see (not too long) codes just in the answer, not behind a link. This is because pastebin doesn't guarantee to store the codes. Could you add the code to your answer please?</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">It's the same code from my question update. I will add the reference</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Using ptrace-based dynamic analysis tools on suid binaries makes them run without privileges. Because of this, a copy of the file running as your user is probably sufficient for analysis purposes.\nWhen I have had to do this, I used the xocopy tool, which uses <pre><code>ptrace</code></pre> to reconstruct ELF files when the header is mapped into memory (most compilers do this, possibly for use by the dynamic linker). I haven't tested the tool with ASLR, but you may be able to combine it with some of the techniques covered in other answers. Once the file has been dumped, it can be analysed statically, or run with any dynamic analysis tool.\n",
+            "votes": "9",
+            "user": "Dougall",
+            "time": "Mar 22, 2013 at 8:36",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Skylion",
+                    "text": "<span class=\"comment-copy\">Is there a 64bit version of this tool? It doesn't seem to work on 64 bit elf files. :/</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Here are some tools that might or might not work:\n\nskpd, apparently based on a Phrack article.\nunexec\nundump\npcat\njust read <pre><code>/proc/<pid>/maps</code></pre> and then <pre><code>dd</code></pre> <pre><code>/proc/<pid>/mem</code></pre>\n\nI'll be interested to hear if you had any success with any of them.\n",
+            "votes": "5",
+            "user": "Igor Skochinsky",
+            "time": "Mar 20, 2013 at 21:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Gilles 'SO- stop being evil'",
+                    "text": "<span class=\"comment-copy\">None of these will work on a setuid executable.</span>",
+                    "time": null
+                },
+                {
+                    "user": "cb88",
+                    "text": "<span class=\"comment-copy\">@Guiles it isn't setuid nor did he ever say it was.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@cb88 to be fair the quoted permissions do show the <code>s</code> flag. Though I guess it should have been mentioned explicitly.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Gain root read the file\nCopy the filesystem to a different sytem and read it if you have permissions to do so (copy the fs to a system where you have root access). \nexamine the memory of the process as it executes. won't work if it is setuid and you aren't that user.\nI'm just being silly but you could execute it over and over untill it fills up swap and then copy it from there :P Or create a swap file in your home folder with priority higher than system swap. And then do the above... and when the system swap starts filling up copy your swapfile to save it. I would suggest doing that in a script otherwise your system might end up locked up. You could monitor swap useage with free I believe or failing that parse the useage out of /proc. Of course kill all the created tasks after you copy your swapfile.\n\nChances are you don't have permission to do any of that :P. that said you probably need to provide more specifics about what you can/can't do on this system.\n",
+            "votes": "1",
+            "user": "cb88",
+            "time": "Mar 20, 2013 at 21:47",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">That's right. I am just a normal user and can't access /proc. Though <code>strace</code> works and I thought that there exist other stuff I don't know about.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

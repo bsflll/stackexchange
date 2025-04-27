@@ -1,0 +1,26 @@
+{
+  "title": "Unknown parameters in custom signal handler on Linux",
+  "link": "https://reverseengineering.stackexchange.com/questions/20453/unknown-parameters-in-custom-signal-handler-on-linux",
+  "content": "```\n   0x0000000008001946:  mov    0xa8(%rdx),%rax\n   0x000000000800194d:  lea    0x28(%rdx),%rsi\n   0x0000000008001951:  lea    0x2(%rax),%rdi\n   0x0000000008001955:  add    $0xe,%rax\n   0x0000000008001959:  mov    %rax,0xa8(%rdx)\n   0x0000000008001960:  jmpq   0x8001ee0\n\n```\nAbove is the full disassembly of a signal handler which is customarily set by the program which I'm looking into, i.e., the program registers the signal handler and immediately invokes it by raising a SIGILL using the opcode ud2.\n\nThe signal handler is registered here:\n\n```\n   0x8001965:   push   %rbx\n   0x8001966:   xor    %eax,%eax\n   0x8001968:   mov    $0x26,%ecx\n   0x800196d:   sub    $0xa0,%rsp\n   0x8001974:   lea    0x8(%rsp),%rdi\n   0x8001979:   rep stos %eax,%es:(%rdi)\n   0x800197b:   lea    -0x3c(%rip),%rax        # 0x8001946\n   0x8001982:   lea    0x10(%rsp),%rdi\n   0x8001987:   movl   $0x8000004,0x90(%rsp)\n   0x8001992:   mov    %rax,0x8(%rsp)\n   0x8001997:   callq  0x8000f60 <sigfillset@plt>\n   0x800199c:   xor    %edx,%edx\n   0x800199e:   test   %eax,%eax\n   0x80019a0:   jne    0x80019bb\n   0x80019a2:   lea    0x8(%rsp),%rbx\n   0x80019a7:   xor    %edx,%edx\n   0x80019a9:   mov    $0x4,%edi\n   0x80019ae:   mov    %rbx,%rsi\n   0x80019b1:   callq  0x8000f90 <sigaction@plt>\n\n```\nWhere 0x8001946 is the address of the handler, as disassembled prior to that in the first code-block.\n\nMy question is regarding the first instruction of the signal handler which appears to make no sense at all, and I can't debug it since I can't put a breakpoint on it:\n\n```\n0x0000000008001946:  mov    0xa8(%rdx),%rax\n\n```\n%rdx is defined by the ABI as the third parameter passed to a function, and as defined by sigaction the third argument of sa_sigaction is a void * (a casted ucontext_t structure) but there is no 0xa8th index into the definition of a struct ucontext_t, which leads me to believe it's something else.\n\nI thought it might be an %rdx set before the ud2 instruction is called:\n\n```\n   0x0000000008000fde:  test   %al,%al\n   0x0000000008000fe0:  mov    $0x2,%edx\n   0x0000000008000fe5:  je     0x8001028\n   0x0000000008000fe7:  movslq %ebx,%rdi\n   0x0000000008000fea:  mov    %rbp,%rsi\n   0x0000000008000fed:  callq  0x8001190\n\n```\nBut prior to the call to 0x80001190 (the bug), %rdx only contains $0x2. So I'm even more confused.\n\nCould anyone shed some light on what %rdx could contain at 0x8001946 after a SIGILL is raised, and  the signal is passed off to the custom handler defined at that address?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "144",
+  "tags": [
+    "linux",
+    "gcc",
+    "x86-64"
+  ],
+  "user": "Omniscient Phynial Sniper",
+  "time": "Jan 23, 2019 at 19:51",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "It seems to be %rip (the address of the ud2):\n\n```\n#include <signal.h>\n#include <stdio.h>\n#include <ucontext.h>\n\nvoid handler(int signo, siginfo_t *info, void *context) {\n    ucontext_t *uc = (ucontext_t*)context;\n    printf(\"%llx  \n\", uc->uc_mcontext.gregs[REG_RIP]);\n}\n\n```\ncompiles to:\n\n```\nhandler(int, siginfo_t*, void*):\n        movq    168(%rdx), %rsi\n        movl    $.L.str, %edi\n        xorl    %eax, %eax\n        jmp     printf\n.L.str:\n        .asciz  \"%llx  \n\"\n\n```\n(https://gcc.godbolt.org/z/RC064L)\n\n",
+      "votes": "2",
+      "user": "booto",
+      "time": "Jan 24, 2019 at 9:07",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

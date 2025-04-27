@@ -1,0 +1,38 @@
+{
+  "title": "PinTools Multi-threaded example (inscount_Tls.cpp): only one thread outputs",
+  "link": "https://reverseengineering.stackexchange.com/questions/31492/pintools-multi-threaded-example-inscount-tls-cpp-only-one-thread-outputs",
+  "content": "I am studying PinTools multithread example inscount_tls.cpp. When I change the number of thread to 3, only 1 thread outputs the result. Is anyone familiar with Intel Pintools instruments that can give some advice?\nIf I run the example inscount_tls.cpp as in the manual (i.e., numThreads set to 0), the output:\n\n```\nCount[0] = 1141027\nTotal number of threads = 1\n\n```\nBut if I change the numThreads to 3, there is only one thread outputs (instead of 4) its result:\n\n```\nCount[0] = 1141027\nTotal number of threads = 4\n\n```\nMy Linux machine has 8 cores, and the below is how I build and run Pin:\n\n\n\nIn the source file, I only change the number thread to 3, and the output log file to \"inscount_tls.out\"\n\n```\n/*\n * Copyright (C) 2004-2021 Intel Corporation.\n * SPDX-License-Identifier: MIT\n */\n \n#include <iostream>\n#include <fstream>\n#include \"pin.H\"\nusing std::cerr;\nusing std::cout;\nusing std::endl;\nusing std::ostream;\nusing std::string;\n \nKNOB< string > KnobOutputFile(KNOB_MODE_WRITEONCE, \"pintool\", \"o\", \"inscount_tls.out\", \"specify output file name\");\n \nINT32 numThreads = 3;\nostream* OutFile = NULL;\n \n// Force each thread's data to be in its own data cache line so that\n// multiple threads do not contend for the same data cache line.\n// This avoids the false sharing problem.\n#define PADSIZE 56 // 64 byte line size: 64-8\n \n// a running count of the instructions\nclass thread_data_t\n{\n  public:\n    thread_data_t() : _count(0) {}\n    UINT64 _count;\n    UINT8 _pad[PADSIZE];\n};\n \n// key for accessing TLS storage in the threads. initialized once in main()\nstatic TLS_KEY tls_key = INVALID_TLS_KEY;\n \n// This function is called before every block\nVOID PIN_FAST_ANALYSIS_CALL docount(UINT32 c, THREADID threadid)\n{\n    thread_data_t* tdata = static_cast< thread_data_t* >(PIN_GetThreadData(tls_key, threadid));\n    tdata->_count += c;\n}\n \nVOID ThreadStart(THREADID threadid, CONTEXT* ctxt, INT32 flags, VOID* v)\n{\n    numThreads++;\n    thread_data_t* tdata = new thread_data_t;\n    if (PIN_SetThreadData(tls_key, tdata, threadid) == FALSE)\n    {\n        cerr << \"PIN_SetThreadData failed\" << endl;\n        PIN_ExitProcess(1);\n    }\n}\n \n// Pin calls this function every time a new basic block is encountered.\n// It inserts a call to docount.\nVOID Trace(TRACE trace, VOID* v)\n{\n    // Visit every basic block  in the trace\n    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl))\n    {\n        // Insert a call to docount for every bbl, passing the number of instructions.\n \n        BBL_InsertCall(bbl, IPOINT_ANYWHERE, (AFUNPTR)docount, IARG_FAST_ANALYSIS_CALL, IARG_UINT32, BBL_NumIns(bbl),\n                       IARG_THREAD_ID, IARG_END);\n    }\n}\n \n// This function is called when the thread exits\nVOID ThreadFini(THREADID threadIndex, const CONTEXT* ctxt, INT32 code, VOID* v)\n{\n    thread_data_t* tdata = static_cast< thread_data_t* >(PIN_GetThreadData(tls_key, threadIndex));\n    *OutFile << \"Count[\" << decstr(threadIndex) << \"] = \" << tdata->_count << endl;\n    delete tdata;\n}\n \n// This function is called when the application exits\nVOID Fini(INT32 code, VOID* v) { *OutFile << \"Total number of threads = \" << numThreads << endl; }\n \n/* ===================================================================== */\n/* Print Help Message                                                    */\n/* ===================================================================== */\n \nINT32 Usage()\n{\n    cerr << \"This tool counts the number of dynamic instructions executed\" << endl;\n    cerr << endl << KNOB_BASE::StringKnobSummary() << endl;\n    return 1;\n}\n \n/* ===================================================================== */\n/* Main                                                                  */\n/* ===================================================================== */\n \nint main(int argc, char* argv[])\n{\n    // Initialize pin\n    PIN_InitSymbols();\n    if (PIN_Init(argc, argv)) return Usage();\n \n    OutFile = KnobOutputFile.Value().empty() ? &cout : new std::ofstream(KnobOutputFile.Value().c_str());\n \n    // Obtain  a key for TLS storage.\n    tls_key = PIN_CreateThreadDataKey(NULL);\n    if (tls_key == INVALID_TLS_KEY)\n    {\n        cerr << \"number of already allocated keys reached the MAX_CLIENT_TLS_KEYS limit\" << endl;\n        PIN_ExitProcess(1);\n    }\n \n    // Register ThreadStart to be called when a thread starts.\n    PIN_AddThreadStartFunction(ThreadStart, NULL);\n \n    // Register Fini to be called when thread exits.\n    PIN_AddThreadFiniFunction(ThreadFini, NULL);\n \n    // Register Fini to be called when the application exits.\n    PIN_AddFiniFunction(Fini, NULL);\n \n    // Register Instruction to be called to instrument instructions.\n    TRACE_AddInstrumentFunction(Trace, NULL);\n \n    // Start the program, never returns\n    PIN_StartProgram();\n \n    return 1;\n}\n\n```\n",
+  "votes": "2",
+  "answers": 0,
+  "views": "234",
+  "tags": [
+    "instrumentation",
+    "pintool",
+    "multi-process"
+  ],
+  "user": "Tony Nguyen",
+  "time": "Jan 31, 2023 at 16:24",
+  "comments": [
+    {
+      "user": "josh poley",
+      "text": "Based on the code pasted, numThreads is not a configuration, but just for display.",
+      "time": null
+    },
+    {
+      "user": "Tony Nguyen",
+      "text": "@joshpoley I see. numThreads is just to display (increased by one) each time ThreadStart() is called. How do I configure to have more than one thread with Intel Pin? I don't see any references in Intel Pintool manual",
+      "time": null
+    },
+    {
+      "user": "josh poley",
+      "text": "You only see one thread because ls uses a single thread. How would ls know what to do with another thread?",
+      "time": null
+    },
+    {
+      "user": "Tony Nguyen",
+      "text": "@joshpoley I see what I misunderstood. I executed the ls command instead of an multithreaded executable file. I now have it working correctly.",
+      "time": null
+    }
+  ],
+  "answers_data": []
+}

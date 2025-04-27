@@ -1,0 +1,41 @@
+{
+    "title": "Illegal entry point of an ELF file",
+    "link": "https://reverseengineering.stackexchange.com/questions/10892/illegal-entry-point-of-an-elf-file",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have encountered a quite obscure 32-bit ELF file (that is a crackme) and I still cannot figure out how can it execute. First, beside some \"understandable\" property that it has not any section:\n </p>\n <pre><code># readelf --sections SimpleVM\n\nThere are no sections in this file.\n</code></pre>\n <p>\n  Considering the segments:\n </p>\n <pre><code># readelf --segments SimpleVM\n\nElf file type is EXEC (Executable file)\nEntry point 0xc023dc\nThere are 2 program headers, starting at offset 52\n\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  LOAD           0x000000 0x00c01000 0x00c01000 0x013c7 0x013c7 RWE 0x1000\n  LOAD           0x00019c 0x0804b19c 0x0804b19c 0x00000 0x00000 RW  0x1000\n</code></pre>\n <p>\n  I observe that the first segments\n  <code>\n   LOAD\n  </code>\n  has size\n  <code>\n   0x13c7\n  </code>\n  bytes, and mapped into memory at\n  <code>\n   0xc01000\n  </code>\n  ; the second one is not important because its size is zero. But, the entry point of the ELF file is at\n  <code>\n   0xc023dc\n  </code>\n  , that means outside any segment\n  <code>\n   LOAD\n  </code>\n  !!!\n </p>\n <p>\n  I use also IDA 6.8 (evaluation ver.) to load this file, and IDA says that the entry point is illegal.\n </p>\n <p>\n  Since the program has no\n  <code>\n   INTERP\n  </code>\n  segment, the first executed instruction must be at\n  <code>\n   0xc023dc\n  </code>\n  . But this address is outside any \"reliably\" mapped data, we cannot sure which instruction will be executed. I think that this ELF should have some random behaviors (e.g. it should be crashed usually), but it is not, it executes normally, without any crash.\n </p>\n <p>\n  So my question is: how can this happen?\n </p>\n <p>\n  NB1. In case of someone wants to look at this file, I give the link\n  <a href=\"https://app.box.com/s/xbyc5r7ladg8uvvr4plwcczkdiubqn3g/\" rel=\"nofollow\" title=\"here\">\n   here\n  </a>\n  , but please do not give directly the solution. I want to handle it myself.\n </p>\n <p>\n  NB2. Using a Pintool to trace out what happens, I find the\n  <code>\n   OEP\n  </code>\n  of the program is at\n  <code>\n   0xc01dfa\n  </code>\n  since its trace is:\n </p>\n <pre><code>0xc023dc  mov dword ptr [0xc01bf0], 0x252e8 <=== modify address 0xc01bf0\n0xc023e6  jmp 0xc01bf0\n0xc01bf0  call 0xc01e47                     <=== modified instruction\n0xc01e47  pop ebp                           <=== OEP\n0xc01e48  call 0xc01dfa\n0xc01dfa  pop esi\n0xc01dfb  lea eax, ptr [ebp-0x9]\n0xc01dfe  mov edi, dword ptr [eax]\n0xc01e00  sub eax, edi\n0xc01e02  mov edx, eax\n0xc01e04  add eax, dword ptr [eax+0x48]\n0xc01e07  add eax, 0xfff\n0xc01e0c  and eax, 0xfffff000\n0xc01e11  push 0x1\n0xc01e13  push eax\n....\n</code></pre>\n <p>\n  But I still cannot understand why the instruction at\n  <code>\n   0xc023dc\n  </code>\n  is always\n  <code>\n   mov dword ptr [0xc01bf0], 0x252e8\n  </code>\n  (so the binary is somehow \"self-modified\")\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "disassembly",
+        "elf"
+    ],
+    "user": "Ta Thanh Dinh",
+    "time": "Sep 20, 2015 at 23:11",
+    "comments": [
+        {
+            "user": "Ian Cook",
+            "text": "<html><body><span class=\"comment-copy\">\n File/memory mappings are always multiples of the page size, on x86 this is usually 4k.  The mapping length here, 0x13c7  will be rounded up to a multiple of the page size meaning that  0x2000 bytes will be mapped.  If you look the raw file at offset 0x13dc you should find these 'extra' instructions.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks a lot @IanCook, this is exactly what you say. Indeed, at 0x13dc is the opcode (10 bytes) of the first instruction. I do not know that the mapping size should be rounded up to page size.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n ...then the OS will copy more data from LOAD segments regardless of theirs size in the header. Would you mind let your comment as an answer?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  File/memory mappings are always multiples of the page size, on x86 this is usually 4k. The mapping length here,\n  <code>\n   0x13c7\n  </code>\n  will be rounded up to a multiple of the page size meaning that\n  <code>\n   0x2000\n  </code>\n  bytes will be mapped. If you look the raw file at offset\n  <code>\n   0x13dc\n  </code>\n  you should find these 'extra' instructions.\nThe rounding up to page size is necessary because the memory manager and processor page tables work on 4k granularity to reduce the overhead of memory management.\n </p>\n <p>\n  There is self-modification going on too. It is the write to memory from the instruction at\n  <code>\n   0xc023dc\n  </code>\n  which creates the CALL (0xE8) instruction you see at address\n  <code>\n   0xC01BF0\n  </code>\n  .  This won't be in the raw file.   The write to the code is possible because the code is, unusually, mapped with write (\n  <code>\n   W\n  </code>\n  ) access in the program header.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Ian Cook",
+            "time": "Sep 18, 2015 at 8:03",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

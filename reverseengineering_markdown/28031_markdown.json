@@ -1,0 +1,46 @@
+{
+  "title": "How to analyze dumped process?",
+  "link": "https://reverseengineering.stackexchange.com/questions/28031/how-to-analyze-dumped-process",
+  "content": "I'm trying to reverse engineer a malware which uses a Process Hollow technique. This malware uses an API hashing technique and contains some RC4 encryption algorithm references.\n\nI already knew the entry point of the resumed thread and dumped it out but IDA failed to analyze the dumped code.\n\nWhat should I do?\n\nAfter dumping the injected code I have to fix the alignment of the file. According to https://reverseengineering.stackexchange.com/a/21932/36056\n\nIn IDA, the final address is calculated by\n(base << 4) + offset so I have to set the loading segment to 0 and the loading offset to the BaseAddr of injected code\n\nI set a bp on GetProcAddress to build a table of APIs and then use a tool called apiscout https://github.com/danielplohmann/apiscout to dynamically resolve all APIs in IDA\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "831",
+  "tags": [
+    "ida",
+    "injection"
+  ],
+  "user": "ManJaro",
+  "time": "Jul 24, 2021 at 5:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Disclaimer: I'm going to expose my workflow when I see similar things. I'm not telling you that this is the best one or the faster, and I'm sure you have a lot of other way to deal with this. But this should give you an insight on how you can do this.\n\nAs your question is really wide and does not contain any details (malware name, hash, or what 'failed to analyse' means) my answer is too.\n\nFire-up your favorite debugger, load your binary, and put breakpoints on CreateProcessInternalW, ZwUnmapViewOfsection, WriteProcessMemory and ResumeThread.\n\nThis should allow you to observe the full process-hollowing technique.\n\nOnce you have your dump, start by looking at the sections in PE-bear (or equivalent) to unmappe it. As your dump was taken from memory, the sections are not aligned as it should be on the disk.\n\nOnce you re-aligned everything, check if your IAT seems coherent. Even if it use some API hashing technique, you should at least find an entry for LoadLibrary and GetProcAddress. This will confirm that your dump is properly aligned on disk. (Additionally it should run if you execute it).\n\nYou can now import this in IDA and start the analysis.\n\nFor this part, you want to reverse the hashing algorithm.\n\nFirst, find the function in charge of doing so. It should be easy to spot, as it should take a DWORD as argument, and a string (or another DWORD if the DLL name is hashed too). The string being the name of the DLL where the API comes from, and the DWORD being the API hash. Small tip: you can also list the functions by their number of call. The API resolving function should be called from a huge number of different place in the code, and is usually the one with the more references.\n\nIt is not impossible that the DLL name is decoded/decrypted just before the API resolving function.\n\nIf you are not sure, open it in a debugger, and execute random instructions just after the entrypoint, until you can observe the resolving mechanism.\n\nIf the DLL name is encoded/encrypted (witch is usually the case), start by reversing the algorithm. It can also be another hashing algorithm (or even the same one that the API). generally speaking, this part is easier to deal with, and you'll face some basic strings manipulations used to recover the DLL name.\n\nOnce you understand it, write a small function that is supposed to take an encrypted/encoded DLL name, and returns the plaintext one. You can then convert it to an IDAPython script that is going to label your idb with the plaintext names.\n\nHalf of the job is done here. Now, focus on the API hashing technique. Start by checking if the hash is not a standard one (CRC or others).\nIf this is done by hand, try to see if the hashing algorithm is not vulnerable to some reverse-manipulation that could lead to the recovery of the plaintext related hash.\n\nIf the algorithm is strong enough, you will not be able to recover the API name from the hash, but you'll have to bruteforce it. Luckily for you, you already have the name of the DLL where the API is going to be import. So you know that this hash resolve to something in a pre-defined list of API.\n\nThe idea is to re-implement the hashing algorithm, take the list of API defined in the target DLL, and pass them to your algorithm. Then, match the hash with the correct API name.\n\nOnce again, you can automate this with an IDAPython script to label your idb and makes things easier for you.\n\nYou now have something a bit more readable, and you should be able to understand the general goal of this malware.\n\nThis part is standard as the RC4 algorithm is well documented, not that hard to reverse, easy to spot, and very popular among malwares.\n\nAs always, try to identify your encryption function. You can search for some specific part of the algorithm (KSA, PRGA and the XOR) that have some hardcoded constants. The easy to stop one is the 'for' loop in the KSA, that should give you the following pseudo-code:\n\n```\nfor (int i = 0; i < 0x100; i++) {\n   S[i] = i;\n   [...]\n}\n\n```\nEvery-time you see this, you can be sure that this is RC4.\n\nNow, trace back those function to the main encryption wrapper. If this is standard, you should see two buffer being passed to the function: one for the encrypted content, and one for the key.\n\nOnce again, write a small script to decode this (plenty of libraries for RC4), and you should be able to recover the plaintext strings.\n\nDon't forget to test your script on several encrypted strings, as the key may be different for each one.\n\nOnce you have marked up your idb with the plaintext string, you should have everything to analyze this malware.\n\n",
+      "votes": "4",
+      "user": "Guillaume",
+      "time": "Jul 23, 2021 at 9:33",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "ManJaro",
+          "text": "Thanks for your reply. I'm trying to reverse Andromeda V2.6 (MD5:  9ea65c7a034e2fab37cf414de18aea1e ). I got svchost.exe injected process and successfully got the entrypoint of new thread (injected code I mean). My point is How to load this thread into ida to analyze it statically",
+          "time": null
+        },
+        {
+          "user": "Guillaume",
+          "text": "Take a look at the first paragraph of my answer. You basically are at the fourth dot, right before/after the ResumeThread call. You just have to dump this process on disk to obtain a copy of the injected process. It either one of those method: you copy the injected content when it is about to be written in memory (WriteMemory call) to a new file, or you dump the memory space of the injected process (before the ResumeThread call).  You then fix the alignment if it needs to, and you'll be able to load it in IDA as a regular file.",
+          "time": null
+        },
+        {
+          "user": "Guillaume",
+          "text": "To dump it in x64dbg: Right click on the memory map segment that contains your dump, and 'save to file'",
+          "time": null
+        },
+        {
+          "user": "ManJaro",
+          "text": "Thanks a lot!!!! finally it works .... I just change the EP to point directly to malicious code and IDA analyzes it successfully ....",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+    "title": "Optimization of strcpy at the assembler level",
+    "link": "https://reverseengineering.stackexchange.com/questions/10839/optimization-of-strcpy-at-the-assembler-level",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm writing small C programs to teach myself how to use GDB to disassemble code.  The C in question is:\n </p>\n <pre><code>void function( char **pointer )\n{\n   *pointer = malloc(100);\n   strcpy(*pointer,\"This is text\");\n}\n</code></pre>\n <p>\n  The disassembly is:\n </p>\n <pre><code>0x400620:    push   %rbp\n0x400621:    mov    %rsp,%rbp\n0x400624:    sub    $0x10,%rsp\n0x400628:    mov    %rdi,-0x8(%rbp)\n0x40062c:    mov    $0x64,%edi\n0x400631:    callq  0x4004f0 <malloc@plt>\n0x400636:    mov    %rax,%rdx\n0x400639:    mov    -0x8(%rbp),%rax\n0x40063d:    mov    %rdx,(%rax)\n0x400640:    mov    -0x8(%rbp),%rax\n0x400644:    mov    (%rax),%rax\n0x400647:    movabs $0x2073692073696854,%rcx\n0x400651:    mov    %rcx,(%rax)\n0x400654:    movl   $0x74786574,0x8(%rax)\n0x40065b:    movb   $0x0,0xc(%rax)\n0x40065f:    leaveq \n0x400660:    retq   \n</code></pre>\n <p>\n  I understand the prologue:\n  <code>\n   0x400620\n  </code>\n  -\n  <code>\n   0x400624\n  </code>\n  . I also understand that the pointer is being initialized to 100 char here:\n  <code>\n   0x400628\n  </code>\n  -\n  <code>\n   0x40063d\n  </code>\n  .\n </p>\n <p>\n  I cannot seem to figure out what\n  <code>\n   strcpy\n  </code>\n  is doing and I do not understand how to examine the contents of the addresses listed in\n  <code>\n   0x400647\n  </code>\n  and\n  <code>\n   0x400654\n  </code>\n  .\n </p>\n <p>\n  Can someone help me work through this?\n </p>\n</div>\n</body></html>",
+    "votes": "5",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "disassembly"
+    ],
+    "user": "David Lee Braun",
+    "time": "Sep 12, 2015 at 9:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So, I assume that you understood the stack-frame initialization part and the call to the\n  <code>\n   malloc\n  </code>\n  through the PLT (Procedure Linking Table).\n </p>\n <pre><code>0x400636:    mov    %rax,%rdx\n</code></pre>\n <p>\n  This line take the return code of the\n  <code>\n   malloc\n  </code>\n  function and save it in the\n  <code>\n   rdx\n  </code>\n  register. This value correspond to the address of the memory space you just created through the\n  <code>\n   malloc\n  </code>\n  call.\n </p>\n <pre><code>0x400639:    mov    -0x8(%rbp),%rax\n</code></pre>\n <p>\n  Here, you take the first argument of the function we are in (\n  <code>\n   char **pointer\n  </code>\n  according to your source code) and it is stored in the\n  <code>\n   rax\n  </code>\n  register.\n </p>\n <pre><code>0x40063d:    mov    %rdx,(%rax)\n</code></pre>\n <p>\n  This line transfert the address of the allocated memory area to the\n  <code>\n   pointer\n  </code>\n  variable.\n </p>\n <pre><code>0x400640:    mov    -0x8(%rbp),%rax\n</code></pre>\n <p>\n  An (unnecessary) copy of the first argument of\n  <code>\n   function\n  </code>\n  in\n  <code>\n   rax\n  </code>\n  (the register already store this value, probably a glitch of the compiler that did not optimized enough).\n </p>\n <pre><code>0x400644:    mov    (%rax),%rax\n</code></pre>\n <p>\n  Set\n  <code>\n   rax\n  </code>\n  as the address pointed by\n  <code>\n   pointer\n  </code>\n  .\n </p>\n <pre><code>0x400647:    movabs $0x2073692073696854,%rcx\n</code></pre>\n <p>\n  To understand that, you need to decompose this magic number\n  <code>\n   0x2073692073696854\n  </code>\n  and cut it into pieces. Lets use\n  <code>\n   gdb\n  </code>\n  for that:\n </p>\n <pre><code>(gdb) p /c 0x54\n$1 = 84 'T'\n(gdb) p /c 0x68\n$2 = 104 'h'\n(gdb) p /c 0x69\n$3 = 105 'i'\n(gdb) p /c 0x73\n$4 = 115 's'\n(gdb) p /c 0x20\n$5 = 32 ' '\n(gdb) ...\n</code></pre>\n <p>\n  I guess that you start to see what is the meaning of this big number by now...\n </p>\n <pre><code>0x400651:    mov    %rcx,(%rax)\n</code></pre>\n <p>\n  On this line, the previous magic number is stored in the address pointed by\n  <code>\n   pointer\n  </code>\n  .\n </p>\n <pre><code>0x400654:    movl   $0x74786574,0x8(%rax)\n</code></pre>\n <p>\n  This last magic number is, in fact, the end of your string (it correspond to the word\n  <code>\n   text\n  </code>\n  ).\n </p>\n <pre><code>0x40065b:    movb   $0x0,0xc(%rax)\n</code></pre>\n <p>\n  Copy the\n  <code>\n   \\0\n  </code>\n  character to end the string at the right place (\n  <code>\n   0xc\n  </code>\n  is the size of the string and\n  <code>\n   rax\n  </code>\n  is the start address of the string).\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "perror",
+            "time": "Sep 12, 2015 at 7:41",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">The text seems to be in the wrong order in the register value - that is because x86/64 stores values in little-endian</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">I forgot to tell about that, wasn't it obvious ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">The likelihood of it being obvious for people not that deep into assembly are fairly low. I try to read answers here as if I knew next to nothing and saw that as a possible follow-up question</span>",
+                    "time": null
+                },
+                {
+                    "user": "David Lee Braun",
+                    "text": "<span class=\"comment-copy\">This pretty much explains it.  I was thinking that the string was stored at instead of the string was those funny numbers.  Thanks for the explanation.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Look at the hex digits at\n  <code>\n   0x400647\n  </code>\n  and convert them to ascii characters, byte by byte (2 digits by 2 digits). Does the result ring a bell?\n </p>\n <p>\n  Since the source for your\n  <code>\n   strcpy\n  </code>\n  is a constant string, the compiler optimizes \"copy the contents of a static string, byte by byte, until\n  <code>\n   \\0\n  </code>\n  is reached\" to \"fill the target with the expected bytes in the fastest way possible\".\n </p>\n <p>\n  If you want to see what the memory looks like after the optimized\n  <code>\n   strcpy\n  </code>\n  , set a breakpoint on\n  <code>\n   0x40065b\n  </code>\n  and enter\n  <code>\n   x/20b *$rax\n  </code>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Sep 12, 2015 at 7:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "David Lee Braun",
+                    "text": "<span class=\"comment-copy\">Because I did not use any optimization flags it never occurred to me that the compiler was taking liberties and optimizing.  thanks for pointing this out Guntram.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,39 @@
+{
+    "title": "How the dynamic linker determines which routine to call on Linux?",
+    "link": "https://reverseengineering.stackexchange.com/questions/10952/how-the-dynamic-linker-determines-which-routine-to-call-on-linux",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a question about dynamic linking on Linux. Consider the following disassembly of an ARM binary.</p>\n<pre><code>8300 &lt;printf@plt-0x40&gt;:\n    ....\n8320:   e28fc600    add ip, pc, #0, 12\n8324:   e28cca08    add ip, ip, #8, 20  ; 0x8000\n8328:   e5bcf344    ldr pc, [ip, #836]! ; 0x344\n  ....\n83fc &lt;main&gt;:\n  ....\n8424:   ebffffbd   bl  8320 &lt;_init+0x2c&gt;\n</code></pre>\n<p>the <code>main()</code> function calls <code>printf()</code> at <code>8424: bl 8320</code>. Where <code>8320</code> is an address in the <code>.plt</code> shown above. Now, the code in <code>.plt</code> makes call to dynamic linker to invoke <code>printf()</code> routine. </p>\n<p>My question is how the dynamic linker will be able to say that it is a call to <code>printf()</code>?</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "elf",
+        "dynamic-linking"
+    ],
+    "user": "user13659",
+    "time": "Sep 25, 2015 at 10:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The initial function being jumped to is the <code>PLT0</code> stub which calls the glibc's <code>_dl_runtime_resolve</code> via pointer in <code>GOT[2]</code> (pre-filled by the dynamic loader):</p>\n<pre><code>.plt:00008530        STR             LR, [SP,#-4]!\n.plt:00008534        LDR             LR, =(_GLOBAL_OFFSET_TABLE_ - 0x8540)\n.plt:00008538        ADD             LR, PC, LR ; _GLOBAL_OFFSET_TABLE_\n.plt:0000853C        LDR             PC, [LR,#8]!\n</code></pre>\n<p>Relevant parts from <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/arm/dl-trampoline.S\" rel=\"nofollow noreferrer\">the source</a>:</p>\n<pre><code>    @ we get called with\n    @       stack[0] contains the return address from this call\n    @       ip contains &amp;GOT[n+3] (pointer to function)\n    @       lr points to &amp;GOT[2]\n    [...]\n    @ prepare to call _dl_fixup()\n    @ change &amp;GOT[n+3] into 8*n        NOTE: reloc are 8 bytes each\n   sub     r1, ip, lr\n   sub     r1, r1, #4\n   add     r1, r1, r1\n\n   @ call fixup routine\n   bl      _dl_fixup\n</code></pre>\n<p>So, glibc knows which function to resolve from the fact that the GOT pointer is in <code>ip</code> (<code>R12</code>). This way it can convert the address into the relocation table offet, and then <code>dl_fixup</code> can look up the relevant symbol in the symbol table and resolve it. You can see the source of <code>dl_fixup</code> in <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/dl-runtime.c\" rel=\"nofollow noreferrer\"><code>dl-runtime.c</code></a></p>\n<p>Additional reading:</p>\n<ul>\n<li><a href=\"http://users.eecs.northwestern.edu/%7Ekch479/docs/notes/linking.html\" rel=\"nofollow noreferrer\">Runtime Dynamic Linking</a>.</li>\n<li><a href=\"https://web.archive.org/web/20161225013845/http://althing.cs.dartmouth.edu:80/secref/resources/plt-got.txt\" rel=\"nofollow noreferrer\">PLT-GOT</a>.</li>\n</ul>\n</div>",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Sep 27, 2021 at 22:20",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is done using the standard relocation methods which have been in ELF since long before the invention of the <em>plt</em> (procedure linking table).</p>\n<p>Long ago (for some definition of long), external functions were called directly from within code. Which means, if your program called <code>printf</code> from 1000 different places, each of these 1000 places had to be adjusted to the new dynamic location of <code>printf</code> <em>everytime the program was started</em>. Each of these 1000 places was added to the <em>relocation table</em>, and starting a program included walking the <em>relocation table</em> and adjusting every position referenced in it. Needless to say, this made starting programs take much more time, especially when the number of dynamic libraries used in programs increased. </p>\n<p>The <em>plt</em> was invented to improve this - instead of producing a call to  <code>printf</code> directly, the program got a new <code>plt</code> section. Each call to <code>printf</code> would be converted to a call to <code>printf@plt</code> - which could be done at link time, so it wouldn't affect program loading - and <code>printf@plt</code> did nothing but <em>jump</em> to <code>printf</code>. This still needs a relocation entry for <code>printf@plt</code>, but it's much faster to do this single relocation at load time than many of them. And it doesn't affect execution much, because unconditional jumps can be handled by the processor pipeline quite efficiently.</p>\n<p>So what happens in your case is: the <code>printf@plt</code> does not make a call to the dynamic linker. The <code>printf@plt</code> makes a jump to a static address, and the dynamic linker adjusts the target of this static address when it loads the program. It uses the relocation table to find out where to adjust things, and which target address to adjust them to.</p>\n<p>In your case, the jump is implemented by taking the original pc, adding 12, adding 8000, then doing an indirect jump (<code>ldr pc, ...</code> instead of <code>b</code>). I'd assume that the 12 and the 8000 get adjusted to the load address of the .so that's loaded (libc.so), and libc.so contains a jump at offset <code>0x344</code> to the real printf function. (However, i might be wrong here, i'd have to test on a real system, which i can't do conveniently right now)</p>\n</div>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Sep 25, 2015 at 8:19",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Vasant K",
+                    "text": "<span class=\"comment-copy\">Thanks for your lucid explanation about .plt, and relocation. This helped my understanding a lot. But when you say \"dynamic linker adjusts the target of this static address when it loads the program\", how does the dynamic linker knows it is printf routine not any other to adjust the address?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,85 @@
+{
+    "title": "What is \"webcomp\" and how does it work?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1763/what-is-webcomp-and-how-does-it-work",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  When reversing a router firmware based on DD-WRT I came across a mention of \"webcomp\". It seems it's used for storing internal HTML files for the web interface. What exactly it is and how can I extract those files from the firmware image?\n </p>\n <p>\n  NOTE: This is a self-asked and answered question to add to the knowledge based.\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 3,
+    "views": "790",
+    "tags": [
+        "linux",
+        "firmware",
+        "webcomp"
+    ],
+    "user": "dyasta",
+    "time": "Apr 4, 2017 at 0:00",
+    "comments": [
+        {
+            "user": "Peter Andersson",
+            "text": "<html><body><span class=\"comment-copy\">\n Is this format really the way to go? Looks more like something that would belong on a wiki describing webcomp not as a QA.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n @90h: chime in\n <a href=\"http://meta.reverseengineering.stackexchange.com/questions/144/highlighting-the-tag-wikis\">\n  over on meta\n </a>\n then ;)\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "asheeshr",
+            "text": "<html><body><span class=\"comment-copy\">\n @90h Votes on meta are an expression of opinion. In any real world scenario, there will be people who agree with you and there will be those who dont. You should not let that stop that stop you from expressing your opinion about how this site should work.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ange",
+            "text": "<html><body><span class=\"comment-copy\">\n It doesn't sound like a real 'pinpointed' question to me, albeit interesting, so I copied the answer/write-up in the new webcomp tag wiki as well.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n @90h while I like your enthusiasm I think the way you've been asking these questions is somewhat off. I edited the question a bit to make it a bit more like a real one.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>/*\n * webcomp -- Compile web pages into C source\n *\n * Copyright (c) GoAhead Software Inc., 1995-2000. All Rights Reserved.\n */\n</code></pre>\n <h2>\n  Webcomp Description\n </h2>\n <p>\n  Webcomp, or 'web compiler', is a very simple tool written by\n  <em>\n   GoAhead Software\n  </em>\n  during the period of 1995-2000. It 'compiles' web pages into a single binary blob, adding an index of files in the blob to the httpd for use at runtime.\n </p>\n <p>\n  Webcomp is available in the DD-WRT source code. It clearly was created in a 'just hack it out' style, without much concern for its appearance. It does the job though, which is what matters.\n </p>\n <p>\n  DD-WRT uses this tool to 'protect' their web management console. Since their web management console is derived from GPL'd open source,  has had countless contributors over the years, and webcomp itself is open source, I do not believe there is any legal restriction against  documenting the mechanism they use.\n </p>\n <h2>\n  Data Types\n </h2>\n <p>\n  <strong>\n   Binary Blob.\n  </strong>\n  Normally stored as a file at /etc/www, this is a simple concatenation of all web pages on the device. It is not compressed or obfuscated. Nor should it be. The file systems used by embedded linux firmwares, such as squashfs, feature compression as a primary attribute. Therefore, compressing this blob would be redundant and would harm the final compression ratio of the file system. Similarly, obfuscation of the block would substantially affect the compressibility. However, there is a commented out section in the webcomp source that would apply lzma to the binary blob. There's no evidence it has ever been used, for the reasons I've given.\n </p>\n <p>\n  <strong>\n   Index Array.\n  </strong>\n  The array added to the httpd is done by\n  <em>\n   modifying the source code prior to build\n  </em>\n  . It adds an object named\n  <em>\n   websRomPageIndex\n  </em>\n  that contains this array of information about the files in the concatenated binary blob.\n </p>\n <p>\n  The array consists of file names and sizes. An older version of webcomp included offsets as well, but these are redundant since the binary blob's files are concatenated in the same order as they appear in the index array. Therefore, as one walks the array, the size of each file gives  a relative offset to the next file in the binary blob.\n </p>\n <p>\n  Craig Heffner's webdecomp, which can decompile and recompile webcomp'd web packages, is much better formatted code than webcomp itself, so I'll use its data structures, amended with my own comments.\n </p>\n <p>\n  Each member of the array is defined as:\n </p>\n <p>\n  ORIGINAL Format\n </p>\n <pre><code>/* OLD webcomp file_entry data type */\nstruct file_entry\n{\n    uint32_t name;   /* virtual offset of asciiz file name in httpd  */\n    uint32_t offset; /* offset to file in blob (unnecessary) */\n    uint32_t size;   /* size of file data in blob */\n};\n</code></pre>\n <p>\n  NEW Format\n </p>\n <pre><code>/* NEWER webcomp file_entry data type */\nstruct new_file_entry\n{\n    uint32_t name;  /* virtual offset of asciiz file name in httpd  */\n    uint32_t size;  /* size of file data in blob */\n};\n</code></pre>\n <h2>\n  Modifications by DD-WRT\n </h2>\n <p>\n  DD-WRT has hacked on the webcomp code a few times. Their modifications are not publicly available. In fact, only the old webcomp.c using the original file_entry data type is included in the DD-WRT source code. They may have been responsible for the switch to the more efficient file_entry data type that excludes the redundant offsets.\n </p>\n <p>\n  They are certainly responsible for a recent addition that obfuscates all file sizes in the index array. They do this by adding a constant to the sizes. In the most recent builds of DD-WRT, this appears to be 0x4BF8. This can vary between builds.\n </p>\n <p>\n  Therefore, the obfuscation is quite simple:\n </p>\n <pre><code>new_file_entry.size += key;\n</code></pre>\n <p>\n  <strong>\n   Dynamically Calculating the Key.\n  </strong>\n  Since we can\n  <em>\n   assume\n  </em>\n  the real size of files within the package (many haven't changed in years, if ever), we can calculate the key used with a firmware. This has the added benefit of working on older images that had no key (0). We do this by finding the file we know the size of (index 0 is fine), then:\n </p>\n <pre><code>key = new_file_entry.size - assumed_known_size;\n</code></pre>\n <p>\n  For an additional sanity check, one could confirm that the sample file is indeed extracted to match the known sample of that file. A simple hash compare would do the trick.\n </p>\n <p>\n  <em>\n   <strong>\n    Update:\n   </strong>\n  </em>\n  <a href=\"https://reverseengineering.stackexchange.com/a/1798/245\">\n   See devttys0's answer\n  </a>\n  that utilizes the sum of all files vs the actual blob size, then divides by the number of files to get the average difference, which is the key.\n </p>\n <h2>\n  Webdecomp\n </h2>\n <p>\n  Created by Craig Heffner, this tool can extract and rebuild webcomp'd packages. It's, ironically, far superior code to the webcomp tool. I recently modified webdecomp to handle these new DD-WRT keys, calculating the key at extraction and saving it for the Later rebuild. This is part of the Firmware Mod Kit.\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "dyasta",
+            "time": "Jan 10, 2022 at 21:09",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "SRobertJames",
+                    "text": "<span class=\"comment-copy\">The link to \"Firmware Mod Kit\" takes you to a bizarre \"urlsafety.net\" page, which looks like a landing page for adware or worse.  Anyone know what it is?</span>",
+                    "time": null
+                },
+                {
+                    "user": "dyasta",
+                    "text": "<span class=\"comment-copy\">@SRobertJames That domain was let go of. Squatter there now. Link removed. Thanks for the heads up.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Small update to 90h's answer: the key can be calculated dynamically without making assumptions about the size of any specific file.\n </p>\n <p>\n  The total of all the file sizes reported in\n  <code>\n   httpd\n  </code>\n  should match the size of the\n  <code>\n   /etc/www\n  </code>\n  file, which is the actual size of all the files. Since the same fixed value is added to all the file sizes reported in\n  <code>\n   httpd\n  </code>\n  , you can simply take the difference in reported size vs actual size and divide it by the number of files to find what fixed value was used:\n </p>\n <pre><code>key = (total_reported_size - actual_etc_www_size) / number_of_files\n</code></pre>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "0xC0000022L",
+            "time": "Apr 17, 2013 at 0:11",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The webdecomp tool didn't work for me on the latest builds of DD-WRT, managed to extract the firmware though.\n </p>\n <pre><code>root@ubuntu:~/Desktop/firmware-mod-kit/src/webcomp-tools$ ./webdecomp --httpd=\"/home/root/Desktop/firmware-mod-kit/fmk/rootfs/usr/sbin/httpd\" -www=\"/home/root/Desktop/firmware-mod-kit/fmk/rootfs/etc/www\" --dir=\"/home/root/Desktop/www\" --extract\nFailed to locate websRomPageIndex!\nFailed to detect httpd settings!\nFailed to process Web files!\n\nroot@ubuntu:~/Desktop/firmware-mod-kit/fmk/rootfs/usr/sbin$ file httpd \nhttpd: ELF 32-bit LSB executable, MIPS, MIPS32 version 1, dynamically linked, interpreter /lib/ld-uClibc.so.0, corrupted section header size\n</code></pre>\n <p>\n  Looks like they have obfuscated the section headers.\n </p>\n <pre><code>root@ubuntu:~/Desktop/firmware-mod-kit/src/webcomp-tools$ readelf -a /home/root/Desktop/firmware-mod-kit/fmk/rootfs/usr/sbin/httpd\nELF Header:\n  Magic:   7f 45 4c 46 01 01 01 00 01 00 00 00 00 00 00 00 \n  Class:                             ELF32\n  Data:                              2's complement, little endian\n  Version:                           1 (current)\n  OS/ABI:                            UNIX - System V\n  ABI Version:                       1\n  Type:                              EXEC (Executable file)\n  Machine:                           MIPS R3000\n  Version:                           0x1\n  Entry point address:               0x401a30\n  Start of program headers:          52 (bytes into file)\n  Start of section headers:          0 (bytes into file)\n  Flags:                             0x54001005, noreorder, cpic, o32, mips16, mips32\n  Size of this header:               52 (bytes)\n  Size of program headers:           32 (bytes)\n  Number of program headers:         7\n  Size of section headers:           0 (bytes)\n  Number of section headers:         0\n  Section header string table index: 0\n\nThere are no sections in this file.\n\nThere are no sections to group in this file.\n</code></pre>\n</div>\n</body></html>",
+            "votes": "-1",
+            "user": "Sigals",
+            "time": "Sep 23, 2018 at 17:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">This is not an answer to the posted  question. Feel free to post a new question (check <a href=\"https://reverseengineering.stackexchange.com/tour\">the rules</a> first); you can link to this one for context.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

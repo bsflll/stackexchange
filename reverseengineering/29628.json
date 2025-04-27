@@ -1,0 +1,38 @@
+{
+    "title": "IDA Pro - configure register clobbering",
+    "link": "https://reverseengineering.stackexchange.com/questions/29628/ida-pro-configure-register-clobbering",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>TL;DR:</p>\n<p>The __fastcall convention in IDA Pro assumes that all the registers which could be used for transferring parameters are clobbered after a call (tested on x86, clobbered regs are <code>eax</code>, <code>edx</code>, <code>ebx</code>, <code>ecx</code>). I'm wondering how can I change that.</p>\n<p>Full explanation:</p>\n<p>I have a chunk of code (used Watcom <a href=\"https://en.wikipedia.org/wiki/Name_mangling\" rel=\"nofollow noreferrer\">name mangling</a>):</p>\n<pre><code>cseg01:00062A6B                 mov     edx, [ebp+tng1]\ncseg01:00062A6E                 mov     eax, [ebp+this1]\ncseg01:00062A71                 call    W?MyMethod$_Whatever$n_x__pn$SubObject$$\ncseg01:00062A76                 call    W?MySubMethod$_SubObject$n_pn$Thing$$_l\ncseg01:00062A7B                 cmp     eax, 0Ah\n</code></pre>\n<p>The functions are:</p>\n<pre><code>SubObject *__fastcall Whatever::MyMethod(Whatever *__hidden this);\nint __fastcall SubObject::MySubMethod(SubObject *__hidden this, Thing *tng);\n</code></pre>\n<p>IDA Pro produces:</p>\n<pre><code>(v3 = Whatever::MyMethod(this1), SubObject::MySubMethod(v3, v4) &lt; 10)\n</code></pre>\n<p>So the proper code clearly is:</p>\n<pre><code>(this1-&gt;MyMethod()-&gt;MySubMethod(tng1) &lt; 10)\n</code></pre>\n<p>The problem is — IDA did not use <code>tng1</code> as the 2nd argument of <code>MySubMethod()</code> — instead, it defined a separate variable <code>v4</code> with an unset value.</p>\n<p>Because we use <code>__fastcall</code> for both functions, first arg is passed through <code>eax</code>, second by <code>edx</code>. The code so happens to set the value of <code>edx</code> before the first call, even though it's really an argument for the second call. IDA seem to assume that <code>MyMethod()</code> overwrote (or with proper nomenclature, <a href=\"https://en.wikipedia.org/wiki/Clobbering\" rel=\"nofollow noreferrer\">clobbered</a>) the value of <code>EDX</code>).</p>\n<p>I tried __usercall and __userpurge, and it had no impact on the code — IDA still assumes <code>EDX</code> was clobbered by the first call.</p>\n<p>Is there a way to configure/change that behavior, making IDA know that function calls does not clobber registers?</p>\n<p>I remember fixing it in the past, so there is a way, just can't remember what it was exactly...</p>\n<p>Also, it would be nice to configure that on a project level instead of defining a custom calling convention for every function.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "884",
+    "tags": [
+        "ida",
+        "x86",
+        "register",
+        "calling-conventions"
+    ],
+    "user": "mefistotelis",
+    "time": "Nov 30, 2021 at 8:17",
+    "comments": [
+        {
+            "user": "mefistotelis",
+            "text": "<span class=\"comment-copy\">Oh right, the clobbering is configured per-function using __spoils. Details here: <a href=\"https://hex-rays.com/products/ida/support/idadoc/1361.shtml\" rel=\"nofollow noreferrer\">hex-rays.com/products/ida/support/idadoc/1361.shtml</a> But I don't think there's project-wide setting for it. Or is there?</span>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">I'm not sure defining a calling convention is necessary. I think defining the prototype of <code>mySubMethod</code> to accept two arguments (I assume it accepts one now) will do the trick. I think the main issue here is not with clobbering but with incorrectly identifying the number of arguments in <code>mySubMethod</code></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In the absence of an explicit <code>__spoils</code> declaration on the called function's prototype, Hex-Rays makes decisions about which registers should be spoiled at a call site based on the compiler that has been chosen for the binary, which can be viewed and modified under <code>Options-&gt;Compiler</code>. Your first step should be to ensure that the <code>Compiler</code> dropdown box says \"Watcom C++\".</p>\n<p>The authors of Hex-Rays need to implement support for each compiler's ABI separately. That is to say, if you were to reverse engineer the part of Hex-Rays that chose the standard clobber set to be used throughout call analysis, you'd find that the logic made use of <code>if</code>-statements that were checking the database's compiler settings (as described in the previous paragraph).</p>\n<p>Unfortunately, as of the last time I reverse engineered that part of Hex-Rays, they had not yet implemented support for Watcom's ABI. It's possible this has changed in the meantime -- again, your first step should be to set the compiler to Watcom and see what happens. I get the impression they <a href=\"https://hex-rays.com/products/ida/news/7_3/\" rel=\"nofollow noreferrer\">might have added it in 7.3, based on the following changelog</a>:</p>\n<blockquote>\n<p>BUGFIX: TYPES: corrected the list of spoiled registers for watcom files</p>\n</blockquote>\n<p>However, if setting the compiler doesn't work, then there's nothing you can do as a user to fix this without manually annotating each function's <code>__spoils</code> set. If so, this would be a great time to contact Hex-Rays support with your license key, and a copy of the binary if possible, and ask them if they can implement ABI support for Watcom in the decompiler. It may not happen in the next release, but if enough customers have enough requests involving Watcom binaries, it'll happen. After all, it's probably not that much work on their end to implement it, and it's a nice feature to have out-of-the-box.</p>\n</div>",
+            "votes": "0",
+            "user": "Rolf Rolles",
+            "time": "Nov 30, 2021 at 14:07",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

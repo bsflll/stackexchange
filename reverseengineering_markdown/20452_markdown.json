@@ -1,0 +1,35 @@
+{
+  "title": "How does ASLR in Windows work?",
+  "link": "https://reverseengineering.stackexchange.com/questions/20452/how-does-aslr-in-windows-work",
+  "content": "I had recently this situation where in a program I was debugging I found:\n\n```\n03CD38D4:  8B15 8C5FF703  MOV EDX, DWORD PTR DS:[3F75F8C]\n\n```\nIf I look for these bytes in the physical file I found nothing. I assumed this is because the reference to 3F75F8C, which might change over each instance of the program, is being randomised by Windows. So I could not change the value directly in an hexed - say change 3F75F8C to 3F75F88 (I suppose I can do it with some math involving the base, though).\n\nEDIT\n\nAs per the answer, what I undestood is that Windows will look into the .reloc section and will change one by one the references pointed in the section based on the random base. Then, if I modify the bytes of the instruction, since they have been defined in the .reloc section, my new bytes will be modified (probably I am wrong, but this is what I understood)\n\nHowever, I am not able to find out how Windows \"obtains\" the instruction:\n\n```\n03CD38D4:  8B15 8C5FF703  MOV EDX, DWORD PTR DS:[3F75F8C]\n\n```\nWhich is in file offset 482CD4 stored as:\n\n```\nMOV EDX, DWORD PTR DS:[B25F8C]\n\n```\nThe image base is 400000 and base of code 1000.\n\nI cannot find anything in the .reloc section that points to 03CD38D4,482CD4 or similar.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "936",
+  "tags": [
+    "windows"
+  ],
+  "user": "user1156544",
+  "time": "Jan 27, 2019 at 2:37",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "ASLR does not peer inside executable\nit is a system wide exploit mitigation technique\nbasically and simply put it assigns a random base address on every load of every executable   \n\nthat is if you run say calc.exe five times you may see calc.exe load at five different addresses \n\n```\nC:\\>cdb -c \"lm m calc;q\" calc | grep \"calc.*deferred\n00dd0000 00e90000   calc       (deferred)\n\nC:\\>cdb -c \"lm m calc;q\" calc | grep \"calc.*deferred\n00250000 00310000   calc       (deferred)\n\nC:\\>cdb -c \"lm m calc;q\" calc | grep \"calc.*deferred\n00370000 00430000   calc       (deferred)\n\nC:\\>cdb -c \"lm m calc;q\" calc | grep \"calc.*deferred\n00860000 00920000   calc       (deferred)\n\nC:\\>cdb -c \"lm m calc;q\" calc | grep \"calc.*deferred\n00110000 001d0000   calc       (deferred)\n\n```\nthe information to fix-up lies within your executable under .reloc section\n\nthe loader when it loads an executable takes the base address assigned to the load and performs fix-ups based on the details provided in the .reloc section of an executable \n\nyou can look at fix-ups using dumpbin and other innumerable pe editors \n\n```\nC:\\>dumpbin /relocations c:\\Windows\\System32\\calc.exe | wc -l\n7346\n\nC:\\>dumpbin /relocations c:\\Windows\\System32\\calc.exe | head -n 20\nMicrosoft (R) COFF/PE Dumper Version 14.15.26726.0\nCopyright (C) Microsoft Corporation.  All rights reserved.\n\n\nDump of file c:\\Windows\\System32\\calc.exe\n\nFile Type: EXECUTABLE IMAGE\n\nBASE RELOCATIONS #4\n    1000 RVA,       B4 SizeOfBlock\n     641  HIGHLOW            01054064  ___security_cookie\n     652  HIGHLOW            01001194  __imp__GetModuleHandleW@4\n     6A5  HIGHLOW            010013F4  __imp__LoadStringW@16\n     6B3  HIGHLOW            010540AC  ?calcSQM@@3PAVCCalculatorSQM@@A (class CCalculatorSQM * calcSQM)\n     6BD  HIGHLOW            01054A70  _Microsoft_Windows_CalculatorHandle\n     6C2  HIGHLOW            010551F8  _Microsoft_Windows_Calculator_Context\n     6C7  HIGHLOW            010321A3  _McGenControlCallbackV2@36\n     6CC  HIGHLOW            01001D5C  _Microsoft_Windows_Calculator\n     6D7  HIGHLOW            0105521C\n     707  HIGHLOW            01001EDE  ?WndProc@@YGJPAUHWND__@@IIJ@Z (long __stdcall WndProc(struct HWND__ *,unsigned in\nt,unsigned int,long))\n\nC:\\>\n\n```\nRVA is relative virtual address related to base address \n\nso if base address = 0x10000000  then absolute will be 0x10001000\nso the address that needs fixup is  0x10001641 in the dump above \n\nyou can find what the preferred base of address is from the headers\nmost of the static analysis tools will load the pe in this address only  \n\n```\nC:\\>dumpbin /headers c:\\Windows\\System32\\calc.exe | grep -i \"image base\"\n         1000000 image base (01000000 to 010BFFFF)\n\n```\nyou can dump the bytes at some specified position inside executable using any of the hexeditors (using the HIGHLOW of first entry in dump above 0x641)\nyou can see the bytes are  a1 0x10054064 \n\nusing a40 instead of 1640 because the Base of code is 0x400 in physical file   \n\nwhich will be mapped to 0x1000 (Virtual Address) in the process address space   \n\n```\nC:\\>xxd -s 0xa40 -l 10 -g 5 c:\\Windows\\System32\\calc.exe\n0000a40: a164400501 33c58945fc                .\n\n```\nyou can see the disassembly with (using virtual address here as this is a mapped layout not physical file )\n\n```\nC:\\>dumpbin /disasm /range:0x1001640,0x1001645 c:\\Windows\\System32\\calc.exe\n\n  01001640: A1 64 40 05 01     mov         eax,dword ptr [___security_cookie]\n  01001645: 33\n\n```\nif you now load this in a ASLR enabled machine and look at the disassembly at the same virtual address you will see the 0x1000000 (preferred load address)\nhas been fixed up\n\n```\nC:\\>cdb -c \"? calc;u calc+1640 l1;q\" calc | grep -i -A 3 Reading\n0:000> cdb: Reading initial command '? calc;u calc+1640 l1;q'\nEvaluate expression: 5177344 = 004f0000\ncalc!WinMain+0xb:\n004f1640 a164405400      mov     eax,dword ptr [calc!__security_cookie (00544064)]\n\nC:\\>python -c \"print ( \\\"%x\\\" % (0x4f0000 + 0x54064) )\"\n544064\n\n```\n",
+      "votes": "3",
+      "user": "user1156544",
+      "time": "Jan 24, 2019 at 7:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user1156544",
+          "text": "Thanks. I am trying to follow your explanation. So Windows uses the .reloc to find all \"pointers\" that have to be realocated, correct? I have been looking at .reloc with PEview and cannot find where the pointer to the instruction is. Knowing that the instruction is in file offset=482CD4, with original ref value=[B25F8C], being image base=400000` and base of code=1000, how Windows creates the final value [3F75F8C]?",
+          "time": null
+        },
+        {
+          "user": "mrexodia",
+          "text": "Iirc the value stored in the binary is a VA with the ImageBase from the header as the base. So generally the relocation function will do value-header.ImageBase+loaded.ImageBase...",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

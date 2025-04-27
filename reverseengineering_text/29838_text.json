@@ -1,0 +1,25 @@
+{
+    "title": "How to get IDA and Hex-Rays to forcibly sync their knowledge of the sample on-demand?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29838/how-to-get-ida-and-hex-rays-to-forcibly-sync-their-knowledge-of-the-sample-on-de",
+    "content": "<pre><code>; PCWSTR __stdcall RtlGetNtSystemRoot()\n                public RtlGetNtSystemRoot\nRtlGetNtSystemRoot proc near            ; CODE XREF: LdrpBuildSystem32FileName+1A↑p\n                                        ; _IsOverlaySupportedPath+2B↓p ...\n\n; FUNCTION CHUNK AT .text:00000001800B5A2A SIZE 00000019 BYTES\n\n                sub     rsp, 28h\n                call    RtlGetCurrentServiceSessionId\n                test    eax, eax\n                jnz     ReadFromPEB\n                mov     eax, offset UserSharedData.NtSystemRoot ; was 7FFE0030h instead of the offset\n\nloc_18003C806:                          ; CODE XREF: RtlGetNtSystemRoot+7924E↓j\n                add     rsp, 28h\n                retn\n; ---------------------------------------------------------------------------\n                db 0CCh\nRtlGetNtSystemRoot endp\n</code></pre>\n(NB: <pre><code>ReadFromPEB</code></pre> is uninteresting for this discussion.)\nWhen I originally decompiled this code, it looked somewhat like this (even without the cast on the second <pre><code>return</code></pre>):\n<pre><code>PCWSTR __stdcall RtlGetNtSystemRoot()\n{\n  if ( RtlGetCurrentServiceSessionId() )\n    return (NtCurrentPeb()->SharedData + 0x30);\n  else\n    return 0x7ffe0030i64;\n}\n</code></pre>\nThe color of the second <pre><code>return</code></pre> value suggested something was wrong, so I went ahead and made the address known to IDA.\nNow, <pre><code>UserSharedData</code></pre> is a struct (based on the imported standard struct <pre><code>_KUSER_SHARED_DATA</code></pre>) which resides in its own segment which I declared at 0x7FFE0000. I declared the segment with the current size of the struct (0x720) to fit it snugly.\nIt looks like this:\n<pre><code>_user_shared_data segment para public '' use64\n                assume cs:_user_shared_data\n                ;org 7FFE0000h\n                assume es:nothing, ss:nothing, ds:nothing, fs:nothing, gs:nothing\nUserSharedData  _KUSER_SHARED_DATA <?>  ; DATA XREF: LdrpGenSecurityCookie+4A↓r\n                                        ; LdrpGenSecurityCookie+53↓r ...\n_user_shared_data ends\n</code></pre>\nAfter that I changed the original disassembly line:\n<pre><code>mov     eax, 7FFE0030h\n</code></pre>\nto:\n<pre><code>mov     eax, offset UserSharedData.NtSystemRoot\n</code></pre>\nAlas, when I closed all the \"Pseudocode\" windows and then hit F5 again, the output remained the same. Thinking I'd be able to adjust it through the Edit menu I found all relevant menu items disabled there.\nHowever, then I went ahead typing up my question here (which in the end had to be changed completely once again) just to go back to IDA and see that the Peudocode view had finally caught up to my change of the segment and the disassembly:\n<pre><code>PCWSTR __stdcall RtlGetNtSystemRoot()\n{\n  if ( RtlGetCurrentServiceSessionId() )\n    return (NtCurrentPeb()->SharedData + 30);\n  else\n    return UserSharedData.NtSystemRoot;\n}\n</code></pre>\nI've had this lag before and found it somewhat annoying. I assume it's perhaps an expensive operation that runs in the background every now and then.\nQuestion: But can I perhaps also force IDA to sync the knowledge the disassembler has with that of the decompiler so such changes take effect immediately in the pseudo-code?\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "489",
+    "tags": [
+        "ida",
+        "hexrays"
+    ],
+    "user": "0xC0000022L",
+    "time": "Oct 31, 2023 at 9:55",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "A \"heavy-weight\" answer to this question would be that you can force the decompiler to flush all decompilation caches that it maintains via <pre><code>Edit->Other->Reset decompiler information</code></pre>, then selecting (only) <pre><code>All caches</code></pre>. This does what it sounds like, and forces Hex-Rays to re-decompile every function rather than relying upon cached results the next time around. Of course, this will increase the amount of time it takes for Hex-Rays to decompile any function the next time around, since it won't be able to use cached results.\n",
+            "votes": "1",
+            "user": "Rolf Rolles",
+            "time": "Jan 10, 2022 at 2:00",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,92 @@
+{
+    "title": "convert this x86 ASM to C?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2096/convert-this-x86-asm-to-c",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  How could this 32-bit x86 assembly be written in C?\n </p>\n <pre><code>loc_536FB0:\nmov cl, [eax]\ncmp cl, ' '\njb short loc_536FBC\ncmp cl, ','\njnz short loc_536FBF\n\nloc_536FBC:\nmov byte ptr [eax], ' '\n\nloc_536FBF\nmov cl, [eax+1]\ninc eax\ntest cl, cl\njnz short loc_536FB0\n</code></pre>\n <p>\n  I have already figured out that it is a for loop that loops 23 times before exiting.\n </p>\n</div>\n</body></html>",
+    "votes": "45",
+    "answers": 4,
+    "views": "23k",
+    "tags": [
+        "assembly",
+        "x86",
+        "c"
+    ],
+    "user": "user1365830",
+    "time": "Nov 28, 2014 at 15:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Such small snippets are not too hard to decompile manually. Let's try it.\n </p>\n <p>\n  You have already figured out that\n  <code>\n   cl\n  </code>\n  holds a character, this means that\n  <code>\n   eax\n  </code>\n  where it's read from is a pointer to a character array. Let's call it\n  <code>\n   p\n  </code>\n  . Now, let's do a dumb translation for every assembly statement to C:\n </p>\n <pre><code>l1:            ; l1:\nmov cl, [eax]  ;   cl = *p;\ncmp cl, ' '    ;   if ( cl < ' ' )\njb short l2    ;     goto l2\ncmp cl, ','    ;   if ( cl != ',' )\njnz short l3   ;     goto l3\n\nl2:                      ; l2:\nmov byte ptr [eax], ' '  ;   *p = ' '\n\nl3:                  ; l3:\nmov cl, [eax+1]      ; cl = *(p+1)\ninc eax              ; p = p + 1\ntest cl, cl          ; if ( cl != 0 )\njnz short l1         ;   goto l1\n</code></pre>\n <p>\n  And cleaned up:\n </p>\n <pre><code>l1:               \n  cl = *p;\n  if ( cl < ' ' ) \n    goto l2;\n  if ( cl != ',' )\n    goto l3;       \nl2:       \n  *p = ' ';\nl3:           \n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n</code></pre>\n <p>\n  Now, let's have a look at the second\n  <code>\n   if\n  </code>\n  . It has the following form:\n </p>\n <pre><code>if ( condition )\n  goto end_of_if;\n  <if body>\nend_of_if:\n</code></pre>\n <p>\n  And here's how we can get rid of the\n  <code>\n   goto\n  </code>\n  :\n </p>\n <pre><code>if ( !condition )\n{\n  <if body>\n}\n</code></pre>\n <p>\n  Applying it to our snippet:\n </p>\n <pre><code>l1:               \n  cl = *p;\n  if ( cl < ' ' ) \n    goto l2;\n  if ( cl == ',' )  {\nl2:       \n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n</code></pre>\n <p>\n  Now, how we can get rid of\n  <code>\n   goto l2\n  </code>\n  ? If you look at it carefully, you can see that the body at\n  <code>\n   l2\n  </code>\n  will get executed if\n  <em>\n   either\n  </em>\n  <code>\n   cl < ' '\n  </code>\n  <em>\n   or\n  </em>\n  <code>\n   cl == ','\n  </code>\n  . So we can just combine the two conditions with a logical OR (\n  <code>\n   ||\n  </code>\n  ):\n </p>\n <pre><code>l1:               \n  cl = *p;\n  if ( cl < ' ' || cl == ',' ) {\n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n</code></pre>\n <p>\n  Now we have one\n  <code>\n   goto\n  </code>\n  left. We have: 1) label at the beginning of a statement block 2) check at the end of the block and 3) goto to the start of the block if the check succeeded. This is a typical pattern of a\n  <code>\n   do-while\n  </code>\n  loop, and we can easily convert it:\n </p>\n <pre><code>do {\n  cl = *p;\n  if ( cl < ' ' || cl == ',' ) {\n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n} while ( cl != 0 )\n</code></pre>\n <p>\n  Now the code is almost nice and pretty, but we can compress it a bit more by substituting equivalent statements:\n </p>\n <pre><code>do {\n  if ( *p < ' ' || *p == ',' )\n    *p = ' ';\n  cl = *++p;\n} while ( cl != 0 )\n</code></pre>\n <p>\n  And, finally, the last assignment can be moved into the condition:\n </p>\n <pre><code>do {\n  if ( *p < ' ' || *p == ',' )\n    *p = ' ';\n} while ( *++p != 0 )\n</code></pre>\n <p>\n  Now it's obvious what the code is doing: it's going through the string, and replacing all special characters (those with codes less than 0x20 aka space) and commas with the spaces.\n </p>\n</div>\n</body></html>",
+            "votes": "134",
+            "user": "Igor Skochinsky",
+            "time": "Jun 14, 2015 at 11:22",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Well, especially for that,\n  <a href=\"https://www.hex-rays.com/products/decompiler/index.shtml\">\n   Hex-Rays Decompiler\n  </a>\n  was invented. It will decompile ASM code into pseudo-C, and from there You may write C-based logic of assembly code You have.\n </p>\n</div>\n</body></html>",
+            "votes": "10",
+            "user": "Denis Laskov",
+            "time": "May 25, 2013 at 19:42",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user1365830",
+                    "text": "<span class=\"comment-copy\">solved this now</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xea",
+                    "text": "<span class=\"comment-copy\">not everybody have access to hex-rays tho... Igor's answer is far more thorough.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Denis Laskov",
+                    "text": "<span class=\"comment-copy\">Well, not everybody have small snippet of assembly, so answer should be wider than one specific case. And indeed thx Igor for spending his precious time for this specific piece of code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lightness Races in Orbit",
+                    "text": "<span class=\"comment-copy\">Nah, you didn't answer the question. If you want to link to a tool that makes the question obsolete, then do so in a comment on the question.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Arthur Dent",
+                    "text": "<span class=\"comment-copy\">I believe <a href=\"https://reverseengineering.stackexchange.com/users/60/igor-skochinsky\">Igor</a> is a developer for Hex-Rays.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Here's what it would have looked like in the source. Fastcall being a replacement for the custom leaf convention the compiler used when it was optimized.\n </p>\n <pre><code>void __fastcall __forceinline RemoveControlChars(char* szInput) {\n    int i;\n    for (i = 0; i < 23 && *szInput; ++i, ++szInput) {\n        if (*szInput < ' ' || *szInput == ',')\n            *szInput = ' ';\n    }\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Tox1k",
+            "time": "Jun 4, 2013 at 2:43",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user",
+                    "text": "<span class=\"comment-copy\">There is nothing that I can see in the original code to correspond to your <code>i &lt; 24</code> continuation condition. Starting at i=0 and looping while i&lt;24 will also execute the loop 24 times, not 23 as stated by the OP.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jonathon Reinhart",
+                    "text": "<span class=\"comment-copy\">fastcall and forceinline together don't make any sense. If it's inlined, there is no formal calling convention.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Tox1k",
+                    "text": "<span class=\"comment-copy\">__fastcall simply implies that args will be passed in registers instead of on the stack, which is assumed if inline, however the compiler may still push args onto the stack if there are not enough registers, making it sort of a hackish anti-optimization. According to msdn: <code>Even with __forceinline, the compiler cannot inline code in all circumstances.</code></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You can use\n  <a href=\"https://github.com/radareorg/r2dec-js\" rel=\"nofollow noreferrer\">\n   r2dec\n  </a>\n  plugin on\n  <a href=\"https://rada.re\" rel=\"nofollow noreferrer\">\n   radare2\n  </a>\n  with command\n  <code>\n   pdda\n  </code>\n </p>\n <pre><code>[0x08048060]> pdda\n; assembly                               | /* r2dec pseudo code output */\n                                         | /* ret @ 0x8048060 */\n                                         | #include <stdint.h>\n                                         |  \n; (fcn) entry0 ()                        | int32_t entry0 (void) {\n                                         |     do {\n                                         |         /* [01] -r-x section size 23 named .text */\n0x08048060 mov cl, byte [eax]            |         cl = *(eax);\n0x08048062 cmp cl, 0x20                  |         \n                                         |         if (cl >= 0x20) {\n0x08048065 jb 0x804806c                  |             \n0x08048067 cmp cl, 0x2c                  |             \n                                         |             if (cl != 0x2c) {\n0x0804806a jne 0x804806f                 |                 goto label_0;\n                                         |             }\n                                         |         }\n0x0804806c mov byte [eax], 0x20          |         *(eax) = 0x20;\n                                         | label_0:\n0x0804806f mov cl, byte [eax + 1]        |         cl = *((eax + 1));\n0x08048072 inc eax                       |         eax++;\n0x08048073 test cl, cl                   |         \n0x08048075 jne 0x8048060                 |         \n                                         |     } while (cl != 0);\n                                         | }\n[0x08048060]> \n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Febriyanto Nugroho",
+            "time": "Aug 29, 2020 at 11:17",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

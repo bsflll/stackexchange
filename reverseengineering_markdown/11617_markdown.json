@@ -1,0 +1,56 @@
+{
+  "title": "How to retrieve native asm code from .NET mixed mode dll file?",
+  "link": "https://reverseengineering.stackexchange.com/questions/11617/how-to-retrieve-native-asm-code-from-net-mixed-mode-dll-file",
+  "content": "This is seriously one question I couldn't find the answer to anywhere on Google.com\n\nWhen I mean mixed mode I mean .NET application which has unmanaged and managed code together.\n\nI used tools\n.NET Reflector 6 that crashes on native methods or shows only signature to them.\nAlso used dnEditor v0.76 beta which doesn't ever crash but also doesn't show any native x86 assembly for the areas it couldn't decompile.\n\nI get code like this\n\n```\n[SuppressUnmanagedCodeSecurity]\n[MethodImpl(MethodImplOptions.Unmanaged | MethodImplOptions.PreserveSig)]\npublic unsafe static extern byte WritePointer(uint uint_1, void* pVoid_1, int int_4, int int_5, __arglist);\n\n```\nYet no way to see the x86 assembly for this method.\n\nI thought about injecting this dll file to a application then attaching ollydbg to it so I could dump the dll file and check it out in IDA PRO but this also doesn't work.\n\nIDA PRO 6.8 by default doesn't even load mixed .NET programs as both .NET IL Code and decompilable native asm..\n\nI ran out of options here, I'll try getting a real dll file and nopping it out somewhere in the middle and pasting the binary there maybe this way IDA PRO would detect it as a unmanaged dll file.\n\nBut ya I ask you any tools to achieve this?\n\n",
+  "votes": "8",
+  "answers": 2,
+  "views": "4k",
+  "tags": [
+    "assembly",
+    "decompile",
+    ".net"
+  ],
+  "user": "SSpoke",
+  "time": "Dec 24, 2015 at 1:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The Linked Dll's native method is here you can load the dll directly in ollydbg too to find a resolved disassembly of the native method \n\nE:\\1dll>ls -l 1.dll\n\n```\n-rwxr-xr-x    1 Admin    Administ   268288 Dec 24 15:27 1.dll\n\n```\nE:\\1dll>rahash2 -a md5 1.dll\n\n```\n1.dll: 0x00000000-0x000417ff md5: 82eab591d8bc6d293a2a07f10a5f6a46\n\n```\nE:\\1dll>\"c:\\Program Files\\Microsoft SDKs\\Windows\\v7.0A\\bin\\ildasm.exe\" /text 1.dll | grep -i global.*writepointer -B 3\n\n```\n  // Embedded native code\n  // Disassembly of native methods is not supported.\n  //  Managed TargetRVA = 0x00005B20\n} // end of global method WritePointer\n\n```\nE:\\1dll>radare2 -qc \"s 0x5b20-0x1000+0x400;af;pdf;\" 1.dll\n\n```\n/ (fcn) fcn.00004f20 135\n|          0x00004f20    51             push ecx\n|          0x00004f21    53             push ebx\n|          0x00004f22    55             push ebp\n|          0x00004f23    56             push esi\n|          0x00004f24    8b742414       mov esi, dword [esp + 0x14]     ; [0x14:4]=0\n|          0x00004f28    57             push edi\n|          0x00004f29    8d442424       lea eax, [esp + 0x24]           ; 0x24  ; '$'\n|          0x00004f2d    6a04           push 4\n|          0x00004f2f    83c004         add eax, 4\n|          0x00004f32    56             push esi\n|          0x00004f33    33db           xor ebx, ebx\n|          0x00004f35    89442418       mov dword [esp + 0x18], eax     ; [0x18:4]=64\n|          0x00004f39    e83c5a0000     call 0xa97a ;0x0000a97a(unk, unk, unk, unk, unk, unk, unk) ; fcn.0000550c+21614\n\n```\nradare2 doesn't seem to load the dll properly as an image but seems to load it as a raw file (as in hexeditor view)\nollydbg will load the dll and will disassemble properly \nradare2 disassembly above and ollydbg disassembly below for the \nembedded native method WritePointer \n\n```\nCPU Disasm\nAddress   Hex dump         Command                                  Comments\n10005B20  /.  51           PUSH    ECX\n10005B21  |.  53           PUSH    EBX                              ; Jump to mscoree._CorDllMain\n10005B22  |.  55           PUSH    EBP\n10005B23  |.  56           PUSH    ESI\n10005B24  |.  8B7424 14    MOV     ESI, DWORD PTR SS:[ESP+14]\n10005B28  |.  57           PUSH    EDI\n10005B29  |.  8D4424 24    LEA     EAX, [ESP+24]\n10005B2D  |.  6A 04        PUSH    4                                ; /Size = 4\n10005B2F  |.  83C0 04      ADD     EAX, 4                           ; |\n10005B32  |.  56           PUSH    ESI                              ; |Addr = 13F8B8\n10005B33  |.  33DB         XOR     EBX, EBX                         ; |\n10005B35  |.  894424 18    MOV     DWORD PTR SS:[ESP+18], EAX       ; |\n10005B39  |.  E8 3C5A0000  CALL    <JMP.&KERNEL32.IsBadReadPtr>     ; \\KERNEL32.IsBadReadPtr\n\n```\nregarding your pastebin \n\nhere is the pseudo code for the function without inside loop\n\nradare2 -c \"s 0x5cb0-0x1000+0x400;af;pdc;\" 1.dll\n\n```\nfunction fcn.000050b0 () {\n    loc_0x50b0:    \n    push ecx\n    push ebx\n    push ebp\n    push esi\n    esi = dword [esp + 0x14]\n    push edi\n    eax = [esp + 0x1c]\n    push 4\n    eax += 4\n    push esi\n    ebx = 0\n    dword [esp + 0x18] = eax\n    0xa97a ()\n    if (eax == eax\n    notZero 0x5106) {\n        loc_0x5106:    \n        eax = dword [ebx]\n        pop edi\n        pop esi\n        pop ebp\n        dword [esp + 4] = 0\n        pop ebx\n        pop ecx\n\n        loc_0x50d2:    \n        ebp = dword [esp + 0x1c]\n        esi = dword [esi]\n        edi = 0\n        if (ebp == ebp\n        isLessOrEqual 0x5106)\n      }\n      return;\n}\n\n```\n",
+      "votes": "4",
+      "user": "blabb",
+      "time": "Dec 24, 2015 at 14:08",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "SSpoke",
+          "text": "Wow thanks so much mate, very useful knowledge!, not going to ask how you get 0x1000+0x400 can't wait until these tools updated to show raw asm code if it cant be decompiled. Thanks again",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "that is basic pe reversing 101 it is  (rva - virtual address of the rvas section  + pointer to raw address )  = physical file offset  btw pebrowse pro can disassemble the methods simply by double clicking on the .net metainfo tab",
+          "time": null
+        },
+        {
+          "user": "SSpoke",
+          "text": "thanks again I completely miss-looked Igor's solution lol I usually just click Ok without checking those options that's by far the easiest way to do it.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "You need to select Portable executable for 80386 (PE) from the list of loaders in IDA instead of confirming the default (Microsoft.NET assembly).\n\n\n",
+      "votes": "3",
+      "user": "Igor Skochinsky",
+      "time": "Dec 24, 2015 at 14:43",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "SSpoke",
+          "text": "Oh dang haha slow moment should read more, thanks a bunch too, this is much easier to me and did the trick.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

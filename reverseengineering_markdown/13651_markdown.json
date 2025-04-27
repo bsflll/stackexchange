@@ -1,0 +1,36 @@
+{
+  "title": "Is this request mask algorithm reversible?",
+  "link": "https://reverseengineering.stackexchange.com/questions/13651/is-this-request-mask-algorithm-reversible",
+  "content": "I am trying to understand an algorithm from a malware I found. This algorithm encodes http request to C&C. The decompiled version is taken from IDA. There are some comments I wrote.\n\nThe problem is: I dont see the malware sends result from QueryPerformanceCounter() to its C&C. So without this value how C&C decodes this request?\n\n```\nint __cdecl sub_A2AA0(int a1, unsigned int a2, int a3, _BYTE *a4, int a5)\n{\n// a5: length of buffer\n// a4: buffer to encode\n// a3: always 0\n// a2: always 4\n// a1: addr contains result from QueryPerformanceCounter()\n\n  signed int v5; // eax@1\n  char v6; // si@3\n  unsigned int v7; // eax@3\n  signed int v8; // edi@3\n  char v9; // cl@4\n  int v10; // edx@4\n  int v11; // edi@7\n  int v12; // esi@7\n  int result; // eax@7\n  char v14; // cl@8\n  int v15; // ebp@9\n  _BYTE *i; // edi@9\n  char v17; // cl@10\n  char v18[256]; // [sp+0h] [bp-100h]@2\n\n // buffer with 0 to 255\n  v5 = 0;\n  do\n  {\n    v18[v5] = v5;\n    ++v5;\n  }\n  while ( v5 < 256 );\n\n\n  // exchange content of a random index starting with index 0\n  v6 = 0;\n  v7 = 0;\n  v8 = 0;\n  do\n  {\n    v9 = v18[v8];\n    v10 = (unsigned __int8)(v6 + v18[v8] + *(_BYTE *)(v7++ + a1)); // generate index\n    v6 = v10;\n    if ( v7 >= a2 )\n      v7 = 0;\n    v18[v8++] = v18[v10];\n    v18[v10] = v9;\n  }\n  while ( v8 < 256 );\n\n// iterate local buffer again, exchange content of cells, starting with index 0\n  v11 = a3; // init with 0\n  LOBYTE(v12) = 0;\n  for ( result = 0; v11; v18[v12] = v14 )\n  {\n    result = (unsigned __int8)(result + 1);\n    v14 = v18[result];\n    --v11;\n    v12 = (unsigned __int8)(v12 + v18[result]);\n    v18[result] = v18[v12];\n  }\n\n// mask the request\n  v15 = a5;\n  for ( i = a4; v15; --v15 )\n  {\n    result = (unsigned __int8)(result + 1);\n    v17 = v18[result];\n    v12 = (unsigned __int8)(v12 + v18[result]);\n    v18[result] = v18[v12];\n    v18[v12] = v17;\n    *i++ ^= v18[(unsigned __int8)(v17 + v18[result])]; // simple xor\n  }\n  return result;\n\n\n}\n\n```\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "144",
+  "tags": [
+    "malware"
+  ],
+  "user": "JACK M",
+  "time": "Oct 6, 2016 at 9:31",
+  "comments": [
+    {
+      "user": "w s",
+      "text": "Generally speaking it uses a1 in line marked with \"// generate index\" comment. *(_BYTE *)(v7++ + a1) makes dereference from this address, so the content of v18 depends on the counter content.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This seems to me like RC4, a stream cipher (here is a somewhat similar implementation, and here's another). It does not encode data, it encrypts it (with a key). Being a stream cipher, it generates a sequence of bytes derived from the key, and then XORs the data with those. These two steps are usually separated in two functions, which is why you don't see any reference to the key in your function: because it is the part which XORs with an already generated stream somewhere before that function gets called.\n\na1 seems to be a pointer to the state structure, so it is not a pointer to a 4 byte sequence, but rather, a structure which holds the current state. From what I have seen, most binaries do something like this:\n\n```\nRC4_Init(state, key, ...)\nRC4_Process(...) // this is the function you're looking at now\n\n```\nFind where the function is called, look a bit above (try cross-referencing a1), and you should find the initialization function, which has the key.\n\nYour code:\n\n```\n // buffer with 0 to 255\n  v5 = 0;\n  do\n  {\n    v18[v5] = v5;\n    ++v5;\n  }\n  while ( v5 < 256 );\n\n```\nrc4_init:\n\n```\nvoid rc4_init(unsigned char *key, unsigned int key_length) {\n    for (i = 0; i < 256; i++)\n        S[i] = i;\n\n    /* ... more code ... */\n}\n\n```\nYour code:\n\n```\n// exchange content of a random index starting with index 0\n  v6 = 0;\n  v7 = 0;\n  v8 = 0;\n  do\n  {\n    v9 = v18[v8];\n    v10 = (unsigned __int8)(v6 + v18[v8] + *(_BYTE *)(v7++ + a1)); // generate index\n    v6 = v10;\n    if ( v7 >= a2 )\n      v7 = 0;\n    v18[v8++] = v18[v10];\n    v18[v10] = v9;\n  }\n  while ( v8 < 256 );\n\n```\nChunk of rc4_init:\n\n```\nfor (i = j = 0; i < 256; i++) {\n        j = (j + key[i % key_length] + S[i]) & 255;\n        swap(S, i, j);\n    }\n\n    i = j = 0;\n\n```\nInlined swap in your code:\n\n```\n    v9 = v18[v8];\n    v18[v8++] = v18[v10];\n    v18[v10] = v9;\n\n```\nRC4 swap:\n\n```\nvoid swap(unsigned char *s, unsigned int i, unsigned int j) {\n    unsigned char temp = s[i];\n    s[i] = s[j];\n    s[j] = temp;\n}\n\n```\nDo you see the similarities? I definitely think this is RC4, so your best bet is to hope that the malware uses a static/predictable/weak key, so you can decrypt the communication (if sniffing from outside).\n\nTL;DR You can't decrypt this without the proper key, which may or may not be predictable. Look at how it is generated to find out if it is.\n\n",
+      "votes": "2",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "NirIzr",
+          "text": "Although you're probably right about your guess, it's important to note the actual code pieces you compared are only the state initialization, which could be replaced with any other similar algorithm, as the core of RC4 is in the sequence update which you skipped (and is indeed RC4)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

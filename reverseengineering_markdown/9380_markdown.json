@@ -1,0 +1,86 @@
+{
+  "title": "Putting an application in between client and server",
+  "link": "https://reverseengineering.stackexchange.com/questions/9380/putting-an-application-in-between-client-and-server",
+  "content": "I'm attempting to reverse engineer (without dissecting the source code, as my understanding is that reverse engineering by analyzing input and output and building something from scratch that fits is both far more legal and less monotonous/brain-dead than decompiling/de-obfuscating the program) a program that acts as client to a server, and one of the main systems I need to figure out is how they communicate (the exact meaning of each byte of data sent over the internet). The way I would like to go about doing this is by developing a program from scratch that attempts to imitate the client, but that acts as middle-man to both client and server so that I can easily see if the output my work-in-progress program would provide matches the actual client's output and how it differs.\n\nI'm not sure how to go about doing this, though. I think the site the client connects to is hard-coded into it; is there a way to make the client think that it is talking to the server, and the server to think that it is talking to the client, when in reality both are talking to my in-progress program? I would like for both my program and the client to be on the same (physical) system. I've been using a packet sniffer to monitor communication between the client and server, but it would be much simpler and convenient if I could have my program act as middle-man. \n\nI'm using a Lubuntu 15.04 system as my primary system currently, if that helps.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "730",
+  "tags": [
+    "linux",
+    "networking"
+  ],
+  "user": "Reepca",
+  "time": "Jul 17, 2015 at 3:42",
+  "comments": [
+    {
+      "user": "Jason Geffner",
+      "text": "It very likely won't be possible to determine, in your words, \"the exact meaning of each byte of data sent over the internet\" via the dynamic analysis approach you're proposing. To fully determine \"the exact meaning of each byte of data sent over the internet\", you'll likely need to statically analyze the client.",
+      "time": null
+    },
+    {
+      "user": "Reepca",
+      "text": "The program is one where user input directly corresponds to information being sent over the internet; i.e. you can click a certain place and see output appear as a result of it in a packet sniffer. Also, correct me if I'm wrong, but doesn't static analysis usually involve looking at some form of source code? (I realize \"the exact meaning of each byte\" is probably not very realistic, but it's what the end goal is)",
+      "time": null
+    },
+    {
+      "user": "Jason Geffner",
+      "text": "Static analysis means analyzing something without running it. In this context, yes, it would likely involve looking at the disassembled code or decompiled code. But as you suggested, depending on your needs, it may not be a requirement here.",
+      "time": null
+    },
+    {
+      "user": "joxeankoret",
+      "text": "Depending on the protocol's complexity, you might be lucky enough to decrypt most of the format by just using Wireshark or any other network sniffer. However, to actually determine each field, you really need to statically reverse engineer it.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You may want to have a look at mitmproxy. This allows you to intercept and modify http(s) traffic, which may or may not be what you need, but it also has tools like mitmdump that just dump what's going over the connection.\n\nMitmproxy also has instructions about setting up the linux tcp stack using iptables to redirect connections. I guess this is the main part of what you're trying to achieve.\n\nIn your setup, the easiest thing you could do is probably create a virtual machine using virtualbox, running the client within the machine, using iptables inside the machine to redirect server connections to your host, and run the proxy on the host. \n\nThe advantage of using a virtual machine is that whatever you install/configure on your VM won't interfere with your host, where you may not want to mess with the network to reduce the risk of breaking other things, and you can create a snapshot and go back to it of you break something and don't remember what exactly you've done.\n\nThen, on the VM, do something like\n\n```\niptables -t nat -A OUTPUT -p tcp --dport 1234 -j DNAT --to-destination 1.2.3.4:1234\n\n```\nto redirect all traffic from the client, independent from target ip, to the host (assuming the host is 1.2.3.4). The, on the host, write a program to listen on port 1234, dump all data, and pass through to real.server.ip:1234. This way, you don't have to mess with the IP configuration of the host.\n\nIf you don't want to use a VM, you could also use\n\n```\niptables -t nat -A OUTPUT -p tcp --dport 1234 -j DNAT --to-destination 127.0.0.1:1234\niptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination :1234\n\n```\nand have your program listen on port 1234, and connect to 1235 on the real server. The second iptables entry will redirect this to 1234 again, and use the IP the program requested, since you just used a port without an IP in the --to-destination argument. Your client (that uses port 1234) always gets redirected to localhost, and the proxy, that connects to 1235, will get redirected to 1234. Obviously, the order of iptables commands is important here.\n\nYou can use the real server ip or name as well, of course:\n\n```\niptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination 192.168.17.135:1234\niptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination real.server.name:1234\n\n```\nbut note that real.server.name gets resolved the moment you start the iptables command, not when the packet gets sent. So, if your real.server.address changes later, for example if it's behind a dynamic IP, you'll have to remove the iptables entry and create a new one.\n\nAnd to minimize impact on your machine, where you might have an unrelated program connect to an unrelated server on port 1235, you might want to restrict changing the port to one particular server only:\n\n```\niptables -t nat -A OUTPUT -p tcp --dest 192.168.17.135 --dport 1235 -j DNAT --to-destination 192.168.17.135:1234\n\n```\n",
+      "votes": "1",
+      "user": "Guntram Blohm",
+      "time": "Jul 17, 2015 at 16:48",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Reepca",
+          "text": "iptables looks exactly like what I'm looking for, but the only problem I can think of is that if I make a rule that redirects all traffic from the port the client communicates on to my program, since my program also has to communicate on that port, it would get redirected to itself as well. Apologies if there's some obvious thing I'm missing, I don't understand NAT and stuff very well. Is that why you said I'd need a virtual machine?",
+          "time": null
+        },
+        {
+          "user": "Reepca",
+          "text": "Actually, couldn't I have the output from the client be redirected at OUTPUT and have the output from my program be redirected at POSTROUTING? So that for example I could say that all output on port X going through the OUTPUT chain is redirected to <myapplication> on 127.0.0.1, then when <myapplication> communicates with the server on port <X +/- 1> it can be translated to port X as it goes out?",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "On the TCP level, you don't know which application a packet is coming from, so you can't say \"coming from the client\" except if your proxy uses a different port, just as you suggest. This is why i suggested a VM. (Another thing that is useful with a VM is i can make snapshots when i have a working state, for whichever definition of working, and can go back to that easily when i change a few things, break the client, and don't remember exactly what to change back).",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "OUTPUT probably won't work, since you need the nat chain to make sure incoming answer packets get the appropriate reverse-natting to reach the source. But as POSTROUTING rules are processed in order, you'll probably be ok if you add a rule to redirect the client first (--dest real.server.ip --dport 1234 --to localhost --to-port  proxy.port), then the proxy to the real server (--dest real.server.ip --dport 1235 --to-port 1234) if the real client and server use port 1234, and your proxy connects to 1235.",
+          "time": null
+        },
+        {
+          "user": "Reepca",
+          "text": "quick question - can I use a name instead of an ip address (I forget the technical name for that) - where I could put \"server.companyname.com\" instead of an actual hard-coded ip address?",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "first you need to determine the kind of communication between server and client like if it is TCP or UDP or whatever else\n\n",
+      "votes": "1",
+      "user": "Spektre",
+      "time": "Apr 28, 2017 at 9:02",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Reepca",
+          "text": "\"I think some bridge or virtual network would do it but that is above my knowledge\" While your post is helpful, that knowledge is exactly what I'm looking for :/",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

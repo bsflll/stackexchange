@@ -1,0 +1,44 @@
+{
+    "title": "Using Python CTypes to get to the IAT",
+    "link": "https://reverseengineering.stackexchange.com/questions/2843/using-python-ctypes-to-get-to-the-iat",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to get to IAT of a PE file.  My plan is eventually overwrite some values so I can hook some stuff to help with unpacking, etc.  I'm using this post\n  <a href=\"https://stackoverflow.com/questions/7673754/pe-format-iat-questions\">\n   https://stackoverflow.com/questions/7673754/pe-format-iat-questions\n  </a>\n  as a guide.  I'm currently on number 4 and that's where things are getting a little fuzzy for me.  I'm able to get a pointer to an entry within the DataDirectory array.  I chose the 13th entry because from my research\n  <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms680305%28v=vs.85%29.aspx\" rel=\"nofollow noreferrer\">\n   http://msdn.microsoft.com/en-us/library/windows/desktop/ms680305%28v=vs.85%29.aspx\n  </a>\n  it looks like that will lead me to the IAT.  I'm not sure I'm on the right track because this DataDirectory has the value for size = 0 and virtualaddress = 172.  Is the virtualsize of 172 an offset that must be added to some base address?  I'm just working with a simple C program with no debug info that prints, \"Hello World\".  Any help is greatly appreciated.  Not sure how much showing the code will help my methodology but I'll post the relevant parts below.  Any help is appreciated.  Thanks!\n </p>\n <pre><code>pDOSHeader = ctypes.cast(hModule, ctypes.POINTER(IMAGE_DOS_HEADER)).contents\n\ne_lfanew_offset = pDOSHeader.e_lfanew\n\noffset_to_NTHeaders = e_lfanew_offset + hModule\npNTHeaders = ctypes.cast(offset_to_NTHeaders,ctypes.POINTER(IMAGE_NT_HEADERS)).contents\n\npImage_NT_Headers = pNTHeaders.OptionalHeader\npDataDirectory = pImage_NT_Headers.DataDirectory\npDataDirectory_IAT = pDataDirectory[13]\n</code></pre>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "python",
+        "iat"
+    ],
+    "user": "user2743",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Don't rely on the IAT entry in the PE Data Directory to be accurate. The only truly accurate way to find the IAT(s) is to find actual calls from the disassembled code to statically imported API functions.\n </p>\n <p>\n  Let's use the following code in IDA as an example:\n </p>\n <pre><code>FF 15 44 60 03 01    call    ds:GetVersion\n</code></pre>\n <p>\n  The actual disassembly of\n  <code>\n   FF 15 44 60 03 01\n  </code>\n  is\n  <code>\n   call dword ptr ds:[1036044h]\n  </code>\n  , but IDA knows this points to\n  <code>\n   GetVersion()\n  </code>\n  , so it shows the \"pretty\" disassembly instead. In this example, the address\n  <code>\n   1036044h\n  </code>\n  is actually the virtual address of\n  <code>\n   GetVersion()\n  </code>\n  's entry in the IAT for kernel32.dll. As such, you can now look \"up\" and \"down\" in memory near virtual address\n  <code>\n   1036044h\n  </code>\n  to find the beginning and end of the IAT for kernel32.dll.\n </p>\n <p>\n  99% of the time, all IATs will be back-to-back in memory, so you should be able to find all IATs knowing only a single IAT entry address.\n </p>\n <p>\n  I recommend the method above instead of relying on content in the PE Import Tables since relying on the PE Import Tables will fail if the disassembled code had been packed, whereas the method above will work on packed and non-packed samples.\n </p>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Jason Geffner",
+            "time": "Sep 26, 2013 at 21:52",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <em>\n   Note: only applicable if reading the PE from disk\n  </em>\n </p>\n <p>\n  You could simplify your code if you used\n  <a href=\"https://code.google.com/p/pefile/\" rel=\"nofollow\">\n   <code>\n    pefile\n   </code>\n  </a>\n  rather than Python\n  <code>\n   ctypes\n  </code>\n  . Here's a quick script for getting the hex address of some API name.\n </p>\n <pre><code>import pefile\n\ntry:\n        pe = pefile.PE(f)\n    except:\n        print 'could not load file...exiting'\n        return\nep = pe.OPTIONAL_HEADER.AddressOfEntryPoint\nep_ava = ep+pe.OPTIONAL_HEADER.ImageBase\nAPI_addr = None\nfor entry in pe.DIRECTORY_ENTRY_IMPORT:\n      for imp in entry.imports:\n          if 'SOME_API' in imp.name:\n               API_addr = hex(imp.address).lower()\n</code></pre>\n <p>\n  If you have questions about\n  <code>\n   pefile\n  </code>\n  check out the\n  <a href=\"https://code.google.com/p/pefile/wiki/UsageExamples\" rel=\"nofollow\">\n   usage examples\n  </a>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "0xC0000022L",
+            "time": "Sep 27, 2013 at 11:50",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">This will fail if the disassembled code had been packed; it's more reliable to find IAT references made from the code itself.</span>",
+                    "time": null
+                },
+                {
+                    "user": "alexanderh",
+                    "text": "<span class=\"comment-copy\">@JasonGeffner You are right, I didn't realize he was referencing a memory handle. Maybe next time the user asks a question here he will add a little more details like in this other question... <a href=\"http://stackoverflow.com/questions/19018906/trying-to-cast-a-returned-hmodule-to-a-declared-image-dos-header-struct-in-pytho\" title=\"trying to cast a returned hmodule to a declared image dos header struct in pytho\">stackoverflow.com/questions/19018906/…</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

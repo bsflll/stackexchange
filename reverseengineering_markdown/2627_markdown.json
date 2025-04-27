@@ -1,0 +1,111 @@
+{
+  "title": "What is the meaning of movabs in gas/x86 AT&T syntax?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2627/what-is-the-meaning-of-movabs-in-gas-x86-att-syntax",
+  "content": "I just found a strange instruction by assembling (with gas) and disassembling (with objdump) on a amd64 architecture.\n\nThe original amd64 assembly code is:\n\n```\nmov 0x89abcdef, %al\n\n```\nAnd, after gas compiled it (I am using the following command line: gcc -m64 -march=i686 -c -o myobjectfile myassemblycode.s), objdump gives the following code:\n\n```\na0 df ce ab 89 00 00    movabs 0x89abcdef, %al\n\n```\nMy problem is that I cannot find any movabs, nor movab in the Intel assembly manual (not even a mova instruction).\n\nSo, I am dreaming ? What is the meaning of this instruction ? My guess is that it is a quirks from the GNU binutils, but I am not sure of it.\n\nPS: I checked precisely the spelling of this instruction, so it is NOT a movaps instruction for sure.\n\n",
+  "votes": "33",
+  "answers": 5,
+  "views": "47k",
+  "tags": [
+    "x86",
+    "amd64"
+  ],
+  "user": "perror",
+  "time": "Aug 12, 2013 at 16:41",
+  "comments": [
+    {
+      "user": "phuclv",
+      "text": "I think the first 5 bytes is a0 ef cd ab 89, not a0 df ce ab 89",
+      "time": null
+    },
+    {
+      "user": "Ciro Santilli OurBigBook.com",
+      "text": "stackoverflow.com/questions/19415184/…",
+      "time": null
+    },
+    {
+      "user": "jww",
+      "text": "Also see When was the MOVABS instruction introduced?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Here's the official documentation for gas, quoting the relevant section:\n\nParticularly read the last sentence.\n\nNote: Found via Google operator inurl, searching for movabs inurl:sourceware.org/binutils/.\n\n",
+      "votes": "29",
+      "user": "0xC0000022L",
+      "time": "Aug 12, 2013 at 17:32",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "I looked at the gas manual but I did not find the right section. Thanks a lot  0xC0000022L ! :-)",
+          "time": null
+        },
+        {
+          "user": "phuclv",
+          "text": "How can you move a 32 bit number into al?",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@LưuVĩnhPhúc: well you can only with losses, but this has nothing to do with my answer or the question, so you better ask it as a new question.",
+          "time": null
+        },
+        {
+          "user": "Ruslan",
+          "text": "What's interesting, gdb gives me 48 b8 <imm64> bytes as movabs rax, <imm64> even in disassembly-flavor=intel.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "movabs is used for absolute data moves, to either load an arbitrary 64-bit constant into a register or to load data in a register from a 64-bit address.\n\nSource: http://www.ucw.cz/~hubicka/papers/amd64/node1.html\n\n",
+      "votes": "9",
+      "user": "ekse",
+      "time": "Aug 12, 2013 at 17:35",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "If you find yourself often deciphering AT&T syntax x86/x64 assembler, Solaris manuals may be of help: x86 Assembly Language Reference Manual .\n\n",
+      "votes": "8",
+      "user": "Michał Rybak",
+      "time": "Aug 6, 2017 at 16:32",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "blabb",
+          "text": "good downloadable reference  thanks igorsk for the link",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I noticed that GAS translates\n\n```\nmovq $0x80000000, %rax\n\n```\ninto\n\n```\nmovabs $0x80000000, %rax\n\n```\nBut values smaller than 0x80000000 are not translated into movabs.\nThat is, movq $0x7fffffff, $rbx is NOT translated into movabs $0x7fffffff, %rbx. You can verify with disas disassemble command within GDB.\n\nMaybe the reason is that $0x80000000 is over the signed positive number range of 32 bit and needs to be translated into 64-bit integer.  For the reason, GAS translates such larger number into  64-bit long integer and therefore uses movabsq instruction instead of movq instruction whose immediate source is limited to 32 bit constant.\n\n",
+      "votes": "3",
+      "user": "Michael Karcher",
+      "time": "Jul 31, 2024 at 22:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "phuclv",
+          "text": "this is incorrect movq $0x80000000, %rax moves the immediate 0x80000000 into rax whereas movabs 0x80000000, %rax loads the quadword at address 0x80000000 to rax",
+          "time": null
+        },
+        {
+          "user": "Michael Karcher",
+          "text": "@phuclv You are right, this is most likely a typo in the OP (missing $ sign). I suggested the correspondig edit.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Yes this instruction should move absolute hardcoded data embedded into instruction itself into register,\nor data from absolute address. But I got into this instruction only recently when I wanted to know where constant data for initialization of local variables are because I didnt find them in .rodata ELF section.\n\nSo basically GCC uses this instruction to initialize automatic variables on stack!\n\nLets dive into code to find out how this instruction is used.\nAs we see in this code example  we have local variable test initialized:\n\n\n\nWe know that local variables are put in stack and I was interested to know\nwhere and how local variables get initialized.\n\nWhen we dump .text section with objdump we see that this constant 0x41414141414141 is realy embedded in the code itself:\n\n```\n000000000000116c <get_message2>:\n116c:   f3 0f 1e fa             endbr64 \n1170:   55                      push   %rbp\n1171:   48 89 e5                mov    %rsp,%rbp\n1174:   48 83 ec 10             sub    $0x10,%rsp\n1178:   64 48 8b 04 25 28 00    mov    %fs:0x28,%rax\n117f:   00 00 \n1181:   48 89 45 f8             mov    %rax,-0x8(%rbp)\n1185:   31 c0                   xor    %eax,%eax\n1187:   48 b8 41 41 41 41 41    movabs $0x41414141414141,%rax\n118e:   41 41 00 \n\n```\nAs we see disassembled function and register content from GDB:\n\n\n\nSo when we look at code we see that this string test, in HEX notation 0x0x41414141414141 is hardcoded in movabs instruction, and is put in rax register, and then content of rax register is put on address in rbp minus offset 0x10:\n\n```\n   0x000055555555517d <+27>:    movabs $0x41414141414141,%rax\n   0x0000555555555187 <+37>:    mov    %rax,-0x10(%rbp)\n\n```\nSo this local string will be placed on address 0x7fffffffdde0 - 0x10\nWe see that this local string is placed in stack frame of function\non address 0x7fffffffddd0, and this we see when we dump the stack:\n\n```\n(gdb) x/16gx $sp\n0x7fffffffddd0: 0x0041414141414141  0x6a8574f1d6812b00\n0x7fffffffdde0: 0x00007fffffffddf0  0x000055555555515b\n0x7fffffffddf0: 0x0000000000000001  0x00007ffff7daad90 \n\n```\nSo we ended with initialized local string on a stack just as we expected.\n\n",
+      "votes": "1",
+      "user": "Dražen Grašovec",
+      "time": "Nov 27, 2023 at 14:19",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

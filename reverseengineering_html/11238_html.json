@@ -1,0 +1,55 @@
+{
+    "title": "Variable liveness analysis on binaries",
+    "link": "https://reverseengineering.stackexchange.com/questions/11238/variable-liveness-analysis-on-binaries",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I want to detect all the variables\n  <em>\n   live\n  </em>\n  at any instruction/address in a binary. By\n  <em>\n   variable\n  </em>\n  , I refer to both\n  <code>\n   global\n  </code>\n  as well as\n  <code>\n   function local\n  </code>\n  variables. In other words, given a Linux ELF and a virtual address, is there any means to know programmatically what all are the variables (in terms of memory locations) live at that point?\n </p>\n <p>\n  IDA Pro seems to detect the memory locations of probable variables in a procedure.  Does IDA expose any API to collect such information?\n </p>\n <p>\n  I plan to use DynamoRIO to dynamically monitor the program at run-time. A\n  <code>\n   call-ret\n  </code>\n  pair should mark the beginning and ending of a function. Once I encounter a\n  <code>\n   call\n  </code>\n  , I monitor all the read-write accesses on stack locations referenced either by\n  <code>\n   %ebp\n  </code>\n  or\n  <code>\n   %esp\n  </code>\n  . The problem is tail-calls where compiler optimizes a\n  <code>\n   call\n  </code>\n  substituting by\n  <code>\n   jmp\n  </code>\n  , thereby detection of function virtually impossible.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "384",
+    "tags": [
+        "binary-analysis",
+        "elf",
+        "binary",
+        "stack-variables",
+        "local-variables"
+    ],
+    "user": "sherlock",
+    "time": "Nov 12, 2015 at 6:36",
+    "comments": [
+        {
+            "user": "w s",
+            "text": "<html><body><span class=\"comment-copy\">\n What do you mean by all the variables ? Are globals and caller function locals included ? What about other threads ?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "sherlock",
+            "text": "<html><body><span class=\"comment-copy\">\n I have updated the original question. Kindly have a look at it.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't think that it is possible.\n </p>\n <p>\n  Let's assume the following C code:\n </p>\n <pre><code>int f1(int p1, int p2)\n{\n    int l1, l2, l3;\n    /* some code */\n    l1 = l1 + l2; // here is our virtual address\n    return l1;\n}\n\nint f2(int p3, int p4)\n{\n    int l4, l5, l6;\n    return f1(p3, p4);\n}\n\nint f3(int p5, p6)\n{\n    int l7, l8;\n    return f2(p5, p6) + f1(p6, p5);\n}\n</code></pre>\n <p>\n  Obviously the set of local variables in whole the stack of this thread will be different when calling f3, f2 and f1.\n </p>\n <p>\n  For example when f3 calls f2 f2's locals are on stack. after call to f2 when f3 calls f1 obviously the whole threads stack is different and f2 locals are not alive and it is impossible to restore the full stack layout of callers without knowing the full execution sequence and stack trace.\n </p>\n <p>\n  Determining global variables, however, is simpler - they always alive and can be retrieved by iteration on all data and bss like elf segments with, for example, following simple code:\n </p>\n <pre><code>import idautils\nimport idc\nseg_list = [\".bss\", \".data\"] #insert your segment names here\nseg_addrs = []\nfor seg in Segments():\n    if idc.SegName(seg) in seg_list:\n        seg_addrs.append(seg)\n\nfor seg in seg_addrs:  \n    start = SegStart(seg)\n    end = SegEnd(seg)\n    for ea in idautils.Heads(start, end):\n        gen_xrefs = XrefsTo(ea, 0)\n        for xx in gen_xrefs:\n            print hex(ea), hex(xx.frm)\n</code></pre>\n <p>\n  Everything which Ida recognizes as referenced will be printed out.\nThe accuracy of these results, however, is questionable and depends on accuracy of IDA analysis.\n </p>\n <p>\n  Function local variables and stack layout can be retrieved by getting the stack frame structure, with usage of the following APIs:\n </p>\n <pre><code>GetFrame(ea)         #Get ID of function frame structure\nGetFrameLvarSize(ea) #Get size of local variables in function frame\nGetFrameRegsSize(ea) #Get size of saved registers in function frame\nGetFrameArgsSize(ea) #Get size of arguments in function frame which are purged upon return\nGetFrameSize(ea)     #Get full size of function frame\n</code></pre>\n <p>\n  The frame structure may be observed with the following IDAPython APIs from idc module:\n </p>\n <pre><code>GetMemberId(sid, member_offset)\nGetStrucPrevOff(sid, offset)\nGetStrucNextOff(sid, offset)\nGetFirstMember(sid)\nGetLastMember(sid)\nGetMemberOffset(sid, member_name)\nGetMemberName(sid, member_offset)\nGetMemberComment(sid, member_offset, repeatable)\nGetMemberSize(sid, member_offset)\nGetMemberFlag(sid, member_offset)\nGetMemberStrId(sid, member_offset)\nIsUnion(sid)\n</code></pre>\n <p>\n  Hope it helps.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "w s",
+            "time": "Nov 3, 2015 at 13:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">What if a function is recursive? What if it calls <code>alloca</code> ? What if a signal handler (linux), or exception handler (windows) calls a function? There's just too many ways for local variables to get generated anywhere on the stack to <i>reliably</i> determine every possible location for a particular variable. There's only 2 things you can do - stop the program at a specific point and check the current stack frame, or analyze the call tree and local stacks to get a \"what happens if we omit all special cases\" list.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sherlock",
+                    "text": "<span class=\"comment-copy\">Kindly check the OP once again. I have updated the last paragraph to explain my approach. The problem now lies in detecting a tail-call where compiler optimizes a <code>CALL</code> substituting by <code>JMP</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "w s",
+                    "text": "<span class=\"comment-copy\">I'd suggest to ask this question separately to make the question more visible. I never used DinamoRio, so may be somebody else will help you,</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

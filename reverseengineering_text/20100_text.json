@@ -1,0 +1,44 @@
+{
+    "title": "How does API call work on Android (NDK)?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20100/how-does-api-call-work-on-android-ndk",
+    "content": "In windows platform, an application usually references its IAT(Import Access Table) to get the address of the APIs it wants, then call it. Then some mechanisms are done as demonstrated here nicely.\nHowever, I cannot find out how API calls work on Android NDK. I think there's no IAT in an ELF file. Could anybody tell me how API calls on android works, in assembly level?\n\nE.g.\nWhen I call <pre><code>ALooper_acquire(&mylooper)</code></pre> then it assembles as\n<pre><code> mov r4, 0x2000  ; address of mylooper\n bl 0x7777fff0      ;address of ALooper_acauire\n ... after ALooper_acquire()\n</code></pre>\nthen in <pre><code>0x7777fff0</code></pre>:\n<pre><code>Blah blah happens to call system api, ...\n</code></pre>\n",
+    "votes": "7",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "linux",
+        "android",
+        "arm",
+        "system-call",
+        "api"
+    ],
+    "user": "Hyeonseo Yang",
+    "time": "Dec 18, 2018 at 12:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "To answer your question, let us first set a solid ground in terms of entities and definitions.\nELF stands for \"Executable and Linkable format\". \nThat is, it defines the structure and shape of two types of files:\n\nExecutables (Shared Objects *.so and stand-alone executables)\nLinkables (Object files *.o)\n\nLet us focus on executables.\nDependencies resolution of executables\nAmong other things, ELF defines a method of describing and resolving dependencies of executable.\nDependencies\nPut simple, dependencies are required external symbols. \nSymbols are named (identified) chunks of memory.\nSome of the chunks are data chunks (Global variables) while others are code-data chunks (Global functions). \nSince a symbol is a part of a module (aka Shared Object), any required symbol is coupled with a module.\nIn summary, dependencies are needed symbols and modules.\nNote that a function that is a part of an OS API could be and usually is an external symbol. However, it's not always the case.\nDependencies description\nELF defines a structure called Dynamic Segment used to store information needed by the loader (aka dynamic linker) in the loading process of an executable.\nAn executable's dependencies description is stored in its Dynamic Segment.\nNeeded symbols are organized in a table called Dynamic Symbol Table that's referred by the Dynamic Segment:\n\nReference to a symbol table under Loader directives- https://elfy.io/KYze4\nA dynamic symbol table is a contiguous array of symbol descriptors:\n\n.dynsym under Symbols - https://elfy.io/KYze4\nNeeded modules on the other hand are described directly with DT_NEEDED entries:\n\nNeeded modules under Loader directives - https://elfy.io/KYze4\nDynamic link\nNow we are ready to discuss the wiring mechanism that lets an executable reach its dependencies once they are resolved by the loader.\nWe will do it by following the steps of an external function call.\nLet's take a call to __android_log_print as an example (ARM 32 bit).\n<pre><code>...\n   1d21a:       f7fa e8e8       blx     173ec ; __android_log_print@plt\n...</code></pre>\nThe above is an assembly that calls __android_log_print which prints out text to Android Logcat.\nBut in fact, that blx instruction branches to a specific code-stub in a special area called Procedure Link Table (PLT).\nThere's a code stub in the PLT for every needed external function.\nHere's __android_log_print's stub:\n<pre><code>...\n000173ec __android_log_print@plt:\n   173ec:       e28fc600        add     ip, pc, #0, 12\n   173f0:       e28cca11        add     ip, ip, #69632   \n   173f4:       e5bcf9f4        ldr     pc, [ip, #2548]! \n000173f8 sleep@plt:\n   173f8:       e28fc600        add     ip, pc, #0, 12\n   173fc:       e28cca11        add     ip, ip, #69632\n   17400:       e5bcf9ec        ldr     pc, [ip, #2540]!\n...\n</code></pre>\nThe three instructions in the stub do the following: (pseudo code)\n<pre><code>JUMP *(GOT_ADDRESS + GOT_OFFSET_OF(__android_log_print))\n</code></pre>\nThe Global Offset Table (GOT) is a table of pointers.\nThere's a cell in the GOT for every external function.\nThat is, every external function has its own cell in the GOT.\nOnce the loading process is done, the cell of function X contains the memory address of function X.\n\nThe address computation of the right cell in the GOT is split into 3 because of\nencoding limitations. eg: Large offsets can't be encoded in a \nsingle instruction.\n\nIt's the OS loader responsibility to initialize the GOT with the right memory addresses, based on the information discussed before.\nThe PLT and GOT are parts of the ELF specification.\n",
+            "votes": "7",
+            "user": "Lero",
+            "time": "Dec 12, 2018 at 5:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Hyeonseo Yang",
+                    "text": "<span class=\"comment-copy\">Thank you so much!! Sounds like this applies to any linux executables, right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lero",
+                    "text": "<span class=\"comment-copy\">@KYHSGeekCode  I have yet to see a Linux executable that's formatted with a format other than ELF. So it's safe to assume that a Linux executable would be an ELF file, and in such case, yes, the mechanism would be the same.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Chris Stratton",
+                    "text": "<span class=\"comment-copy\">ELF was not Linux's initial dynamic executable format.  And there are some static binary formats in use today.  But what's really notable about Android is that it uses a unique libc.  Some embedded systems use alternate libc's as well.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

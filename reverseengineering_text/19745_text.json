@@ -1,0 +1,50 @@
+{
+    "title": "Changing local variable in caller from callee in C? [closed]",
+    "link": "https://reverseengineering.stackexchange.com/questions/19745/changing-local-variable-in-caller-from-callee-in-c",
+    "content": "Closed. This question is off-topic. It is not currently accepting answers.\n                                \n                            \n\n\n\n\n\n\n\n\n\n\n\n Questions on software development are off-topic here, but can be asked on Stack Overflow.\n\n\nClosed 3 years ago.\n\n\n\n\n\n\n\n                        Improve this question\n                    \n\n\n\nI'm implementing a function which is going to perform some time-consuming task, and I'd like to hack the benchmarking part a bit by changing the variable indicating the CPU time my function has started executing. Here is the code:\n<pre><code>#if defined(_MSC_VER)\n#pragma intrinsic(__rdtsc)\n#else\nstatic __inline__ uint64_t __rdtsc() {\n    uint32_t hi, lo;\n    __asm__ volatile\n        (\n        \"rdtsc\"\n        : \"=a\"(lo), \"=d\"(hi)\n        );\n    return (((uint64_t) hi) << 32) | ((uint64_t) lo);\n}\n#endif\n\n\nint arg = 42;\n\nuint64_t start_tSC, end_tSC;\n\n// Get total clock cycles for func\nstart_tSC = __rdtsc();\nfunc(arg);\nend_tSC = __rdtsc();\ndouble func_tSC = end_tSC - start_tSC;  // <---- let's minimize this\n</code></pre>\nBasically, I want to set <pre><code>start_tSC</code></pre> to the current clock time-stamp right before all tasks have been completed within <pre><code>func</code></pre>.\n<pre><code>void func(int arg) {\n    perform_tasks(arg);\n    /* black magic that resets start_tSC in the CALLER */\n}\n</code></pre>\nSince local variables and function parameters tend to be stored on the stack, can I somehow deduce where <pre><code>start_tSC</code></pre> resides by looking at the address of <pre><code>arg</code></pre>?\n\nSystem information\n<pre><code>~ $ uname -a\nLinux hive30 4.15.0-36-generic #39~16.04.1-Ubuntu SMP Tue Sep 25 08:59:23 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux\n</code></pre>\nAlso note that I have access to the target system as a normal user, which means I can build the executable as well as view the resulting assembly code via <pre><code>gcc -S</code></pre>. Here is some hardware information, if relevant.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "320",
+    "tags": [
+        "x86",
+        "linux",
+        "c",
+        "stack",
+        "stack-variables"
+    ],
+    "user": "nalzok",
+    "time": "3 years ago",
+    "comments": [
+        {
+            "user": "user3629249",
+            "text": "please do not cross post your questions\n",
+            "time": null
+        },
+        {
+            "user": "user202729",
+            "text": "Not very related to reverse engineering.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Edit:\nTo make the offset irrelevent to your stack frame size, i'd start by reading the address of the caller's stack frame pointer (the caller's ebp, located right before your return address, at <pre><code>DWORD PTR [ebp]</code></pre>).\nYou cannot assume the offset of <pre><code>start_tSC</code></pre> doesn't change as your code can be run with different versions of benchmarks.\nBefore explaining the idea, it operates under the assumption that the call for [<pre><code>GetSystemTimeAsFileTime</code></pre>, <pre><code>__rdtsc</code></pre>, <pre><code>GetTickCount</code></pre> or any other function ] is performed right before the call for your function. The justification for this assumption is that when preforming benchmarks, precision is essential and timing tend to wrap the tested code as close as possible.\nThe basic idea is to find the variable that contains the value that returns from the timing function.\nYou can read the return address from the memory (at <pre><code>DWORD PTR [ebp + 4]</code></pre>) and try to disassemble the code prior to your function until you find a call instruction (skip the call to your own function as the return address points right after this call). the instruction after the call should look something like:\n<pre><code>MOV [ebp - offset], eax\n</code></pre>\nand you can deduce the offset of <pre><code>start_tSC</code></pre> from here.\nDo note that disassemble code backwards is not straightforward as x86 code doesn't have constant length opcodes.\nAlso note that this solution requires more code, expanding the function size by (probably) a lot.\n",
+            "votes": "0",
+            "user": null,
+            "time": "Dec 28, 2018 at 18:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Chris Stratton",
+                    "text": "<span class=\"comment-copy\">You seem to have missed the point of the question with this proposal to modify the code of the caller.  The point is to modify the <i>behavior</i> of the <i>existing</i> calling code, without actually changing that code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user22970",
+                    "text": "<span class=\"comment-copy\">oh, yea, i see it now. my bad. i really misunderstood the question here</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,54 @@
+{
+    "title": "Having keys and binary, how do I reverse/decrypt a stream encryption?",
+    "link": "https://reverseengineering.stackexchange.com/questions/13483/having-keys-and-binary-how-do-i-reverse-decrypt-a-stream-encryption",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I would like to ask if you have any idea or approach to reverse engineer a decryption algorithm to find the opposite encryption function.\nI do have all required keys and fields and of course the decryption source code, which I reverse engineered already.</p>\n<p>I have analyzed the code and kinda know how it works but can`t figure out how to reverse (in the sense of undoing the encryption of) it.</p>\n<p>The following information is available to me:</p>\n<pre><code>// I have all these fields (filled correctly)\n\n    public byte[] Keychain;\n    public uint Step, Mul, HeaderXor, Key;\n</code></pre>\n<p>The decryption function looks like this:</p>\n<pre><code>public void Decrypt(byte[] packet) {\n        fixed (byte* pp = packet, pk = Keychain) {\n            uint size = (uint)GetPacketSize(packet);\n            uint header = (first) ? /* Checks if it is a partial packet (It isnt!)*/\n                0x000eb7e2 :\n                *((uint*)&amp;pp[0]) ^ HeaderXor; \n                // HeaderXor is an unsigned int\n                // It also changes after each decryption and if the key changes\n\n            if (first) \n                first = false;\n\n            uint token = *((uint*)&amp;pp[0]);\n            *((uint*)&amp;pp[0]) = header;\n            token &amp;= 0x3FFF;    // Get only last 14 bits\n            token *= Mul * 4;   \n            // Mul is an unsigned int and changes sometimes\n            token = *((uint*)&amp;pk[token]);\n\n            uint i, r, t;\n            size -= r = (size - 8) &amp; 3; // Make size dividable by 4\n\n            for (i = 8; i &lt; size; i += 4) {\n                t = *((uint*)&amp;pp[i]);\n                token ^= t;\n                *((uint*)&amp;pp[i]) = token;\n\n                t &amp;= 0x3FFF;\n                token = *((uint*)&amp;pk[t * Mul * 4]);\n            }\n\n            t = 0xFFFFFFFF &gt;&gt; 8 * (4 - (int)r);\n            token &amp;= t;\n            *((uint*)&amp;pp[i]) ^= token; // If something is left over ( if size - 8 == 5 then size &amp; 3 has rest of 1)\n            * ((uint*)&amp;pp[4]) = 0;\n\n            Step++;\n            Step &amp;= 0x3FFF;\n            HeaderXor = *((uint*)&amp;pk[Step * Mul * 4]);\n        }\n    }\n</code></pre>\n<p>Example results:</p>\n<pre><code>// Encrypted data\n// 5b 54 34 23\n// cc c2 5a a3\n// 81 7e d6 27\n// 36 c4 8f 36\n// b9 3b 6f ce\n// f4 8e 72 5b\n// \n// Decrypted data\n// e2 b7 18 00\n// 00 00 00 00\n// be 00 56 00\n// 2f 00 58 00\n// 30 00 59 00\n// 31 00 01 00\n</code></pre>\n<p>So, do you have any approach ?\nMaybe this source code can offer some more informations, but its Server-To-Client:</p>\n<p><a href=\"https://bitbucket.org/dignityteam/minerva/src/e149a219b6783070de71820ea359f1b27cebda63/src/ObjectBuddy/Cryption.cs?at=develop&amp;fileviewer=file-view-default\" rel=\"nofollow\">https://bitbucket.org/dignityteam/minerva/src/e149a219b6783070de71820ea359f1b27cebda63/src/ObjectBuddy/Cryption.cs?at=develop&amp;fileviewer=file-view-default</a></p>\n<p>I think, the Server-To-Client encryption is not the right thing. The decryption code I posted above does returns right results but is not the same as you can see at the linked page.</p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "encryption",
+        "decryption",
+        "cryptography",
+        "c#",
+        "cryptanalysis"
+    ],
+    "user": "bitQUAKE",
+    "time": "Nov 1, 2016 at 7:21",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Good news, You're lucky!</p>\n<p>What you're facing in front of you is a <a href=\"https://en.wikipedia.org/wiki/Stream_cipher\" rel=\"noreferrer\">stream cipher</a>. Why is that good? because the way stream ciphers are built makes them extremely easy to reverse - the decryption and encryption functions of stream ciphers are actually the same function.</p>\n<blockquote>\n<p>A stream cipher is a symmetric key cipher where plaintext digits are combined with a pseudorandom cipher digit stream (keystream). In a stream cipher each plaintext digit is encrypted one at a time with the corresponding digit of the keystream, to give a digit of the ciphertext stream. Since encryption of each digit is dependent on the current state of the cipher, it is also known as state cipher. In practice, a digit is typically a bit and the combining operation an exclusive-or (XOR).</p>\n</blockquote>\n<p>Stream ciphers are basically generating a sequence (or a stream) of bytes, and those bytes are mixed with the message in a byte-per-byte fashion, nearly always using a <a href=\"https://en.wikipedia.org/wiki/Exclusive_or\" rel=\"noreferrer\">XOR</a> operation. That's also the case with your function, see the line <code>token ^= t;</code>. Since two XOR operations with the same value cancel each other, XORing a byte of the encrypted message with the same stream again on the receiving end will actually decrypt it.</p>\n<p>If you have the keys and all input needed to generate the stream in the first place, simply applying the same function again will provide you with the original message.</p>\n</div>",
+            "votes": "5",
+            "user": "NirIzr",
+            "time": "Sep 11, 2016 at 20:28",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "bitQUAKE",
+                    "text": "<span class=\"comment-copy\">Thanks for these informations. I will try to run the same function on this decrypted data. I will keep you up to date.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bitQUAKE",
+                    "text": "<span class=\"comment-copy\">Hi, I tried to convert it back. You are absolutely right, these cipher algorithms do use the same algorithm to en/decrypt. But in my case there was a rapidly changing key between server and client. I used the algorithm from decryption to rebuild the next key and it works pretty good now :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Stream ciphers must be in sync with each other to gerentee they generate the same sequence I both ends. This is done by either :-) sending the sync with the message or b) guessing based on previous location and trying several values. I can elaborate on that if you're interested with N edit</span>",
+                    "time": null
+                },
+                {
+                    "user": "bitQUAKE",
+                    "text": "<span class=\"comment-copy\">What do you mean by: I can elaborate on that if you're interested with N edit ? :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Sorry, with an edit. I meant I can edit my answer and add more info about that</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

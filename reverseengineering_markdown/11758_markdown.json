@@ -1,0 +1,52 @@
+{
+  "title": "How do you calculate Address Start / Size of PE Section like .rdata / .data",
+  "link": "https://reverseengineering.stackexchange.com/questions/11758/how-do-you-calculate-address-start-size-of-pe-section-like-rdata-data",
+  "content": "I want to clone ollydbg's functionalities in vb6, so I could write my own tools easier then using it's scripting engine.\n\nI started of with trying to map the memory map's addresses exactly the same way ollydbg does it.\n\n\n\nThe PE header is at 0x00400000 with Size 0x1000\n\nI assume the 0x00400000 is retrieved like so.\n\n```\nDim AddressOfPE As Long = NTHEADER.OptionalHeader.ImageBase\n\n```\nNow I want to map the addresses for all the other stuff most importantly .text .rdata but I wouldn't mind having them all.\n\nwhat I tried is this\n\n```\nFor u = 0 To UBound(SECTIONSHEADER)\n    AddressStart = AddressOfPE + SECTIONSHEADER(u).VirtualAddress\n    Debug.Print \"(\" & u & \") \" & SECTIONSHEADER(u).nameSec & _\n    \" AddressStart = \" & Hex(AddressStart) & _\n    \" VirtualAddress = \" & Hex(SECTIONSHEADER(u).VirtualAddress) & _\n    \" VirtualSize = \" & Hex(SECTIONSHEADER(u).VirtualSize) & _\n    \" SizeOfRawData = \" & Hex(SECTIONSHEADER(u).SizeOfRawData)\n    'Hunt for strings\n    If SECTIONSHEADER(u).nameSec = \".rdata\" Or SECTIONSHEADER(u).nameSec = \".data\" Then\n        MsgBox \"a\"\n    End If\n    AddressEnd = AddressStart + SECTIONSHEADER(u).SizeOfRawData\n    Debug.Print \"(\" & u & \") \" & SECTIONSHEADER(u).nameSec & _\n    \" AddressEnd(?) = \" & Hex(AddressEnd) & _\n    \" OllyAddressEnd(?) = \" & Hex(SECTIONSHEADER(u).SizeOfRawData)\nNext u\n\n```\nDebug log looks like this\n\n```\n(0) .text  AddressStart = 401000 VirtualAddress = 1000 VirtualSize = 1FAB3AD SizeOfRawData = 1FAB400\n(0) .text  AddressEnd(?) = 23AC400 OllyAddressEnd(?) = 1FAB400\n(1) .rdata AddressStart = 23AD000 VirtualAddress = 1FAD000 VirtualSize = 855586 SizeOfRawData = 855600\n(1) .rdata AddressEnd(?) = 2C02600 OllyAddressEnd(?) = 855600\n(2) .data  AddressStart = 2C03000 VirtualAddress = 2803000 VirtualSize = 2D045C4 SizeOfRawData = 1DF000\n(2) .data  AddressEnd(?) = 2DE2000 OllyAddressEnd(?) = 1DF000\n(3) .rsrc  AddressStart = 5908000 VirtualAddress = 5508000 VirtualSize = 105CC SizeOfRawData = 10600\n(3) .rsrc  AddressEnd(?) = 5918600 OllyAddressEnd(?) = 10600\n\n```\nLooking at this image seems I got it all right? but the size addresses are off.\n\n\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "ollydbg",
+    "pe",
+    "vb6"
+  ],
+  "user": "SSpoke",
+  "time": "Jan 15, 2016 at 2:31",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Dang I solved it, I thought you had to add the previous section size to create new section address but it doesn't work like that.\n\nStill got a little bug where VirtualSize is smaller then OllyDbg's Memory Map Sizes for that section, but it seems SizeOfRawData is more accurate sometimes?\n\nBut I guess I could fix this by taking the previous StartAddress for each section and subtracting one from it to get the End Size.\n\nI guess I could mark this solved.\n\n```\nDim AddressOfPE As Long\nDim RawFileOffsetToCheck As Long\nDim StartAddress as Long\nDim EndAddresss as Long   \n\nAddressOfPE = NTHEADER.OptionalHeader.ImageBase\n\nFor u = 0 To UBound(SECTIONSHEADER)\n    StartAddress = AddressOfPE + SECTIONSHEADER(u).VirtualAddress\n    EndAddresss = AddressOfPE + RoundUp((SECTIONSHEADER(u).VirtualAddress + SECTIONSHEADER(u).VirtualSize), NtHeader.OptionalHeader.SectionAlignment) - 1\n\n    If offset >= StartAddress And offset <= EndAddresss Then\n        RawFileOffsetToCheck = offset - StartAddress  + SECTIONSHEADER(u).PointerToRawData\n    End If\n    'Hunt for strings\n    'TODO: Use the STUFF here.. pretty easy since we get the file offset here [RawFileOffsetToCheck]\nNext u\n\n\nPublic Function RoundUp(V, M) As Long\n    If (V Mod M) = 0 Then\n        RoundUp = V\n    Else\n        RoundUp = ((V \\ M) + 1) * M\n    End If\nEnd Function\n\n```\nDebug outputs exactly like ollydbg view\n\n```\n.text  401000 23ACFFF\n.rdata 23AD000 2C02FFF\n.data  2C03000 5907FFF\n.rsrc  5908000 5918FFF\n\n```\n",
+      "votes": "2",
+      "user": "SSpoke",
+      "time": "Jan 15, 2016 at 1:50",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "peter ferrie",
+          "text": "the algorithm is essentially the smaller of VirtualSize and SizeOfRawData (except when SizeOfRawData is zero, then VirtualSize is always used), rounded up to a multiple of SectionAlignment.  I can hand-craft some corner cases which break that algorithm, but a compiler isn't going to do that.",
+          "time": null
+        },
+        {
+          "user": "SSpoke",
+          "text": "if VirtualSize = 0x1700 and SectionAlignment = 0x200 then EndAddress = EndAddress + (0x1700 % 0x200);  correct?",
+          "time": null
+        },
+        {
+          "user": "SSpoke",
+          "text": "Doesn't give me good results I will try to fix this up.. I think I know a better way",
+          "time": null
+        },
+        {
+          "user": "SSpoke",
+          "text": "Nope that doesn't do it adding the SectionAlignment makes it go over into the next section, so that's not it either, I know of some tricks I discovered like Export tables size is calculated like this (NTHEADER.OptionalHeader.DataDirectory(1).Size / 20) - 1   1 being Exports index. I been looking at other debuggers source code and FileAlignment and SectionAlignment isn't even used in them very odd indeed.",
+          "time": null
+        },
+        {
+          "user": "SSpoke",
+          "text": "Okay thanks for your advice it works perfectly!, I didn't understand the concept of rounding up it works good now.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "title": "Question about process injection",
+  "link": "https://reverseengineering.stackexchange.com/questions/6493/question-about-process-injection",
+  "content": "During an analysis, I found the following piece of malware:\n\n```\n   ...\n   lea eax, [ebp+ThreadId]\n   push eax                   ;lpThreadId\n   push ebx                   ;dwCreationFlags\n   push [ebp+lpParameter]     ;lpParameter\n   push [ebp+lpStartAddress]  ;lpStartAddress\n   push ebx                   ;dwStackSize\n   push ebx                   ;lpThreadAttributes\n   push [ebp+hProcess]        ;hProcess\n   call CreateRemoteThread\n   ...\n\n```\nFrom some previous parts, I know that \n\n```\nxor ebx, ebx -> ebx = NULL or zero\n\n```\nAt the address pointed to by lpParameter, the malware stores the address of LoadLibrary. And hProcess is a handle to explorer.exe. \n\nRelated to lpStartAddress, I have found the following lines:\n\n```\n  ...\n  push ebx\n  push [ebp+nSize]\n  push offset loc_402B58\n  push [ebp+lpStartAddress]\n  push [ebp+hProcess] \n  call WriteProcessMemory\n  ...\n\n```\nSo, this function writes the content of offset loc_402B58 into the region of pages started at lpStartAddress (which was allocated some lines before).\nNow, when I go to offset loc_402B58, I see the following (note: I use IDA PRO):\n\n```\nloc_402B58:\n push esi\n mov esi, [esp+8]\n lea eax, [esi+14h]\n push eax\n call dword ptr[esi]\n test eax, eax\n mov [esi+10h], eax\n jz short loc_402B80\n lea ecx, [esi+46h]\n push ecx\n push eax\n call dword ptr [esi+4]\n test eax, eax\n jz short_loc402B80\n call eax\n push 0\n call eax                  <----- edited because i have forgotten it\n push 0                    <-----                    ''\n call dword ptr [esi+8]    <-----                    ''\n\nloc_402B80:     \n xor eax, eax\n pop esi\n retn 4\n\n```\nSo my question would be: \n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "348",
+  "tags": [
+    "assembly",
+    "malware",
+    "injection"
+  ],
+  "user": "user3097712",
+  "time": "Oct 19, 2014 at 13:34",
+  "comments": [
+    {
+      "user": "user45891",
+      "text": "Can not be said with the limited information given. As you see loc_402B58 access esp+8 which is the parameter given in the CreateRemoteTHread call. So without knowledge of that there is no way of knowing",
+      "time": null
+    },
+    {
+      "user": "user3097712",
+      "text": "the parameter given to CreateRemoteThread is the address of the function \"LoadLibrary\", as I wrote. Or, how can I look which information is at esp+8 ?",
+      "time": null
+    },
+    {
+      "user": "user45891",
+      "text": "Yes, however I am not sure whether it's only that. Consider line 5 call [esi] which is the call to LoadLibrary(). However on line 3 it accesses the parameter + 0x14 and uses that as the DLL name that is passed to LoadLibrary.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It should also be storing address of GetProcAddress() at <lpparm+4> \n\nit should store a string the name of module at <lpparam+14>\n\nit should store a string the name of proc for getProcAddress at <lpparm+46>\n\nat [esp+8] it accesses the lpparam which was written to the remote process so you may need to find this WriteProcessMemory Also and look at the local Buffer to Know the data ie name of dll and name of Proc \n\nor you may need to attach to the Remote process and Break on Thread CreateEvent and single Step through the BaseThreadStartThunk()  Routine  in this routine you will notice ebp is Zeored in there and Eax and Ebx holds LpStart and lpParam and that is how lpStart gets Executed \n\n```\npush [ebp+c] lpparam\ncall [enp+8] lpStart\n\n```\nesi gets the lpparm via mov esi [esp+8] which in your case holds the Address of LoadLibrary as you correctly observed but you have not observed what is at \n\n```\nassuming [esp+8 ] holds 403000 <lpparam>\n[[esp+8] + 0 ] [403000] holds Address of LoadLibrary as you observed\n[[esp+8] + 4]  [403004] will hold Address of GetProcAddress\n[[esp+8] + 14] [403014] will hold a string the dll name\n[[esp+8] + 46] [403046] will hold the name of  Proc in the Loaded Dll\n[[esp+8] + 10] [403010] gets the Result of LoadLibrary Return in your above snippet\n\n```\nedit \n\nadded the annotated snippet for referance\n\n```\npush esi\n mov esi, [esp+8]    <lpparameter> assuming 403000\n lea eax, [esi+14h]  lpparameter+14> should be a string the name of dll 403014\n push eax            push 403014    \n call dword ptr[esi] DWORD [ lpparmeter+0 ] = [403000] = Address Of LoadLib so calling loadlib\n test eax, eax\n mov [esi+10h], eax  [lpparam+10] [403010] store LoadLibResult here\n jz short loc_402B80  failure\n lea ecx, [esi+46h] [403046] = <lpparm+46> again a string name of Proc for GetProcAddress()\n push ecx           processname     \n push eax           HandletoLoadedmod  \n call dword ptr [esi+4]  Must be Address of GetProcAddress from the looks check your code \ncapture local buffer when Writing to ProcessMemory or Break on Create new Thread in the RemoteProcess\nby attaching a debugger Executing the RemoteDebugge and when a new Thread Create Event is triggered \nsingle step to find the contents of lpparam\n test eax, eax    \n jz short_loc402B80\n call eax  <calls the  functions that was just getproc'ed>\n push 0\n call \n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Oct 18, 2014 at 19:22",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user3097712",
+          "text": "Thank you for your answer. It helps a lot. I complete the lines after the last call instruction because I have forgotten it. So, what the code construct does is to get a handle to a dll and use that handle later for GetProcAddress to retrieve the address of a process from that dll. Okay.",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "nitpick not process but proc -------------------------------The term Proc Literally Denotes a Function Address in a Process Space where Process is Term that Denotes a Collection Of threads that are Scheduleable to Execute in a Processor",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

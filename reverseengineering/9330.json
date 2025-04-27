@@ -1,0 +1,43 @@
+{
+    "title": "Tracing variable access/usage instructions",
+    "link": "https://reverseengineering.stackexchange.com/questions/9330/tracing-variable-access-usage-instructions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There is a great little closed-source freeware Windows program (written in Delphi) that I have been using for years. WinBar shows a little bar above the TaskBar which gives some system information and provides access to a few useful functions.</p>\n<p>Unfortunately it has a bug that is pretty annoying. The Memory Usage component only shows half of the installed memory and displays 0MB used until at least half of the memory has been used, then it starts counting up from there (for example, if 4GB are installed, and 1GB is in use, it says 0MB/2047MB; if 3GB are in use, it says 1024MB/2047MB).</p>\n<p>It looks like this is due to it using a signed 32-bit value for the installed and used memory count. That should be a pretty easy fix, but alas, development of it has long since been discontinued (there is a 2.x version on SourceForge—also discontinued—which does not suffer from this bug, but it is too different and I do not like it).</p>\n<p>I want to dig in and fix this by finding the bits of code that handle the relevant values and change them to treat it as unsigned. This might be very easy (change a <code>printf</code> format specifier) or it might be difficult, depending on the nature of the code (no way to tell without seeing the exact assembler instructions).</p>\n<p>I tried running it through WDasm32 a while back but couldn’t find any good leads. It shows the value in a ThunderRT6PictureBoxDC control in the bar.</p>\n<p>Does anybody have any advice on how to accomplish this?</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "windows",
+        "binary-analysis",
+        "debugging",
+        "local-variables"
+    ],
+    "user": "Synetech",
+    "time": "Jul 11, 2015 at 21:21",
+    "comments": [
+        {
+            "user": "Synetech",
+            "text": "<span class=\"comment-copy\">(<a href=\"http://winbar.nl/\" rel=\"nofollow noreferrer\">WinBar 1.2.95</a> is available on their old site.)</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\"><code>ThunderRT6</code> sounds like VB6, not Delphi.</span>",
+            "time": null
+        },
+        {
+            "user": "JimmyB",
+            "text": "<span class=\"comment-copy\">How about looking at the 2.x sources to find out how &amp; where the output is generated? This should give you a clue as to what to look for, assuming that not everything changed from a previous version. (<a href=\"http://sourceforge.net/p/winbar/code/1/tree/\" rel=\"nofollow noreferrer\">Oldest on SF</a> seems to be from 2008, but already V2.0) - Or, go the straight way and contact the author for an old version of the source.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As <em>@Igor Skochinsky</em> has already commented, the <a href=\"http://winbar.nl/\" rel=\"nofollow\">software</a> is indeed written in Visual Basic 6 <a href=\"https://msdn.microsoft.com/en-us/library/aa240843(v=vs.60).aspx\" rel=\"nofollow\">compiled in native mode</a> (VB6 also supports P-mode). You can verify this with a PE Info tool like <a href=\"http://ntinfo.biz/\" rel=\"nofollow\">Detect It Easy</a> (but before that  you need to unpack the <a href=\"http://www.aspack.com/\" rel=\"nofollow\">ASPack</a> wrapper).</p>\n<p>The cause of the bug is due to multiple reasons.</p>\n<p>The software uses an WinApi Function <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/aa366586(v=vs.85).aspx\" rel=\"nofollow\"><code>GlobalMemoryStatus</code></a> to retrieve the  System Memory currently in use. Now there are a couple of quirks of this function:</p>\n<h3>First</h3>\n<blockquote>\n<p>On computers with <strong>more than 4 GB of memory</strong>, the GlobalMemoryStatus\n  function can <strong>return incorrect information</strong>, reporting a value of –1 to\n  indicate an overflow. For this reason, applications <strong>should use the\n  GlobalMemoryStatusEx function instead</strong>.</p>\n</blockquote>\n<p>Hence if your system has more than 4 GB of memory, the output from this function is not reliable, and hence may display erroneous values. Fixing this is difficult.</p>\n<h3>Second</h3>\n<blockquote>\n<p>On Intel x86 computers with <strong>more than 2 GB and less than 4 GB</strong> of\n  memory, the GlobalMemoryStatus function will <strong>always return 2 GB</strong> in the\n  dwTotalPhys member of the MEMORYSTATUS structure. Similarly, if the\n  total available memory is <strong>between 2 and 4 GB</strong>, the dwAvailPhys member\n  of the MEMORYSTATUS structure will be <strong>rounded down to 2 GB</strong>. If the\n  executable is <strong>linked using the /LARGEADDRESSAWARE</strong> linker option, then\n  the GlobalMemoryStatus function will <strong>return the correct amount of\n  physical memory</strong> in both members</p>\n</blockquote>\n<p>To fix this bug, you need to make the application <a href=\"https://msdn.microsoft.com/en-us/library/wz223b1z.aspx\" rel=\"nofollow\">Large Address Aware</a>.  This can be done by loading it in <a href=\"http://www.ntcore.com/exsuite.php\" rel=\"nofollow\">CFF Explorer</a> and check the flag <strong><em>App can handle &gt; 2GB address space</em></strong> under <br/> <strong><em>Nt Headers</em></strong> -&gt; <strong><em>File headers</em></strong> -&gt; <strong><em>Characteristics</em></strong>.</p>\n<hr/>\n<p>Now, to convert the integer memory value obtained from <code>GlobalMemoryStatus</code> to a string the app uses the <a href=\"http://vb6reference.tomswebdesign.net/string.html\" rel=\"nofollow\"><code>CStr</code></a> function. </p>\n<p>VB6 has no unsigned 32 bit integer <a href=\"https://en.wikibooks.org/wiki/Visual_Basic/Data_Types\" rel=\"nofollow\">data type</a>. The only unsigned data type is an 8 bit <code>Byte</code>. </p>\n<p>Suppose your system has more than 2GB but less than 4GB memory and that you have already fixed the second bug as mentioned above.</p>\n<p>Let's assume your system has 3GB memory. This is equivalent to <code>3,22,12,25,472</code> bytes in decimal or <code>1100 0000 0000 0000 0000 0000 0000 0000</code> bytes in binary. \n<br/>Since the <a href=\"https://en.wikipedia.org/wiki/Most_significant_bit\" rel=\"nofollow\">MSB</a> of this value is 1, it will be treated as negative when passed to <code>CStr</code>. Thus the resultant string would be <code>- 1GB</code> instead of <code>3GB</code>. <strike>There is also no easy fix for this.</strike></p>\n<p><strike>So all-in-all the <strong>software is only usable when your system has less than 2GB memory</strong>.</strike></p>\n<h3>UPDATE (Signed Integer Bug Fix)</h3>\n<p>The signed integer bug can be patched to make the application usable to 4GB.\nPatch the binary so as to convert the<code>SAR</code> (signed shift) to <code>SHR</code> (unsigned shift) instruction.</p>\n<p><strong>Original Code</strong></p>\n<pre><code>00092DCD  and edx,000FFFFF\n00092DD3  add eax,edx\n00092DD5  sar eax,14        ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;\n00092DD8  mov dword ptr [ebp-28],eax\n00092DDB  mov eax,dword ptr [ebp-54]\n00092DDE  cdq\n00092DDF  and edx,000FFFFF\n00092DE5  add eax,edx\n00092DE7  sar eax,14        ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;\n00092DEA  mov dword ptr [ebp-30],eax\n</code></pre>\n<p><strong>Patched Code</strong></p>\n<pre><code>00092DCD  and edx,000FFFFF\n00092DD3  add eax,edx\n00092DD5  shr eax,14        ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;\n00092DD8  mov dword ptr [ebp-28],eax\n00092DDB  mov eax,dword ptr [ebp-54]\n00092DDE  cdq\n00092DDF  and edx,000FFFFF\n00092DE5  add eax,edx\n00092DE7  shr eax,14        ; &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;\n00092DEA  mov dword ptr [ebp-30],eax\n</code></pre>\n<p><strong>Incorporating the large address aware and signed integer patch, the application can be made usable to 4 GB of memory</strong>.</p>\n</div>",
+            "votes": "4",
+            "user": "0xec",
+            "time": "Jul 14, 2015 at 3:46",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

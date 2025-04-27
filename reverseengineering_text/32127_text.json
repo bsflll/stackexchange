@@ -1,0 +1,24 @@
+{
+    "title": "Unsure how LZSS compression is assigning dictionary references",
+    "link": "https://reverseengineering.stackexchange.com/questions/32127/unsure-how-lzss-compression-is-assigning-dictionary-references",
+    "content": "I am having trouble understanding how this LZSS compression assigns dictionary match references. This particular LZSS compression algorithm has a dictionary space of 4096 bytes that are assigned 0 to start. The first index used is 4078, and the match length is 3 to 18. Each data chunk is a flag byte followed by 8 objects. An object is a 1 byte literal or two byte reference/length pair.\nThe flag byte determines whether the next object will be a literal or a reference/length. As an example, 0xEF (0b11101111) means the fifth object will be a dictionary reference. All other objects will be literals.\nFor the reference/length pair, 0XECF0 means the dictionary reference is 0xFEC and the length is 3 (0+3).\nThis set of data:\n<pre><code>00 0A 7C 8D 00 00 00 03 00 5B\n</code></pre>\nCompresses into\n<pre><code>EF 00 0A 7C 8D EC F0 03 00 5B\n</code></pre>\nThis 100% makes sense to me. The 0xFEC, 0xFED, and 0xFEE all contain zeros in the dictionary.\nThe next sets of bytes to be encoded are\n<pre><code>00 5C 00 5D 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 E0\n</code></pre>\nWhich it compresses into\n<pre><code>CF 00 5C 00 5D DC FF E5 F7 01 E0\n</code></pre>\nWhy is it DC FF E5 F7 (reference 0XFDC length 18, reference 0xFE5 length 10) and not DD FF 0D 07? I thought LZSS was supposed to work backwards. The encoder is ignoring the 0 stored at reference 0XFEE for the first 18 zeros. I have seen other circumstances where chains of 18 0s are previously referenced. I have even used someone else’s code and got the same result I did.\nUPDATE\nThis algorithm is completely baffling. The 0xB36 byte to be encoded is 18 0s and it pulls it from 0x1DF to 0x1F0. The very next bytes to be encoded (0XB48) is 5 0s. It goes all the way back 0XFE9 to 0xFEE to pull the 5 zeros. Where the dictionary references are pulled from seem completely arbitrary.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "73",
+    "tags": [
+        "encodings"
+    ],
+    "user": "fishygobyebye",
+    "time": "Aug 5, 2023 at 15:41",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I reproduced your case in Golang:\n<pre><code>package main\n\nimport (\n    \"bytes\"\n    \"fmt\"\n\n    \"github.com/bovarysme/lzss\"\n)\n\nfunc compressAndDisplay(name string, input []byte) {\n    buffer := new(bytes.Buffer)\n    writer := lzss.NewWriter(buffer)\n    fmt.Println(fmt.Sprintf(\"%s:\", name))\n    fmt.Println(fmt.Sprintf(\"%x\", input))\n    writer.Write(input)\n    writer.Close()\n    // get rid of the null-termination byte\n    hex := buffer.Bytes()\n    hex = hex[0 : len(hex)-1]\n    fmt.Println(fmt.Sprintf(\"%s compressed:\", name))\n    fmt.Println(fmt.Sprintf(\"%x\", hex))\n}\n\nfunc main() {\n    input := []byte {0x00, 0x0A, 0x7C, 0x8D, 0x00, 0x00, 0x00, 0x03, 0x00, 0x5B}\n    compressAndDisplay(\"1st part\", input)\n    input = []byte {0x00, 0x5C, 0x00, 0x5D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xE0}\n    compressAndDisplay(\"2nd part\", input)\n}\n\n</code></pre>\nIt produces the same output for the first buffer:\n<pre><code>EF 00 0A 7C 8D EC F0 03 00 5B\n</code></pre>\nAnd, funnily enough, yet another sequence for the second buffer:\n<pre><code>CF 00 5C 00 5D DD FF 03 07 01 E0\n</code></pre>\nI'm no expert in compression algorithms, but this seems like an implementation-dependent behaviour (although the result only differs on a single byte from what you expected).\n",
+            "votes": "1",
+            "user": "mimak",
+            "time": "Aug 4, 2023 at 14:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

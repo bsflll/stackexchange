@@ -1,0 +1,37 @@
+{
+  "title": "Determine if the function has try/catch statement via the static analysis",
+  "link": "https://reverseengineering.stackexchange.com/questions/28027/determine-if-the-function-has-try-catch-statement-via-the-static-analysis",
+  "content": "I need to determine if the function has exception handler via static analysis. Initially I thought that if there's SEH handler prolog in the function, then the function should have try /catch. I.e. I thought if x86 function has instructions like:\n\n```\n.text:004125E3                 push    0FFFFFFFFh\n.text:004125E5                 push    418540h\n.text:004125EA                 mov     eax, large fs:0\n\n```\nthere should be try/catch.\nBut after compiling some C++ code samples I've found that these instructions are added even if there's no try/catch, but a call to throw(). Thus it looks like it's impossible to determine if the function actually has the exception hander or not.\n\nOn AMD64, it's even more obscure, since there are no exception related instructions. The information about the exception handler seems to be encoded with Exception Directory in PE header. The data in Exception Directory points to function start, function end and Unwind info. I thought that if function doesn't have try/catch there will be no entry in the Exception Directory. But similarly to x86, if the function calls throw() it has the entry in the Exception Directory, even if there's no try/catch in the source code.\n\nSo the question is: how does the system know if there's an exception hander for a function and to distinguish the function which have no try/catch from those which have it?\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "193",
+  "tags": [
+    "static-analysis",
+    "exception",
+    "seh"
+  ],
+  "user": "Anton Kukoba",
+  "time": "Jul 21, 2021 at 13:01",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "TL,DR;\nException handling can cause memory leaks. Your C++ compiler is smart enough to realize the possibility of memory leaks surrounding exception handling and is automatically inserting exception handlers where necessary to prevent memory leaks. This means that there really is a try/catch block where you observed an exception handler, except it is handling nothing and simply re-throwing the exception after cleaning up C++ objects.\n\nThe system doesn't know. In fact, it is impossible for the system to know, so it simply walks down the chain of exception handlers until it finds one that tells the system \"exception handled\". This means that whenever you see those 3 assembly instructions, there is always an exception handler and I believe that it should always be possible to reverse the exception handler into an equivalent C++ try/catch block.\n\nBut as you have observed, not all exception handlers need to be explicitly defined. Your C++ compiler will insert them into your program where necessary for the purpose of object cleanup, because exception handling can cause memory leaks:\n\n```\nvoid i_leak_memory() {\n    void* memory = malloc(512);\n    throw std::exception();\n\n    // this line of code will never be executed\n    free(memory);\n}\n\nvoid i_handle_exceptions() {\n    try {\n        i_leak_memory();\n    }\n    catch(std::exception e) {\n        // exception handled\n    }\n}\n\n```\nIn the above code, you will find that memory is never freed due to the interruption caused by the exception. At the exact moment the exception occurs, execution is immediately transferred to the catch in i_handle_exceptions() and after handling the exception, execution continues in i_handle_exceptions(). i_leak_memory() never gets an opportunity to release resources after the exception occurred, and so we end up with a memory leak.\n\nFortunately, there is a simple solution to this apparent memory leak. Simply replace i_leak_memory() with i_do_not_leak_memory():\n\n```\nvoid i_do_not_leak_memory() {\n    void* memory = 0;\n\n    try {\n        memory = malloc(512);\n        throw std:exception();\n        free(memory);\n    }\n    catch(std:exception e) {\n        free(memory);\n        throw;\n    }\n}\n\n```\nBy simply adding a try/catch block to the function, we can give it one last chance at releasing resources in the event of an exception. The catch block does not necessarily need to handle the exception, but it allows us to include special logic that would prevent memory leaks.\n\nWith the RAII design of C++, the task of object cleanup is the responsibility of the C++ compiler. When using throw(), the C++ compiler needs to inject special logic into the code (possibly in multiple functions) to prevent memory leaks from occurring. So in your observations, what really happened is that your C++ compiler replaced i_leak_memory() with i_do_not_leak_memory() because if it didn't, the program would be leaking C++ objects whenever an exception occurred.\n\n",
+      "votes": "1",
+      "user": "MarianD",
+      "time": "Jul 25, 2021 at 11:18",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Anton Kukoba",
+          "text": "(Part 1) Thanks for C++ tour, but I've already known that. The system actually knows if the function has try/catch from unwind info. In case of x86, the prolog actually pushes SEH hander structure to SEH stack, and in such way CRT SEH handler knows where it should go in case exception has happened and if the exception type matches, it will execute the topmost SEH handler, otherwise it will traverse down until it reaches Unhandled exception filter. In x86 SEH handler code is usually a part of the function code. Thus it can been seen \"by eyes\" in the disassembly.",
+          "time": null
+        },
+        {
+          "user": "Anton Kukoba",
+          "text": "(Part 2) Sometimes SEH hander is placed right after the function. Thus it should be possible to detect (for at least x86) that there's an exception handler and which kind of exception it handles. The problem is how to do it in static. Since the information about unwind info is hard to find and hard to understand.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

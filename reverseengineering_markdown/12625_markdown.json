@@ -1,0 +1,75 @@
+{
+  "title": "Find Address of Windows Kernel Functions",
+  "link": "https://reverseengineering.stackexchange.com/questions/12625/find-address-of-windows-kernel-functions",
+  "content": "How can I find the address of a Windows kernel function?\n\nIn this case I'm trying to find CreateThread.\n\nCan this be done from a debugger? Olly/Immunity?\n\n",
+  "votes": "3",
+  "answers": 3,
+  "views": "3k",
+  "tags": [
+    "windows",
+    "debuggers"
+  ],
+  "user": "Juicy",
+  "time": "May 10, 2016 at 21:58",
+  "comments": [
+    {
+      "user": "blabb",
+      "text": "if you mean CreateThread in kernel32.dll with ollydbg 2.01 alt +e ->right click show names in all modules start typing CreateThread and double click the resultant line",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It can be done programmatically with a combination of NtQuerySystemInformation, LoadLibraryEx, and GetProcAddress.\n\nThe code below may not work perfectly, as I don't have a Windows box to build it for testing.  However, it should move you in the correct direction.\n\n```\n#include \"stdafx.h\"\n\n#include <string.h>\n#include <windows.h>\n\nenum { SystemModuleInformation = 11 };\n\ntypedef struct _RTL_PROCESS_MODULE_INFORMATION {\n    ULONG Section;\n    PVOID MappedBase;\n    PVOID ImageBase;\n    ULONG ImageSize;\n    ULONG Flags;\n    USHORT LoadOrderIndex;\n    USHORT InitOrderIndex;\n    USHORT LoadCount;\n    USHORT OffsetToFileName;\n    CHAR FullPathName[256];\n} RTL_PROCESS_MODULE_INFORMATION, *PRTL_PROCESS_MODULE_INFORMATION;\n\ntypedef struct _RTL_PROCESS_MODULES {\n    ULONG NumberOfModules;\n    RTL_PROCESS_MODULE_INFORMATION Modules[1];\n} RTL_PROCESS_MODULES, *PRTL_PROCESS_MODULES;\n\ntypedef NTSTATUS (*NtQuerySystemInformationFunc)(\n    _In_      DWORD SystemInformationClass,\n    _Inout_   PVOID                    SystemInformation,\n    _In_      ULONG                    SystemInformationLength,\n    _Out_opt_ PULONG                   ReturnLength\n);\n\nULONG64 GetKernelFunctionAddress(LPCSTR Name) {\n    NtQuerySystemInformationFunc NtQuerySystemInformation = NULL;\n    HMODULE hKernel = NULL;\n    HMODULE hNtdll = NULL;\n    ULONG64 KernelBase = NULL;\n    ULONG64 KernelFunctionAddress = NULL;\n    RTL_PROCESS_MODULES ModuleInfo = { 0 };\n\n    // Get the address of NtQuerySystemInformation\n    hNtdll = GetModuleHandle(\"ntdll\");\n    NtQuerySystemInformation = (NtQuerySystemInformationFunc)GetProcAddress(hNtdll, \"NtQuerySystemInformation\");\n\n    // Get the base address of the kernel\n    NtQuerySystemInformation(SystemModuleInformation, &ModuleInfo, sizeof(ModuleInfo), NULL);\n    KernelBase = (ULONG64)ModuleInfo.Modules[0].ImageBase;\n\n    // Load the kernel\n    hKernel = LoadLibraryEx(strrchr(ModuleInfo.Modules[0].FullPathName, '\\\\') + 1, 0, LOAD_LIBRARY_AS_IMAGE_RESOURCE);\n\n    // Look up the function in the kernel\n    KernelFunctionAddress = (ULONG64)GetProcAddress(hKernel, Name);\n\n    // Adjust the address based on the kernel load address\n    KernelFunctionAddress -= (ULONG64)hKernel;\n    KernelFunctionAddress += KernelBase;\n\n    return KernelFunctionAddress;\n}\n\n```\n",
+      "votes": "6",
+      "user": "Zach Riggle",
+      "time": "Aug 11, 2016 at 21:20",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Jason Geffner",
+          "text": "Smart approach! Even though I gave a different answer, I voted yours up ;)",
+          "time": null
+        },
+        {
+          "user": "Djof",
+          "text": "No need to dynamically import NtQuerySystemInformation, it is defined in winternl.h, though not all SystemInformationClass values are defined. See learn.microsoft.com/en-us/windows/win32/api/winternl/…",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "From WinDbg you can use the x command.\n\nFor example:\n\n```\nkd> x nt!NtCreateThread\n830e4fda          nt!NtCreateThread (<no parameter info>)\n\n```\nWhen I lookup the address for the NtCreateThread function above, WinDbg tells me that NtCreateThread is at address 0x830e4fda.\n\n(You'd probably want to use LiveKd instead as it's easier than hooking up a remote kernel debugger.)\n\n",
+      "votes": "5",
+      "user": "Jason Geffner",
+      "time": "May 11, 2016 at 0:30",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "grepNstepN",
+          "text": "beat me to it! dont forget, if youre trying to trap a native API call which would be better for hooking or introspection, you'd want to use      x ntdll!ZwCreateThread",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "In Ollydbg you can select the disassembly windows and hit CTRL + g. A dialog box will show up and just enter CreateThread in it. The search is case sensitive.\n\nEDIT\n\nThis does not work for Windows Kernel functions but it does work for any function from a DLL that is imported by the program being debugged. Since you are searching for CreateThread address, I assume that is what you meant from your question.\n\n",
+      "votes": "0",
+      "user": "ubnix",
+      "time": "May 12, 2016 at 14:34",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jason Geffner",
+          "text": "This won't work for Windows kernel functions. OllyDbg does not have access to the kernel's address space.",
+          "time": null
+        },
+        {
+          "user": "ubnix",
+          "text": "@JasonGeffner you are right! I mixed the terminology since I only saw that the OP was looking for address of a common DLL function. The answer has beed edited.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

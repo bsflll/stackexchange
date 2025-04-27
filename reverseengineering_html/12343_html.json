@@ -1,0 +1,60 @@
+{
+    "title": "Reverse engineering a base64 encoded number",
+    "link": "https://reverseengineering.stackexchange.com/questions/12343/reverse-engineering-a-base64-encoded-number",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am working on reverse engineering an encoding.\n </p>\n <p>\n  A number between -12 and 12, with 2 decimals is encoded using an unknown method, and the result is a pair of strings as follows:\n </p>\n <pre><code>value   string1     string2\n  0     AAAAAAAAAA  AAAAAAAA\n  0.01  AAAAB7FK5H  4XqEPwAA\n  0.02  AAAAB7FK5H  4XqUPwAA\n  0.03  AAAAC4HoXr  UbiePwAA\n  1     EAAAAAAAAA  AADwPwAA\n  2     IAAAAAAAAA  AAAAQAAA\n  3     MAAAAAAAAA  AAAIQAAA\n  4     QAAAAAAAAA  AAAQQAAA\n  5     UAAAAAAAAA  AAAUQAAA\n  6     YAAAAAAAAA  AAAYQAAA\n  7     cAAAAAAAAA  AAAcQAAA\n  8     gAAAAAAAAA  AAAgQAAA\n  9     kAAAAAAAAA  AAAiQAAA\n 10     oAAAAAAAAA  AAAkQAAA\n 11     sAAAAAAAAA  AAAmQAAA\n 12     wAAAAAAAAA  AAAoQAAA\n-12     T///8AAAAA  AAAowAAA\n- 1     ////8AAAAA  AADwvwAA\n- 0.64  ////97FK5H  4XrkvwAA\n  2.01  IAAAAUrkfh  ehQAQAAA\n</code></pre>\n <p>\n  (any additional samples can be provided upon request)\n </p>\n <p>\n  Obviously, I would like to determine the algorithm used to do this conversion.\n </p>\n <p>\n  My research indicates it MIGHT have to do with base64 encoding, and the alphabet used is \nABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\n </p>\n <p>\n  A=0 B=1 ... /=63\n </p>\n <p>\n  For instance, the first column, translated to decimal, then divided by 4 \n(discarding the remainder), gives the \"integer\" part of the value, when \nthe value is positive, or 16-value, when negative.\n </p>\n <p>\n  I had lass luck with the decimal part, I just don't have the knowledge.\n </p>\n <p>\n  If anyone can give me a hint or a solution, it would be immensely appreciated.\n </p>\n <p>\n  I am a photographer with basic math and programming knowledge, and this would be the central piece needed to complete a script that will optimize my workflow, that now requires for me to manually read, compute (excel) and write those values back (in decimal).\n </p>\n <p>\n  Thank you.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "encodings"
+    ],
+    "user": "Adrian Man",
+    "time": "Apr 4, 2016 at 20:33",
+    "comments": [
+        {
+            "user": "rev",
+            "text": "<html><body><span class=\"comment-copy\">\n Can you post the binary? Jason Geffner's answer seems practical, but I'd like to have a look at it. Or if you can't, a simple assembly dump of the code doing the encoding would be enough.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "<html><body><span class=\"comment-copy\">\n With the OP stating \"I am a photographer with basic math and programming knowledge\", this might just be a string that a camera sends, encoding exposure or lighting or whatever, so the encoding may be done in a firmware that's not easily accesible\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Adrian Man",
+            "text": "<html><body><span class=\"comment-copy\">\n Thank you all for your invaluable help. The values mentioned above store the tint (green-magenta), one of the two white balance parameters, the other being color temperature, that was a natural number, luckily easy enough for me to extract using rudimentary integer divisions and remainders. Both parameters are necessary to retrieve the exact white balance the camera used as a result of it's internal algorithm, in order to make the necessary adjustments to groups of raw photos in need to have the same average value. Again, thank you, a lot, I was really out of my depth on this one.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Building on @ebux's answer:\n </p>\n <p>\n  The first 4 bytes is the integral part of the number, encoded in a slightly weird way .. the UPPER nibble of the first byte is the number itself. The other 5 nibbles are 0 for positive, f for negative numbers in the \"usual\" way.\n </p>\n <p>\n  The rest of the strings are, like @ebux said, the float part of the value, in IEEE format, but when encoding/decoding them, you have to add/remove two \\0 bytes to the binary string.\n </p>\n <p>\n  This perl program will decode a file containing your examples:\n </p>\n <pre><code>#!/usr/bin/perl\n\nuse MIME::Base64 qw(decode_base64 encode_base64);\nwhile (<>) {\n    chomp;\n    y/\\r//d;\n    s/- /-/;\n    s/^\\s+//;\n    ($a, $b, $c)=split();\n    $a2=decode_base64(substr($b, 0, 4));\n    $b2=substr(decode_base64(substr($b, 2)), 2);\n    $c2=substr(decode_base64($c), 0, 4);\n    printf(\"%10s\", $a);\n    print \"\\t\"; printhex($a2); \n    print \"\\t\"; printhex($b2); \n    print \"\\t\"; printhex($c2);\n    print \"\\t\"; printint($a2);\n    print \"\\t\"; printdbl($b2.$c2);\n    print \"\n\";\n}\n\nsub printhex {\n    my $str=shift;\n    for ($i=0; $i<length($str); $i++) {\n        printf(\"%02x.\", ord(substr($str, $i, 1)));\n    }\n}\n\nsub printint {\n    my $str=shift;\n    my $val=ord(substr($str, 0, 1))>>4;\n    $val-=16 if (substr($str, 1, 1) eq \"\\xff\");\n    printf(\"%5d\", $val);\n}\n\nsub printdbl {\n    my $str=shift;\n    my $val=unpack(\"d\", $str);\n    printf(\"%10.4f\", $val);\n}\n</code></pre>\n <p>\n  Output (column order is your column, 3 columns of hex bytes derived from the base64 strings, integer value derived from col1, float value from col2/3):\n </p>\n <pre><code>  2.01  20.00.00.   14.ae.47.e1.    7a.14.00.40.        2       2.0100\n     0  00.00.00.   00.00.00.00.    00.00.00.00.        0       0.0000\n  0.01  00.00.00.   7b.14.ae.47.    e1.7a.84.3f.        0       0.0100\n  0.02  00.00.00.   7b.14.ae.47.    e1.7a.94.3f.        0       0.0200\n  0.03  00.00.00.   b8.1e.85.eb.    51.b8.9e.3f.        0       0.0300\n     1  10.00.00.   00.00.00.00.    00.00.f0.3f.        1       1.0000\n     2  20.00.00.   00.00.00.00.    00.00.00.40.        2       2.0000\n     3  30.00.00.   00.00.00.00.    00.00.08.40.        3       3.0000\n     4  40.00.00.   00.00.00.00.    00.00.10.40.        4       4.0000\n     5  50.00.00.   00.00.00.00.    00.00.14.40.        5       5.0000\n     6  60.00.00.   00.00.00.00.    00.00.18.40.        6       6.0000\n     7  70.00.00.   00.00.00.00.    00.00.1c.40.        7       7.0000\n     8  80.00.00.   00.00.00.00.    00.00.20.40.        8       8.0000\n     9  90.00.00.   00.00.00.00.    00.00.22.40.        9       9.0000\n    10  a0.00.00.   00.00.00.00.    00.00.24.40.       10      10.0000\n    11  b0.00.00.   00.00.00.00.    00.00.26.40.       11      11.0000\n    12  c0.00.00.   00.00.00.00.    00.00.28.40.       12      12.0000\n   -12  4f.ff.ff.   00.00.00.00.    00.00.28.c0.      -12     -12.0000\n    -1  ff.ff.ff.   00.00.00.00.    00.00.f0.bf.       -1      -1.0000\n -0.64  ff.ff.ff.   7b.14.ae.47.    e1.7a.e4.bf.       -1      -0.6400\n  2.01  20.00.00.   14.ae.47.e1.    7a.14.00.40.        2       2.0100\n</code></pre>\n <p>\n  This program converts one or multiple numbers to your format:\n </p>\n <pre><code>#!/usr/bin/perl\n\nuse MIME::Base64 qw(decode_base64 encode_base64);\n\nforeach $a (@ARGV) {\n    print $a;\n    my $intpart=($a & 0x0f) << 4;\n    if ($a<0) {\n        $intpart|=0xffffff0f;\n    }\n    my $part1=encode_base64(pack(\"l\", $intpart)); chomp $part1;\n    # print \"\\t\", $part1;\n\n    my $temp=encode_base64(\"\\x00\\x00\".pack(\"d\", $a)); chomp $temp;\n    # print \"\\t\", $temp;\n\n    my $part2=substr($part1, 0, 4).substr($temp, 2, 6);\n    print \"\\t\", $part2;\n\n    my $part3=substr($temp, 8, 6).\"AA\";\n    print \"\\t\", $part3;\n\n    print \"\n\";\n}\n</code></pre>\n <p>\n  Example:\n </p>\n <pre><code>$ perl encode.pl 0.01 0.02 0.03  2.01 0 11 12 -12 -1 \n0.01    AAAAB7FK5H  4XqEPwAA\n0.02    AAAAB7FK5H  4XqUPwAA\n0.03    AAAAC4HoXr  UbiePwAA\n2.01    IAAAAUrkfh  ehQAQAAA\n0       AAAAAAAAAA  AAAAAAAA\n11      sAAAAAAAAA  AAAmQAAA\n12      wAAAAAAAAA  AAAoQAAA\n-12     T///AAAAAA  AAAowAAA\n-1      ////AAAAAA  AADwvwAA\n</code></pre>\n <p>\n  And here's a link to all numbers from -12 to 12:\n </p>\n <p>\n  <a href=\"https://mega.nz/#!BVpWgBiI!aPbtMmMYnLgUUn011Cl5qjA5OO6TpKG8CSTIhR7Re0E\" rel=\"nofollow\">\n   https://mega.nz/#!BVpWgBiI!aPbtMmMYnLgUUn011Cl5qjA5OO6TpKG8CSTIhR7Re0E\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Apr 5, 2016 at 13:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Adrian Man",
+                    "text": "<span class=\"comment-copy\">Now that's a complete answer! Thank you!! And the list of pre-calculated values, immensely helpful - that puts stuff on motion right now, and allows me to comeback to implement that piece of code on my leasurly time later on weekend (vb.net, but your Perl code looks straightforward). Very thoughtful of you to came down to my level. Right now I fell like printing your avatar picture and hanging it on the wall :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  These are binary representation of double numbers encoded with base64.\nTo understand the encoding lets see an example (I used to convert numbers to binary double representation with this\n  <a href=\"http://www.binaryconvert.com/result_double.html?decimal=048046048051\">\n   page\n  </a>\n  ):\n </p>\n <pre><code>0.03 = 0x3F9EB851EB851EB8 (binary representation of the double number)\n</code></pre>\n <p>\n  With little endian encoding it is stored in the memory in the following form:\n </p>\n <pre><code>B8 1E 85 EB  51 B8 9E 3F\n</code></pre>\n <p>\n  You have to extend the first and second 4 bytes with 2 zeros and encoded it with base64:\n </p>\n <pre><code>base64(0000B81E85EB) = AAC4HoXr\nbase64(51B89E3F0000) = UbiePwAA\n</code></pre>\n <p>\n  In your example the 0.03 was encoded to:\n </p>\n <pre><code>0.03 = AAAAC4HoXr  UbiePwAA\n</code></pre>\n <p>\n  So, the difference is only the first 2 letters in the first string, but I don't see why the first string starts with these letters.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "ebux",
+            "time": "Apr 5, 2016 at 7:16",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Adrian Man",
+                    "text": "<span class=\"comment-copy\">You, sir, are a god like person to me. Thank you kindly for solving this one. I was borderline depressed for not being able to do it myself.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

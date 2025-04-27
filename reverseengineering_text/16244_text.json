@@ -1,0 +1,66 @@
+{
+    "title": "ASM working as is, but not in a C program",
+    "link": "https://reverseengineering.stackexchange.com/questions/16244/asm-working-as-is-but-not-in-a-c-program",
+    "content": "I have this piece of ASM:\n<pre><code>section .text\n    global _start\n\n_start:\n    xor  eax, eax\n    push eax         ; 0 to finish the /bin//sh string\n    push 0x68732f2f  ; //sh\n    push 0x6e69622f  ; /bin\n    mov  ebx, esp\n    mov  al, 0xb\n    int  0x80\n</code></pre>\nWhich works fine if I do:\n<pre><code>$ nasm -f elf shellcode.asm && ld -o shellcode shellcode.o\n$ ./shellcode\n$ # the new shell\n</code></pre>\nBut now, with the hex translation:\n<pre><code>$ objdump -s shellcode\n\nshellcode:     file format elf32-i386\n\nContents of section .text:\n  8048060 31c05068 2f2f7368 682f6269 6e89e3b0  1.Ph//shh/bin...\n  8048070 0bcd80                               ...\n</code></pre>\nUsed here:\n<pre><code>const char shellcode[] = \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\xb0\\x0b\\xcd\\x80\";\n\nint main(){\n    (*(void(*)()) shellcode)();\n    return 0;\n}\n</code></pre>\nThe result is:\n<pre><code>$ gcc -o shellcode shellcode.c\n$ ./shellcode\nSegmentation fault\n</code></pre>\nI tried to practice my ASM and re-create the one provided here. The difference, which I can't explain, is that on his payload, he's pushing the an extra <pre><code>0</code></pre> and the address of the <pre><code>/bin//sh</code></pre> string into the stack.\nI though that because I was using the fastcall convention, I didn't have to setup the stack, but apparently there's more going on here.\nDoes anyone know why the shellcode refuses to run and why setting the stack changes \"correct\" it?\n\nEdits:\nWhen I try to run the program from <pre><code>gdb</code></pre> I have the following result:\n<pre><code>$ gdb ./shellcode\n(gdb) run\nProgram received signal SIGSEGV, Segmentation fault.\n0x080484b3 in shellcode ()\n</code></pre>\nAnd here's the <pre><code>readelf</code></pre> command output:\n<pre><code>$ readelf -l -S shellcode\nThere are 30 section headers, starting at offset 0x1150:\n\nSection Headers:\n  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n  [ 0]                   NULL            00000000 000000 000000 00      0   0  0\n  [ 1] .interp           PROGBITS        08048154 000154 000013 00   A  0   0  1\n  [ 2] .note.ABI-tag     NOTE            08048168 000168 000020 00   A  0   0  4\n  [ 3] .note.gnu.build-i NOTE            08048188 000188 000024 00   A  0   0  4\n  [ 4] .gnu.hash         GNU_HASH        080481ac 0001ac 000020 04   A  5   0  4\n  [ 5] .dynsym           DYNSYM          080481cc 0001cc 000040 10   A  6   1  4\n  [ 6] .dynstr           STRTAB          0804820c 00020c 000045 00   A  0   0  1\n  [ 7] .gnu.version      VERSYM          08048252 000252 000008 02   A  5   0  2\n  [ 8] .gnu.version_r    VERNEED         0804825c 00025c 000020 00   A  6   1  4\n  [ 9] .rel.dyn          REL             0804827c 00027c 000008 08   A  5   0  4\n  [10] .rel.plt          REL             08048284 000284 000010 08   A  5  12  4\n  [11] .init             PROGBITS        08048294 000294 000023 00  AX  0   0  4\n  [12] .plt              PROGBITS        080482c0 0002c0 000030 04  AX  0   0 16\n  [13] .text             PROGBITS        080482f0 0002f0 000192 00  AX  0   0 16\n  [14] .fini             PROGBITS        08048484 000484 000014 00  AX  0   0  4\n  [15] .rodata           PROGBITS        08048498 000498 00001c 00   A  0   0  4\n  [16] .eh_frame_hdr     PROGBITS        080484b4 0004b4 00002c 00   A  0   0  4\n  [17] .eh_frame         PROGBITS        080484e0 0004e0 0000b0 00   A  0   0  4\n  [18] .init_array       INIT_ARRAY      08049f08 000f08 000004 00  WA  0   0  4\n  [19] .fini_array       FINI_ARRAY      08049f0c 000f0c 000004 00  WA  0   0  4\n  [20] .jcr              PROGBITS        08049f10 000f10 000004 00  WA  0   0  4\n  [21] .dynamic          DYNAMIC         08049f14 000f14 0000e8 08  WA  6   0  4\n  [22] .got              PROGBITS        08049ffc 000ffc 000004 04  WA  0   0  4\n  [23] .got.plt          PROGBITS        0804a000 001000 000014 04  WA  0   0  4\n  [24] .data             PROGBITS        0804a014 001014 000008 00  WA  0   0  4\n  [25] .bss              NOBITS          0804a01c 00101c 000004 00  WA  0   0  1\n  [26] .comment          PROGBITS        00000000 00101c 00002b 01  MS  0   0  1\n  [27] .shstrtab         STRTAB          00000000 001047 000106 00      0   0  1\n  [28] .symtab           SYMTAB          00000000 001600 000430 10     29  45  4\n  [29] .strtab           STRTAB          00000000 001a30 00024e 00      0   0  1\nKey to Flags:\n  W (write), A (alloc), X (execute), M (merge), S (strings)\n  I (info), L (link order), G (group), T (TLS), E (exclude), x (unknown)\n  O (extra OS processing required) o (OS specific), p (processor specific)\n\nElf file type is EXEC (Executable file)\nEntry point 0x80482f0\nThere are 9 program headers, starting at offset 52\n\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  PHDR           0x000034 0x08048034 0x08048034 0x00120 0x00120 R E 0x4\n  INTERP         0x000154 0x08048154 0x08048154 0x00013 0x00013 R   0x1\n      [Requesting program interpreter: /lib/ld-linux.so.2]\n  LOAD           0x000000 0x08048000 0x08048000 0x00590 0x00590 R E 0x1000\n  LOAD           0x000f08 0x08049f08 0x08049f08 0x00114 0x00118 RW  0x1000\n  DYNAMIC        0x000f14 0x08049f14 0x08049f14 0x000e8 0x000e8 RW  0x4\n  NOTE           0x000168 0x08048168 0x08048168 0x00044 0x00044 R   0x4\n  GNU_EH_FRAME   0x0004b4 0x080484b4 0x080484b4 0x0002c 0x0002c R   0x4\n  GNU_STACK      0x000000 0x00000000 0x00000000 0x00000 0x00000 RW  0x10\n  GNU_RELRO      0x000f08 0x08049f08 0x08049f08 0x000f8 0x000f8 R   0x1\n\n Section to Segment mapping:\n  Segment Sections...\n   00\n   01     .interp\n   02     .interp .note.ABI-tag .note.gnu.build-id .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rel.dyn .rel.plt .init .plt .text .fini .rodata .eh_frame_hdr .eh_frame\n   03     .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss\n   04     .dynamic\n   05     .note.ABI-tag .note.gnu.build-id\n   06     .eh_frame_hdr\n   07\n   08     .init_array .fini_array .jcr .dynamic .got\n</code></pre>\n\nComparison with this shellcode:\nHere're the differences:\n<pre><code>Hamza (working)     |   me\n\nASM\n\nxor    eax, eax     |   xor    eax, eax\npush   eax          |   push   eax\npush   0x68732f2f   |   push   0x68732f2f\npush   0x6e69622f   |   push   0x6e69622f\nmov    ebx, esp     |   mov    ebx, esp\npush   eax          |\npush   ebx          |\nmov    esp, ecx     |\nmov    al, 0xb      |   mov    al, 0xb\nint    0x80         |   int    0x80\n\nStack before the interrupt (each line is a word)\n\n&(/bin//sh)         | /bin\n0                   | //sh\n/bin                | 0\n//sh                |\n0                   |\n\nRegisters before the interrupt\n\neax    0xb          |   0xb\nebx    &(/bin//sh)  |   &(/bin//sh)\necx    esp          |   ?\n</code></pre>\nAs you can see, the stack changes by having the string's address and an extra <pre><code>0</code></pre>, and his <pre><code>ecx</code></pre> register is set to the last <pre><code>esp</code></pre> value. And those differences make his shellcode to work (both direcly with <pre><code>nasm</code></pre> & <pre><code>ld</code></pre> and inside the <pre><code>C</code></pre> program, without any change).\n\nEdit:\nSome progress, there's one extra instruction when the payload run within the C program:\n<pre><code>(gdb)  x/14i 0x80484a0\n   ...\n   0x80484b3 <shellcode+19>:    mov    $0xb,%al\n   0x80484b5 <shellcode+21>:    int    $0x80\n   0x80484b7 <shellcode+23>:    add    %al,(%ecx)\n</code></pre>\nWhile I don't know (yet) why the <pre><code>ecx</code></pre> register is incremented with the return value of the interrupt, clearing the register with <pre><code>xor ecx, ecx</code></pre> fixes the issue.\nHere's the working asm:\n<pre><code>section .text\n    global _start\n\n_start:\n    xor  eax, eax\n    push eax\n    push 0x68732f2f\n    push 0x6e69622f\n    mov  ebx, esp\n    xor  ecx, ecx\n    mov  al, 0xb\n    int  0x80\n</code></pre>\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "724",
+    "tags": [
+        "assembly",
+        "gdb",
+        "shellcode"
+    ],
+    "user": "nobe4",
+    "time": "Sep 2, 2017 at 21:23",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "possibly your string bin,sh doesnt have a null terminator and push 0 is fulfilling it\n",
+            "time": null
+        },
+        {
+            "user": "nobe4",
+            "text": "afaik it does, that's why I <pre><code>push eax</code></pre> the first time...\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "is your data section executable? post output of <pre><code>readelf -l -S</code></pre>.What does <pre><code>gdb</code></pre> say when you run the compiled program under it?\n",
+            "time": null
+        },
+        {
+            "user": "nobe4",
+            "text": "Hey @IgorSkochinsky: see my edit. It seems that my <pre><code>.data</code></pre> is writable and allocable but not executable. Could it be it? Also when I try to <pre><code>readelf</code></pre> from the asm-generated executable, I only have the <pre><code>.text</code></pre> header that is executable.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "so according to gdb it does run. what do you mean by \"setting the stack changes \"correct\" it\"?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The problem with you shellcode and the why it differs if you run from C program or not is the initial values.\nThe registers that are used when executing execv (second page) are:\n\n<pre><code>eax</code></pre> = 0x0b\n<pre><code>ebx</code></pre> = ptr to filename\n<pre><code>ecx</code></pre> = ptr to argv\n<pre><code>edx</code></pre> = ptr to environment variables\n\nBut actually the important one are only <pre><code>ebx</code></pre> and <pre><code>eax</code></pre> and the two other we can nullify.\nIf you run your shellcode only the default value for the registers is <pre><code>0x0</code></pre> so we are getting nullification of <pre><code>ecx</code></pre> & <pre><code>edx</code></pre> for free.\n\nit's not the case when you execute your shellcode from C program. \n\nAs you can see registers has already some initial values so you need to prepare them correctly. This is why adding <pre><code>xor ecx,ecx</code></pre> fixes the issue. \nAs for the example that you took from <pre><code>ecx</code></pre> is assigned to stack pointer but on the stack there's a value that points to \"/bin/sh\" which is also ok (and probably even better than <pre><code>0x00</code></pre>)\n",
+            "votes": "6",
+            "user": "Paweł Łukasik",
+            "time": "Sep 3, 2017 at 9:24",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "Okay, so according to <pre><code>gdb</code></pre> the shellcode does run, so it's probably placed into <pre><code>.text</code></pre>. You should try to step through the shellcode (e.g. using <pre><code>stepi</code></pre>) to see on what instruction it faults.\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Sep 2, 2017 at 19:12",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">OK I did that and there is an extra instruction on the payload, I'll post an update.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

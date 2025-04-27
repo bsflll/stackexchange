@@ -1,0 +1,45 @@
+{
+    "title": "Ghidra scripting: get indirect operand address",
+    "link": "https://reverseengineering.stackexchange.com/questions/32229/ghidra-scripting-get-indirect-operand-address",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I tried several hours to find a way to get the operand address which is displayed in the ghidra listing, but without success:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/LKSuu.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"indirect operand address\" src=\"https://i.sstatic.net/LKSuu.png\"/>\n  </a>\n </p>\n <p>\n  I know at least that the OperandType is \"Address\".\n </p>\n <pre><code>import ghidra.program.model.lang.OperandType;\n\nint ot1 = ins1.getOperandType(1);\nboolean indirect1 = OperandType.isAddress(ot1); \n                // --> result is true\n</code></pre>\n <p>\n  The\n  <code>\n   op_rep = ins1.getDefaultOperandRepresentation(1)\n  </code>\n  is of course\n  <code>\n   [a0]-0x38d8\n  </code>\n  but I want the resolved reference / address DAT_d0006b78, or with the next instruction, the address of the symbol in the first operand, the address of ACCI_trqDes.\n </p>\n <p>\n  If I use\n  <code>\n   currentProgram.getAddressFactory().getAddress(op_rep)\n  </code>\n  the resulting address is null.\n </p>\n <p>\n  I tried it also via\n  <code>\n   PcodeOp[] pc = ins1.getPcode(opIndex);\n  </code>\n  but I was much too stupid to understand it.\n </p>\n <p>\n  How can I get this? Thanks a lot!\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "699",
+    "tags": [
+        "ghidra",
+        "script"
+    ],
+    "user": "karsten",
+    "time": "Aug 28, 2023 at 15:00",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is done with the code/data references related API. See the code below (not checked too much, but runs on my last project, in python):\n </p>\n <pre class=\"lang-py prettyprint-override\"><code># These imports are accessible when you run the script inside Ghidra\nfrom ghidra.program.model.listing import CodeUnit\nfrom ghidra.program.model.symbol import RefType\nfrom ghidra.program.database import ProgramDB\nfrom ghidra.program.flatapi import FlatProgramAPI\n\n# Mimic getting the current program (In Ghidra's Script Manager, currentProgram is globally available)\nstate = getState()  # Assume getState() returns the current program state\ncurrentProgram = state.getCurrentProgram()\n\n# Define FlatProgramAPI object for more convenient function calls\nflat_api = FlatProgramAPI(currentProgram)\n\ndef getReferencesFrom(address):\n    return flat_api.getReferencesFrom(address)\n\ndef find_data_references_from_address(source_address):\n    # Convert the source_address parameter to a Ghidra Address object\n    source_addr = currentProgram.getAddressFactory().getAddress(source_address)\n        \n    # Initialize an empty list to store the referred addresses\n    referred_addresses = []\n        \n    # Get the references from the source address\n    references = getReferencesFrom(source_addr)\n        \n    # Loop through the references to find data references\n    for ref in references:\n        # Determine the type of the reference\n        ref_type = ref.getReferenceType()\n            \n        # Check if it's a data reference\n        if ref_type.isData():\n            # Get the address of the code unit that is referred by the source address\n            to_addr = ref.getToAddress()\n                \n            # Add the referred address to our list\n            referred_addresses.append(str(to_addr))\n\n    return referred_addresses\n\n# Example usage:\nsource_address = \"0x11390\"  # Replace with the source address you're interested in\nresult = find_data_references_from_address(source_address)\nprint(\"Addresses referred to by {}: {}\".format(source_address, result))\n</code></pre>\n <p>\n  References to Ghidra API documentation may be found\n  <a href=\"https://ghidra.re/ghidra_docs/api/index.html\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  .\n </p>\n <p>\n  Java variant of the same script with small addition that determines if it is read/write or read+write reference:\n </p>\n <pre class=\"lang-java prettyprint-override\"><code>import ghidra.app.script.GhidraScript;\nimport ghidra.program.model.address.Address;\nimport ghidra.program.model.listing.Program;\nimport ghidra.program.model.symbol.Reference;\nimport ghidra.program.model.symbol.ReferenceManager;\nimport ghidra.program.model.symbol.RefType;\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic class FindDataReferences extends GhidraScript {\n\n    public List<String> findDataReferencesFromAddress(Program program, String sourceAddress) throws Exception {\n        List<String> referredAddresses = new ArrayList<>();\n\n        Address sourceAddr = program.getAddressFactory().getAddress(sourceAddress);\n        ReferenceManager refManager = program.getReferenceManager();\n\n        Reference[] references = refManager.getReferencesFrom(sourceAddr);\n\n        for (Reference ref : references) {\n            RefType refType = ref.getReferenceType();\n            \n            String typeDescription = \"\";\n            if (refType.isRead() && refType.isWrite()) {\n                typeDescription = \"read/write\";\n            } else if (refType.isRead()) {\n                typeDescription = \"read\";\n            } else if (refType.isWrite()) {\n                typeDescription = \"write\";\n            }\n\n            if (!typeDescription.isEmpty()) {\n                Address toAddr = ref.getToAddress();\n                referredAddresses.add(String.format(\"%s (%s)\", toAddr.toString(), typeDescription));\n            }\n        }\n\n        return referredAddresses;\n    }\n\n    @Override\n    public void run() throws Exception {\n        String sourceAddress = \"0x113e8\"; // Replace this with your source address\n\n        List<String> result = findDataReferencesFromAddress(currentProgram, sourceAddress);\n        println(\"Addresses referred to by \" + sourceAddress + \": \" + result);\n    }\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "hairlessbear",
+            "time": "Sep 28, 2023 at 9:50",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "karsten",
+                    "text": "<span class=\"comment-copy\">Ah, you approach it from reverse direction. This works nicely, thanks!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>   14098c632 48 89 44 24 28            MOV      qword ptr [RSP + local_40],RAX=>KiSchedulerApc\n</code></pre>\n <p>\n  for a line like above you want the operand Representation?\n </p>\n <p>\n  you mean something like this\n </p>\n <pre><code>>>> currentLocation\nOperandFieldLocation@14098c632, refAddr=1402fa5b0, row=0, col=1, charOffset=12, OpRep = RAX=>KiSchedulerApc, subOpIndex = 0, VariableOffset = null\n>>> currentLocation.getOperandRepresentation()\nu'RAX=>KiSchedulerApc'\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Aug 29, 2023 at 10:08",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "karsten",
+                    "text": "<span class=\"comment-copy\">Thank you, but I wanted the address referenced, which is shown in the ghidra listing in the form of e.g.  \"=&gt; DAT_d0006b78\".</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

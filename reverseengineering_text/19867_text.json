@@ -1,0 +1,46 @@
+{
+    "title": "Angr never finishes",
+    "link": "https://reverseengineering.stackexchange.com/questions/19867/angr-never-finishes",
+    "content": "I create the following c program as a proof of concept. When I try to analyze it with anger it never finishes.\n<pre><code>#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n\nchar *secret = \"password\";\n\nint compare(char *string)\n{\n    int i, c=0;\n    for (i=0; i< strlen(secret); i++)\n    {\n        if (string[i] == secret[i])\n            c++;\n    }\n    if (c == 8)\n        printf(\"You won\");\n    return 0;\n}\nint main(int argc, char **argv)\n{\n    char input[50];\n    scanf(\"%s\", input);\n    compare(input);\n    return EXIT_SUCCESS;\n}\n</code></pre>\nThe script is the following:\n<pre><code>#!/usr/bin/env python\n\nimport angr\nimport sys\nimport logging\nimport claripy\n\nFIND = 0x00000000000011dd\nLEN = 8 \n\ndef basic_symbolic_execution():\n    p = angr.Project('test', load_options={'auto_load_libs':False})\n\n    flag = claripy.BVS('flag', LEN * 8)\n\n    st = p.factory.entry_state(\n        stdin=flag,\n    )\n\n    sm = p.factory.simulation_manager(st)\n    sm.explore(find=FIND, num_find=1)\n\n    print(\"Found solution\")\n    out = b''\n\n    for pp in sm.deadended:\n        out = pp.posix.dumps(1)\n        print(out)\n\n    import IPython; IPython.embed()\n\ndef test():\n    r = basic_symbolic_execution()\n\nif __name__ == '__main__':\n    sys.stdout.buffer.write(basic_symbolic_execution())\n</code></pre>\nI have also tried to use explore on the address of c++ 8 times and then checking the stdin and it finishes but the result is all zeros. I was wondering if any of you have faced something similar and what your solutions were.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "954",
+    "tags": [
+        "angr"
+    ],
+    "user": "letFunny",
+    "time": "Nov 10, 2018 at 22:36",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "Hi, while this is fully on topic, you may want to consider filing a ticket here as that's more likely to catch the attention of the Angr developers. Also, your question isn't really a question, it's more of a statement. You may want to edit it to clarify what you expect members of this site to contribute to your RCE effort.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "By your FIND address it seems like your binary was compiled with PIE. Please verify this. Angr will load PIE enabled elf at a base address of 0x400000, add this to your FIND address so that angr is able to resolve this.\nI have made a couple of changes to your script to make it detect the \"password\".\n<pre><code>import angr\nimport sys\nimport logging\nimport claripy\n\nFIND = 0x00400672\nLEN = 8\n\ndef basic_symbolic_execution():\n    p = angr.Project('x', load_options={'auto_load_libs':False})\n\n    flag = claripy.BVS('flag', LEN * 8)\n\n    st = p.factory.entry_state(\n        stdin=flag,\n    )\n\n    sm = p.factory.simulation_manager(st)\n    sm.explore(find=FIND, num_find=1)\n\n    print(\"Found solution\")\n    out = b''\n\n    for pp in sm.found:\n        out = pp.posix.dumps(0)\n        print(out)\n        print(pp.solver.eval(flag, cast_to=str))\n\n    import IPython; IPython.embed()\n\ndef test():\n    r = basic_symbolic_execution()\n\nif __name__ == '__main__':\n    basic_symbolic_execution()\n</code></pre>\nTo look for states which actually reached your FIND addresses you need to iterate over <pre><code>found</code></pre> of a <pre><code>simulation_manager</code></pre>.\nAccording to <pre><code>man stdin</code></pre>\n\nOn  program  startup, the integer file descriptors associated with the streams stdin,\n         stdout, and  stderr  are  0,  1,  and  2,  respectively.\n\nSo to get input you need to use <pre><code>pp.posix.dumps(0)</code></pre>\nI have also added on how to use <pre><code>solver</code></pre> of a found state to solve for constraints that you set like the <pre><code>flag</code></pre>.\nAlso offset for the printf in the binary for me.\n<pre><code>$ gcc -no-pie -fno-pic x.c -o x\n$ r2 -AA x -qc \"pdf @ sym.compare ~won\"    \n│       │   0x00400672      bf7d074000     mov edi, str.You_won        ; 0x40077d ; \"You won\"\n</code></pre>\n",
+            "votes": "1",
+            "user": "sudhackar",
+            "time": "Nov 12, 2018 at 6:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "letFunny",
+                    "text": "<span class=\"comment-copy\">I tried your way with no luck. I also tried with sm.run() plainly and it logs      \"\"\"Exit state has over 256 possible solutions. Likely unconstrained; skipping. \"\"\"  over and over and no solution is found.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">@letFunny I have updated my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "letFunny",
+                    "text": "<span class=\"comment-copy\">It does work this way. However the problem with using sm.run() is the number of possible states (&gt;500). How is that possible in such tiny program. When using num_find = 1 it finished thou.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

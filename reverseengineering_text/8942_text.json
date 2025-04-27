@@ -1,0 +1,66 @@
+{
+    "title": "How to retrieve assembly from a raw memory dump?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8942/how-to-retrieve-assembly-from-a-raw-memory-dump",
+    "content": "I have a running memory dump saved as a raw binary file.  This isn't a standalone executable - it's literally just a snapshot of running memory.\nI'm looking for a tool that will help me identify assembly instructions within this binary file.  Does such a tool exist?  \nI know you can use OllyDebug or IDAPRO to analyze executables.  However, since this is a full memory dump, it'a not clear to me whether these tools are still applicable.  For a raw memory dump there isn't a clear entry point that IDA can start with.\nAny suggestions would be very helpful.  Thanks!\n",
+    "votes": "7",
+    "answers": 2,
+    "views": "7k",
+    "tags": [
+        "assembly",
+        "memory",
+        "digital-forensics"
+    ],
+    "user": "Runcible",
+    "time": "May 20, 2015 at 23:21",
+    "comments": [
+        {
+            "user": "broadway",
+            "text": "I'd prob start off with something like volatility to analyze the memory dump and isolate the sections of it which may justify deeper analysis.\n",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "How did you get this snapshot ? Which OS is it from? What is its size ?\n",
+            "time": null
+        },
+        {
+            "user": "Thomas Weller",
+            "text": "Is it a memory dump of a process (virtual memory, user mode) or of the whole PC (physical memory, kernel dump)?\n",
+            "time": null
+        },
+        {
+            "user": "user1743",
+            "text": "Is there anything specific you can tell us about the architecture whose opcodes you are expecting in the memory dump?\n",
+            "time": null
+        },
+        {
+            "user": "ST3",
+            "text": "If I understand question correctly, very likely it is (almost) impossible, because running application modifies its registers, so you need to know at least EIP, but other values is very likely controls execution flow. So you would better attach something like WinDbg to running process instead of creating memory dump.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Disassembling\nYou can disassemble in WinDbg at any memory address, e.g.\n<pre><code>0:067> db 000007fe`ff4d0000\n000007fe`ff4d0000  4d 5a 90 00 03 00 00 00-04 00 00 00 ff ff 00 00  MZ..............\n000007fe`ff4d0010  b8 00 00 00 00 00 00 00-40 00 00 00 00 00 00 00  ........@.......\n000007fe`ff4d0020  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................\n000007fe`ff4d0030  00 00 00 00 00 00 00 00-00 00 00 00 e0 00 00 00  ................\n000007fe`ff4d0040  0e 1f ba 0e 00 b4 09 cd-21 b8 01 4c cd 21 54 68  ........!..L.!Th\n000007fe`ff4d0050  69 73 20 70 72 6f 67 72-61 6d 20 63 61 6e 6e 6f  is program canno\n000007fe`ff4d0060  74 20 62 65 20 72 75 6e-20 69 6e 20 44 4f 53 20  t be run in DOS \n000007fe`ff4d0070  6d 6f 64 65 2e 0d 0d 0a-24 00 00 00 00 00 00 00  mode....$.......\n\n0:067> u 000007fe`ff4d0000 L1\nadvapi32!WmipBuildReceiveNotification <PERF> (advapi32+0x0):\n000007fe`ff4d0000 4d5a            pop     r10\n</code></pre>\nBut as you can see, this is more or less useless (in my example useless to disassemble the <pre><code>MZ</code></pre> magic bytes of a DLL's header).\nSo, finding the right starting place for a disassembly is the critical part.\nFinding code as part of DLLs\nCode should mainly be in DLLs or EXEs (called images or modules in WinDbg). To find them in a memory dump (kernel or user mode), you can run the WinDbg command\n<pre><code>.imgscan\n</code></pre>\nFrom WinDbg help:\n\nThe .imgscan command scans virtual memory for image headers.\nThe .imgscan command displays any image headers that it finds and the header type. Header types include Portable Executable (PE) headers and Microsoft MS-DOS MZ headers.\n\nI was able to verify this in user mode, but with the only Windows XP kernel mode dump I currently have, it does not output anything.\nExample output from a user mode dump:\n<pre><code>MZ at 000007fe`ff4d0000, prot 00000004, type 00020000 - size db000\n  Name: ADVAPI32.dll\n</code></pre>\nSo all the necessary information to get the DLL is available. In case of a user mode dump I have used\n<pre><code>.writemem <FileName> <Range>\n</code></pre>\nto write the DLL to disk and analyze later. \n<pre><code><Range></code></pre> is according the address and range syntax, e.g.\n<pre><code>.writemem advapi32.dll 000007fe`ff4d0000 Ldb000\n</code></pre>\nThis probably won't work for kernel mode dumps because parts of the module may have been swapped to disk, so the DLL in memory is no longer complete.\nThis approach will also not find code that was generated on the fly.\nFinding potentially executable code\nCode that can be executed must reside in a memory block that has the <pre><code>executable</code></pre> flag set.\nUnfortunately the command\n<pre><code>!address -f:<filter>\n</code></pre>\nis broken in WinDbg 6.2.9200. It should work in user mode dumps and output a list of start and end addresses that are executable.\nAt the moment I only get\n<pre><code>0:067> !address -f:PAGE_EXECUTE\n\n        BaseAddress      EndAddress+1        RegionSize     Type       State                 Protect             Usage\n------------------------------------------------------------------------------------------------------------------------\n\n0:067> !address -f:PAGE_EXECUTE_READ\nInvalid filter arguments. Type !address -? to get the list of supported parameters\n0:067> !address -f:PAGE_EXECUTE_READWRITE\nInvalid filter arguments. Type !address -? to get the list of supported parameters\n0:067> !address -f:PAGE_EXECUTE_WRITECOPY\nInvalid filter arguments. Type !address -? to get the list of supported parameters\n</code></pre>\nAlthough I have a full memory dump\n<pre><code>0:067> .dumpdebug\n...\nFlags           40002\n                0002 MiniDumpWithFullMemory\n                40000 MiniDumpWithTokenInformation\n</code></pre>\nBut you get the idea and might be able to apply it to other tools.\n",
+            "votes": "9",
+            "user": "Thomas Weller",
+            "time": "Apr 11, 2020 at 18:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "T.Todua",
+                    "text": "<span class=\"comment-copy\">Many thanks! as that doesnt matter, i will remove comment so here will be clean up.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "If you know the processor type and if its little or big endian you can search for common opcodes used in functions.\nfor example in x86 its common to see:\n<pre><code>push    ebp\nmov     ebp, esp\nadd     esp ...\n</code></pre>\nwhich is 55 8B EC 83 C4 in binary and then search for it in the dump. \nIf you'll find areas which contain your opcodes in high density its probably code.\n",
+            "votes": "3",
+            "user": "Eli K",
+            "time": "May 21, 2015 at 20:25",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

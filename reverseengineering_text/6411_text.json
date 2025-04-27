@@ -1,0 +1,60 @@
+{
+    "title": "Decompiling .NET marshaled code",
+    "link": "https://reverseengineering.stackexchange.com/questions/6411/decompiling-net-marshaled-code",
+    "content": "There's a .NET malware sample I'm trying to analyze, which goes more or less like this:\n<pre><code>internal static class Class1\n{\n    public static byte[] Code = new byte[]\n    {\n        9,\n        249,\n        131,\n        225,\n        ...,\n    }\n\n    private static void Main()\n    {  \n        // AFAIU this copies the marshaled code in Code to freshly allocated memory\n        IntPtr ptr = Class1.Alloc((uint)Class1.Code.Length);\n        for (int i = 0; i < Class1.Code.Length; i++)\n        {\n            int num = (int)Marshal.ReadByte(Class1.Code, i);\n            Marshal.WriteByte(ptr, i, (byte)num);\n        }\n\n        Class1.newObject newObject = (Class1.newObject)Marshal.GetDelegateForFunctionPointer(ptr, typeof(Class1.newObject));\n\n        object.Equals(null, null);\n        [...snip...]\n        object.Equals(null, null); // probably some timing mechanism\n\n        Marshal.GetFunctionPointerForDelegate(newObject);\n        newObject();\n    }\n}\n</code></pre>\nI'm trying to get to the code behind newObject(), which is apparently instantiated from marshaled code. I'm no .Net expert, but from what I read marshaled code is some kind of serialization that can be applied on objects to transfer functional code over binary channels (such as a TCP connection, for example). From what I understand, I should be able to reverse it to an understandable, or at least bytecode-like format.\nI tried software like ILSpy and dotPeek but they don't seem to recognize the code in <pre><code>Code</code></pre> as being managed code, and provide no usable output.\n",
+    "votes": "6",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "disassembly",
+        "malware",
+        ".net"
+    ],
+    "user": "Thomas Chopitea",
+    "time": "Oct 9, 2014 at 9:47",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I'm trying to get to the code behind newObject(), which is apparently instantiated from marshaled code. I'm no .Net expert, but from what I read marshaled code is some kind of serialization that can be applied on objects to transfer functional code over binary channels (such as a TCP connection, for example).\n\nI'm not sure what \"marshaled code\" means, but marshaling in .Net generally refers to interoperability with native code.\nIt's not really serialization, and I believe it's not commonly used for that purpose. (It can be used to convert a single object to an array of bytes, but that's not really relevant here, since your code doesn't do that.)\n\nNow, to your code: The <pre><code>Marshal</code></pre> class contains methods useful for interoperability, including converting between native and managed types.\nAnd that's exactly what <pre><code>GetDelegateForFunctionPointer()</code></pre> does: it converts from an unmanaged function pointer (pointing to some unmanaged code) to a delegate that can be called from .Net.\nTo verify that this is indeed what your code does, I have created a slightly simplified version of it and put the x86 machine code for a very simple function into the byte array:\n<pre><code>class Program\n{\n    private static readonly byte[] code =\n    {\n        0xB8, 0x2A, 0x00, 0x00, 0x00, // mov eax, 0x2a\n        0xC3 // ret\n    };\n\n    private delegate int FuncInt();\n\n    private static void Main()\n    {\n        IntPtr ptr = AllocExecutableMemory(code.Length);\n        for (int i = 0; i < code.Length; i++)\n        {\n            Marshal.WriteByte(ptr, i, code[i]);\n        }\n        var del = (FuncInt)Marshal.GetDelegateForFunctionPointer(ptr, typeof(FuncInt));\n        Console.WriteLine(del());\n    }\n\n    private static IntPtr AllocExecutableMemory(int length)\n    {\n        // see http://www.pinvoke.net/default.aspx/kernel32.virtualalloc,\n        // but change the return type from UIntPtr to IntPtr\n        return NativeMethods.VirtualAlloc(\n            UIntPtr.Zero, (UIntPtr)length,\n            AllocationType.COMMIT, MemoryProtection.EXECUTE_READWRITE);\n    }\n}\n</code></pre>\nThis code prints 42 (=0x2A), as expected.\nThis means that to analyze <pre><code>Code</code></pre>, you have to look at it as unmanaged code (most likely x86).\n",
+            "votes": "5",
+            "user": "svick",
+            "time": "Oct 16, 2014 at 13:12",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "You could likely open the file in IDA and force IDA to interpret the IL machine code bytes as code, thus giving you the disassembly for the IL machine code bytes.\nBut since you asked about decompiling it, you could try \"force-feeding\" the IL machine code bytes to ILSpy's decompiler functions to see if it can decompile it for you. You'd need to look through the source code for ILSpy to figure out what function(s) to call.\nI realize that this isn't an ideal solution, so hopefully someone can post a better answer :)\n",
+            "votes": "1",
+            "user": "Jason Geffner",
+            "time": "Oct 9, 2014 at 14:17",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Thomas Chopitea",
+                    "text": "<span class=\"comment-copy\">I tried force-feeding the code to ILSpy but no dice. Same with IDA, it wouldn't find the entry point (which I don't have since it's not a PE I'm loading). I'm headed to try with other .Net disassemblers / decompilers.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Load the original .NET exe into IDA, navigate to the <code>Code</code> array, and press 'C' to tell IDA to disassemble it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Also, which functions in ILSpy did you try feeding the code to?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Thomas Chopitea",
+                    "text": "<span class=\"comment-copy\">I simply tried opening the dumped <code>Code</code> array in ILSpy, to no avail. I tried looking for other loading functions but didn't find any.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Right, using ILSpy's standard \"open file\" user interface certainly won't work. I was suggesting above that you load ILSpy's codebase into your IDE and call specific functions in order to decompile your machine code.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

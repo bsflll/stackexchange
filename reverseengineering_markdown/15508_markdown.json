@@ -1,0 +1,70 @@
+{
+  "title": "How to convert the dumped firmware (from linksys-wrt54gl via JTAG port) in an understandable format",
+  "link": "https://reverseengineering.stackexchange.com/questions/15508/how-to-convert-the-dumped-firmware-from-linksys-wrt54gl-via-jtag-port-in-an-un",
+  "content": "Issuing some commands for the dumped firmware:\n\n```\n$ du -h fw.bin\n4.0 M\n\n$ file fw.bin\nfw.bin: data\n\n$ file -i fw.bin\nfw.bin: application/octet-stream; charset=binary\n\n$ binwalk fw.bin\n-\n\n$ enca -L none fw.bin\n-\n\n```\nThe way that I have dumped the firmware is by using the JTAG port:\n\n\nAnd the pins on the linksys router are set according to the figure described in the datasheet (www.cse.buffalo.edu/~bina/amrita/cse524/wrt54gl.pdf):\n\n\nAnd the corresponding pins from the BusPirate v3.6 is put on based on the reference (dangerousprototypes.com/docs/Bus_Pirate_I/O_Pin_Descriptions):\n\nThe OpenOCD command has been issued such as:\n\n```\nsudo openocd -f interface/buspirate.cfg -f board/linksys-wrt54gl.cfg -c \"init\"\n\n```\nThe configurations for BusPirate\ninterace/buspirate.cfg:\n\n```\ninterface buspirate\nbuspirate_port /dev/ttyUSB0\nbuspirate_speed normal\nreset_config srst_only\n\n```\nand the board/linksys-wrt54gl.cfg:\n\n```\n# Linksys WRT54GL v1.1\n#\nsource [find target/bcm5352e.cfg]\nset partition_list {\n    CFE         { Bootloader                    0x1c000000 0x00040000 }\n    firmware    { \"Kernel+rootfs\"               0x1c040000 0x003b0000 }\n    nvram       { \"Config space\"                0x1c3f0000 0x00010000 }\n}\n\n# External 4MB NOR Flash (Intel TE28F320C3BD90 or similar)\nset _FLASHNAME $_CHIPNAME.flash\nflash bank $_FLASHNAME cfi 0x1c000000 0x00400000 2 2 $_TARGETNAME\n\n```\nand the source, target/bcm5352e.cfg , it refers to:\n\n```\nset _CHIPNAME bcm5352e\nset _CPUID 0x0535217f\n\njtag newtap $_CHIPNAME cpu -irlen 8 -ircapture 0x1 -irmask 0x1f -expected-id $_CPUID\n\nset _TARGETNAME $_CHIPNAME.cpu\ntarget create $_TARGETNAME mips_m4k -endian little -chain-position $_TARGETNAME\n\ngdb_memory_map disable\n$_TARGETNAME configure -event gdb-attach {\n   reset\n   halt\n}\n\n```\nI open a new terminal and telnet into the socket openocd has opened for communication and I dump the firmware as follows:\n\n```\ndump_image fw.bin 0x1c000000 0x00400000\n\n```\nThe values are adapted from the linksys-wrt54gl.cfg file shown previously.\n\nAny Ideas what might be wrong using/connecting the JTAG and dumping the firmware?\n\nInfo about the current Linksys-Wrt54gl:\n\nModel: WRT54GL-EU\n\nFirmware Version: v4.30.7, Jun.20, 2006\n\nA copy of the \"dumped\" firmware can be obtained here:\nhttps://www.dropbox.com/s/kl02cnc5qqddx1x/fw.bin?dl=0\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "debugging",
+    "binary-analysis",
+    "firmware",
+    "mips",
+    "jtag"
+  ],
+  "user": "alperc",
+  "time": "Jun 29, 2017 at 17:00",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "what if you try -EB?",
+      "time": null
+    },
+    {
+      "user": "alperc",
+      "text": "then its andi instruction that is repeated all the way.",
+      "time": null
+    },
+    {
+      "user": "Brandon Bryant",
+      "text": "from the set partition_list {     CFE         { Bootloader                    0x1c000000 0x00040000 }     firmware    { \"Kernel+rootfs\"               0x1c040000 0x003b0000 }     nvram       { \"Config space\"                0x1c3f0000 0x00010000 } It appears you might be dumping the bootloader instead of the firmware.",
+      "time": null
+    },
+    {
+      "user": "alperc",
+      "text": "But shouldn't I be able to see this in $binwalk. The dumped data looks garbage. And even though I only dump the \"Kernel+rootfs\" which is the core of the firmware, it still cannot recognize anything.",
+      "time": null
+    },
+    {
+      "user": "Brandon Bryant",
+      "text": "what does dump_image fw.bin 0x1c040000 0x003b0000 do? if 0x1c040000 0x003b0000 is the offsets for the kernel+rootfs shouldn't you be using those values?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The firmware itself most likely is not a binary. Also usually when you run file it will tell you something like: \nfile busybox \nbusybox: ELF 32-bit MSB executable, MIPS, MIPS32 version 1. My guess is that you haven't actually extracted any binaries yet. My advice would be to use something like binwalk to extract specific files and binaries from the firmware. Running objdump on an entire firmware will probably give you an object dump of every single binary in your firmware and that could be a lot.\n\n",
+      "votes": "2",
+      "user": "Brandon Bryant",
+      "time": "Jun 27, 2017 at 21:36",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "alperc",
+          "text": "Actually, I have issued binwalk but it couldn't recognize anything. I used enca to detect the encoding, but it couldn't either. Do you have any suggestions?",
+          "time": null
+        },
+        {
+          "user": "Brandon Bryant",
+          "text": "I can offer a few. I would like to gather some more information about your router. If you could post what firmware version you are using, what hardware version your wrt54gl is, and if its not too lengthly, what steps you've taken to dump the firmware. I did go to the linksys page and download the Ver.4.30.18 (build 6) firmware and then I ran a simple binwalk against it and found a few things. I'm thinking maybe what is going on is that you got that flash memory from the device instead of the firmware",
+          "time": null
+        },
+        {
+          "user": "alperc",
+          "text": "Actually,I am not sure if I have dumped the firmware correctly using the JTAG, but I will make an edit section on the actual post, where I will explain further details.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

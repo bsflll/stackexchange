@@ -1,0 +1,51 @@
+{
+  "title": "IDA Pro failed decompilation with \"JUMPOUT\"",
+  "link": "https://reverseengineering.stackexchange.com/questions/32029/ida-pro-failed-decompilation-with-jumpout",
+  "content": "I'm trying to reverse a crackme that is using jz x; mov eax, x+1; jmp eax pattern to confuse IDA. I have made a script to find all the patterns and disassemble from x+1 instead of x, but I'm running into this error.\n\n\n\n\nThe crackme is https://crackmes.dreamhosters.com/users/fatmike/fatmikes_crackme_3/\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "779",
+  "tags": [
+    "ida"
+  ],
+  "user": "Alvo",
+  "time": "Jul 7, 2023 at 1:11",
+  "comments": [
+    {
+      "user": "mimak",
+      "text": "Did you try undefining the byte at 0x100025C0 and both function chunks (U key) then making it a function again (P key)? Seems like autoanalysis didnt get it right",
+      "time": null
+    },
+    {
+      "user": "Alvo",
+      "text": "I tried that and it didn't work. Thank you.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This failure happens as a result of A) the intentional obfuscation, and B) what the compiler community calls a \"phase-ordering\" problem.\n\nWhen Hex-Rays decompiles a function, it begins by creating the control flow graph pictured in your second screenshot. Next, it performs a \"reachability analysis\", a depth-first search starting from the entry block, to determine which blocks may ever be executed. Then, it removes blocks that it determines can never be executed. In particular, the reachability analysis only follows control flow references, not data flow references. If some basic block is only reachable by a data flow reference -- as in loc_100025C1 in your example -- its code will be removed from the decompilation by this phase.\n\nLater on in the decompilation, Hex-Rays propagates the mov eax, offset loc_100025C1 into the subsequent jmp eax instruction to determine that the jmp transfers control to loc_100025C1, and then sees whether that address is part of the code it is decompiling. Since that address was removed from the decompilation as just discussed, this fails. As a result, Hex-Rays emits the JUMPOUT(0x100025C1) that you see in the decompilation. If Hex-Rays had known earlier that the jmp would resolve to loc_100025C1, then it would have kept that code, so you would not see a JUMPOUT in the decompilation -- but it only discovers that the jmp resolves there after it's already removed the target, at which point it's too late.\n\nThere is something you can do about this, although it is a bit of a weak solution that will require manual work and probably several iterations of refinement on your end. Namely, if you explicitly add a control flow reference from the jmp eax instruction to loc_100025C1, then Hex-Rays won't remove that block, and it will be able to decompile more of the code. You can add such a control flow reference as follows:\n\nida_xref.add_cref(0x100025BE,100025C1,ida_xref.XREF_USER | ida_xref.fl_JN)\n\nNote, however, that you are going to have to do this for every occurrence of this obfuscation construct, which you might only discover after adding the first cross reference and then seeing new JUMPOUT statements. You'll probably also run into issues where IDA may not create function chunks for new parts of the code that you add cross references to, which will be annoying and painful.\n\nIf I were you, I'd do this instead:\n\nAs long as your script can find the relevant entries, this should prevent you from having to create the cross-references manually (in an iterative fashion) like I described above; you'll be explicitly creating all of the cross-references at once. And by delaying auto-analysis until after your script runs, you'll prevent issues with IDA not identifying the function chunks.\n\nIn response to your edit including a link to the crackme, here's an IDAPython script you can run to remove the obfuscation. When loading the binary, uncheck the \"Enabled\" checkbox under the \"Analysis\" heading. Then, run the script. Finally, go to Options->General->Analysis and check the \"Enabled\" checkbox. (Note that there's a bit more logic to the script than necessary; only the \"patched jmp to destination\" block ever executes.)\n\n```\nimport idaapi\nimport ida_bytes\nimport ida_nalt\nimport ida_bytes\nimport ida_ida\n\nPATTERN_STR = \"B8 ? ? ? ? 3D ? ? ? ? 74 07 B8 ? ? ? ? FF E0\"\n\npatterns = ida_bytes.compiled_binpat_vec_t()\nencoding = ida_nalt.get_default_encoding_idx(ida_nalt.BPU_1B)\nimagebase = ida_nalt.get_imagebase()\nida_bytes.parse_binpat_str(patterns,imagebase,PATTERN_STR,16,encoding)\nea = imagebase\nwhile True:\n    ea = ida_bytes.bin_search(ea,ida_ida.inf_get_max_ea(),patterns,ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_CASE)\n    if ea == idaapi.BADADDR:\n        break\n\n    const1 = ida_bytes.get_dword(ea+1)\n    const2 = ida_bytes.get_dword(ea+6)\n    offs = ida_bytes.get_dword(ea+13)\n    if const1 != const2:\n        if offs == ea+0x14:\n            ida_bytes.put_byte(ea,0xEB)\n            ida_bytes.put_byte(ea+1,0x12)\n            for i in range(0x12):\n                ida_bytes.put_byte(ea+2+i,0x90)\n            print(\"%#x: patched jmp to destination\" % ea)\n        else:\n            print(\"%#x: jmp address incorrect?\" % ea)\n\n    else:\n        ida_bytes.put_byte(ea,0xEB)\n        ida_bytes.put_byte(ea+1,0x11)\n        for i in range(0x11):\n            ida_bytes.put_byte(ea+2+i,0x90)\n        print(\"%#x: patched jmp to byte after jmp eax\" % ea)\n\n```\n",
+      "votes": "2",
+      "user": "Rolf Rolles",
+      "time": "Jul 7, 2023 at 3:50",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Alvo",
+          "text": "Thank you kind sir for the detailed explanation! Adding xref using my script allowed me to connect those detached basic blocks, Although there were still some bytes that were treated as data instead of code but I was able to get the whole dllmain decompiled after turning those bytes into code! I tried the patch the program before auto analysis approach as well, I think it works as well as the xref approach since it didn't make auto analysis magically finding all the function chunks.",
+          "time": null
+        },
+        {
+          "user": "Rolf Rolles",
+          "text": "No problem. See the IDAPython script in the updated answer, which removes all of the obfuscation automatically according to the steps I laid out at the bottom of the original answer.",
+          "time": null
+        },
+        {
+          "user": "Alvo",
+          "text": "You script completely fixed the auto analysis result, and I understand that the jz was the culprit of all the errors. It's interesting that you don't need to advance the search start point using BIN_SEARCH_FORWARD. Thanks for sharing, and now I'm thinking it would be fun to implement this kind of obfuscation as a llvm pass.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

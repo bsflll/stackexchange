@@ -1,0 +1,38 @@
+{
+    "title": "PinTools Multi-threaded example (inscount_Tls.cpp): only one thread outputs",
+    "link": "https://reverseengineering.stackexchange.com/questions/31492/pintools-multi-threaded-example-inscount-tls-cpp-only-one-thread-outputs",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am studying <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/98690/Pin/doc/html/index.html#InscountTLS\" rel=\"nofollow noreferrer\">PinTools multithread example inscount_tls.cpp</a>. When I change the number of thread to 3, only 1 thread outputs the result. Is anyone familiar with <code>Intel Pintools instruments</code> that can give some advice?\nIf I run the example <code>inscount_tls.cpp</code> as in the manual (i.e., <code>numThreads</code> set to 0), the output:</p>\n<pre><code>Count[0] = 1141027\nTotal number of threads = 1\n</code></pre>\n<p>But if I change the <code>numThreads</code> to 3, there is only one thread outputs (instead of 4) its result:</p>\n<pre><code>Count[0] = 1141027\nTotal number of threads = 4\n</code></pre>\n<p>My Linux machine has 8 cores, and the below is how I build and run Pin:</p>\n<p><a href=\"https://i.sstatic.net/9yvwx.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/9yvwx.png\"/></a></p>\n<p>In the source file, I only change the number thread to 3, and the output log file to \"inscount_tls.out\"</p>\n<pre><code>/*\n * Copyright (C) 2004-2021 Intel Corporation.\n * SPDX-License-Identifier: MIT\n */\n \n#include &lt;iostream&gt;\n#include &lt;fstream&gt;\n#include \"pin.H\"\nusing std::cerr;\nusing std::cout;\nusing std::endl;\nusing std::ostream;\nusing std::string;\n \nKNOB&lt; string &gt; KnobOutputFile(KNOB_MODE_WRITEONCE, \"pintool\", \"o\", \"inscount_tls.out\", \"specify output file name\");\n \nINT32 numThreads = 3;\nostream* OutFile = NULL;\n \n// Force each thread's data to be in its own data cache line so that\n// multiple threads do not contend for the same data cache line.\n// This avoids the false sharing problem.\n#define PADSIZE 56 // 64 byte line size: 64-8\n \n// a running count of the instructions\nclass thread_data_t\n{\n  public:\n    thread_data_t() : _count(0) {}\n    UINT64 _count;\n    UINT8 _pad[PADSIZE];\n};\n \n// key for accessing TLS storage in the threads. initialized once in main()\nstatic TLS_KEY tls_key = INVALID_TLS_KEY;\n \n// This function is called before every block\nVOID PIN_FAST_ANALYSIS_CALL docount(UINT32 c, THREADID threadid)\n{\n    thread_data_t* tdata = static_cast&lt; thread_data_t* &gt;(PIN_GetThreadData(tls_key, threadid));\n    tdata-&gt;_count += c;\n}\n \nVOID ThreadStart(THREADID threadid, CONTEXT* ctxt, INT32 flags, VOID* v)\n{\n    numThreads++;\n    thread_data_t* tdata = new thread_data_t;\n    if (PIN_SetThreadData(tls_key, tdata, threadid) == FALSE)\n    {\n        cerr &lt;&lt; \"PIN_SetThreadData failed\" &lt;&lt; endl;\n        PIN_ExitProcess(1);\n    }\n}\n \n// Pin calls this function every time a new basic block is encountered.\n// It inserts a call to docount.\nVOID Trace(TRACE trace, VOID* v)\n{\n    // Visit every basic block  in the trace\n    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl))\n    {\n        // Insert a call to docount for every bbl, passing the number of instructions.\n \n        BBL_InsertCall(bbl, IPOINT_ANYWHERE, (AFUNPTR)docount, IARG_FAST_ANALYSIS_CALL, IARG_UINT32, BBL_NumIns(bbl),\n                       IARG_THREAD_ID, IARG_END);\n    }\n}\n \n// This function is called when the thread exits\nVOID ThreadFini(THREADID threadIndex, const CONTEXT* ctxt, INT32 code, VOID* v)\n{\n    thread_data_t* tdata = static_cast&lt; thread_data_t* &gt;(PIN_GetThreadData(tls_key, threadIndex));\n    *OutFile &lt;&lt; \"Count[\" &lt;&lt; decstr(threadIndex) &lt;&lt; \"] = \" &lt;&lt; tdata-&gt;_count &lt;&lt; endl;\n    delete tdata;\n}\n \n// This function is called when the application exits\nVOID Fini(INT32 code, VOID* v) { *OutFile &lt;&lt; \"Total number of threads = \" &lt;&lt; numThreads &lt;&lt; endl; }\n \n/* ===================================================================== */\n/* Print Help Message                                                    */\n/* ===================================================================== */\n \nINT32 Usage()\n{\n    cerr &lt;&lt; \"This tool counts the number of dynamic instructions executed\" &lt;&lt; endl;\n    cerr &lt;&lt; endl &lt;&lt; KNOB_BASE::StringKnobSummary() &lt;&lt; endl;\n    return 1;\n}\n \n/* ===================================================================== */\n/* Main                                                                  */\n/* ===================================================================== */\n \nint main(int argc, char* argv[])\n{\n    // Initialize pin\n    PIN_InitSymbols();\n    if (PIN_Init(argc, argv)) return Usage();\n \n    OutFile = KnobOutputFile.Value().empty() ? &amp;cout : new std::ofstream(KnobOutputFile.Value().c_str());\n \n    // Obtain  a key for TLS storage.\n    tls_key = PIN_CreateThreadDataKey(NULL);\n    if (tls_key == INVALID_TLS_KEY)\n    {\n        cerr &lt;&lt; \"number of already allocated keys reached the MAX_CLIENT_TLS_KEYS limit\" &lt;&lt; endl;\n        PIN_ExitProcess(1);\n    }\n \n    // Register ThreadStart to be called when a thread starts.\n    PIN_AddThreadStartFunction(ThreadStart, NULL);\n \n    // Register Fini to be called when thread exits.\n    PIN_AddThreadFiniFunction(ThreadFini, NULL);\n \n    // Register Fini to be called when the application exits.\n    PIN_AddFiniFunction(Fini, NULL);\n \n    // Register Instruction to be called to instrument instructions.\n    TRACE_AddInstrumentFunction(Trace, NULL);\n \n    // Start the program, never returns\n    PIN_StartProgram();\n \n    return 1;\n}\n</code></pre>\n</div>",
+    "votes": "2",
+    "answers": 0,
+    "views": "234",
+    "tags": [
+        "instrumentation",
+        "pintool",
+        "multi-process"
+    ],
+    "user": "Tony Nguyen",
+    "time": "Jan 31, 2023 at 16:24",
+    "comments": [
+        {
+            "user": "josh poley",
+            "text": "<span class=\"comment-copy\">Based on the code pasted, <code>numThreads</code> is not a configuration, but just for display.</span>",
+            "time": null
+        },
+        {
+            "user": "Tony Nguyen",
+            "text": "<span class=\"comment-copy\">@joshpoley I see. <code>numThreads</code> is just to display (increased by one) each time <code>ThreadStart()</code> is called. How do I configure to have more than one thread with <code>Intel Pin</code>? I don't see any references in <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/98690/Pin/doc/html/index.html#MT\" rel=\"nofollow noreferrer\">Intel Pintool manual</a></span>",
+            "time": null
+        },
+        {
+            "user": "josh poley",
+            "text": "<span class=\"comment-copy\">You only see one thread because <code>ls</code> uses a single thread. How would <code>ls</code> know what to do with another thread?</span>",
+            "time": null
+        },
+        {
+            "user": "Tony Nguyen",
+            "text": "<span class=\"comment-copy\">@joshpoley I see what I misunderstood. I executed the <code>ls</code> command instead of an multithreaded executable file. I now have it working correctly.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

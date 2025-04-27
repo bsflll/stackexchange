@@ -1,0 +1,56 @@
+{
+    "title": "pydbg: Disassemble at $exentry and relative offset from $exentry",
+    "link": "https://reverseengineering.stackexchange.com/questions/10625/pydbg-disassemble-at-exentry-and-relative-offset-from-exentry",
+    "content": "I am attempting to disassemble a test binary I compiled written in masm. Here are the follwing bytes:\n<pre><code>    Microsoft (R) COFF/PE Dumper Version 10.00.40219.01\nCopyright (C) Microsoft Corporation.  All rights reserved.\n\n\nDump of file X:\\test.exe\n\nFile Type: EXECUTABLE IMAGE\n\n00401000: EB FE              jmp         00401000\n00401002: 33 C0              xor         eax,eax\n00401004: 33 DB              xor         ebx,ebx\n00401006: 33 C9              xor         ecx,ecx\n00401008: 33 D2              xor         edx,edx\n0040100A: B8 02 00 00 00     mov         eax,2\n0040100F: BB 01 00 00 00     mov         ebx,1\n00401014: 3B C3              cmp         eax,ebx\n00401016: 7F 06              jg          0040101E\n00401018: 2B C3              sub         eax,ebx\n0040101A: 3B C3              cmp         eax,ebx\n0040101C: 7F 22              jg          00401040\n0040101E: B8 05 00 00 00     mov         eax,5\n00401023: BB 0A 00 00 00     mov         ebx,0Ah\n00401028: 3B C3              cmp         eax,ebx\n0040102A: 7F 06              jg          00401032\n0040102C: 2B D8              sub         ebx,eax\n0040102E: 3B D8              cmp         ebx,eax\n00401030: 7F 07              jg          00401039\n00401032: B8 0D 00 00 00     mov         eax,0Dh\n00401037: EB 0E              jmp         00401047\n00401039: BB 09 00 00 00     mov         ebx,9\n0040103E: EB 07              jmp         00401047\n00401040: B9 17 00 00 00     mov         ecx,17h\n00401045: EB 00              jmp         00401047\n00401047: 6A 00              push        0\n00401049: E8 00 00 00 00     call        0040104E\n0040104E: FF 25 00 20 40 00  jmp         dword ptr ds:[00402000h]\n</code></pre>\nThe following is my python script:\n<pre><code>import os, sys\nfrom pydbg import *\nfrom pydbg.defines import *\n\npid = int(sys.argv[1])\n\ndef handler_breakpoint(pydbg):\n    if pydbg.first_breakpoint:\n        return DBG_CONTINUE\n    for thread_id in dbg.enumerate_threads():\n        context = dbg.get_thread_context(None, h_thread)\n    print(\"Eip = %08x\" % context.Eip)\n    dbg.disasm(context.Eip)\n    return DBG_CONTINUE\n\ndbg = pydbg()\ndbg.set_callback(EXCEPTION_BREAKPOINT, handler_breakpoint)\ndbg.attach(pid)\nfor thread_id in dbg.enumerate_threads():\n        context = dbg.get_thread_context(None, h_thread)\ndbg.bp_set(context.Eip)\ndbg.resume_all_threads()\npydbg.debug_event_loop(dbg)\n</code></pre>\nI just want to break into the first (jmp-0x2) instruction.\nI checked the pydbg API pydbg API and various projects that utilized pydbg and couldn't make heads or tails on how to do this.\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "321",
+    "tags": [
+        "windows",
+        "debuggers",
+        "python"
+    ],
+    "user": "grepNstepN",
+    "time": "Aug 14, 2015 at 14:40",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "if you attach to any running process the breakpoint at the entry point will not be hit \nto break on <pre><code>Address of EntryPoint</code></pre> you should load the binary and set the breakpoint during the first system (pydbg.firstbreakpoint) \nto retrieve the AddressofEntryPoint dynamically you would have to read the process memory and decipher the pe header->address of entry point \nshown below is a sample script that breaks on calc.exe entrypoint and dumps the context \n<pre><code>:\\>cat entrypoint.py\nimport struct\nfrom pydbg import *\nfrom pydbg.defines import *\ndef handler_breakpoint (pydbg):\n  if pydbg.first_breakpoint:\n    for module in dbg.iterate_modules():\n      base_address = module.modBaseAddr\n      dos_header   = dbg.read_process_memory(base_address, 0x40)\n      if len(dos_header) != 0x40 or dos_header[:2] != \"MZ\":\n        continue\n      e_lfanew   = struct.unpack(\"<I\", dos_header[0x3c:0x40])[0]\n      pe_headers = dbg.read_process_memory(base_address + e_lfanew, 0xF8)\n      if len(pe_headers) != 0xF8 or pe_headers[:2] != \"PE\":\n        continue\n      entrypoint = (struct.unpack(\"<I\", pe_headers[0x28:0x2c])[0]) + base_addres\ns\n      print \"0x%08x\" % entrypoint\n      dbg.bp_set(entrypoint)\n      return DBG_CONTINUE\n  print dbg.dump_context(dbg.context)\n  return DBG_CONTINUE\ndbg = pydbg()\ndbg.set_callback(EXCEPTION_BREAKPOINT, handler_breakpoint)\ndbg.load(\"c:\\windows\\system32\\calc.exe\")\npydbg.debug_event_loop(dbg)\n</code></pre>\nresult \n<pre><code>:\\>python entrypoint.py\n0x01012475\nCONTEXT DUMP\n  EIP: 01012475 push byte 0x70\n  EAX: 00000000 (         0) -> N/A\n  EBX: 7ffd7000 (2147315712) -> N/A\n  ECX: 0007ffb0 (    524208) ->\n  EDX: 7c90e514 (2089870612) -> N/A\n  EDI: 00250000 (   2424832) -> N/A\n  ESI: 7c9115f9 (2089883129) -> N/A\n  EBP: 0007fff0 (    524272) -> \n  ESP: 0007ffc4 (    524228) -> wp (stack)\n  +00: 7c817077 (2088857719) -> N/A\n  +04: 00250000 (   2424832) -> N/A\n  +08: 7c9115f9 (2089883129) -> N/A\n  +0c: 7ffd7000 (2147315712) -> N/A\n  +10: 80544c7d (2153008253) -> N/A\n  +14: 0007ffc8 (    524232) ->\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Aug 14, 2015 at 22:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "grepNstepN",
+                    "text": "<span class=\"comment-copy\">thanks blabb! trying to avoid pefile and as many other imports as possible</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "It looks like you'd want to indent <pre><code>dbg.bp_set(context.Eip)</code></pre> (so that it's part of the <pre><code>for</code></pre>-loop) and replace <pre><code>dbg.resume_all_threads()</code></pre> with <pre><code>dbg.run()</code></pre>.\n",
+            "votes": "1",
+            "user": "Jason Geffner",
+            "time": "Aug 14, 2015 at 18:05",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "grepNstepN",
+                    "text": "<span class=\"comment-copy\">I tried it, and it prints EIP now. However, it doesn't print the disassembled bytes (jmp-0x2).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\"><a href=\"http://pedramamini.com/PaiMei/docs/PyDbg/public/pydbg.pydbg.pydbg-class.html#disasm\" rel=\"nofollow noreferrer\"><code>disasm()</code></a> doesn't automatically print its output; it returns its output as a string. Further questions on this would probably best be asked at <a href=\"http://stackoverflow.com/\">stackoverflow.com</a>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "grepNstepN",
+                    "text": "<span class=\"comment-copy\">thanks Jason! in hindsight i should have 'type()d' it to see the return type and print it or checked the definition to see if it called print</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

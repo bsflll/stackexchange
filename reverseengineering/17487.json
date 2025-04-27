@@ -1,0 +1,32 @@
+{
+    "title": "How to find ELF symbol table reference?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17487/how-to-find-elf-symbol-table-reference",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In a huge ELF binary, I find some functions which use some kind of (string) constant. The constant itself seems to be stored inside the binary itself but I can't figure out, how to resolve IDA's disassembly result:</p>\n<pre><code>.text:096B3D58 lea     eax, (stru_8199A2C.st_shndx+1 - 96B3D47h)[ebx]\n.text:096B3D5E push    eax             ; char *\n.text:096B3D5F push    edx             ; this\n.text:096B3D60 call    _ZN11NameDB7resolveEPKc ; NameDB::resolve(char const*)\n</code></pre>\n<p>My problem is to understand the source of the LEA instruction. For me it reads like \"the symbol at 0x96B3D47 bytes prior to the symbol table index\". Strangely enough, the position 096B3D47 is just a few lines above the above excerpt...</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "elf",
+        "symbols"
+    ],
+    "user": "oxident",
+    "time": "Feb 17, 2018 at 19:07",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>Strangely enough, the position 096B3D47 is just a few lines above the above excerpt...</p>\n</blockquote>\n<p>... and the instruction before that address is a <code>call</code> instruction. Right?</p>\n<p>This kind of instructions is used for <em>position-independend code</em>: The code can be loaded into another address and it will work the same way without modifications. Typically it works like this:</p>\n<pre><code>    call some_address                         ; 1\nsome_address:\n    pop ebx                                   ; 2\n    lea eax, (some_text - some_address)[ebx]  ; 3\n    ...\nsome_text:\n    ...\n</code></pre>\n<ol>\n<li>After the <code>call</code> instruction the address of the instruction after the <code>call</code> instruction will have been pushed to the stack. This means that the address <code>some_address</code> is now on the stack.</li>\n<li>Using <code>pop</code> we read the address of <code>some_address</code> from the stack (and remove it from there).</li>\n<li>This instruction will calculate <code>some_text - some_address + someaddress</code> so the instruction has the same effect as <code>lea eax, [some_text]</code>.</li>\n</ol>\n<p>The distance <code>some_text - some_address</code> is always the same when the executable file is loaded into different memory addresses. Therefore the <code>lea</code> instruction will work independently on the location (address) where the program is executed.</p>\n<p>The same is true for the <code>call</code> instruction because the argument of the <code>call</code> instruction is stored PC-relative.</p>\n<p>The argument of the instruction <code>lea eax, [some_text]</code> however would be an absolute (not a PC-relative) address so you would have to exchange it when executing the program at another address.</p>\n<blockquote>\n<p>For me it reads like \"the symbol at 0x96B3D47 bytes prior to the symbol table index\".</p>\n</blockquote>\n<p>If there is a relocation table entry for the <code>lea</code> instruction the disassembler could take the information from the relocation table.</p>\n<p>In your case this seems to be different:</p>\n<p>Your disassembler seems also to be intelligent enough to see that <code>ebx</code> contains the address 096B3D47 at this point. Therefore it will know that the  instruction <code>lea eax, XYZ[ebx]</code> will result in a value of <code>096B3D47+XYZ</code> in the <code>eax</code> register.</p>\n<p>Therefore it will disassemble the instruction as <code>lea eax, ((XYZ+096B3D47)-096B3D47)[ebx]</code> and tries to find out what symbol the address <code>XYZ+096B3D47</code> is.</p>\n<p>Many disassemblers I know however only guess here; they assume that the address belongs to the last symbol before that address. And in your case the symbol <code>stru_8199A2C.st_shndx</code> seems to be that symbol.</p>\n<p>Obviously your disassembler does not only evaluate symbols but also debugging information such as \"Dwarf\" debugging data (which contains information used by debuggers).</p>\n</div>",
+            "votes": "2",
+            "user": "Martin Rosenau",
+            "time": "Feb 18, 2018 at 13:07",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "oxident",
+                    "text": "<span class=\"comment-copy\">Quite easy to understand. Thanks. But then, I don't have the opportunity to find the location of \"some_text\" without starting a debug session, do I?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,35 @@
+{
+    "title": "Where do arguments 5 and 6 go in this Microsoft x64 function call?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25490/where-do-arguments-5-and-6-go-in-this-microsoft-x64-function-call",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm disassembling a working-as-expected compiled C program (MS/Windows x64, MinGW gcc 10.1.0). In the <code>main</code> function, I have the following call which passes 6 arguments to the function <code>DotProduct</code>:</p>\n<pre><code>...\n// void** m3 [rbp-0x50] = DotProduct(ptr, ptr2, 3, 2, 2, 3);\n  401b9f:   48 8b 55 b8             mov    rdx,QWORD PTR [rbp-0x48] // arg2 = m2\n  401ba3:   48 8b 45 c0             mov    rax,QWORD PTR [rbp-0x40] // arg1 = m1\n  401ba7:   c7 44 24 28 03 00 00    mov    DWORD PTR [rsp+0x28],0x3 // arg6 = 3   (+40) &lt;- Δ main rsp\n  401bae:   00\n  401baf:   c7 44 24 20 02 00 00    mov    DWORD PTR [rsp+0x20],0x2 // arg5 = 2   (+32)\n  401bb6:   00\n  401bb7:   41 b9 02 00 00 00       mov    r9d,0x2                  // arg4 = 2\n  401bbd:   41 b8 03 00 00 00       mov    r8d,0x3                  // arg3 = 3\n  401bc3:   48 89 c1                mov    rcx,rax                  // arg1 = m1\n  401bc6:   e8 34 fc ff ff          call   4017ff &lt;DotProduct&gt;      // DotProduct(m1, m2, 3, 2, 2, 3);\n  401bcb:   48 89 45 b0             mov    QWORD PTR [rbp-0x50],rax // void** m3 [rbp-0x50] = returned\n...\n</code></pre>\n<p>Note that <code>arg5</code> and <code>arg6</code> are placed into <code>[rsp+0x20]</code> and <code>[rsp+0x28]</code>.</p>\n<p>See what happens when DotProduct is called:</p>\n<pre><code>00000000004017ff &lt;DotProduct&gt;:\n  4017ff:   55                      push   rbp\n  401800:   53                      push   rbx\n  401801:   48 83 ec 48             sub    rsp,0x48       // (-72)\n  401805:   48 8d ac 24 80 00 00    lea    rbp,[rsp+0x80] // (-72+128) =&gt; (+56)\n</code></pre>\n<p>The <code>rbp</code> should be at <code>-0x48+0x80</code> relative to <code>main</code>'s <code>rsp</code>, which simplifies to <code>+0x38</code> (+56, Δ<code>main</code> rsp). The stack pointer decreased 72 bytes, and the base pointer was placed 128 bytes above that (so 56 bytes above the previous stack pointer location). Next, <code>DotProduct</code> loads the first four arguments from their registers:</p>\n<pre><code>  40180d:   48 89 4d e0             mov    QWORD PTR [rbp-0x20],rcx\n  401811:   48 89 55 e8             mov    QWORD PTR [rbp-0x18],rdx // (rbp-24) =&gt; (+56-24) =&gt; (+32) !\n  401815:   44 89 45 f0             mov    DWORD PTR [rbp-0x10],r8d // (rbp-16) =&gt; (+56-16) =&gt; (+40) !\n  401819:   44 89 4d f8             mov    DWORD PTR [rbp-0x8],r9d\n</code></pre>\n<p>Wait! How are <code>rdx</code> and <code>r8d</code> loaded into these memory locations? Aren't they occupied by arguments 5 and 6? What happened?</p>\n<p>Right after that, we have this:</p>\n<pre><code>  40181d:   8b 45 00                mov    eax,DWORD PTR [rbp+0x0]\n</code></pre>\n<p>What's going on here? <code>[rbp+0x0]</code> hasn't been initialized in this function, so what's in this memory location? Where did arguments 5 and 6 go?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "809",
+    "tags": [
+        "disassembly",
+        "windows",
+        "assembly",
+        "x86-64"
+    ],
+    "user": "JoshuaS3",
+    "time": "Jul 14, 2020 at 0:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>when you are here <strong>4017ff:   55                      push   rbp</strong></p>\n<p>your 5th argument will be available at [rsp+28]<br/>\n(8 bytes for return address and 20 bytes for HOMEPARAMS (space for saving the 4 args passed via register)</p>\n<p>two pushes and one subtract will make your argument no 5  available at\n0x28 + 0x8 +0x8 +0x48 = 0x80</p>\n<p>so rbp+0 will hold the address of 5th argument after the LEA operation</p>\n</div>",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Jul 14, 2020 at 10:40",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've spent many hours (too many for me to admit) trying to figure this out and I just realized what it is, right after hitting submit. <code>push</code> instructions implicitly decrease the stack pointer. The call to the function <code>DotProduct</code> calls <code>push</code> three times; once in the <code>call</code> instruction itself, where the return address is implicitly pushed, and twice in the function's prolog, where two quadword registers are explicitly pushed with the <code>push</code> instruction. This all automatically decreases <code>rsp</code> by 24 bytes, leaving arg5 and arg6 at <code>[rbp]</code> and <code>[rbp+0x8]</code>. The arguments aren't overwritten.</p>\n</div>",
+            "votes": "1",
+            "user": "JoshuaS3",
+            "time": "Jul 14, 2020 at 0:44",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

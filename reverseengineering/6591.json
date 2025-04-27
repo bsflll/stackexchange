@@ -1,0 +1,59 @@
+{
+    "title": "Non standard LZ77 compression header",
+    "link": "https://reverseengineering.stackexchange.com/questions/6591/non-standard-lz77-compression-header",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm working on reversing the SJ4000 camera firmware but I found a problem unpacking it.</p>\n<p>This is the header I found on the image:</p>\n<pre><code>00000000  42 43 4c 31 81 66 00 09  00 54 68 e0 00 2f 2b bf  |BCL1.f...Th../+.|\n</code></pre>\n<p>As you can see BCL1 is the header for 'Basic Compression Library' ( <a href=\"http://bcl.comli.eu/home-en.html\" rel=\"nofollow\">http://bcl.comli.eu/home-en.html</a> ) using LZ77 algorithm but I can't decompress the image with it.</p>\n<p>I built some files using BCL, compared to the firmware header and found this:</p>\n<pre><code>00000000  42 43 4c 31 81 66 00 09  00 54 68 e0 00 2f 2b bf  |BCL1.f...Th../+.| &lt; FIRMWARE\n00000000  42 43 4c 31 00 00 00 09  00 00 4f 88 99 7f 45 4c  |BCL1......O...EL| &lt; LZ\n00000000  42 43 4c 31 00 00 00 02  00 00 4f 88 20 03 06 90  |BCL1......O. ...| &lt; HUFFMAN\n00000000  42 43 4c 31 00 00 00 01  00 00 4f 88 99 7f 45 4c  |BCL1......O...EL| &lt; RLE\n00000000  42 43 4c 31 00 00 00 0a  00 00 4f 88 56 01 64 9f  |BCL1......O.V.d.| &lt; SF\n00000000  42 43 4c 31 00 00 00 03  00 00 4f 88 00 7f 45 4c  |BCL1......O...EL| &lt; RICE8\n00000000  42 43 4c 31 00 00 00 04  00 00 4f 88 00 45 7f 46  |BCL1......O..E.F| &lt; RICE16\n00000000  42 43 4c 31 00 00 00 05  00 00 4f 88 00 46 4c 45  |BCL1......O..FLE| &lt; RICE32\n</code></pre>\n<p>According to this the compression algorithm is LZ77 and it follows the same structure except for 2 bytes.</p>\n<pre><code>42 43 4c 31 &lt; Magic Number\n81 66 00 09 &lt; unknown 2 bytes + 2 standard bytes \n00 54 68 e0 &lt; Original Size\n00 2f 2b bf &lt; Compressed Size\n</code></pre>\n<p>Any idea what these 2 bytes mean?</p>\n<p>EDIT: I tried to edit that 2 bytes and override them with 00 00 so the header matches the standard. After that tried to uncompress it with BCL LZ77 and it prompts a segmentation fault:</p>\n<pre><code>LZ77 decompress FW96655A_ZERO.bin to test...\nInput file: 3091395 bytes\nOutput file: 5531872 bytes\nSegmentation fault\n</code></pre>\n<p>Checking the lenght bytes I got the following result:</p>\n<pre><code>0x005468E0 &gt; Big Endian Long: 5531872\n0x002F2BBF &gt; Big Endian Long: 3091391\n</code></pre>\n<p>As you can see for the compressed data length there is a difference of 4 bytes that might be causing the Seg. fault.</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "firmware",
+        "unpacking",
+        "decompress",
+        "magic-number"
+    ],
+    "user": "Nucklear",
+    "time": "Nov 5, 2014 at 14:47",
+    "comments": [
+        {
+            "user": "Libor Tomsik",
+            "text": "<span class=\"comment-copy\">Are you sure that the FW is realy compressed? Using strings -n 9 FW I'm getting quite a lot of readable data which are obviously not compressed. Maybe just part of the file is?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I don't know for sure but can think of two possibilities.  </p>\n<ol>\n<li><p>One is that it's simply a coding error and only the low half of the 32-bit register was initialized when the file was created.  If that's the case, then simply zeroing those two bytes should result in a successful decompression using the standard tool.</p></li>\n<li><p>The other is that it's a (proprietary) modification to the normal LZ77 decompression, in which case, it's likely to be a minor enhancement rather than a completely new scheme.</p></li>\n</ol>\n<p>All of the samples of that camera's firmware that I was easily able to locate on the internet use the standard <code>00 00 00 09</code> tag, which may indicate that the first possibility is the more likely.</p>\n<p>After checking with the binary you mentioned, it became clear that there was simply an error in the <code>bfc.c</code> file.  Specifically, around line 192 of <code>bfc.c</code> it says:</p>\n<pre><code>if( command == 'd' )\n{\n    /* Read header */\n    algo = ReadWord32( f );  /* Dummy */\n    algo = ReadWord32( f );\n    outsize = ReadWord32( f );\n    insize -= 12;\n}\n</code></pre>\n<p>However, this is incorrect because it fails to read the <code>infile</code> size as written in the header.  To quickly fix this, just change those lines to these and recompile:</p>\n<pre><code>if( command == 'd' )\n{\n    /* Read header */\n    algo = ReadWord32( f );  /* Dummy */\n    algo = ReadWord32( f );\n    outsize = ReadWord32( f );\n    ReadWord32( f );\n    insize -= 16;\n}\n</code></pre>\n<p>When I do that, there is no problem decompressing the code.  To make the corresponding change to the output file (that is, compressing), change the code around line 364 of <code>bfc.c</code> from this:</p>\n<pre><code>/* Write output file */\nWriteWord32( outsize, f );\nfwrite( out, outsize, 1, f );\nfclose( f );\n</code></pre>\n<p>to this:</p>\n<pre><code>/* Write output file */\nfwrite( out, outsize, 1, f );\nfclose( f );\n</code></pre>\n<p>I should probably mention the likely reason this change was done.  In the original program, the file size can be used to determine the size, but in an undifferentiated array of bytes (i.e. no file system) as is often the case in ROM, it is useful to encode both input and output files sizes within the header.</p>\n</div>",
+            "votes": "5",
+            "user": "Edward",
+            "time": "Nov 5, 2014 at 19:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">I guess that too and I tried that way, but had a new issue. Check my edit for more information</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">@Nucklear Can you point me to a copy of the image you're using?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">Here is the download link <a href=\"http://www.sjcamindonesia.com/wp-content/uploads/2014/09/SJCAM_SJ4000WIFI_firmware_W20141021V02_sjcamindonesia.com_.zip\" rel=\"nofollow noreferrer\">sjcamindonesia.com/wp-content/uploads/2014/09/…</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">That was exactly what I was thinking about but I couldn't find the error on bfc.c thank you for the patch I was able to decompress the file. Again thank you so much for the help</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">You're welcome.  I also added a note to the answer to clarify the likely reason for this change, from the point of view of the firmware designers.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

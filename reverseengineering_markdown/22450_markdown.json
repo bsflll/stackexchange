@@ -1,0 +1,63 @@
+{
+  "title": "Stack-Smashing Protection error message",
+  "link": "https://reverseengineering.stackexchange.com/questions/22450/stack-smashing-protection-error-message",
+  "content": "Here is a very ugly C program:\n\n```\n #include <stdio.h>\n #include <string.h>\n int main(int argc, char *argv[])\n {\n    char buffer[10];\n    memcpy(buffer,argv[1],strlen(argv[1]));\n    printf(\"%s  \n\", buffer);\n    return 0;\n }\n\n```\nI am compiling this program with Stack-Smashing Protection:\n\n```\n $ gcc -fstack-protector smash.c -o smash\n\n```\nHere is what I get during execution:\n\n```\n $ ./smash 01234567890\n 01234567890v?\\??nr?!??U\n *** stack smashing detected ***: <unknown> terminated\n\n```\nThe protection works fine but I do not understand why I see unknown instead of argv[0].\n\n",
+  "votes": "3",
+  "answers": 3,
+  "views": "324",
+  "tags": [
+    "assembly",
+    "stack-protector"
+  ],
+  "user": "Bob5421",
+  "time": "Dec 4, 2019 at 12:21",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "It seems you are overwriting the argv array itself so error handler  is unable to retrieve the argv[0] value. \n\n",
+      "votes": "2",
+      "user": "Igor Skochinsky",
+      "time": "Nov 4, 2019 at 7:09",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "In fact, this is a fairly recent mitigation mechanism introduced to avoid to leak information about the stack of the crashed application.\n\nThe \"<unknown>\" (which is a static string added by -fstack-protector) that you see was previously argv[0]. But, some attackers started to exploit the fact that you could overflow the stack, reach the argv[0] and overwrite it with an address that you choose. Indeed, if you can control the address at argv[0] and crash the application, you can leak the whole stack outside of the application.\n\nThis technique was mainly used in servers where fork() was used to respawn an instance. As fork() is cloning the memory of the initial process, the ASLR was useless because the same starting memory image was used and, then, the same memory mapping was used again and again.\n\nIf a secret key or some confidential data were stored in the stack, then an attacker can access it through this feature.\n\nThat is why, sometime last year, some developers decided to avoid to use argv[0] when displaying information about the stack-smashing and replaced it by <unknown>.\n\nHere is an answer on Unix/Linux Stack-Exchange site that pinpoint the part of the code of glibc that is responsible for that.\n\n```\nvoid\n__attribute__ ((noreturn))\n__fortify_fail_abort (_Bool need_backtrace, const char *msg)\n{\n  /* The loop is added only to keep gcc happy.  Don't pass down\n     __libc_argv[0] if we aren't doing backtrace since __libc_argv[0]\n     may point to the corrupted stack.  */\n  while (1)\n    __libc_message (need_backtrace ? (do_abort | do_backtrace) : do_abort,\n            \"*** %s ***: %s terminated  \n\",\n            msg,\n            (need_backtrace && __libc_argv[0] != NULL\n             ? __libc_argv[0] : \"<unknown>\"));\n}\n\n```\nAnd, here is the comment attached to the original commit introducing the patch:\n\nI would have liked to give more references and articles in english about this flaw but nobody seemed have write about this thing... Sorry. \n\nHere is an article explaining it (in French):\n\n",
+      "votes": "2",
+      "user": "perror",
+      "time": "Dec 6, 2019 at 8:39",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "Hmm, I am really unhappy to have failed to find references for that... The only good references I found were in French. So, if somebody can come with good references or links (in an understandable language), feel free to suggest it in the comments. I'll edit my answer to integrate it.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "strlen returns the length of a string excluding terminating NULL character, so memcpy just copies provided characters without 0 at the end. \n\nprintf will print everything it gets until it encounters NULL and hence these \"random\" characters at the end.\n\n",
+      "votes": "1",
+      "user": "bart1e",
+      "time": "Nov 2, 2019 at 22:38",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Bob5421",
+          "text": "I understand, but this is not my question. My problem is on the second line : The <unknown> should contain argv[0]",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "Please add this clarification to your question since “i do not understand why i see instead of argv[0]” is very unclear.",
+          "time": null
+        },
+        {
+          "user": "Bob5421",
+          "text": "Sorry, stackexchange was thinking <unknown> was a tag!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

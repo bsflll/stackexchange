@@ -1,0 +1,59 @@
+{
+  "title": "Changing Entrypoint in ELF executable",
+  "link": "https://reverseengineering.stackexchange.com/questions/15199/changing-entrypoint-in-elf-executable",
+  "content": "I wrote some code that does the following:\n\nSo, what happens is when the binary starts it will execute code at the address I changed the entrypoint to, I can see my code in gdb but any kind of instruction other than nop will trigger a segfault.\n\nCan ayone help me understand why this happen?\n\nFor the record, in the binary I am using, the place where I write my code is a place where I found a bunch of 00s. It is in the .eh_frame section.\n\nI added the executable flag to the section in case that was the cause, but it did not help.\n\nI am trying to add code to a \"hello world\" program written in C.\nAn offset in the following section is located as a place to write code to:\n\nBefore any modifications the binary has the following:\n\n```\nSection: [17] .eh_frame\nAddr: 00000000004005d0 Offset: 0005d0 Size: 0000f4 Flags: A\nEntry point address:               0x400400\n\n```\nAfter my code runs:\n\n```\nSection: [17] .eh_frame\nAddr: 00000000004005d0 Offset: 0005d0 Size: 0000f4 Flags: A**WX**\nEntry point address:               **0x4006b6**\n\n```\nInside GDB:\n\n```\n Breakpoint 1, 0x00000000004006b6 in ?? ()\n(gdb) x/10i $rip\n=> 0x4006b6:    nop\n   0x4006b7:    nop\n   0x4006b8:    nop\n   0x4006b9:    add    0x1,%ebx\n\n```\nWhen I hit the add 0x1, %ebx the program segfaults.\n** I've also tried a add 0x1, %rbx.\n\nI am pretty sure I found the issue.\n\nWhen writing my assembly code I was using GCC and then using the eXamine command to get the bytes for each instruction but I was doing something like this:\n\n```\n__asm__(\"movl 0x00, %rax\") (trying to access 0x00 location..)\n\n```\nInstead of __asm__(\"movl $0x00, %rax\") (moving a 0 constant into register as I wanted).\n\nSo, I am an idiot but at least I realized it myself ;))\n\nthanks all who looked and helped.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "5k",
+  "tags": [
+    "linux",
+    "c",
+    "gdb",
+    "elf",
+    "gcc"
+  ],
+  "user": "joe",
+  "time": "May 22, 2017 at 8:36",
+  "comments": [
+    {
+      "user": "Evan Carroll",
+      "text": "I'm voting to close this question as off-topic because it's about a very minor typo with GDB and no relevance to reverse engineering nor Radare/Linux/C.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The .eh_frame section is not a code section. Therefore, it is not an executable section and the memory allocated for it is non-executable memory. You can read it, but the CPU won't execute it.\n\nOne solution is to change the permissions for that section in the ELF header (in the sections listing). Another would be to find another code cave (that's how regions you can add code to are often called) in an executable section. You could also create your own section if you can't find an appropriate code cave.\n\nP.S.\nAn area full of nulls is not necessarily an area you can edit, those null bytes might still be used or parsed or whatever.\n\n",
+      "votes": "1",
+      "user": "NirIzr",
+      "time": "Apr 21, 2017 at 20:05",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "joe",
+          "text": "The section is has write/execute/alloc bits set.  Initially it has just the alloc bit set but even when I set Write and Executable bits the code segfaults on any instruction other than nop, even simple add instructions.",
+          "time": null
+        },
+        {
+          "user": "Ta Thanh Dinh",
+          "text": "I don't think the answer correct, for an executable binary, something like code section doesn't have much sense. The ELF loader simply doesn't care about sections, it is interested in segments instead.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": ".eh_header is probably not executable but editing the section table won't help. You need to edit the segment (Program header) corresponding to this section. you can find out the segment using e.g. readelf -a:\n\n```\nProgram Headers:\n  Type           Offset             VirtAddr           PhysAddr\n                 FileSiz            MemSiz              Flags  Align\n  PHDR           0x0000000000000040 0x0000000000000040 0x0000000000000040\n                 0x0000000000000230 0x0000000000000230  R E    8\n  INTERP         0x0000000000000270 0x0000000000000270 0x0000000000000270\n                 0x000000000000001c 0x000000000000001c  R      1\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]\n  LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000\n                 0x0000000000020a28 0x0000000000020a28  R E    200000\n  LOAD           0x0000000000020ab8 0x0000000000220ab8 0x0000000000220ab8\n                 0x0000000000002e10 0x0000000000a53d58  RW     200000\n  DYNAMIC        0x0000000000020c30 0x0000000000220c30 0x0000000000220c30\n                 0x0000000000000250 0x0000000000000250  RW     8\n  NOTE           0x000000000000028c 0x000000000000028c 0x000000000000028c\n                 0x0000000000000020 0x0000000000000020  R      4\n  TLS            0x0000000000020ab8 0x0000000000220ab8 0x0000000000220ab8\n                 0x0000000000000000 0x0000000000000040  R      8\n  GNU_EH_FRAME   0x000000000001c3d0 0x000000000001c3d0 0x000000000001c3d0\n                 0x0000000000000ae4 0x0000000000000ae4  R      4\n  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000\n                 0x0000000000000000 0x0000000000000000  RW     10\n  GNU_RELRO      0x0000000000020ab8 0x0000000000220ab8 0x0000000000220ab8\n                 0x0000000000000548 0x0000000000000548  R      1\nSection to Segment mapping:\nSegment Sections...\n00     \n01     .interp \n02     .interp .note.ABI-tag .hash .dynsym .dynstr .gnu.version .gnu.version_r .rela.dyn .init .plt .plt.got .text .fini .rodata .eh_frame_hdr .eh_frame .gcc_except_table \n03     .preinit_array .init_array .fini_array .jcr .data.rel.ro .dynamic .got .data .bss \n04     .dynamic \n05     .note.ABI-tag \n06     .tbss \n07     .eh_frame_hdr \n08\n09     .preinit_array .init_array .fini_array .jcr .data.rel.ro .dynamic .got \n\n```\nin this example, .eh_frame is actually already in the executable segment (first LOAD entry, R-E), but if you patch e.g. .data.rel.ro, you'd need to edit the entry #3 (second LOAD entry, RW-).\n\nNote that the OS loader only uses LOAD program headers to map the file, so editing other entries (e.g. GNU_EH_FRAME) is not necessary even if they cover the section you're interested in.\n\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Apr 21, 2017 at 21:00",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "joe",
+          "text": "So if .eh_frame is in an executable segment already any idea why it segfaults when it hits my code and does even simple add instructions?  I can follow in gdb and see the add instruction but it wont execute the instruction, it just segfaults.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

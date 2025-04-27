@@ -1,0 +1,56 @@
+{
+    "title": "Stack buffer size is different between C and ASM",
+    "link": "https://reverseengineering.stackexchange.com/questions/17075/stack-buffer-size-is-different-between-c-and-asm",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Given that function:</p>\n<pre><code>void vuln( char * arg ) {\n    char buf[256];\n    strcpy(buf, arg);\n}\n</code></pre>\n<p>Disassembled in:</p>\n<pre><code>       0x0804842b      55             push ebp                                                                                                                                                                                          \n       0x0804842c      89e5           mov ebp, esp                                                                                                                                                                                      \n       0x0804842e      81ec08010000   sub esp, 0x108                                                                                                                                                                                    \n       0x08048434      83ec08         sub esp, 8                                                                                                                                                                                        \n       0x08048437      ff7508         push dword [arg_8h]                                                                                            \n       0x0804843a      8d85f8feffff   lea eax, ebp - 0x108                                                                                                                                                                              \n       0x08048440      50             push eax                                                                                                           \n       0x08048441      e8bafeffff     call sym.imp.strcpy                                                                                             \n       0x08048446      83c410         add esp, 0x10                                                                                                                                                                                     \n       0x08048449      c9             leave                                                                                                                                                                                             \n       0x0804844a      c3             ret             \n</code></pre>\n<p>It overflows when the argument is 264 = 0x108 chars and I was expecting 256 bytes. Why compiler adds 8 bytes with <code>sub esp,8</code> ?       </p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "assembly"
+    ],
+    "user": "Kartone",
+    "time": "Dec 29, 2017 at 18:27",
+    "comments": [
+        {
+            "user": "Trey",
+            "text": "<span class=\"comment-copy\">It's probably because of <b>strcpy</b></span>",
+            "time": null
+        },
+        {
+            "user": "Kartone",
+            "text": "<span class=\"comment-copy\">Why ? What ? How ? :-)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<ul>\n<li><p>According to the <a href=\"https://refspecs.linuxfoundation.org/elf/abi386-4.pdf\" rel=\"nofollow noreferrer\">SYS V i386 ABI</a> the stack must be at minimum operating system word aligned prior to execution of the <a href=\"https://c9x.me/x86/html/file_module_x86_id_26.html\" rel=\"nofollow noreferrer\"><code>CALL</code></a> instruction. </p>\n<p>Excerpt from Peter Cordes' answer to <a href=\"https://stackoverflow.com/questions/40307193/responsiblity-of-stack-alignment-in-x86-assembly\">Responsiblity of stack alignment in x86 assembly</a>:</p>\n<blockquote>\n<p>The i386 System V ABI has guaranteed/required for years that ESP+4 is 16B-aligned on entry to a function. (i.e. ESP must be 16B-aligned before a CALL instruction, so args on the stack start at a 16B boundary. This is the same as for x86-64 System V.)</p>\n</blockquote></li>\n<li><p>Additionally, GCC aligns the stack to a 16-byte boundary by defualt. To accomplish this, GCC will allocate additional space in an area within a function's stack frame that is considered unrestricted by the ABI:</p>\n<blockquote>\n<p>Other areas depend on the compiler and the code being compiled. The standard calling sequence does not define a maximum stack frame size, nor does it restrict how a language system uses the ‘‘unspecified’’ area of the standard stack frame.</p>\n</blockquote></li>\n<li><p>in the ABI the function return address is considered to be part of the current stack frame:</p></li>\n</ul>\n<p><a href=\"https://i.sstatic.net/I0vwk.png\" rel=\"nofollow noreferrer\"><img alt=\"i386 stack frame layout\" src=\"https://i.sstatic.net/I0vwk.png\"/></a></p>\n<p>This is enough information to allow us to determine why the compiler generates code that creates unused space on the stack. Let us examine the code, focusing on instructions that result in stack frame memory allocation:</p>\n<pre><code>   0x0804842b      55             push ebp                     ( 1 )                                                                                                                                                                     \n   0x0804842c      89e5           mov ebp, esp                                                                                                                                                                                      \n   0x0804842e      81ec08010000   sub esp, 0x108               ( 2 )                                                                                                                                                                     \n   0x08048434      83ec08         sub esp, 8                   ( 3 )                                                                                                                                                                    \n   0x08048437      ff7508         push dword [arg_8h]          ( 4 )                                                                                  \n   0x0804843a      8d85f8feffff   lea eax, ebp - 0x108                                                                                                                                                                              \n   0x08048440      50             push eax                     ( 5 )                                                                                      \n   0x08048441      e8bafeffff     call sym.imp.strcpy          ( 6 )                                                                                   \n   0x08048446      83c410         add esp, 0x10                                                                                                                                                                                     \n   0x08048449      c9             leave                                                                                                                                                                                             \n   0x0804844a      c3             ret             \n</code></pre>\n<hr/>\n<ol>\n<li><p>We now know that the return address is considered to be part of the current stack frame. i386 machines have 32-bit architecture, so the return address takes up 4 bytes of space and execution of the instruction <code>push ebp</code> will decrement the stack pointer by 4 bytes.  </p>\n<ul>\n<li>4 + 4 = 8, so at this point the stack frame is 8 bytes in size.</li>\n</ul></li>\n<li><p>As you noted, this creates 264 bytes of space. </p>\n<ul>\n<li>8 +  264 = 272</li>\n</ul></li>\n<li><p><code>sub esp, 8</code> - the specific instruction in question. Creates 8 additional bytes of space on the stack frame.</p>\n<ul>\n<li>272 + 8 = 280</li>\n</ul></li>\n<li><p>As before, <code>push</code> has the effect of adding 4 bytes of space.</p>\n<ul>\n<li>280 + 4 = 284</li>\n</ul></li>\n<li><p>Another <code>push</code>.</p>\n<ul>\n<li>284 + 4 = 288</li>\n</ul></li>\n<li><p>Now it is time for execution of the <code>call</code> instruction. At this point the stack frame is 288 bytes in size. Let us check for alignment to a 16-byte boundary:</p>\n<ul>\n<li>288 % 16 = 0 (thanks RadLexus). The stack frame is correctly aligned.</li>\n</ul></li>\n</ol>\n<p><hr/>\nConclusion:</p>\n<p>The compiler uses <code>sub esp, 8</code> to maintain stack frame alignment to a 16-byte boundary.</p>\n<p>See also:</p>\n<ul>\n<li><a href=\"https://stackoverflow.com/questions/4175281/what-does-it-mean-to-align-the-stack\">https://stackoverflow.com/questions/4175281/what-does-it-mean-to-align-the-stack</a></li>\n<li><a href=\"https://software.intel.com/en-us/forums/intel-isa-extensions/topic/291241\" rel=\"nofollow noreferrer\">https://software.intel.com/en-us/forums/intel-isa-extensions/topic/291241</a></li>\n</ul>\n</div>",
+            "votes": "5",
+            "user": "julian",
+            "time": "Dec 29, 2017 at 23:50",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@usr2564301 yes, good point. I will change it. Thanks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kartone",
+                    "text": "<span class=\"comment-copy\">Superb answer @SYS_V. Thank you. Can you explain me why it reserve 0x108 (264) bytes for a char buf[256] and not 0x100 ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@Kartone The best I can do is guess: if 264 bytes are allocated for the buffer, we have 8 + 264 + 8 + 4 + 4 = 288, where 288 % 16 = 0. However, if 256 bytes are allocated for the buffer, with the given code we instead have 8 + 256 + 8 + 4 + 4 = 280, where 280 % 16 = 8, which means the stack is not correctly aligned to a 16-byte boundary.  To correct for this, the compiler would have to generate additional instructions to align the stack.</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@Kartone no problem, you are welcome</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

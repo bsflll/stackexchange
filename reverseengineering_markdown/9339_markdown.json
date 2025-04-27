@@ -1,0 +1,50 @@
+{
+  "title": "Loop through letters of a string with index",
+  "link": "https://reverseengineering.stackexchange.com/questions/9339/loop-through-letters-of-a-string-with-index",
+  "content": "I have the following code:\n\n```\n00401163   > 8D15 49634000  LEA EDX,DWORD PTR DS:[406349]            ; see below, 0x406349 is pointing to entered username\n00401169   . 52             PUSH EDX                                 ; /String => \"myusername\"\n0040116A   . E8 8D020000    CALL <JMP.&kernel32.lstrlenA>            ; \\lstrlenA\n0040116F   . 8BE8           MOV EBP,EAX\n00401171   . B9 05000000    MOV ECX,5\n00401176   . 33F6           XOR ESI,ESI                              ; ESI = 0\n00401178   . 33C0           XOR EAX,EAX\n0040117A   > 8A0C16         MOV CL,BYTE PTR DS:[ESI+EDX]             ; Why is it pointing to 'y' (2nd letter of username) at 1st run in the loop?\n0040117D   . 8AD9           MOV BL,CL\n0040117F   . 3298 28634000  XOR BL,BYTE PTR DS:[EAX+406328]\n00401185   . 40             INC EAX\n00401186   . 83F8 05        CMP EAX,5\n00401189   . 881C32         MOV BYTE PTR DS:[EDX+ESI],BL\n0040118C   . 8888 27634000  MOV BYTE PTR DS:[EAX+406327],CL\n00401192   . 75 02          JNZ SHORT crackme.00401196\n00401194   . 33C0           XOR EAX,EAX\n00401196   > 46             INC ESI\n00401197   . 3BF5           CMP ESI,EBP\n00401199   .^72 DF          JB SHORT crackme.0040117A\n\n```\nAs you can see, 0x406349 contains the username:\n\n```\n00406349  6D 79 75 73 65 72 6E 61 6D 65 00 00 00 00 00 00  myusername......\n\n```\nThere is a loop that will go thru the letters of the entered username. I don't understand why the first run in the loop (at 0x40117A) contains the 2nd letter of the username instead of the 1st one because the index (ESI) is 0.\n\nCan you please help me understand?\n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "5k",
+  "tags": [
+    "assembly",
+    "x86"
+  ],
+  "user": "Sebastien Damaye",
+  "time": "Jul 13, 2015 at 8:11",
+  "comments": [
+    {
+      "user": "Guntram Blohm",
+      "text": "Check your EDX register content at 0x40116F. This will probably confirm that EDX gets changed by lstrlenA. It probably didn't get changed by the lstrlenA of the version of Windows that was current when the crackme was written, but does get changed with your version; the bug probably didn't ever bite the author of the crackme, but bites you now.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "as hanno binder replied edx is not preserved by the function call lstrlena\n\nyou can easily deduce such things by instrumenting the code prior to and post the operation where your assumptions dont pan out to actual behaviour\n\na sample test code could look like this (in x64 you may need a seperate file for inline asm but since you say edx and not rdx inline asm inside a cpp file is fine)\n\n```\n#include <stdio.h>\n#include <windows.h>\n// the vars are global so they are initialised to zero\nint preeax,preebx,preecx,preedx,posteax,postebx,postecx,postedx;\nvoid main (void) {\n  printf(\"does lstrlena change edx ? lets check  \n\");\n__asm {\n  mov preeax,eax\n  mov preebx,ebx\n  mov preecx,ecx\n  mov preedx,edx  \n}\nlstrlenA(\"does this change edx  \n\");\n__asm {\n  mov posteax,eax\n  mov postebx,ebx\n  mov postecx,ecx\n  mov postedx,edx  \n}\nprintf(\n\"preeax = %08x\\tposteax = %08x  \npreebx = %08x\\tpostebx = %08x  \n\"\n\"preecx = %08x\\tpostecx = %08x  \npreedx = %08x\\tpostedx = %08x  \n\",\npreeax,posteax,preebx,postebx,preecx,postecx,preedx,postedx);\n}\n\n```\non compiling and running it \n\n```\n\nedxlstrlen.exe\ndoes lstrlena change edx ? lets check\npreeax = 00000026       posteax = 00000015\npreebx = 7ffd8000       postebx = 7ffd8000\npreecx = 00401120       postecx = 7c80be86\npreedx = 004166a0       postedx = 004121b9\n\n```\nand as guntram commented to confirm you could disassemble lstrlena and grep for edx \n\n```\ncdb -c \"uf kernel32!lstrlena;q\" cdb | grep edx\neax=00191eb4 ebx=7ffdb000 ecx=00000007 edx=00000080 esi=00191f48 edi=00191eb4\n7c80be71 8d5001          lea     edx,[eax+1] <-------------\n7c80be7b 2bc2            sub     eax,edx\n\n```\nguess what eax points to :)\nor here is the spoiler you still need to understand x86 stack\n\n",
+      "votes": "2",
+      "user": "blabb",
+      "time": "Jul 13, 2015 at 13:34",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Guntram Blohm",
+          "text": "Now the interesting part of this is: why is your postedx so completely different from preedx, when it's only preedx+1 in the OP's example? (Probable answer: edx equals the input string  + 1 after lstrlenA, and in the OP's example, it's the input string before the call; in your example, it's some random value).",
+          "time": null
+        },
+        {
+          "user": "Sebastien Damaye",
+          "text": "You guys are correct. EDX is modified by lstrlenA. Thank you all for your quick and very valuable feedback.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "EDX may have been altered by the function call, see stdcall:\n\nUse another register, or push+pop EDX before/after the call to lstrlenA.\n\n",
+      "votes": "3",
+      "user": "JimmyB",
+      "time": "Jul 13, 2015 at 11:34",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

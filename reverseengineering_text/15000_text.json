@@ -1,0 +1,30 @@
+{
+    "title": "Which environmental variables can be used alter control flow and keep suid?",
+    "link": "https://reverseengineering.stackexchange.com/questions/15000/which-environmental-variables-can-be-used-alter-control-flow-and-keep-suid",
+    "content": "I am working on a challenge where it is possible to manipulate environmental variables (in C).\nI know that with <pre><code>PATH</code></pre> it is possible to execute arbitrary programs when relative path is used, for example: <pre><code>execv(\"ls\", 0);</code></pre>\n<pre><code>export PATH=path/to/attackers/dir/:$PATH</code></pre> (This works as well by changing the PATH environmental within the program's memory, e.g <pre><code>char **envp</code></pre>)\nI have read something about <pre><code>IFS</code></pre> but I think is only applicable on scripts.\n<pre><code>export IFS=/</code></pre> (so /bin/ls will become <pre><code>bin ls</code></pre>)\nIs there any other environmental that can be used for exploitation?\nI was trying for example to mess with <pre><code>PWD</code></pre> in order to influence <pre><code>fopen(\"file\")</code></pre> with a file in different directory than the current but it didn't work. (the <pre><code>fopen</code></pre> eventually calls <pre><code>getcwd</code></pre> which I could not identify how exactly it operates).\n<pre><code>export PWD=new/pwd</code></pre> (It changes the prompt but the <pre><code>pwd</code></pre> command returns the right current working directory)\nOperating system: Ubuntu (latest kernel)\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "93",
+    "tags": [
+        "c"
+    ],
+    "user": "Anton Paragas",
+    "time": "Mar 24, 2017 at 10:36",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "most of these tricks only apply to shell scripts, not C programs\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "How exactly did you set the path? Can you confirm the output of <pre><code>pwd</code></pre> changes?\n\n<pre><code>get_current_dir_name()</code></pre> will <pre><code>malloc(3)</code></pre> an array big enough to hold the absolute pathname of the current working directory. If the environment variable <pre><code>PWD</code></pre> is set, and its value is correct, then that value will be returned.\n\nSource\nWhich operating system do you use?\n\nUnder Linux, the function getcwd() is a system call (since 2.1.92).\n         On older systems it would query /proc/self/cwd.\n  Straight from the kernel source:\n\n<pre><code>/*\n * NOTE! The user-level library version returns a\n * character pointer. The kernel system call just\n * returns the length of the buffer filled (which\n * includes the ending '\\0' character), or a negative\n * error value. So libc would do something like\n *\n *  char *getcwd(char * buf, size_t size)\n *  {\n *      int retval;\n *\n *      retval = sys_getcwd(buf, size);\n *      if (retval >= 0)\n *          return buf;\n *      errno = -retval;\n *      return NULL;\n *  }\n */\nSYSCALL_DEFINE2(getcwd, char __user *, buf, unsigned long, size)\n{\n    int error;\n    struct path pwd, root;\n    char *page = (char *) __get_free_page(GFP_USER);\n\n    if (!page)\n        return -ENOMEM;\n\n    get_fs_root_and_pwd(current->fs, &root, &pwd);\n\n    error = -ENOENT;\n    spin_lock(&dcache_lock);\n    if (!d_unlinked(pwd.dentry)) {\n        unsigned long len;\n        struct path tmp = root;\n        char *cwd = page + PAGE_SIZE;\n        int buflen = PAGE_SIZE;\n\n        prepend(&cwd, &buflen, \"\\0\", 1);\n        error = prepend_path(&pwd, &tmp, &cwd, &buflen);\n        spin_unlock(&dcache_lock);\n\n        if (error)\n            goto out;\n\n        /* Unreachable from current root */\n        if (!path_equal(&tmp, &root)) {\n            error = prepend_unreachable(&cwd, &buflen);\n            if (error)\n                goto out;\n        }\n\n        error = -ERANGE;\n        len = PAGE_SIZE + page - cwd;\n        if (len <= size) {\n            error = len;\n            if (copy_to_user(buf, cwd, len))\n                error = -EFAULT;\n        }\n    } else\n        spin_unlock(&dcache_lock);\n\nout:\n    path_put(&pwd);\n    path_put(&root);\n    free_page((unsigned long) page);\n    return error;\n}\n</code></pre>\nTL;DR\nglibc only specifies a stub looking up the PWD variable, it it is not set, the filesystem implementation has to handle the job\n",
+            "votes": "1",
+            "user": "Nordwald",
+            "time": "Mar 24, 2017 at 7:10",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

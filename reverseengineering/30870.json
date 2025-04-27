@@ -1,0 +1,42 @@
+{
+    "title": "Under what circumstances relative to instr rip+offsets to .rdata data may not match?",
+    "link": "https://reverseengineering.stackexchange.com/questions/30870/under-what-circumstances-relative-to-instr-ripoffsets-to-rdata-data-may-not-ma",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a 100Mb binary file, in which I need to find and patch specific bytes in  a function. When disassembled in IDA, this function is the only thing that ever references on unique ASCII string via <code>lea</code> instruction: <code>48 8D 15 D3 75 83 01</code><br/>\nwhich is, <code>lea rdx, [rip + 0x18375d3]</code>\nThe <em>raw binary address</em> of said in instruction in the file is <code>0x2929B4E</code>.\nThe <em>raw binary address</em> of the target ASCII string in .rdata is <code>0x4160728</code></p>\n<p>Doing basic math: <code>0x2929B55 + 0x18375d3 = 0x4161128</code>  (next instr addr + relative offset)\nThat is overshoot by <code>0xA00</code> or 2560 bytes. When the same math don't inside IDA on a <strong>mapped</strong> file it all lines up.</p>\n<p>I've tried calculating the VA of the instruction and then adding the RIP offset to the final value but now I'm 5120 bytes off.</p>\n<p>What gives? What the reason behind it and, most importantly, is there a way for me to somehow infer this intricacy without disassembling and mapping file?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "122",
+    "tags": [
+        "ida",
+        "binary-analysis",
+        "patching"
+    ],
+    "user": "Digika",
+    "time": "Sep 10, 2022 at 14:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It has to do with how the sections are loaded into memory versus how they are laid out in the file. For locations within the same section, the in-memory distance versus the in-file distance will be the same. For locations in different sections, the file format might save space by not representing bytes at the end of the section that align it to a multiple of the page size. Generally speaking, the simplest way to deal with issues like these is to use tools that are aware of such things. For example, try loading the .so in IDA or Ghidra.</p>\n<p>In the case of a Windows PE file, the sections have two different \"alignment values\": the \"file alignment\", and the \"section alignment\". The size of every section in the raw .EXE must be a multiple of the file alignment, which is commonly 0x200, or the size of one disk sector. That is to say, if the actual size of the contents of the section are 0x3FF, then there are 0x1FF bytes in the last chunk, and we need 0x001 extra byte to round it up to the file alignment. If the actual size of the section is 0x402 bytes, then there are 0x002 bytes in the last chunk, and we need 0x1FE more bytes to round it up to be a multiple of 0x200.</p>\n<p>On the other hand, the section alignment dictates how big sections are when they are loaded into memory. This is commonly 0x1000, or the size of one memory page. So if the disk size of a section is 0xFFE, we need 0x002 bytes to round it up to a multiple of 0x1000. If the disk size of a section is 0x1003, we need 0xFFD extra bytes to round it up to a multiple of 0x1000.</p>\n<p>For a complete example:</p>\n<ul>\n<li>Let's say section #1 is 0x200 bytes long, and begins at address 0x600 in the file. Supposing the imagebase is 0x400000, the section will be loaded at address 0x401000 in memory.</li>\n<li>Let's say that section #2 is 0x200 bytes long, begins at address 0x800 in the file, and is loaded at address 0x402000 in memory.</li>\n<li>Let's say that byte 0x0 in section #1 contains a reference to data at byte 0x0 in section #2. In terms of distance within the file, the distance is 0x800-0x600, or 0x200. In terms of distance in memory, the distance will be 0x402000-0x401000, or 0x1000.</li>\n</ul>\n<p>How do automated tools deal with this? By being aware of how the sections in the file will be loaded into memory. In the case of a Windows PE file, an automated tool would need to parse the section headers to produce a memory map of where the sections would be loaded in memory. Then, to resolve a RIP-relative displacement <code>[rip+0xABCD]</code>, you:</p>\n<ul>\n<li>Add 0xABCD to the in-memory address of the source of the reference</li>\n<li>Determine in which section the target address lies</li>\n<li>Determine the relative offset of the target address within its containing section (by subtracting the target address by the section begin address)</li>\n<li>Map this back to a file offset by adding the relative offset to the beginning of the targeted section within the file.</li>\n</ul>\n</div>",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Sep 10, 2022 at 19:30",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Digika",
+                    "text": "<span class=\"comment-copy\">\"So if the disk size of a section is 0xFFE, we need 0x002 bytes to round it up to a multiple of 0x1000.\" How can disk/file size of a section be <code>0xFFE</code> if you just said it is rounded up to be clean multiple if 0x200?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">I was referring to the size of the raw contents before rounding it up.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Digika",
+                    "text": "<span class=\"comment-copy\">So in the end you are talking about RVAs?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

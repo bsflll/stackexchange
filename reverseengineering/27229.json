@@ -1,0 +1,33 @@
+{
+    "title": "Run ltrace to avoid detection (on a different PID?)",
+    "link": "https://reverseengineering.stackexchange.com/questions/27229/run-ltrace-to-avoid-detection-on-a-different-pid",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to run <code>ltrace</code> on this file:</p>\n<blockquote>\n<p>./launcher: ELF 32-bit LSB shared object, Intel 80386, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux.so.2, for GNU/Linux 2.6.32, BuildID[sha1]=f6f8cf3307e0ee26723f4d03ec68f022d15e56b6, stripped</p>\n</blockquote>\n<p>When I pop it open in ghidra, and view the decompiled c, I can see that it changes the program flow to somewhere I don't want to be when ltrace is running.</p>\n<pre><code>  attached_to_ptrace = ptrace(PTRACE_TRACEME,0,1,0);\n  if (attached_to_ptrace == -1) {\n    puts(\"I am not your property!\");\n    exit_code = 1;\n  }\n  else {\n    // execute main loop\n  }\n</code></pre>\n<p>Looking at the man page for <code>ptrace</code>, I see:</p>\n<pre><code>long ptrace(enum __ptrace_request request, pid_t pid,\n                   void *addr, void *data);\n</code></pre>\n<p>Meaning that if the program? or ltrace? were to run with a different PID, I would be able to successfully run my program using ltrace.</p>\n<p>This is the current output I get when running the program with <code>ltrace</code>:</p>\n<pre><code>~/ctf/cyberstart/level13/04 [master|…1] $ ltrace ./launcher\n__libc_start_main(0x565a86f0, 1, 0xff837be4, 0x565a8970 &lt;unfinished ...&gt;\nptrace(0, 0, 1, 0)                                                     = 0xffffffff\nputs(\"I am not your property!\"I am not your property!\n)                                        = 24\n+++ exited (status 1) +++\n</code></pre>\n<p>Without ltrace:</p>\n<pre><code>~/ctf/cyberstart/level13/04 [master|…1] $ ./launcher\n\nEnter the password:\npassword\nAway now, you anklebiter!\n\n[1]+  Stopped                 ./launcher\n</code></pre>\n<p>(This is my second buffer overflow CTF challenge, where the main goal is to mess with this block of code:)</p>\n<pre><code>  int iVar1;\n  char local_1e [10];\n  int local_14;\n  int local_10;\n  \n  local_10 = 0;\n  puts(\"\\nEnter the password: \");\n  gets(local_1e);\n  iVar1 = strcmp(local_1e,\"PAssw0rd\");\n  if (iVar1 == 0) {\n    puts(\"Well done! Unfortunately, you have to try harder.\");\n    local_10 = 0;\n  }\n  else {\n    puts(\"Away now, you anklebiter!\");\n  }\n  if (local_10 != 0) {\n    printf(\"Unexpected error condition. Control char is %d\\n\",local_10);\n    local_14 = param_2 * local_10;\n    (*(code *)(local_14 + param_1))();\n  }\n</code></pre>\n<p><strong>How can I run ltrace in a way such that it isn't detected?</strong></p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "476",
+    "tags": [
+        "debugging",
+        "buffer-overflow"
+    ],
+    "user": "Peter Stenger",
+    "time": "Mar 13, 2021 at 1:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h3>Ghidra method</h3>\n<p>You can modify the binary via Ghidra in the following way:</p>\n<ul>\n<li>load the track</li>\n<li>move in the assembly code to the point where it checks the result (if statement)</li>\n<li>you will probably be faced with a jump instruction <code>JNZ</code>, just right click on it and select \"Patch Instruction\" and replace it with the opposite condition <code>JZ</code> (or vice versa).</li>\n<li>Now save the project (<code>Ctrl</code>+<code>S</code>)</li>\n<li>Then navigate to <code>File</code>&gt;<code>Export</code> Program and decide where to save the modified binary</li>\n</ul>\n<p>If you have problems with the exported binary, try this script: <a href=\"https://github.com/schlafwandler/ghidra_SavePatch\" rel=\"nofollow noreferrer\">https://github.com/schlafwandler/ghidra_SavePatch</a></p>\n<h3>LD_PRELOAD method</h3>\n<ul>\n<li>Create a file called <code>ptrace.c</code> with the following content:</li>\n</ul>\n<pre><code>long ptrace(int request, int pid, void *addr, void *data) {\n    return 0;\n}\n</code></pre>\n<ul>\n<li>Now build the file as a shared library: <code>gcc -shared ptrace.c -o ptrace.so</code>;</li>\n<li>Now lunch the following command: <code>export LD_PRELOAD=./ptrace.so</code></li>\n<li>Run <code>ltrace ./launcher</code></li>\n</ul>\n<blockquote>\n<p>Note: you can also use LD_PRELOAD method with GDB</p>\n</blockquote>\n<h1>GDB method</h1>\n<ul>\n<li>use GDB to lunch the binary: <code>gdb ./launcher</code></li>\n<li>in the GDB client shell: <code>catch syscall ptrace</code></li>\n<li>GDB allows you tun run a series of command when you reach a BP: <code>command 1</code></li>\n<li>type: <code>set ($rax) = 0</code>, that will change the value inside the \"return\" register (aka the result of ptrace syscall) <a href=\"https://www.cs.uaf.edu/2017/fall/cs301/lecture/09_11_registers.html\" rel=\"nofollow noreferrer\">x86-registers</a></li>\n<li>then enter: <code>continue</code> and <code>end</code>\n(as two separated commands)</li>\n<li>place a BP on the main function: <code>b main</code> and then type <code>r</code> to continue the execution</li>\n</ul>\n<p>Another option is to use Qiling framework and hook the function/syscall and always return any other value than \"-1\", but that seems a bit overkill.</p>\n</div>",
+            "votes": "2",
+            "user": "zi0Black",
+            "time": "Nov 13, 2021 at 8:09",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You can patch the CALL to ptrace with NOPs or use LD_PRELOAD to inject your own fake ptrace code which does nothing but return a value other than -1.</p>\n</div>",
+            "votes": "1",
+            "user": "julian",
+            "time": "Nov 12, 2021 at 19:56",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

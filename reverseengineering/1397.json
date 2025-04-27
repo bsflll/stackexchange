@@ -1,0 +1,68 @@
+{
+    "title": "How can I reverse optimized integer division/modulo by constant operations?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1397/how-can-i-reverse-optimized-integer-division-modulo-by-constant-operations",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When compiling a division or modulo by a constant, my compiler (LLVM GCC) generates a series of instructions that I don't understand.</p>\n<p>When I compile the following minimal examples:</p>\n<pre><code>int mod7(int x) {\n    return x % 7;\n}\n\nint div7(int x) {\n    return x / 7;\n}\n</code></pre>\n<p>The following code is generated:</p>\n<pre><code>_mod7:\n    push   rbp\n    mov    rbp,rsp\n\n    mov    ecx,0x92492493\n    mov    eax,edi\n    imul   ecx\n    add    edx,edi\n    mov    eax,edx\n    shr    eax,0x1f\n    sar    edx,0x2\n    add    edx,eax\n    imul   ecx,edx,0x7\n    mov    eax,edi\n    sub    eax,ecx\n\n    pop    rbp\n    ret    \n\n\n_div7:\n    push   rbp\n    mov    rbp,rsp\n\n    mov    ecx,0x92492493\n    mov    eax,edi\n    imul   ecx\n    add    edx,edi\n    mov    ecx,edx\n    shr    ecx,0x1f\n    sar    edx,0x2\n    mov    eax,edx\n    add    eax,ecx\n\n    pop    rbp\n    ret\n</code></pre>\n<ul>\n<li>How is this mathematically equivalent, and where do the constants come from?</li>\n<li>What's the easiest way to turn the assembly back in to C (for arbitrary constants on the right-hand side)?</li>\n<li>How could a tool, such as a decompiler or analysing disassembler, automate this process?</li>\n</ul>\n</div>",
+    "votes": "37",
+    "answers": 3,
+    "views": "12k",
+    "tags": [
+        "disassembly",
+        "static-analysis"
+    ],
+    "user": "Dougall",
+    "time": "Mar 30, 2013 at 7:14",
+    "comments": [
+        {
+            "user": "DCoder",
+            "text": "<span class=\"comment-copy\">This is sometimes called <i>reciprocal multiplication</i>. Here is a <a href=\"http://www.nynaeve.net/?p=115\" rel=\"nofollow noreferrer\">short explanation</a> with links to more detailed resources. I've seen Hex-Rays digest this with no problems.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h1>First</h1>\n<p>Unfortunately we don't seem to have MathJax turned on in this stackexchange so the math parts below are pretty horribly formatted. I'm also far from a mathematician so the notation may be off in some places.</p>\n<h1>Understanding the magic number and code</h1>\n<p>The goal of the code above is to rewrite a division into a multiplication because division takes more clock cycles than a multiplication. It's in the area of about twice as many cycles, depending very much on CPU. So we need to find a nice branchless way of doing that. If we branch we're very likely to lose to simply doing division.</p>\n<p>One way is to simply realize that division is the same as multiplication with the inverse of the number, i.e <img alt=\"\" src=\"https://i.sstatic.net/yhMdN.gif\"/>. The problem is that <img alt=\"\" src=\"https://i.sstatic.net/V3EXb.gif\"/> is a pretty poor number to store as an integer. So we need to multiply both the divisor and dividend by some number. Since we're operating on 32-bit numbers and we get multiplication results in 64-bit numbers we get the best precision with <img alt=\"\" src=\"https://i.sstatic.net/GAbp5.gif\"/> and we also avoid overflow issues. So we basically get <img alt=\"\" src=\"https://i.sstatic.net/66B6M.gif\"/>. Now that fractional part is what causes us issues because it will cause rounding errors.</p>\n<p>So let's try to formalize this:</p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/CXkJ4.gif\"/></p>\n<p>Where <img alt=\"\" src=\"https://i.sstatic.net/85yOF.gif\"/> is our multiplicand, e.g <img alt=\"\" src=\"https://i.sstatic.net/GKdkC.gif\"/>, or really any number <img alt=\"\" src=\"https://i.sstatic.net/4sVUA.gif\"/> but <img alt=\"\" src=\"https://i.sstatic.net/mb7TH.gif\"/> works very well with our register sizes as we can simply discard the lower 32-bit register. <img alt=\"\" src=\"https://i.sstatic.net/p5VNy.gif\"/> is the number you must add to make <img alt=\"\" src=\"https://i.sstatic.net/85yOF.gif\"/> evenly divisible by <img alt=\"\" src=\"https://i.sstatic.net/FObhE.gif\"/>. <img alt=\"\" src=\"https://i.sstatic.net/31LSW.gif\"/> is the number we wish to divide.</p>\n<p>We can rewrite the equation above, as</p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/S56kc.gif\"/></p>\n<p>Which illustrates the point that we have our dividend <img alt=\"\" src=\"https://i.sstatic.net/8dTDm.gif\"/> divided by our divisor <img alt=\"\" src=\"https://i.sstatic.net/7kJpl.gif\"/> and then an error factor of <img alt=\"\" src=\"https://i.sstatic.net/lKedW.gif\"/>.</p>\n<p>Studying our original equation of <img alt=\"\" src=\"https://i.sstatic.net/ZP83c.gif\"/> it's clear that we can affect very little. <img alt=\"\" src=\"https://i.sstatic.net/QvBxq.gif\"/> needs to be a power of 2, can't be too large or we risk an overflow and can't be too small as it has a direct negative effect on our error factor <img alt=\"\" src=\"https://i.sstatic.net/W87D3.gif\"/>. <img alt=\"\" src=\"https://i.sstatic.net/J5UAz.gif\"/> directly depends on <img alt=\"\" src=\"https://i.sstatic.net/tFARj.gif\"/> and <img alt=\"\" src=\"https://i.sstatic.net/IS3SB.gif\"/>.</p>\n<p>So let's try <img alt=\"\" src=\"https://i.sstatic.net/qAwQ9.gif\"/> which gives a maximum error fraction of <img alt=\"\" src=\"https://i.sstatic.net/W87D3.gif\"/> with the maximum value of <img alt=\"\" src=\"https://i.sstatic.net/boZtv.gif\"/> being <img alt=\"\" src=\"https://i.sstatic.net/Sppdl.gif\"/>, so <img alt=\"\" src=\"https://i.sstatic.net/5GbVt.gif\"/>, unfortunately this is not less than <img alt=\"\" src=\"https://i.sstatic.net/Q9RYV.gif\"/> so we can get rounding errors. </p>\n<p>We'll increase the exponent of <img alt=\"\" src=\"https://i.sstatic.net/IAyRL.gif\"/> to <img alt=\"\" src=\"https://i.sstatic.net/yqG5j.gif\"/>, which gives <img alt=\"\" src=\"https://i.sstatic.net/SV70X.gif\"/>, maximum error fraction <img alt=\"\" src=\"https://i.sstatic.net/CN6ya.gif\"/> which is less than <img alt=\"\" src=\"https://i.sstatic.net/wOBpa.gif\"/>. This means that our multiplicand is <img alt=\"\" src=\"https://i.sstatic.net/vNO9f.gif\"/> which is not less than or equal to the maximum signed value we can store in a 32-bit register (<img alt=\"\" src=\"https://i.sstatic.net/up1Y5.gif\"/>). So we instead make the multiplicand <img alt=\"\" src=\"https://i.sstatic.net/aaEyn.gif\"/>. As a side note, thanks to the magic of two's complement when we subtract <img alt=\"\" src=\"https://i.sstatic.net/vwBYh.gif\"/> the number <img alt=\"\" src=\"https://i.sstatic.net/jZA7P.gif\"/> is <img alt=\"\" src=\"https://i.sstatic.net/jBOeP.gif\"/> which is <img alt=\"\" src=\"https://i.sstatic.net/xwp6c.gif\"/> when interpreted as an unsigned number. But we're doing signed arithmetic here. So we need to fix the final expression by adding <img alt=\"\" src=\"https://i.sstatic.net/2xny2.gif\"/>. This also only solves the problem for <img alt=\"\" src=\"https://i.sstatic.net/PevID.gif\"/>, for negative numbers we will be off by 1 so we need to add 1 if we have a negative number.</p>\n<p>That's the explanation for the constant in the multiplication and how to arrive at it. Now let's look at the code:</p>\n<pre><code>; Load -1840700269\nmov    ecx,0x92492493\n\n; Load n\nmov    eax,edi\n\n; n * -1840700269\nimul   ecx\n\n; add n to compensate for 2^32 subtraction\nadd    edx,edi\n\n; check the sign bit of our result\nmov    ecx,edx\nshr    ecx,0x1f\n\n; divide by 2^2 to compensate for us using y=2^34 instead of 2^32\nsar    edx,0x2\n\nmov    eax,edx\n; add the value of the sign bit to the final result\nadd    eax,ecx\n</code></pre>\n<h1>Calculating divisor from magic number and code</h1>\n<p>I have not proven this mathematically, however if you want to recover the divisor from an assembly dump such as the one you showed we can do some simple mental excercises. First we need to realize that the following holds</p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/JscHH.gif\"/></p>\n<p>Where <img alt=\"\" src=\"https://i.sstatic.net/dAO7x.gif\"/> is the adjustment we made in order to bring the value into the range of a 32-bit value. From the code we can devise the following, the right shift by two means that we have <img alt=\"\" src=\"https://i.sstatic.net/65UtM.gif\"/>, <img alt=\"\" src=\"https://i.sstatic.net/5UvZn.gif\"/>, <img alt=\"\" src=\"https://i.sstatic.net/NV0rJ.gif\"/>, <img alt=\"\" src=\"https://i.sstatic.net/TR2L6.gif\"/> is unknown. This means that we're missing one variable in order to perform a perfect solution. However the effect of <img alt=\"\" src=\"https://i.sstatic.net/TR2L6.gif\"/> if negligible as its purpose is to bring the divisor as close to its integer value as possible. This means that the solution can be found by solving</p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/Nke6h.gif\"/></p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/jh1mk.gif\"/></p>\n<p>Another example with divisor 31337 which has the multiplicand magic number 140346763 and right shifts 10 bits.</p>\n<p><img alt=\"\" src=\"https://i.sstatic.net/JuH6C.gif\"/></p>\n<h1>Finally</h1>\n<p>For a complete mathematical breakdown of how this works, including all the appropriate proofs and algorithms for calculating the magic numbers, shifts and adds, see <a href=\"http://rads.stackoverflow.com/amzn/click/0321842685\" rel=\"noreferrer\">Hacker's Delight</a>, chapter 10-3.</p>\n</div>",
+            "votes": "41",
+            "user": "13 revs, 2 users 100%Peter Andersson",
+            "time": "Jan 2, 2014 at 22:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">The question was not just how to calculate the magic constants, but also how to get back the divisor.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Andersson",
+                    "text": "<span class=\"comment-copy\">I tried to answer it. Didn't really have time to formulate a proof so I'm not 100% sure it's correct.</span>",
+                    "time": null
+                },
+                {
+                    "user": "rwong",
+                    "text": "<span class=\"comment-copy\">Under the assumptions of reverse engineering (if the const division/modulo by multiplication is mixed up with other operations), one can convert the integer multiplication constant into a binary fraction, whose reciprocal is related to the division/modulo constant operand up to an unknown power of 2 multiplicative factor. Deducing the unknown power of 2 factor is sometimes impossible due to intermixing and optimization with other operations.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ferrybig",
+                    "text": "<span class=\"comment-copy\">FYI: the answer looks good with the stack exchange app, as it has mathjax turned on for every site</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Here's a late response. The <a href=\"https://github.com/uxmal/reko\" rel=\"noreferrer\">Reko decompiler</a> recovers the integer divisors by performing a divide and conquer search using <a href=\"https://en.wikipedia.org/wiki/Mediant_%28mathematics%29\" rel=\"noreferrer\">mediants</a>.</p>\n<p>Reko starts by recognizing the pattern where the high word of a 64-bit product (<code>r * c</code>) is used. The constant multiplier <code>c</code> is divided by 2^32 to yield a double precision floating point number between 0.0 and 1.0. Starting with the rational numbers 0 / 0 and 1 / 1, Reko computes a sequence of mediants that brackets the floating point number. From this sequence of mediants it chooses the rational number that comes closest to the floating point number and returns it.</p>\n<p>The code is not fully tested yet -- I haven't had a chance to work with negative numbers yet, for one, but seems to give reasonable results. The code is here if you're curious: <a href=\"https://github.com/uxmal/reko/blob/master/src/Decompiler/Analysis/ConstDivisionImplementedByMultiplication.cs\" rel=\"noreferrer\">https://github.com/uxmal/reko/blob/master/src/Decompiler/Analysis/ConstDivisionImplementedByMultiplication.cs</a></p>\n</div>",
+            "votes": "7",
+            "user": "John Källén",
+            "time": "Mar 30, 2016 at 18:32",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This paper might be of interest: <a href=\"https://gmplib.org/~tege/divcnst-pldi94.pdf\" rel=\"nofollow noreferrer\">Division by invariant multiplication</a>.</p>\n<p>Bumped into this <a href=\"https://stackoverflow.com/questions/30790184/perform-integer-division-using-multiplication\">here</a>.</p>\n</div>",
+            "votes": "2",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

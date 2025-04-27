@@ -1,0 +1,50 @@
+{
+    "title": "In iOS, how can I find all hooked functions in substrate tweak",
+    "link": "https://reverseengineering.stackexchange.com/questions/6151/in-ios-how-can-i-find-all-hooked-functions-in-substrate-tweak",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to reverse a compiled tweak. As a first step, I want to find out all the functions it hooks. I can find all the calls to substrate framework functions, but I didn't figure out which functions are hooked (\n  <code>\n   r0\n  </code>\n  ). What is the best way to do this?\n </p>\n <ol>\n  <li>\n   <p>\n    How can I start an app using\n    <code>\n     gdb\n    </code>\n    instead of attaching to a running process. The straightforward way results in a\n    <code>\n     SIGABRT\n    </code>\n    and the call stacks look something like\n   </p>\n   <pre><code>#0  0x39ee91f0 in __pthread_kill ()\n#1  0x39f53796 in pthread_kill ()\n#2  0x39e99fdc in abort ()\n#3  0x33bdec10 in GSRegisterPurpleNamedPort ()\n#4  0x33bde890 in _GSEventInitialize ()\n#5  0x31604f38 in UIApplicationMain ()\n#6  0x0022d97c in ?? ()\n#7  0x000910c8 in ?? ()\n</code></pre>\n  </li>\n  <li>\n   <p>\n    I tried to write a tweak to hook into the substrate framework functions, e.g.\n    <code>\n     MSHookFunction\n    </code>\n    .\n   </p>\n   <pre><code>#include <CydiaSubstrate.h>\n\nvoid (*oldMSHookFunction)(void *, void *, void **);\n\nvoid newMSHookFunction(void *symbol, void *hook, void **old) {\n    printf(\"CC_HOOKED\n\");\n    oldMSHookFunction(symbol, hook, old); \n }\n\n__attribute__((constructor)) static void initialize() {\n    NSLog(@\"CC_LOADED\");\n    MSHookFunction(MSHookFunction, &newMSHookFunction, &oldMSHookFunction);\n }\n</code></pre>\n  </li>\n </ol>\n <p>\n  With\n  <code>\n   syslog\n  </code>\n  , I found that my tweak is successfully loaded with\n  <code>\n   CC_LOADED\n  </code>\n  printed and there were other tweaks loaded after mine. However, no\n  <code>\n   CC_HOOKED\n  </code>\n  is printed out. What happened ?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ios"
+    ],
+    "user": "c c",
+    "time": "Sep 1, 2014 at 18:52",
+    "comments": [
+        {
+            "user": "c c",
+            "text": "<html><body><span class=\"comment-copy\">\n The second way hooks successfully.\n <code>\n  printf\n </code>\n doesn't print to syslog. Still don't know how to fix the first way.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>#include \"substrate.h\"\n#include <dlfcn.h>\n\nvoid resolveSymbol(const void *addr) {\n    Dl_info info;\n    if (dladdr(addr, &info)) {\n        NSLog(@\"<hooksubstrate> Resolved symbol at address %p: dli_fname %s, dli_fbase %p, dli_sname %s, dli_saddr %p\", addr, info.dli_fname, info.dli_fbase, info.dli_sname, info.dli_saddr);\n    }\n    else {\n        NSLog(@\"<hooksubstrate> Can't resolve symbol at address %p\", addr);\n    }\n}\n\nvoid (*oldMSHookFunction)(void *, void *, void **);\n\nvoid newMSHookFunction(void *symbol, void *hook, void **old) {\n    NSLog(@\"<hooksubstrate> MSHookFunction: symbol %p, new %p, old %p\", symbol, hook, old);\n    resolveSymbol(symbol);\n    resolveSymbol(hook);\n    resolveSymbol(old);\n    oldMSHookFunction(symbol, hook, old);\n}\n\nvoid (*oldMSHookMessageEx)(Class, SEL, IMP, IMP *);\n\nvoid newMSHookMessageEx(Class c/*lass*/, SEL s/*elector*/, IMP replacement, IMP *result) {\n    NSLog(@\"<hooksubstrate> MSHookMessageEx: class %@, selector %@, new %p, old %p\", NSStringFromClass(c/*lass*/), NSStringFromSelector(s/*elector*/), replacement, result);\n    resolveSymbol((const void *) *replacement);\n    resolveSymbol((const void *) result);\n    oldMSHookMessageEx(c/*lass*/, s/*elector*/, replacement, result);\n}\n\n__attribute__((constructor))\nstatic void initialize() {\n    MSHookFunction(MSHookMessageEx, &newMSHookMessageEx, &oldMSHookMessageEx);\n    MSHookFunction(MSHookFunction, &newMSHookFunction, &oldMSHookFunction);\n    NSLog(@\"<hooksubstrate> Hooked into MSHookFunction & MSHookMessageEx\");\n}\n</code></pre>\n <p>\n  With sample output (for an old version)\n </p>\n <pre><code>> cat /dev/null > /var/log/syslog\n> cat /var/log/syslog | grep \"Loading\"\nSep 12 17:06:54 iPad Clash of Clans[2372]: MS:Notice: Loading: /Library/MobileSubstrate/DynamicLibraries/HookSubstrate.dylib\nSep 12 17:06:54 iPad Clash of Clans[2372]: MS:Notice: Loading: /Library/MobileSubstrate/DynamicLibraries/xxCOCPlugin.dylib\n> cat /var/log/syslog | grep \"<cc>\"\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> Hooked into MSHookFunction & MSHookMessageEx\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> MSHookFunction: old 0x845fd, new 0x3af4fd\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> Resolved symbol at address 0x845fd: dli_fname /var/mobile/Applications/1A631C27-CE93-4845-B7FB-0637D600E10C/Clash of Clans.app/Clash of Clans, dli_fbase 0x4000, dli_sname (null), dli_saddr 0x0\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> Resolved symbol at address 0x3af4fd: dli_fname /Library/MobileSubstrate/DynamicLibraries/xxCOCPlugin.dylib, dli_fbase 0x3a7000, dli_sname _Z20func_hook_new_searchi, dli_saddr 0x3af4fd\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> MSHookMessageEx: class AppController, selector application:didFinishLaunchingWithOptions:, new 0x3afdb5\nSep 12 17:06:54 iPad Clash of Clans[2372]: <cc> Resolved symbol at address 0x3afdb5: dli_fname /Library/MobileSubstrate/DynamicLibraries/xxCOCPlugin.dylib, dli_fbase 0x3a7000, dli_sname _Z60hook_AppController_application_didFinishLaunchingWithOptionsP11objc_objectP13objc_selectorS0_S0_, dli_saddr 0x3afdb5\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "c c",
+            "time": "Sep 28, 2014 at 1:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "GroovyCarrot",
+                    "text": "<span class=\"comment-copy\">I find that MSHookFunction sets it's symbol pointer to NULL if it's trying to hook its own address, and forces a crash. Is this a recent safety feature?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You can find all the hooked Objective C methods in a tweak by first doing a cross reference of _MSHookMessageEx in IDA Pro. In the functions which call _MSHookMessageEx, the method name can be seen loaded into R1, just before the call to _MSHookMessageEx.\n </p>\n <p>\n  To launch an app with gdb, use debugserver. It acts as an endpoint for remote gdb or lldb on iOS. You can find more information about debugserver on this page -\n  <a href=\"http://iphonedevwiki.net/index.php/Debugserver\" rel=\"nofollow\">\n   http://iphonedevwiki.net/index.php/Debugserver\n  </a>\n </p>\n <p>\n  Also, I would recommend using Theos (\n  <a href=\"http://iphonedevwiki.net/index.php/Theos\" rel=\"nofollow\">\n   http://iphonedevwiki.net/index.php/Theos\n  </a>\n  ) to do the function hooking. It makes development of MobileSubtrate tweaks a lot easier.\n </p>\n <p>\n  Judging by your question, I seem to get the idea that you're trying to hook MobileSubtrate's own functions like MSHookFunction. MobileSubstrate is only designed to hook other functions and not itself.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "REnoob",
+            "time": "Sep 8, 2014 at 22:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "c c",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer. The cool thing about MobileSubstrate is it <i>can</i> hook everything, including MSHookFunction. The problem of the original code is that I should use NSLog instead of printf, and everything else works just fine.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

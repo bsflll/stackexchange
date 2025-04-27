@@ -1,0 +1,73 @@
+{
+    "title": "Question about LEA instruction",
+    "link": "https://reverseengineering.stackexchange.com/questions/12300/question-about-lea-instruction",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>i'm learning to reverse engineer. So i'm coding some programs and try to understand their assembly.\nI stumbled upon a curious case and i think i can't solve it alone.</p>\n<p>Here's the c code:</p>\n<pre><code> #include &lt;stdio.h&gt;\n\nint main(){\n\nchar *texto = \"O numero e %d\\n\";\nint i = 10;\n\nwhile(i){\n    printf(texto, i--);\n}\n\nreturn 0;\n}\n</code></pre>\n<p>The assembly produced by IDA is the following:</p>\n<pre><code>mov     eax, [esp+28]\nlea     edx, [eax-1] ; The part i don't understand\nmov     [esp+28], edx\nmov     [esp+4], eax\nmov     eax, [esp+18h]\nmov     [esp], eax      ; char *\ncall    _printf\n</code></pre>\n<p>What i could understand is that it stores the old value in eax and pushes to stack(I purposedly didn't turn on optimizations) and then it pushes the format.\nWhile that happens in the middle it does the <code>i--</code>, but i can't understand how it's working. So it get's the address of <code>eax-1</code> and stores in <code>edx</code> and then stores it in <code>i</code>, but <code>eax</code>doesn't hold an address but a value.</p>\n<p>Thanks in advance.</p>\n</div>",
+    "votes": "6",
+    "answers": 2,
+    "views": "7k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "x86",
+        "c"
+    ],
+    "user": "krystalgamer",
+    "time": "Mar 29, 2016 at 11:22",
+    "comments": [
+        {
+            "user": "Vitaly Osipov",
+            "text": "<span class=\"comment-copy\"><code>lea edx, [blah-1]</code> is essentially <code>mov edx, blah-1</code> (the latter is obviously not a valid command)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>What you're seeing is an efficiency trick that compilers like to use.</p>\n<p>Internally, the CPU doesn't make a difference between numbers and addresses - 32 bit integers and pointers are the same thing. (Or 64 bit, if you're using newer architecture, but as your register names start with <code>e</code>, you're using 32 bit).</p>\n<p>The <code>lea</code> instruction loads the address of its operand, instead of the operand itself. In C terms, you could look at [eax-1] as *(eax-1), and <code>lea</code> adds a <code>&amp;</code> operator to that, so <code>lea edx, [eax-1]</code> is like <code>edx = &amp;(*(eax-1))</code>. Which is the same as <code>eax-1</code> of course.</p>\n<p>The compiler could have done exactly the same using the instruction sequence <code>mov edx, eax; sub edx, 1</code> or <code>mov edx, eax; dec edx</code>. So, why did it use the <code>lea</code> instruction?</p>\n<p>The answer is that, historically, resolving addresses in <code>lea</code> was done using dedicated address bus hardware and bypassed the ALU. Also, pipelining had its issues when the same register was used twice in subsequent operations. Which means, on <strong>older</strong> processors, using <code>lea</code> was a few cycles faster than the alternatives, and it's not hard to implement in the compiler, so this is what compilers traditionally did.</p>\n<p>On new processors, the distinction \"<code>lea</code> uses separate hardware\" isn't (neccesarily) made any more, and pipelining is a lot more intelligent than it used to be, so i doubt it's make any difference these days. But it's still in the compilers, and won't get removed from them because there's just no good reason to.</p>\n</div>",
+            "votes": "11",
+            "user": "Guntram Blohm",
+            "time": "Mar 29, 2016 at 12:07",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "krystalgamer",
+                    "text": "<span class=\"comment-copy\">Understanding the &amp;(*(eax-1)) eas the problem. Thanks for the complete and in-depth answer!</span>",
+                    "time": null
+                },
+                {
+                    "user": "John Dvorak",
+                    "text": "<span class=\"comment-copy\">Even today it reduces the code size. Is that not a win?</span>",
+                    "time": null
+                },
+                {
+                    "user": "supercat",
+                    "text": "<span class=\"comment-copy\">@JanDvorak: Wouldn't storing EAX to [ESP+4], and then using \"dec eax\" and storing EAX to [ESP+28] save even more code?  I know modern CPUs are slower on \"inc\" and \"dec\" than \"add\", but I think those are still single-byte instructions are they not?</span>",
+                    "time": null
+                },
+                {
+                    "user": "DarthGizka",
+                    "text": "<span class=\"comment-copy\">@Jan: Modern compilers  tend inline aggressively at the slightest provocation, so a minuscule savings here and there will go unnoticed among the hyper-bloat. Also, CPUs have so many ALUs nowadays that hardly anyone will notice that <code>lea</code> doesn't use any.  However, <code>lea</code> leaves the flags alone, it can reduce register pressure (always an issue in x86 mode!), and it can shorten dependency chains. What's not to like? ;-)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Joshua",
+                    "text": "<span class=\"comment-copy\">Actually, it makes a lot of difference still. In this case the generation is silly because the constant is 1, but in most cases it is better than the mov / add pair or even move / add / add triplet that would otherwise be used.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>According to Intel the LEA instruction is:</p>\n<blockquote>\n<p>This instruction computes the effective address of the second operand\n  (the source operand) and stores it in the first operand (destination\n  operand). The source operand is a memory address (offset part)\n  specified with one of the processors addressing modes; the destination\n  operand is a general-purpose register.</p>\n</blockquote>\n<p>So, the <code>lea edx, [eax-1]</code> computes the address of <code>[eax-1]</code>, which is eax-1, because [] means that the operand should be handled as an address. After it the address will be stored in <code>edx</code>.</p>\n</div>",
+            "votes": "1",
+            "user": "ebux",
+            "time": "Mar 29, 2016 at 11:39",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "krystalgamer",
+                    "text": "<span class=\"comment-copy\">Im always messing up thinking registers have addresses.. Now i understand it subtracts 1. Thanks!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,87 @@
+{
+    "title": "IAT Hook via Kernel Driver",
+    "link": "https://reverseengineering.stackexchange.com/questions/29602/iat-hook-via-kernel-driver",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I've wrote a kernel driver recently and it does multiple things, but I wanted to add a IAT hook for a certain driver.\n </p>\n <p>\n  I want to hook the IAT of another driver from my driver if that makes sense.\n </p>\n <p>\n  So I understand your typical IAT hook is done via DLL injection so you're within the same address space as said module.\n </p>\n <p>\n  <strong>\n   The main question I'm having is can someone give an example of IAT hooking a kernel driver via a kernel driver?\n  </strong>\n  I can't figure it out.\n </p>\n <p>\n  I've been using multiple examples of regular IAT hooking via dll injection but applying it to the Kernel driver instead.\n </p>\n <p>\n  <strong>\n   Expected outcome:\n  </strong>\n  Driver1.sys (does the IAT hook) parses the import table of Driver2.sys and replaces the function \"DbgPrintEx\" import with a function located in Driver1.sys aka accomplishing an IAT hook.\n </p>\n <p>\n  <strong>\n   Here is what I wrote / referenced:\n  </strong>\n </p>\n <pre><code>NTSTATUS _HOOKS_::HookFn(PVOID ModuleBase, const char* FunctionName, uintptr_t HookFunc, uintptr_t* OrigFunc) {\n\nIMAGE_DOS_HEADER DosHeader{ 0 };\nmemcpy(&DosHeader, ModuleBase, sizeof(IMAGE_DOS_HEADER));\n\nIMAGE_NT_HEADERS NtHeaders{ 0 };\nmemcpy(&NtHeaders, (PVOID)((uintptr_t)ModuleBase + DosHeader.e_lfanew), sizeof(IMAGE_NT_HEADERS));\n\nIMAGE_IMPORT_DESCRIPTOR ImportDescriptor{ 0 };\nIMAGE_DATA_DIRECTORY ImportsDirectory = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];\n\nmemcpy(&ImportDescriptor, (PVOID)((uintptr_t)ModuleBase + ImportsDirectory.VirtualAddress), sizeof(ImportDescriptor));\n\nLPCSTR LibraryName = NULL;\nPVOID Library = NULL;\nIMAGE_IMPORT_BY_NAME FunctionNamee{ 0 };\n\nwhile (ImportDescriptor.Name != NULL) {\n    memcpy(&LibraryName, &ImportDescriptor.Name + (uintptr_t)ModuleBase, sizeof(LibraryName));\n\n    IMAGE_THUNK_DATA OriginalFirstThunk{ 0 }, firstThunk{ 0 };\n    memcpy(&OriginalFirstThunk, (PVOID)(ImportDescriptor.OriginalFirstThunk + (uintptr_t)ModuleBase), sizeof(IMAGE_THUNK_DATA));\n    memcpy(&firstThunk, (PVOID)(ImportDescriptor.FirstThunk + (uintptr_t)ModuleBase), sizeof(IMAGE_THUNK_DATA));\n\n    while (OriginalFirstThunk.u1.AddressOfData != NULL) {\n\n        memcpy(&FunctionNamee, (PVOID)(OriginalFirstThunk.u1.AddressOfData + (uintptr_t)ModuleBase), sizeof(IMAGE_IMPORT_BY_NAME));\n\n        Log::Debug(\"First function name -> %s\n\", FunctionNamee);\n\n        if (!strcmp(FunctionNamee.Name, FunctionName)) {\n            Log::Debug(\"FOUND FUNCTION!!! Address -> %p\n\", firstThunk.u1.Function);\n        }\n    }\n}\n\n\nreturn STATUS_SUCCESS;\n</code></pre>\n <p>\n  This code BSOD's on:\n  <code>\n   memcpy(&ImportDescriptor, (PVOID)((uintptr_t)ModuleBase + ImportsDirectory.VirtualAddress), sizeof(ImportDescriptor));\n  </code>\n </p>\n <p>\n  Correct me if I'm wrong but since kernel drivers share the same address space I can just simply use memcpy or RtlCopyMemory to obtain the structs needed for this hook, does anyone have any references or some sort of documentation I can read?\n </p>\n <p>\n  Thanks to all in advance!\n </p>\n <p>\n  extra info:\n </p>\n <ul>\n  <li>\n   Windows 10\n  </li>\n  <li>\n   Using VMWare for testing\n  </li>\n  <li>\n   I'm testing the hook on my own driver\n  </li>\n </ul>\n <p>\n  EDIT: Posted the faulting source line that causes BSOD.\n </p>\n <p>\n  Upon debugging via WinDbg(x64), the driver obtains all the addresses correctly comparing them to memory view. Except\n  <code>\n   ImportDescriptor\n  </code>\n  gets an RVA of 0x6000, when inspecting\n  <code>\n   ModuleBase + 0x6000\n  </code>\n  for the RVA it shows that this memory region is invalid, so I believe that the 0x6000 RVA is incorrect and I'm not sure why\n </p>\n <p>\n  <strong>\n   BUG CHECK CODES:\n  </strong>\n </p>\n <ul>\n  <li>\n   BSOD Error Code: PAGE_FAULT_IN_NONPAGED_AREA\n  </li>\n  <li>\n   BUG Check Code: 50\n  </li>\n </ul>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "1k",
+    "tags": [
+        "c++",
+        "function-hooking",
+        "kernel-mode",
+        "driver",
+        "iat"
+    ],
+    "user": "Ballers",
+    "time": "Nov 26, 2021 at 15:21",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n do the addresses passed to\n <code>\n  memcpy\n </code>\n look correct? You should be able to check it in the debugger before stepping inside the call.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ballers",
+            "text": "<html><body><span class=\"comment-copy\">\n The addresses being passed to memcpy look correct but upon looking at what some of the data types are receiving look incorrect, for example ImportsDirectory\n <code>\n  IMAGE_DATA_DIRECTORY ImportsDirectory = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];\n </code>\n seems to be returning an invalid virtual address, it returns 0x6000 so ImportDescriptor should be\n <code>\n  DriverBase + 0x6000\n </code>\n , and viewing this memory region in WINDBG shows that this memory region is invalid. Do you know why I'm getting these logical errors? I believe I'm getting everything correctly?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The problem seems to be in the source address calculation:\n </p>\n <pre><code>&ImportDescriptor.Name + (uintptr_t)ModuleBase\n</code></pre>\n <p>\n  This adds the\n  <em>\n   address\n  </em>\n  of a local variable (which is on the stack) to the image base, so the result is probably some non-existent address.\n </p>\n <p>\n  You should add its\n  <em>\n   value\n  </em>\n  , which is an RVA, to the image base. I.e. something like this:\n </p>\n <pre><code>memcpy(&LibraryName, (PVOID)((ULONG_PTR)ModuleBase+ImportDescriptor.Name) , sizeof(LibraryName))\n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Nov 24, 2021 at 21:30",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Ballers",
+                    "text": "<span class=\"comment-copy\">My apologizes I posted the wrong line, but that is indeed an error I did not spot. The function never reaches that line I posted above. It actually crashes on getting the ImportDescriptor data. I edited the main post correcting my error.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So, it turns out that if you're testing an IAT hook on a driver, the driver must be compiled in the release mode rather than in the debug one.\n </p>\n <p>\n  If the driver is compiled in the debug mode, the RVA for the\n  <code>\n   Import Descriptor\n  </code>\n  seems to be wrong. But the issue is resolved with compiling in the release rather than in the debug mode.\n </p>\n <p>\n  Thanks to all for the help.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "MarianD",
+            "time": "Nov 25, 2021 at 16:08",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">This, again, sort of suggests that you were running at the wrong IRQL or similar (on account of. Unfortunately given the insufficient information in both the question and the answer, hardly anyone will get out any insights from this Q&amp;A now. We still don't know the exact bug-check code and so even someone knowing the ropes in KM will still <i>at most</i> be able to <i>guess</i> what exactly it is you encountered here. And your \"conclusion\" will lead to magical thinking by other laypeople that release mode is somehow \"safer\" and to eventual cargo cult. -1</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">neither release nor debug should alter logic if it alters logic you should actually ascertain if it is a <a href=\"https://en.wikipedia.org/wiki/Heisenbug\" rel=\"nofollow noreferrer\">HEISENBUG</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@blabb this is simply untrue. I think with more than sixteen years of Windows KM development and some formal training in the subject matter, I know a thing or two. And even if you don't dabble in KM your are certainly aware that assertions don't fire in \"release\" (free) builds, but do in \"debug\" (checked) ones. Heck that's the whole reason for the name checked builds in the first place. Similarly macros expand differently. Loads of them actually. Now one could argue that this is \"technically\" not altering the logic. But in fact it is, because differently expanding macros mean different code...</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">... being executed. Not that this is a clear-cut case here, since the question didn't even originally state the bug-check code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L yes infact there are documented apis <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryunbiasedinterrupttimeprecise\" rel=\"nofollow noreferrer\">that behave differently in release versus build</a>  i was commenting about the calculation about a  dereferenced address and / or its page being present</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is unfortunately not going to be an\n  <em>\n   answer\n  </em>\n  , because you don't give enough information. If I end up writing an answer, it will be a different one. So long I'll make this non-answer a community wiki, attempting to give clues, ask for details and point to resources.\n </p>\n <blockquote>\n  <p>\n   Correct me if I'm wrong but since kernel drivers share the same\naddress space I can just simply use memcpy or RtlCopyMemory [...]\n  </p>\n </blockquote>\n <p>\n  Uhm this statement is \"sort of\" true, but then it also isn't. It depends on so many aspects in (Windows) kernel mode. While the address space (i.e. min through max address) is\n  <em>\n   technically\n  </em>\n  the same, it depends a whole lot in which context your code executes (e.g. the IRQL) and of the attributes for the memory you attempt to access (e.g. NonPagedPool vs. PagedPool).\n </p>\n <p>\n  However, this is introductory material for KM driver development, so I recommend you pick up a book such as \"Windows Kernel Programming\" from Pavel Yosifovich or even the somewhat older work \"Programming the Microsoft Windows Driver Model\" from Walter Oney. The courses offered by OSR and Yosifovich would also be a great way to learn this stuff.\n </p>\n <p>\n  Besides you forgot to mention\n  <em>\n   which\n  </em>\n  bug-check code you're getting. This is very much relevant to help you. The parameters included in the bug-check can also give an idea in absence of a full memory dump (or in your case a live debug session). The parameters are those four items included alongside the bug-check code in a blue screen.\n </p>\n <ul>\n  <li>\n   At what IRQL is your code executing during the bug-check? You can't touch\n  </li>\n  <li>\n   How is the code marked in your driver? (e.g.\n   <code>\n    PAGED_CODE()\n   </code>\n   or similar?)\n   <ul>\n    <li>\n     Also, in case you attempt this in\n     <code>\n      DriverEntry\n     </code>\n     that one always runs at\n     <code>\n      PASSIVE_LEVEL\n     </code>\n     either way ...\n    </li>\n   </ul>\n  </li>\n  <li>\n   Who is the caller of the function?\n  </li>\n  <li>\n   Assuming you're not doing this inside an I/O request code path, you're still fairly wasteful with stack. KM code has quite the limits when it comes to available stack.\n  </li>\n  <li>\n   All the above questions, comments, remarks also should be checked for code you call (such as\n   <code>\n    Log::Debug()\n   </code>\n   ).\n  </li>\n </ul>\n <p>\n  That said, your above statement should be true for all intents and purposes at\n  <code>\n   PASSIVE_LEVEL\n  </code>\n  and to some extent at\n  <code>\n   APC_LEVEL\n  </code>\n  . But even then it pays of to make use of SEH for some code and make use of\n  <code>\n   MmIsAddressValid\n  </code>\n  and\n  <code>\n   ProbeForRead\n  </code>\n  and similar routines as appropriate.\n </p>\n <p>\n  <strong>\n   Btw:\n  </strong>\n  perhaps you'd like instead to tell us what it is you're trying?  Although admittedly none of this is very closely related to RCE.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "2 revs0xC0000022L",
+            "time": "Nov 25, 2021 at 21:11",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,55 @@
+{
+  "title": "How to reverse engineer a setjmp/longjmp sequence?",
+  "link": "https://reverseengineering.stackexchange.com/questions/29486/how-to-reverse-engineer-a-setjmp-longjmp-sequence",
+  "content": "I'm trying to reverse engineer the GNU libc x86 (32 bit) setjmp / longjmp (re a vuln which may allow arbitrary overwrite of the jmp_buf env.\n\nThere's a great writeup of the musl setjmp but I can find almost nothing online about the GNU. I've tried to navigate the source, but it's a spaghetti ball of macros, probably due to being so sys dependent. The asm is unusual, using things like:\n\n```\nCALL       dword ptr GS :[0x10 ]\n\n```\nwhich I don't fully understand (I thought segments were for 16 bit 8088 code! What is the GS:?).\n\nA priori, I would expect that setjmp would simply save a few registers, but it seems much more complicated.  I've found posts claiming GNU intentionally obfuscates it, either to prevent programmers from relying on internals, or for some security purpose, both of which I'm skeptical of.\n\nExperimenting with a debugger has shown one thing: the jmp_buf env changes with each invocation, such as that even the same program, with the same params, and the same stack pointers, if you're using a debugger to load the jmp_buf from one invocation into another you get a SIGV.  The contents are clearly not a pure function of the program and stack, but somehow change (randomly?) with each invocation.\n\nAre any of the crack REs here able to penetrate setjmp?\n\n",
+  "votes": "5",
+  "answers": 1,
+  "views": "363",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "x86",
+    "memory",
+    "operating-systems"
+  ],
+  "user": "SRobertJames",
+  "time": "Nov 10, 2021 at 10:21",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "Check out Later developments. A few of the segment selectors have been repurposed to hold base addresses to specific pieces of data. In Windows, for example fs plays a role in retrieving the TIB/TEB pointer and ultimately the PEB pointer, but also when setting up SEH in a function. Specific to your question read this.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I'll start with answering a few basic questions, some of which you didn't even ask!\n\nIt's been a while since we've needed extra registers to address a memory region. 32, and especially 64, bits are more than enough. OS developers took advantage of those unused registers and nowadays most modern OSes use at least some of the registers to hold OS related data. As mentioned in the comments, on amd64 processors segment registers cannot be used for segmentation but OSes have been doing it on 32 bit processors as well.\n\nYou can read more about it here regarding linux, here and here regarding windows, etcetera.\n\nAlthough you may control some variables of a program's execution (parameters, stack addresses, process loading addresses and heap location) you're still not controlling all variables (locations of specifica allocations, values returned from \"external\" sources such as the kernel and as we'll see soon, anti-exploitation mitigations might interfere with that sort of thing too).\n\nGenerally, you should never expect such a thing to work without taking the necessary adjustments. Let alone in something as low-level and nuanced as setjmp/longjmp.\n\nFirstly, we're in a reverse engineering community, avoiding documentation does not guarantee confidentiality. Secondly, documentation is in the code :)\n\nI would imagine documentation is rather difficult for such low-level details that may change frequently and are very architecture specific. Which leads us to your next question -\n\nObviously, this goes without saying, but for completeness I thought it'd be better to be explicit here. Here are some reason this has to be done on an per-architecture level:\n\nI'll discuss amd64 from now on.\n\nNow, although this isn't C (and isn't the most readable assembly either), the code for setjmp on amd64 can be found in setjmp.S, longjmp is __longjmp.S. It's even quite commented and the code is pretty straight forward!\n\nYou can clearly see the registers as they're saved onto the structure (For example, movq %r12, (JB_R12*8)(%rdi)). You can see PTR_MANGLE is called if the aformentinoed pointer guard feature is enabled.\n\nBecause your question mostly revolved around finding the code and not reading the code and since the code is quite straight-forward, I'll leave reading the functions as an exercise for the reader for now. I'll come back and add more details later on, so feel free to ask follow-up questions.\n\nSince we're dealing with assembly we don't have structures. Instead, there are several #define preprocessor directives to define the jmp_buf structure. Those are located in a dedicated header: jmpbuf-offsets.h\n\nThese files are located in the sysdep module, which holds subdirectories for each supported architecture-specific components. aarch64 stands for arm 64-bit, x86 for 32-bit intel 8086 compatible processors, 86_64 for 64 bit intel 8086 CPUs, etcetera.\n\n",
+      "votes": "5",
+      "user": "NirIzr",
+      "time": "Nov 3, 2021 at 8:56",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "SRobertJames",
+          "text": "Superb answer.  Where is PTR_MANGLE defined? gdb suggests it does two things: rol and xor.  What is the point of the rotation? It doesn't add any true encryption, of course.",
+          "time": null
+        },
+        {
+          "user": "SRobertJames",
+          "text": "Is definition on Intel x64 different than AMD? Or is it just called AMD since they were first? Where is x86-32 bit defined? What is the scheme / layout to find these files?",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "Intel x64, x86_64 and amd64 are practically the same. amd64 indeed comes from amd being the \"first\". PTR_MANGLE is a MACRO used for Linux's \"pointer guard\" feature I mentioned in the answer. The SHADOW_STACK_ MACROs (also used by setjmp) are used for the \"Shadow stack\" feature (also mentioned above).",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "PTR_MANGLE is defined in the architecture's sysdep.h. x86_64 for example. You can browse for them here",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

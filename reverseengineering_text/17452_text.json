@@ -1,0 +1,81 @@
+{
+    "title": "hooking sleep & beep syscalls",
+    "link": "https://reverseengineering.stackexchange.com/questions/17452/hooking-sleep-beep-syscalls",
+    "content": "I have a binary which is playing a Morse code using calls to Beep & Sleep.\nThis file is Windows PE32 exe which I open via Wine on my Ubuntu (16.04).\nHow can I extract the arguments which passed to Sleep or Beep whenever is been invoked ?\nIdeal result will be to open the file from terminal and each time Sleep is called it will log \n\nSleep ( Milliseconds )\nBeep ( Frequency , Duration )\n\nThe binary is packed & obfuscated, can I edit the Kernel32.dll & extend those methods ? \n\nCan I use <pre><code>strace</code></pre> ? if so, how do I filter Sleep & Beep ?\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "function-hooking",
+        "system-call",
+        "wine"
+    ],
+    "user": "James W.",
+    "time": "Feb 13, 2018 at 15:11",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "If you're using Wine, you just need to enable the trace. Do the following:\n<pre><code>$ WINEDEBUG=\"trace+msvcrt\" wine your_binary.exe\n</code></pre>\nTaking a look to the Wine's source code I verified that both Sleep and Beep are being traced.\nBeep:\n<pre><code>void CDECL MSVCRT__beep( unsigned int freq, unsigned int duration)\n{\n    TRACE(\":Freq %d, Duration %d\n\",freq,duration);\n    Beep(freq, duration);\n}\n</code></pre>\nSleep:\n<pre><code>void CDECL MSVCRT__sleep(MSVCRT_ulong timeout)\n{\n  TRACE(\"_sleep for %d milliseconds\n\",timeout);\n  Sleep((timeout)?timeout:1);\n}\n</code></pre>\nNaturally, you will need to filter out many other messages. Simply doing \"grep -v\" should be enough.\n",
+            "votes": "1",
+            "user": "joxeankoret",
+            "time": "Feb 13, 2018 at 11:25",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">It doesn't write to the terminal, so where is the log file ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "joxeankoret",
+                    "text": "<span class=\"comment-copy\">It writes to the terminal, I verified it in my home computer with Wine 1.6.2 in Ubuntu 16.</span>",
+                    "time": null
+                },
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">I'm using same OS and wine 2.4 and it doesn't, I will try again</span>",
+                    "time": null
+                },
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">+relay &amp;&gt; log, then grep</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "not sure what you mean\ndot will always sound like dot  wont it ? \nso logically it will always have the same frequency and same duration ?\nlike wise dash will always sound like dash ?\nif it varied like monkeydash , goatdash , pigdash each time it sounded then it wont be morse code ....\nso logically dash will have the same frequency and duration   \nso logical conclusion would be \nif you log them once you logged them forever in a specific program \ndoes it mage sense ?\nnow that set aside why would you need to edit system dlls ?\ncant you run a debugger and set a breakpoint on the binary? why ?\nis it because it is packed and obfuscated and has heavy anti-debugging measures including checking for breakpoints on system dlls? \nif so you can try some thing like frida \nsuppose you have some code like this \n<pre><code>#include <windows.h>\n#include <stdio.h>\nvoid beepchar(char letter) {\n    char *beeps[] = { \n        \".-\",\"-...\",\"-.-.\",\"-..\",\".\",\"..-.\",\"--.\",\"....\",\"..\",\n        \".---\",\"-.-\",\".-..\",\"--\",        \"-.\",\"---\",\".--.\",\"--.-\",\n        \".-.\",\"...\",\"-\",\"..-\",\"...-\",\".--\",\"-..-\",\"-.--\",\"--..\"\n    };\n    char *curbeep= (beeps[(letter -'a')]);\n    printf(\"%s \" , curbeep);\n    while(*curbeep) {\n        if( *curbeep == '.') {\n            printf (\"dot \"); Beep(440,200);\n        } else {\n            printf(\"dash \"); Beep(440,400);\n        } curbeep++;\n    }printf(\"\n\");\n}\nint main (int argc , char* argv[]) {\n    if(argc !=2) {\n        printf (\"usage %s some string\n\",argv[0]);\n        exit(0);\n    } char *letter = argv[1];\n    while(*letter) {\n        unsigned char temp = *(unsigned char *)letter;\n        if(isalpha(temp))        {\n            beepchar((char)tolower(temp));\n        } else {\n            printf(\"not an alphabet\n\");\n        } letter++;\n    } return 0;\n}\n</code></pre>\nwhen compiled and executed you should get an output like this along with sound \n<pre><code>:\\>morsebeeper.exe\nusage morsebeeper.exe some string\n:\\>morsebeeper.exe \"Hello World\"\n.... dot dot dot dot\n. dot\n.-.. dot dash dot dot\n.-.. dot dash dot dot\n--- dash dash dash\nnot an alphabet\n.-- dot dash dash\n--- dash dash dash\n.-. dot dash dot\n.-.. dot dash dot dot\n-.. dash dot dot\n\n:\\>\n</code></pre>\nyou can use frida-trace to log the beeps \njust run frida-trace -i \"Beep\" .\\yourexe \nand edit the auto generated handler as you wish dynamically and reload it \n<pre><code>:\\>frida-trace -i \"Beep\" .\\morsebeeper.exe Hello\nInstrumenting functions...\nBeep: Loaded handler at \"xxx\\__handlers__\\kernel32.dll\\Beep.js\"\nBeep: Loaded handler at \"xxx\\__handlers__\\KERNELBASE.dll\\Beep.js\"\nStarted tracing 2 functions. Press Ctrl+C to stop.\n           /* TID 0xf44 */\n   109 ms  Beep()\n   110 ms     | Beep(440 , 200) << dot\n   314 ms  Beep()\n   315 ms     | Beep(440 , 200) << dot\n   547 ms  Beep()\n   547 ms     | Beep(440 , 200) << dot\n   800 ms  Beep()\n   800 ms     | Beep(440 , 200) << dot   \n   four dots above = h          <<<<<<<<<<<<<<<<\n  1093 ms  Beep()\n  1094 ms     | Beep(440 , 200) << dot\n  one dot above is e            <<<<<<<<<<<<<<<<<<\n\n  l\n  1382 ms  Beep()\n  1382 ms     | Beep(440 , 200) << dot\n  1609 ms  Beep()\n  1609 ms     | Beep(440 , 400) << dash\n  2104 ms  Beep()\n  2104 ms     | Beep(440 , 200)\n  2333 ms  Beep()\n  2333 ms     | Beep(440 , 200)\n  l\n  2614 ms  Beep()\n  2614 ms     | Beep(440 , 200)\n  2895 ms  Beep()\n  2896 ms     | Beep(440 , 400)\n  3301 ms  Beep()\n  3302 ms     | Beep(440 , 200)\n  3503 ms  Beep()\n  3503 ms     | Beep(440 , 200)\n  o\n  3705 ms  Beep()\n  3705 ms     | Beep(440 , 400)\n  4197 ms  Beep()\n  4198 ms     | Beep(440 , 400)\n  4604 ms  Beep()\n  4604 ms     | Beep(440 , 400)\nstdout> .... dot dot dot dot\nstdout> . dot\nstdout> .-.. dot dash dot dot\nstdout> .-.. dot dash dot dot\nstdout> --- dash dash dash\nstdout>\nstderr>\nProcess terminated\n\n:\\>\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Feb 13, 2018 at 11:04",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">+1 trying frida-trace</span>",
+                    "time": null
+                },
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">$ sudo frida-trace <i>wine</i> \"Failed to attach: ambiguous name; it matches: wineserver (pid: 1), C:\\windows\\system32\\winedevice.exe (pid: 2), C:\\windows\\system32\\winedevice.exe (pid: 3)\" which one ? (tried all, does not seems to work, might have anti-reversing? I'll test with your example)</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i dont run nix and wine but shouldn't you be running frida inside wine and not frida from nix  i mean os-&gt;wine-&gt;frida-&gt;your_exe-&gt;args ?  not os-&gt;frida-&gt;wine-&gt;your_exe ??</span>",
+                    "time": null
+                },
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">Frida-trace can connect to process by pid</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">of course it can and my point is not that i meant shouldn't you need to install frida first inside wine (the windows version of frida ) and from that frida shouldn't you trace the executable in question  well i think i should dust off my ubu vm and see</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,37 @@
+{
+    "title": "How to find the size of an array in binary?",
+    "link": "https://reverseengineering.stackexchange.com/questions/6672/how-to-find-the-size-of-an-array-in-binary",
+    "content": "I'm currently learning RE and try to understand some basic c programs.\nI've almost figure out some concepts, but right now i've no idea how to find the size of an array when i use objdump or gdb.\nfor example :\n<pre><code>int main(int argc, char **argv)\n{\n  char buffer[64];               // <= Where i supposed to find the array size ?\n  gets(buffer);                   \n  printf(\"Buffer : %s\",buffer);\n  return 0;\n}\n</code></pre>\nAnyone can explain me how is it possible ?\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "c",
+        "objdump",
+        "binary"
+    ],
+    "user": "MrHawy",
+    "time": "Nov 21, 2014 at 13:00",
+    "comments": [
+        {
+            "user": "Stolas",
+            "text": "Check the stack =)\n",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "There is a difference between dynamically allocated arrays (trivial to find), stack-based (which may or not may be harder) and static arrays. For the latter you may have to disassemble your entire program -- and even then you can not be sure.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "There's no easy way to do this, C doesn't have a concept of array sizes (at execute time), so the size isn't stored anywhere. You'll have to read the assembly code and (try to) understand it.\nTake the following program\n<pre><code>extern void *malloc(int);\nextern char *strcpy(char *dst, char *src);\n\nchar firstname[80];\nchar lastname[80];\n\nint main(void) {\n    int some_variable=1;\n    char buffer[64];\n    int some_other_variable=2;\n    char *otherbuffer=malloc(100);\n    gets(buffer);\n    strcpy(firstname, \"John\");\n    strcpy(lastname, \"Doe\");\n}\n</code></pre>\nand compile it with <pre><code>cc -fno-builtin -O0 -o arraysize arraysize.c</code></pre>. (I had to disable built-in functions to prevent gcc from short-circuiting malloc and strcpy, and i declared them myself instead of using the headers for the same reason. Also, without -O0, gcc omits stuff that's never used).\nThen, use <pre><code>objdump -d arraysize</code></pre> and check the <pre><code>main</code></pre> function:\n<pre><code>0000000000400554 <main>:\n  400554:   55                      push   %rbp\n  400555:   48 89 e5                mov    %rsp,%rbp\n\n// This instruction tells you that the function needs 80 (0x50) bytes on the\n// stack. This happens to be the same as the size of all local variables\n// here, but might be higher as well if the function needs stack space for\n// function arguments and the like.\n  400558:   48 83 ec 50             sub    $0x50,%rsp\n\n\n// This puts 1 and 2 into the integer variables. Note we now know they're\n// located at -0x10(%rbp) and -0xc(%rbp) on the stack.\n  40055c:   c7 45 f0 01 00 00 00    movl   $0x1,-0x10(%rbp)\n  400563:   c7 45 f4 02 00 00 00    movl   $0x2,-0xc(%rbp)\n\n// This calls malloc(100) and puts the result into -0x8(rbp). We now know\n// the array pointed to has 100 bytes, because that's what was malloc'ed.\n// Note that you have no other way of finding out the size afterwards\n// (except if you know how exactly malloc is implemented and where malloc\n// keeps its internal housekeeping structures)\n  40056a:   bf 64 00 00 00          mov    $0x64,%edi\n  40056f:   e8 b4 fe ff ff          callq  400428 <malloc@plt>\n  400574:   48 89 45 f8             mov    %rax,-0x8(%rbp)\n\n// now, we call gets, feeding it with -0x50(%rbp) as its parameter.\n// As the next variable that's used on the stack is at -0x10(rbp), we can\n// assume that the array has 0x40=64 bytes. This does not have to be true;\n// for example, if the function declared 2 arrays of 32 bytes each, they'd\n// be at -0x50(%rbp) and -0x30(%rbp), and if the function never used the\n// one at 0x30(%rbp), there'd be no way for us to tell the difference.\n  400578:   48 8d 45 b0             lea    -0x50(%rbp),%rax\n  40057c:   48 89 c7                mov    %rax,%rdi\n  40057f:   b8 00 00 00 00          mov    $0x0,%eax\n  400584:   e8 bf fe ff ff          callq  400448 <gets@plt>\n\n// This is the strcpy to firstname. The address of firstname is at 0x6009e0.\n// We don't know how large it is, as we haven't seen a variable behind it yet.\n  400589:   be a8 06 40 00          mov    $0x4006a8,%esi\n  40058e:   bf e0 09 60 00          mov    $0x6009e0,%edi\n  400593:   e8 c0 fe ff ff          callq  400458 <strcpy@plt>\n\n// And this is the second strcpy, to lastname at 0x6000980. Since we've\n// seen the other strcpy to 0x60009e0, we assume that there are no more than\n// 0x50=80 bytes in that buffer, but see below.\n  400598:   be ad 06 40 00          mov    $0x4006ad,%esi\n  40059d:   bf 80 09 60 00          mov    $0x600980,%edi\n  4005a2:   e8 b1 fe ff ff          callq  400458 <strcpy@plt>\n\n// end of function\n  4005a7:   c9                      leaveq \n  4005a8:   c3                      retq   \n</code></pre>\nThe C source code said\n<pre><code>char firstname[80];\nchar lastname[80];\nstrcpy(firstname, \"John\");\nstrcpy(lastname, \"Doe\");\n</code></pre>\nand from the address difference between the two <pre><code>strcpy</code></pre>s, we assumed an array size of 80. But note that the exact same instructions would have been generated in that case:\n<pre><code>char name[160];\nstrcpy(name+80, \"John\");\nstrcpy(name, \"Doe\");\n</code></pre>\nSo if you don't have debugging symbols, all you get are assumptions.\n",
+            "votes": "6",
+            "user": "Guntram Blohm",
+            "time": "Nov 21, 2014 at 16:26",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

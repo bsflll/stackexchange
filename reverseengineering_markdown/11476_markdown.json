@@ -1,0 +1,43 @@
+{
+  "title": "IDA Pro and recognized library functions",
+  "link": "https://reverseengineering.stackexchange.com/questions/11476/ida-pro-and-recognized-library-functions",
+  "content": "I start by saying that I'm completely new to the topic of reversing although I have many years of experience with programming in general.\n\nI've some problems with automatic recognition of library functions of a DOS executable compiled with Borland C++ 3.1.\n\nActually the signatures are correctly identified as bc31rtd (and it states 199 as the actual number of applied signatures). So for example strcmp is correctly identified, colored and such.\n\nStarting from this I was relying blindly on these library function in the rest of the code until I realized that there was something wrong, this is, for example what I see in for strcpy:\n\n\n\nWhich doesn't make sense to me since src is not used at all. Then \nrepne scasb should scan for the length of the string but the last value placed in di is [bp+dest+2] like if both const char* were not dd but dw (so just the offset, without any specified segment, and ds is used implicitly). \n\nSince this was getting me crazy I checked the original implementation of the function by opening CC.LIB of BC++3.1 with IDA Pro directly and implementation is different indeed:\n\n\n\nSo where's the problem here?\n\nHow can I alter the function as I want? I tried modifying directly stack variables (Ctrl+K) but then offsets become faulty (eg [bp+8] marked as red).\n\nI ask sorry if I'm making some trivial wrong assumption that I'm not realizing.\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "ida",
+    "dos",
+    "flirt-signatures"
+  ],
+  "user": "Jack",
+  "time": "Dec 8, 2015 at 14:18",
+  "comments": [
+    {
+      "user": "Vitaly Osipov",
+      "text": "Generally speaking, hex-rays.com/products/ida/tech/flirt/in_depth.shtml is how IDA Pro recognizes compiled-in functions.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Oh, the happyness of near functions vs. far functions, near pointers vs. far pointers, and mixed models (far functions, near pointers)\n\nBack in the 16 bit world, programs could either\n\nor\n\nor\n\nNow, the problem is, that the strcpy function from your program seems to be the far-code-near-data version, and the strcpy from the library seems to be the near-code-far-data version.\n\nYou see how the first function makes sure that es = ds (push ds; pop es) but doesn't mess with segments otherwise. This would make it use 16 bit pointers. The retf at the end suggests it uses the far code convention.\n\nThe second function uses LES di, [bp+src], which loads es and di at the same time. This means it uses far data pointers on the stack, the retn at the end means it uses the near code model.\n\nWhat happened is that, in your disassembled program, IDA saw the retf, deducted far code, and probably assumed far data as well - which is wrong. If data was indeed far, you'd have 4 bytes for src, and another 4 bytes for dst, and this is what ida is showing on your stack. But in fact, the pointers have just 2 bytes each, so dest is at offset 6, but src is at offset 8, not 0x0a (10). Which is why accessing src is shown as dest+2, and the (wrong) offset 0x0a, which IDA falsely assumes to be src, isn't used at all.\n\nShown as a picture:\n\n```\nThis is what IDA thinks:           and this is the real stack layout:\n\n+----------------------------+     +--------------------------------+\n|000c src  segment           |     |                                |\n|000a src  offset            |     |                                |\n|0008 dest segment           |     |0008 src                        |\n|0006 dest offset            |     |0006 dest                       |\n|0004 saved bp               |     |0004 saved bp                   |\n|0002 return address segment |     |0002 return address segment     |\n|0000 return address offset  |     |0000 return address offset      |\n+----------------------------+     +--------------------------------+\n\n```\nTo fix this, open the function prototype dialog, and change the pointer definitions to char near *.\n\n",
+      "votes": "4",
+      "user": "Guntram Blohm",
+      "time": "Dec 9, 2015 at 14:09",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jack",
+          "text": "Everythins is clear, thanks for taking the time to give me precise and complete answers because they're really useful in getting some expertise of this new world. So assuming this, the binary library object of Borland C++ compiler should contain multiple implementations of the same function and choose the one accordingly to the program model specified? I see I can tell IDA to use far code/data or near code/data in compiler options but other methods look like with far data so I wonder if in reality it's like mixed far/near data mode according to the function involved, is it plausible?",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "Well, you can't link in the near and far versions of strcpy at the same time (at least not without a lot of tricks involving changing the names of functions in standard libraries). But even if you compile for the near data model, you could explicitly define some big data arrays as far, while keeping the rest of your data near. You won't be able to use standard functions on these data arrays in that case, but this might be ok depending on your application. When speed is important, keeping as much as possible near helps, so there's a valid reason to do this.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

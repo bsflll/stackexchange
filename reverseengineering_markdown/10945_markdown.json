@@ -1,0 +1,44 @@
+{
+  "title": "Injecting shellcode in ELF binary",
+  "link": "https://reverseengineering.stackexchange.com/questions/10945/injecting-shellcode-in-elf-binary",
+  "content": "I am trying to inject a piece of shellcode inside a 32-bit ELF executable. I am running Ubuntu 14.04 64-bit. Hence, all the commands I have run require explicit switches to produce 32-bit code. I am using elf-infector to inject my shellcode.\n\nC source of the host binary is given below:\n\n```\n/* simple_if.c */\n\n#include <stdio.h>\n#include \"s2e.h\"\n\nint main()\n{\n  int var_cond;\n  printf(\"Enter 0/1: \");\n  scanf(\"%d\", &var_cond);\n  if(!var_cond)\n    printf(\"Entered value: 0  \n\");\n  else\n    printf(\"Entered value: 1  \n\");\n\n  return 0;\n}\n\n```\nFirst I tried with a \"Hello World\" ASM payload:\n\n```\n; hello.asm\nglobal _start\nsection .text\n\n_start:\n    jmp MESSAGE      ; 1) lets jump to MESSAGE\n\nGOBACK:\n    mov eax, 0x4\n    mov ebx, 0x1\n    pop ecx          ; 3) we are poping into `ecx`, now we have the\n                     ; address of \"Hello, World!\\r  \n\" \n    mov edx, 0xF\n    int 0x80\n    jmp end          ; Injector will insert a jump to original entry point\n\n    ;mov eax, 0x1    ; Intentionally not returning the control\n    ;mov ebx, 0x0\n    ;int 0x80\n\nMESSAGE:\n    call GOBACK       ; 2) we are going back, since we used `call`, that means\n                      ; the return address, which is in this case the address \n                      ; of \"Hello, World!\\r  \n\", is pushed into the stack.\n    db \"Hello, World!\", 0dh, 0ah    \nend:\n\n```\nCompiled both the host and the parasite and injected the shellcode at the end.\n\n```\ngcc -m32 simple_if.c -o simple_if\nnasm -f elf hello.asm -o hello.o\nld -m elf_i386 hello.o -o hello\n\n# Test the assembled code\n./hello\nHello, World!\nSegmentation fault (core dumped)\n# Segfault is natural, we are not gracefully returning to OS\n\n# Now extract the shellcode\nfor i in `objdump -d ./hello | tr '\\t' ' ' | tr ' ' '  \n' | egrep '^[0-9a-f]{2}$' `; do echo -n \"\\\\\\\\x$i\" ; done | paste -d '' -s | sed 's/^/\"/' | sed 's/$/\"/g'\n\"\\xeb\\x14\\xb8\\x04\\x00\\x00\\x00\\xbb\\x01\\x00\\x00\\x00\\x59\\xba\\x0f\\x00\\x00\\x00\\xcd\\x80\\xeb\\x14\\xe8\\xe7\\xff\\xff\\xff\\x48\\x65\\x6c\\x6c\\x6f\\x2c\\x20\\x57\\x6f\\x72\\x6c\\x64\\x21\\x0d\\x0a\"\n\n# Update parasite.h\nmake\n./infector simple_if\n\nRun the infected file\n./simple_if\nHello, World!\nEnter 0/1: 8\nEntered value: 1\nSegmentation fault (core dumped)\n\n```\nBut, I expect the program should gracefully exit. Because, the infector inserts a jump to the OEP at the end of the shellcode. I tried the same with a different payload. But, in this case, the program runs in an infinite loop a never exits.\n\n```\nglobal     _start    \nsection    .text\n\n_start:\n    mov    ecx,0x23f0\n    mov    edx,0x804869c\n    jmp    prog_name\n\nstub:\n    pop    eax\n    push   ebx\n    mov    ebx,edx\n    ;db     0x0f,0x3f,0x00,0xaa,0x00,0x00,0x00,0x00,0x00,0x00\n    pop    ebx\n    xor    eax,eax\n    jmp    jump_start\n\nprog_name:\n    call   stub\n    db \"simple_if\",0x00,0x90\n\njump_start:\n\n```\nThis is what the infected file produces.\n\n```\n./simple_if\nEnter 0/1: 9\nEntered value: 1\nEnter 0/1: 7\nEntered value: 1\nEnter 0/1: 6\nEntered value: 1\nEnter 0/1: 5\nEntered value: 1\nEnter 0/1: ^C\n\n```\nWith GDB, I can see the shellcode is executed first and then the program jumps to OEP. The crash occurs thereafter. Can anybody please give me any clue what is going wrong?\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "assembly",
+    "elf",
+    "patching",
+    "shellcode",
+    "nasm"
+  ],
+  "user": "sherlock",
+  "time": "Dec 21, 2017 at 17:13",
+  "comments": [
+    {
+      "user": "peter ferrie",
+      "text": "does the infinite loop version also run the shellcode infinitely?  It looks like the shellcode is being reached repeatedly and returning control to the start of the program each time.",
+      "time": null
+    },
+    {
+      "user": "Guntram Blohm",
+      "text": "Compile your program with -O0 -g and gdb it. Run it; when it gets the signal, inspect eip (info registers) and the stack backtrace (bt). If that doesn't get you anywhere, set a breakpoint at the return in main (break simple_if.c:16, double check the line number), run, single step through what happens after that (stepi and maybe nexti over functions like exit handlers).",
+      "time": null
+    },
+    {
+      "user": "Goodies",
+      "text": "It's possible that the registers and/or flags were changed from the previous values. Try pushad/popad and pushfd/popfd at the beginning and end of your shellcode respectively. This will restore the original registers and EFlags. If nothing else, just so we can rule it out a a problem.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As @goodies said in the comment what is happening here is that you are destroying some register values and thus causing a crash.\n\nExtend your payload with pusha/popa like this\n\n```\n_start:\n  pusha\n  jmp MESSAGE\n\n```\nand here\n\n```\nint 0x80\npopa\njmp end     \n\n```\nAnd if you do all the steps now, you will get the requested result:\n\n```\n./simple_if \nHello, World!\nEnter 0/1: 9\nEntered value: 1\n\n```\nIt's usually the best approach when dealing with payload to maintain the state of the registers unless you specifically want some behavior to occur by modifying the regs.\n\n",
+      "votes": "1",
+      "user": "Paweł Łukasik",
+      "time": "Jul 5, 2017 at 17:45",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

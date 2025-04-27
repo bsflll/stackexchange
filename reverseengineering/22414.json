@@ -1,0 +1,60 @@
+{
+    "title": "BufferOverflow - Cannot push a specific return address on the stack",
+    "link": "https://reverseengineering.stackexchange.com/questions/22414/bufferoverflow-cannot-push-a-specific-return-address-on-the-stack",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm currently playing with buffer overflow and ROP-chains, and I'm facing a weird behavior that I don't know how to deal with.</p>\n<p>I don't know why, but i cannot correctly push the address of my first ROP gadget into the stack.</p>\n<p>With the specific binary that i am trying to exploit, I have to fill a 28 bytes buffer before overwriting the instruction pointer.</p>\n<p>If I do the following test, everything seems in order:</p>\n<pre><code>gdb-peda$ run &lt; &lt;(python -c 'print(\"A\"*28 + \"BBBB\")')\n[...]\n&gt; Stopped reason: SIGSEGV\n&gt; 0x42424242 in ?? ()\n</code></pre>\n<p>My first gadget is at the address \"<em>0x0806ee6b</em>\".</p>\n<p>But when I try the following test, there is a difference between my input and what's pushed on the stack:</p>\n<pre><code>gdb-peda$ run &lt; &lt;(python -c 'print(\"A\"*28 + \"\\x6b\\xee\\x06\\x08\")')\n[...]\n&gt; Stopped reason: SIGSEGV\n&gt; 0x06aec36b in ?? ()\n</code></pre>\n<p>If I take a look at the stack before the <em>retn</em> instruction that trigger the buffer-overflow, my little-indian formatted address is not the same anymore:</p>\n<pre><code>gdb-peda$ x/50x $esp\n0xffffdaec: 0x06aec36b  0x00000008  0x0804f02b  0x080da000\n</code></pre>\n<p>If I try to push an arbitrary address, like \"<em>0x08064141</em>\", everything is ok:</p>\n<pre><code>gdb-peda$ run &lt; &lt;(python -c 'print(\"A\"*28 + \"\\x41\\x41\\x06\\x08\")')\n[...]\ngdb-peda$ x/50x $esp\n0xffffdaec: 0x08064141  0x00000000  0x0804f02b  0x080da000\n</code></pre>\n<p>I tried with some twists, to see how it goes, but the result is still the same. The \"<em>\\xee</em>\" is always translated into \"<em>\\xae\\xc3</em>\" when pushed on the stack. And that's the same for some other specific address.</p>\n<p>I really don't get it, I can push the address 0x0806<strong>5e</strong>6b without any issue:</p>\n<pre><code>gdb-peda$ run &lt; &lt;(python -c 'print(\"A\"*28 + \"\\x6b\\x5e\\x06\\x08\")')\n[...]\ngdb-peda$ x/10x $esp\n0xffffdaec: 0x08065e6b  0x00000000  0x0804f02b  0x080da000\n</code></pre>\n<p>But not the address 0x0806<strong>ee</strong>6b:</p>\n<pre><code>gdb-peda$ run &lt; &lt;(python -c 'print(\"A\"*28 + \"\\x6b\\xee\\x06\\x08\")')\n[...]\ngdb-peda$ x/10x $esp\n0xffffdaec: 0x06aec36b  0x00000008  0x0804f02b  0x080da000\n</code></pre>\n<p>What am I missing here ?</p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "175",
+    "tags": [
+        "buffer-overflow",
+        "rop"
+    ],
+    "user": "Guillaume",
+    "time": "Oct 29, 2019 at 10:39",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>By the looks of it, 0xee is a bad character if its getting truncated like that. What you should do first is look for bad characters and when youre done, you have an idea of what gadget you can and cannot use. </p>\n<p>If that is THE only gadget, I would look into alternatives that do the same thing. So pop a random number into eax, add an offset and then eax will have what you want if its some type of call. Something of the like</p>\n</div>",
+            "votes": "1",
+            "user": "Jon",
+            "time": "Oct 29, 2019 at 0:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guillaume",
+                    "text": "<span class=\"comment-copy\">Well, I tried to check for bad chars, and something stranger happened... It's a binary related to a past CTF, but the server are still online for a few time. When I check for bad characters in my local machine, I can generate a precise list (including the \\xee byte). But on the remote server, those bad chars are not an issue, and I can push my previous problematic value \"0x0806ee6b\". The target binary is the same in my local machine and on the remote server. What can cause a difference between the binary behavior on my local system and on the remote one ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@Guillaume might be a locale issue. Are you using a non-English locale?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guillaume",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky My machine have indeed a non-English locale (<code>fr_FR.UTF-8 UTF-8</code>). The remote server is setup with the following locale configuration: <code>en_US.UTF-8 UTF-8</code>. I'll try to change mine in order to match the remote server locale, and see how it goes.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guillaume",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky The result is the same, even after editing and re-generating my locale file. That's not where the issue come from</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I can not comment yet, but the concern is probably a function that filters, or stops reading, each character. The problem can also come from how you send these data in remote.</p>\n</div>",
+            "votes": "0",
+            "user": "jukebox",
+            "time": "Oct 29, 2019 at 10:25",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guillaume",
+                    "text": "<span class=\"comment-copy\">The vulnerable function is a simple gets(), so the \\xee byte should not be consider as a bad character. In remote, I use the exact same command than on my machine, through a SSH session.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,66 @@
+{
+    "title": "How do I interpret the mangled functions name?",
+    "link": "https://reverseengineering.stackexchange.com/questions/23453/understanding-obscure-function-names",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am going to start by saying that this is my fourth attempt at reverse engineering a crackme and I'm starting to understand how assembly works, which is cool. I am sorry if this question is wrong or if I used the wrong terminology.\n </p>\n <p>\n  I am reversing a mach-0 binary with IDA. When I examine it, I find that there are hundreds of functions with weird names, like this\n </p>\n <pre><code>j___ZNSt3__1plIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_12basic_stringIT_T0_T1_EEPKS6_RKS9_\n</code></pre>\n <p>\n  Now, this doesn't look like pure junk. From it I can 'extract' the following: char_traits, allocator, basic_string.\n </p>\n <p>\n  Apparently it does something with strings, as before there are the following instructions:\n </p>\n <pre><code>lea rsi, goodWork ; \"Good work!\"\nlea rdx, _cido ; _cido in IDA is shown to do -> and [rax], eax ; I have no idea what that means\nlea rdi, [rbp+var] ; the only occurrence of var before is at the start -> var = qword ptr - 1C0H ; as always, no idea of what is this\ncall to_the_function_I_wrote_before\njmp $+5\n</code></pre>\n <p>\n  Is there a technique/way of knowing whatever this function does?\n </p>\n <p>\n  EDIT:\n </p>\n <p>\n  This has been flagged as a duplicate. It's not. The question you've linked only demangles the function name, which is a thing that IDA automatically does.\n </p>\n <p>\n  I need to understand whatever the hell this function does. The demangled function name is to me as helpful as the mangled one. I don't get it. I need a bit of guidance with that.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "binary-analysis"
+    ],
+    "user": "Chase Opsahl",
+    "time": "Dec 29, 2018 at 14:47",
+    "comments": [
+        {
+            "user": "Jongware",
+            "text": "<html><body><span class=\"comment-copy\">\n Possible duplicate of\n <a href=\"https://reverseengineering.stackexchange.com/questions/12816/wierd-names-in-import-table\">\n  Wierd names in import table\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "<html><body><span class=\"comment-copy\">\n .. Using the online demangler on your name results in the slightly bewildering\n <code>\n  j__std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > std::__1::operator+<char, std::__1::char_traits<char>, std::__1::allocator<char> >(char const*, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > const&)\n </code>\n – originally, probably some typedefs or classes or summink like that.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n Re your edit, it may be useful to post the demangled name to StackOverflow since it’s more of a programming question than RE per se\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "anx199",
+            "text": "<html><body><span class=\"comment-copy\">\n The\n <code>\n  _cido\n </code>\n pointer equals to address of\n <code>\n  and [rax], eax\n </code>\n , because IDA shows you data section as code section. It may however be a pointer to char, a table of ints, a pointer to pointer to pointer. That is, a pointer to almost anything.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is actually quite a straightforward C++ string function. It's just that, behind the scenes, the C++\n  <code>\n   std::string\n  </code>\n  class is actually a typedef of a template.\n </p>\n <pre><code>typedef basic_string<char> string;\n</code></pre>\n <p>\n  basic_string itself is declared as -\n </p>\n <pre><code>template< class CharT, \n          class Traits = std::char_traits<CharT>, \n          class Allocator = std::allocator<CharT>\n        > class basic_string;\n</code></pre>\n <p>\n  In other words, a\n  <code>\n   std::string\n  </code>\n  is really a -\n </p>\n <pre><code>std::basic_string< char, std::char_traits<char>, std::allocator<char> >\n</code></pre>\n <p>\n  Applying this in reverse to your mangled name and (and removing the __1's - see below) your function is simply the standard library string function -\n </p>\n <pre><code>std::string operator+( char const* lhs, std::string const& rhs )\n</code></pre>\n <p>\n  This concatenates a C style string and a std::string, returning the result as a new std::string.\n </p>\n <p>\n  This function is called from x86-64 assembly language as follows -\n </p>\n <ul>\n  <li>\n   <code>\n    rdi\n   </code>\n   is a pointer to caller allocated memory for the returned std::string\n  </li>\n  <li>\n   <code>\n    rsi\n   </code>\n   is the first argument and hence a pointer to a C style (zero terminated) string\n  </li>\n  <li>\n   <code>\n    rdx\n   </code>\n   is the second argument and hence a reference (or pointer is assembly language terms) to a C++ std::string\n  </li>\n </ul>\n <p>\n  Details on calling convention can be found here\n  <a href=\"https://software.intel.com/sites/default/files/article/402129/mpx-linux64-abi.pdf\" rel=\"noreferrer\">\n   AMD64 ABI\n  </a>\n </p>\n <hr/>\n <p>\n  In the above, I've ignored the __1 parts of the symbol. For details on where these come from see the following questions:\n </p>\n <ul>\n  <li>\n   <a href=\"https://stackoverflow.com/questions/29293394/where-does-the-1-symbol-come-from-when-using-llvms-libc\">\n    Where does the __1 come from when using LLVM's libc++\n   </a>\n  </li>\n  <li>\n   <a href=\"https://stackoverflow.com/questions/11016220/what-are-inline-namespaces-for\">\n    What are inline namespaces for?\n   </a>\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Ian Cook",
+            "time": "Dec 30, 2018 at 11:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "G. Ramistella",
+                    "text": "<span class=\"comment-copy\">This is brilliant. Thanks. One thing though, I still don't get how you managed to figure out that the function concatenates a C string and an std::string. I guess that <code>basic_string</code> is the C++ string, but where is the C string? and where is the concatenator part?</span>",
+                    "time": null
+                },
+                {
+                    "user": "anx199",
+                    "text": "<span class=\"comment-copy\">@A.Dandelion In <code>std::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt; std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt; (char const*, std::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt; const&amp;)</code> replace all the <code>std::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt;</code> with <code>std::string</code> (<code>std::string</code> is just a <code>typedef</code> for that). It gives you: <code>std::string std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt; (char const*, std::string const&amp;)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "anx199",
+                    "text": "<span class=\"comment-copy\">@A.Dandelion Now, <code>std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;&gt;</code> means that this operator belongs to class <code>&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt;</code>, which is <code>std::string</code>. Therefore, it can be shortened to: <code>std::string std::string::operator+(char const*, std::string const&amp;)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "G. Ramistella",
+                    "text": "<span class=\"comment-copy\">@anx199 Thanks. I think I am starting to get it. Isn't there a tool that does this for me though?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

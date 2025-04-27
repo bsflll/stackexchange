@@ -1,0 +1,33 @@
+{
+    "title": "Syscall from ntdll.dll",
+    "link": "https://reverseengineering.stackexchange.com/questions/19369/syscall-from-ntdll-dll",
+    "content": "I am begginer in RE and also in Win NT world.\nI used IDA to disassemble ntdll.dll from Win XP SP 3. I care about non oficially documented function NtCreatePort which creates LPC port. I would find out how it work under the cover.\nSo ntdll.dll exports NtCreatePort and I can find this: \n<pre><code> mov     eax, 2Eh\n mov     edx, 7FFE0300h\n call    dword ptr [edx]\n retn    14h\n</code></pre>\nSo I think that function on address <pre><code>7FFE0300h</code></pre> is called. \nThe first problem: I do not know where to find it.\nBut from literature I found out that function <pre><code>KiFastSystemCall</code></pre> should be called, correct? \n<pre><code> mov edx, esp\n sysenter\n</code></pre>\nI would think that syscall <pre><code>2Eh</code></pre> could be called. But where to find it? I am quite stucked and I do not know how to continue with tracking.\nThanks you all! Btw I would appraciate if you recommend me a literature of this topic.\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "windows",
+        "dll"
+    ],
+    "user": "hardcheese",
+    "time": "Sep 17, 2018 at 11:27",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<pre><code>int 2e</code></pre> was used in systems prior to windows xp\nfrom windows xp fast syscall is the preferred method to transition from usermode to kernel mode \nfast syscall pointer is embedded in the the Shared User Data Section \n<pre><code>0:003> dt ntdll!_KUSER_SHARED_DATA  @@masm(SharedUserData) SystemCall\n   +0x300 SystemCall : 0x76dd70f0\n\n0:003> uf 0x76dd70f0\nntdll!KiFastSystemCall:\n76dd70f0 8bd4            mov     edx,esp\n76dd70f2 0f34            sysenter\n76dd70f4 c3              ret\n</code></pre>\nif you are using a usermode debugger you cant see the internals of Nt/Zw functions \nntdll carries only the stub that transitions into kernel mode \nyou need a kernel debugging connection or you  have to depend on static analysis of ntos....(kr/mp).exe (kernel executive code) \nor you can use livekd from sysinternals for local debugging \n<pre><code>NtCreatePort</code></pre> calls <pre><code>nt!AlpcpCreateConnectionPort</code></pre> internally \nwhich calls <pre><code>NtCreateObject</code></pre>, initializes the port Attributes inserts\nthe object into HANDLE Table and returns back\na small overview of the control flow as follows (win 7 32 bit)\n<pre><code>kd> uf /c nt!NtCreatePort\nnt!NtCreatePort (8303f8a6)\n  nt!NtCreatePort+0x22 (8303f8c8):\n    call to nt!AlpcpCreateConnectionPort (8304d35c)\n  nt!NtCreatePort+0x52 (8303f8f8):\n    call to nt!KiCheckForKernelApcDelivery (82e74b24)\n\n\nkd> uf /c nt!AlpcpCreateConnectionPort\nnt!AlpcpCreateConnectionPort (8304d35c)\n  nt!AlpcpCreateConnectionPort+0x7 (8304d363):\n    call to nt!_SEH_prolog4 (82ecc240)\n  nt!AlpcpCreateConnectionPort+0xb3 (8304d40f):\n    call to nt!ObCreateObject (83072413)\n  nt!AlpcpCreateConnectionPort+0xc5 (8304d421):\n    call to nt!memset (82e864c0)\n  nt!AlpcpCreateConnectionPort+0xf4 (8304d450):\n    call to nt!AlpcpInitializePort (830b76c5)\n  nt!AlpcpCreateConnectionPort+0x101 (8304d45d):\n    call to nt!ObfDereferenceObject (82ec5163)\n  nt!AlpcpCreateConnectionPort+0x120 (8304d47c):\n    call to nt!AlpcpValidateAndSetPortAttributes (830b75a5)\n  nt!AlpcpCreateConnectionPort+0x140 (8304d49c):\n    call to nt!AlpcpSetOwnerProcessPort (830b77dc)\n  nt!AlpcpCreateConnectionPort+0x14d (8304d4a9):\n    call to nt!AlpcpAllocateBlob (830b7526)\n  nt!AlpcpCreateConnectionPort+0x181 (8304d4dd):\n    call to nt!AlpcInitializeHandleTable (830b7898)\n  nt!AlpcpCreateConnectionPort+0x198 (8304d4f4):\n    call to nt!ObInsertObjectEx (83071380)\n  nt!AlpcpCreateConnectionPort+0x1d5 (8304d531):\n    call to nt!_SEH_epilog4 (82ecc285)\nkd>\n</code></pre>\n",
+            "votes": "4",
+            "user": "NirIzr",
+            "time": "Sep 17, 2018 at 22:34",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "First question: \nin your example you right - <pre><code>KiFastSystemCall()</code></pre> is called. <pre><code>7FFE0300h</code></pre> is pointer to it on non-ASLR systems.\nIn windbg, you can look at it like this: <pre><code>uf poi(7ffe0300)</code></pre>\nSecond question: \nWhere to find <pre><code>int 2E</code></pre> - in older Windows versions -  Windows 2k and earlier.  In Windows XP mechanism has changed, and the new one is exactly what you see in your IDA. \nPlease note that this relevant to x86 machines.\nMore details:\nhttps://opcode0x90.wordpress.com/2007/05/18/kifastsystemcall-hook/\nhttps://www.evilsocket.net/2014/02/11/on-windows-syscall-mechanism-and-syscall-numbers-extraction-methods/\nhttps://www.codemachine.com/article_syscall.html\n",
+            "votes": "0",
+            "user": "NirIzr",
+            "time": "Sep 17, 2018 at 22:33",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

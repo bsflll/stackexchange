@@ -1,0 +1,26 @@
+{
+    "title": "Changing start address of thread using combination of Get- and SetThreadContext?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8086/changing-start-address-of-thread-using-combination-of-get-and-setthreadcontext",
+    "content": "I have the following assembly lines:\n<pre><code> PUSH 0\n PUSH 4                                   ; CreationFlags = CREATE_SUSPENDED\n PUSH 0\n PUSH program.0040163B                    ; start address of thread \n PUSH 0\n PUSH 0\n CALL DWORD PTR DS:[402428]               ; kernel32.CreateThread \n MOV DWORD PTR DS:[4023F8], EAX           ; store handle to created thread to [4023F8]\n ....\n ....\n LEA ESI, DWORD PTR DS:[402000]\n PUSH ESI                                 ; [402000] will be the location where we store the context of the thread\n PUSH DWORD PTR DS:[4023F8]               ; handle to created thread\n CALL DWORD PTR DS:[402424]               ; kernel32.GetThreadContext\n MOV [ESI+B0], program.004010E9           ; [ESI+B0] = [4020B0] = 0040163B (starting address of the created thread will be replaced by 004010E9, I guess)\n PUSH ESI                                 ; ESI points to 402000 where the thread context is stored, but now with a modified starting address of the thread\n PUSH DWORD PTR DS:[4023F8]               ; handle to thread\n CALL DWORD PTR DS:[402418]               ; kernel32.SetThreadContext\n PUSH DWORD PTR DS:[4023F8]\n CALL DWORD PTR DS:[402410]               ; kernel32.ResumeThread\n ....\n ....\n RETN\n</code></pre>\nSo, to sum up:\nWe create a thread in suspended state. Its starting address is 0040163B. \nThen we get the thread context and store it into 402000. By adding the offset of B0 to \n402000, we reach the place where the starting address of the thread is stored in the context structure. \nWe change it to 004010E9 and set the modified context using SetThreadContext.\nSo, my question would be:\nWhen I reach/call ResumeThread(), then will be 0040163B the starting address of the the thread, or 004010E9 ?\nBecause of the combination of Get-and SetThreadContext, it would make sense that the starting address of my thread must be 004010E9, but I wanted to be sure.\nEDIT:\n\nIn short my question is\n(1) if I create a suspended thread\n(2) Change its entry-point via SetThreadContext  \n(3) Resume the suspended thread\n\nwill the thread begin execution at the original entry-point as specified by <pre><code>CreateThread</code></pre> or at the newly modified one ?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "assembly",
+        "thread",
+        "address"
+    ],
+    "user": "user3097712",
+    "time": "Jan 24, 2015 at 5:50",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Your intuition is correct. Changing the starting address of the Thread via <pre><code>SetThreadContext</code></pre> will change the entry point. Here is a C++ snippet to verify our claims\n<pre><code>#include <Windows.h>\n#include <WinNT.h>\n\nDWORD WINAPI orig_entry( LPVOID param)\n{\n    MessageBoxA(0, \"Original Thread Entrypoint called\", \"\", MB_OK);\n    return 0;   \n}\n\nDWORD WINAPI new_entry(LPVOID param)\n{\n    MessageBoxA(0, \"Modified Thread Entrypoint called\", \"\", MB_OK);\n    return 0;   \n}\n\nint main()\n{\n    HANDLE tHand;\n    CONTEXT ctx;\n\n    //Thread created with orig_entry as starting address\n    tHand = CreateThread(NULL, 0, orig_entry, NULL, CREATE_SUSPENDED, NULL);\n\n    ctx.ContextFlags = CONTEXT_INTEGER; //We only want to get/set register eax\n    GetThreadContext(tHand, &ctx);\n\n    //Entry point is stored in register eax (ctx + 0xB0)\n    ctx.Eax = (DWORD) new_entry;    \n    ctx.ContextFlags = CONTEXT_INTEGER;\n\n    //Comment the line below to see the difference\n    SetThreadContext(tHand, &ctx);\n\n    ResumeThread(tHand);    \n    Sleep(-1);  //Pause main thread permanently\n    return 0;\n}\n</code></pre>\nRunning the code, you will notice that function <pre><code>new_entry</code></pre> is called, which justifies that the entry-point was changed by <pre><code>SetThreadContext</code></pre>\n",
+            "votes": "4",
+            "user": "0xec",
+            "time": "Jan 24, 2015 at 5:45",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

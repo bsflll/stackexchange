@@ -1,0 +1,31 @@
+{
+  "title": "x86-64 bit Buffer Overflow, help with overwriting %rip",
+  "link": "https://reverseengineering.stackexchange.com/questions/19682/x86-64-bit-buffer-overflow-help-with-overwriting-rip",
+  "content": "I am trying to get a buffer overflow exploit to work on Ubuntu 16.04 LTS 64bit.\n\nTo this end I use the following vulnerable program:\n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main(int argc, char* argv[])\n{\n\n    char buffer[256];\n    strcpy(buffer, argv[1]);\n    printf(\"%s  \n\", buffer);\n    return 0;\n}\n\n```\nI deactivate ALSR (temporarily set /proc/sys/kernel/randomize_va_space to 0) and compile my code with\n\n```\ngcc vuln.c -o vuln -z execstack -fno-stack-protector\n\n```\nI manage to overwrite rip with 6 B's using \n\n```\ngdb$ run $(python -c 'print \"A\"*264 + \"B\"*6')\n\n```\nand get the following result in gdb:\n\n```\nRSI: 0x602010 ('A' <repeats 200 times>...)\nRDI: 0x1 \nRBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd9d0 --> 0x0 \nRIP: 0x424242424242 ('BBBBBB')\nStopped reason: SIGSEGV\n0x0000424242424242 in ?? ()\n\n```\nWhich makes perfect sense to me.\n\nI would like to overwrite rip with the beginning of my buffer of \"A\"'s so I can later place my shellcode at the beginning of the buffer (preceeded by some noop's):\n\nSo, knowing, how many A's I wrote in the buffer I have a look at rsp minus an offset (I am just playing with the offset until I get a line starting with A's:\n\n```\ngdb$ x/20x $rsp-288\n0x7fffffffd8b0: 0x00007fffffffdaa8  0x0000000200000000\n0x7fffffffd8c0: 0x4141414141414141  0x4141414141414141\n0x7fffffffd8d0: 0x4141414141414141  0x4141414141414141\n\n```\nSo, from this I am taking, that my buffer starts at 0x7fffffffd8c0 on the stack.\n\nNext I'll redirect rip to 0x7fffffffd8c0 as follows:\n\n```\ngdb$ run $(python -c 'print \"A\"*264 + \"\\x7f\\xff\\xff\\xff\\xd8\\xc0\"[::-1]')\n\n```\nWhich works:\n\n```\nRBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd9d0 --> 0x0 \nRIP: 0x7fffffffd8c0 ('A' <repeats 200 times>...)\n\n```\nAs I am planning to put shellcode at the beginning of the buffer I just assume, my shellcode will be 10 bytes long and see if this works:\n\n```\ngdb$ run $(python -c 'print \"S\"*10 + \"A\"*254 + \"\\x7f\\xff\\xff\\xff\\xd8\\xc0\"[::-1]')\n\n```\nand now something I don't understand happens: Despite the fact, that I write exactly the same amount of characters into my buffer, the value of rip changes, apparently it no longer points to the start of my buffer:\n\n```\nRSI: 0x602010 (\"SSSSSSSSSS\", 'A' <repeats 190 times>...)\nRDI: 0x1 \nRBP: 0x4141414141414141 ('AAAAAAAA')\nRSP: 0x7fffffffd980 --> 0x0 \nRIP: 0x7fffffffd8ca ('A' <repeats 182 times>)\n\n```\nInstead of 0x7fffffffd8c0 rip now contains 0x7fffffffd8ca.\n\nSo it is actually still pointing to the beginning of my A's instead of the S's which I injected in my python command:\n\n```\ngdb-peda$ x/20 $rip-10\n0x7fffffffd8c0: 0x5353535353535353  0x4141414141415353\n0x7fffffffd8d0: 0x4141414141414141  0x4141414141414141\n\n```\nObviously I am just getting started with this stuff.\n\nWhy is this happening?\n\nWhat am I missing?\n\n",
+  "votes": "5",
+  "answers": 1,
+  "views": "8k",
+  "tags": [
+    "buffer-overflow",
+    "amd64"
+  ],
+  "user": "schtopps",
+  "time": "Oct 22, 2018 at 8:38",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Have you tried with another number of 'S' characters ? Does it work the same or is it really linked to the fact you have 0xa characters ?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Don't worry, the shellcode is executing properly, just that the debugger \"skipped\" past the execution.\n\nRemember that rip is the instruction pointer and whatever code present at the rip is executed. If the code is invalid however, something will go wrong (for example a SIGSEGV will be raised)\n\nIn this particular case, a S (byte \\x53) corresponds to a push rbx command (which is valid, and push 8 bytes to the stack), while an A is a rex.B - basically speaking, it causes a SIGSEGV in this case.\n\nSo in the latter case, ten push rbx commands get executed. (note the esp is decreased by 0x7fffffffd9d0 - 0x7fffffffd980 = 0x50, which is 10 times the size of rbx)\n\nWhat you can do instead: Break at the ret instruction in the main function. After the breakpoint is hit, execute 1 more instruction then the rip should have the desired value.\n\n",
+      "votes": "6",
+      "user": "user202729",
+      "time": "Oct 22, 2018 at 10:27",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

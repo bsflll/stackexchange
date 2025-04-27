@@ -1,0 +1,62 @@
+{
+    "title": "How can I use an x64 debugger to reroute a .NET application's logic?",
+    "link": "https://reverseengineering.stackexchange.com/questions/9284/how-can-i-use-an-x64-debugger-to-reroute-a-net-applications-logic",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'd like to improve my reverse engineering skills, so I made this WPF application (targeting x64, of course):</p>\n<p><strong>MainWindow.xaml</strong>:</p>\n<pre><code>&lt;Window x:Class=\"ApplicationTest.MainWindow\"\n        xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n        xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n        Title=\"Harness\"\n        WindowStyle=\"ToolWindow\"\n        Width=\"200\"\n        Height=\"200\"&gt;\n    &lt;Grid&gt;\n        &lt;Button Content=\"Go\" Click=\"Button_Click\"/&gt;\n    &lt;/Grid&gt;\n&lt;/Window&gt;\n</code></pre>\n<p><strong>MainWindow.xaml.cs</strong>:</p>\n<pre><code>namespace ApplicationTest\n{\n    public partial class MainWindow : Window\n    {\n        public MainWindow()\n        {\n            InitializeComponent();\n        }\n\n        private void Button_Click(object sender, RoutedEventArgs e)\n        {\n            var value = \"No\";\n            if (value.Equals(\"No\", StringComparison.OrdinalIgnoreCase))\n                MessageBox.Show(\"You cannot proceed.\");\n            else\n                MessageBox.Show(\"Well done, lad.\");\n        }\n    }\n}\n</code></pre>\n<p>When I debug it with <a href=\"http://x64dbg.com/#start\" rel=\"nofollow\">x64dbg</a>, I'm trying to find the location of the <code>value.Equals(\"No\", StringComparison.OrdinalIgnoreCase)</code> comparison, but I am having trouble finding a way to trace the application to its button click event. Ideally, I want to use x64dbg to modify my application's executable and have it run the <code>else</code> statement and print <code>\"Well done, lad.\"</code> instead. How can this be achieved?</p>\n<p>In my Symbols window, under the <code>applicationtest.exe</code> symbol, I see <code>Button_Click</code> at a particular address, but when I try to set breakpoints in or around here in the <code>Disassembler</code> view it never hits them when I click the actual button.</p>\n</div>",
+    "votes": "-1",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "windows",
+        "debuggers",
+        "executable",
+        "x86-64",
+        ".net"
+    ],
+    "user": "Alexandru",
+    "time": "Jul 4, 2015 at 13:46",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>C# is a bad language to compare source code with assembly, because your source code doesn't get compiled to assembly (*). Instead, the source is translated to some intermediate code; running the program means starting an interpreter which takes over and interprets that intermediate code. So the only thing you can trace is that interpreter itself, not the code it's interpreting. (Even if you find a tool that allows you to single-step compiled .net code, it won't be x86 assembly you're single-stepping).</p>\n<p>Try a C program instead, or any other language that gets compiled instead of being translated .NET intermediate code.</p>\n<p>(*) ignoring jit compilation because the won't help the OP much</p>\n</div>",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Jul 3, 2015 at 21:56",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><strong>Modifying a Release-Mode .NET Assembly</strong></p>\n<p>Since IL is so simple, one way to achieve the same result without a debugger is to simply decompile the executable using ILDASM on a corresponding <strong>.NET release mode x64 executable</strong> using the following command line command:</p>\n<pre><code>\"C:\\Program Files (x86)\\Microsoft SDKs\\Windows\\v8.1A\\bin\\NETFX 4.5.1 Tools\\ildasm.exe\" ApplicationTest.exe /out:Disassembly.asm\n</code></pre>\n<p>In the disassembly, you will see the following IL instructions under the <code>Button_Click</code> method:</p>\n<pre><code>IL_000d:  callvirt   instance bool [mscorlib]System.String::Equals(string,\n                                                                       valuetype [mscorlib]System.StringComparison)\n    IL_0012:  brfalse.s  IL_0020\n\n    IL_0014:  ldstr      \"You cannot proceed.\"\n</code></pre>\n<p>It's very verbose and looks almost identical to your original .NET code so it makes it really easy to find the location of your corresponding code. Modify the text <code>brfalse</code> to be <code>brtrue</code>, and compile it using ILASM:</p>\n<pre><code>\"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\ilasm.exe\" Disassembly.asm\n</code></pre>\n<p>The result will be an assembly named <code>Disassembly.exe</code> which is nearly identical to the original assembly except that it has rerouted application logic. Now when you execute it, clicking the button will print <code>Well done, lad.</code>.</p>\n<p><strong>Note</strong>: You may need to download the Windows SDK or corresponding .NET Framework your .NET project is running in order to get access to ILDASM or ILASM. Also, these tools may not work if your .NET application uses a different version of the .NET framework than the .NET versions that the version of ILDASM or ILASM you are using target.</p>\n<p><strong>Debugging a Release-Mode .NET Assembly's MSIL Assembly Code Line-by-Line</strong></p>\n<p>To directly answer the question, you can debug release-mode .NET assemblies line by line. You first need to decompile any .NET assembly into IL code as I have shown above, using ildasm. Then, you can recompile your assembly in ilasm using the <code>/pdb</code> flag (<code>ilasm Disassembly.asm /pdb</code>) to create a debug database that will let you debug any .NET assembly line by line. Here is a simple demonstration of how to do that. Once you have compiled using <code>ilasm Disassembly.asm /pdb</code>, launch the executable (<code>Disassembly.exe</code>). In Visual Studio, go to <code>Tools -&gt; Attach to process</code> and attach the debugger to <code>Disassembly.exe</code>. Once attached, go to <code>Debug -&gt; Options and Settings -&gt; Debugger -&gt; Symbols</code> and make sure you add the location of the folder hosting the <code>Disassembly.pdb</code> file (it should be the same folder that <code>Disassembly.exe</code> is in if you followed this guide correctly thus far. Hit the pause button in Visual Studio to freeze execution and go to <code>Debug -&gt; Windows -&gt; Threads</code> and view your threads. Navigate through the threads by double clicking on them. You may need to disable <code>Just my code</code>. If it prompts you, go ahead and do it, it should be a single click in the thread view. Eventually, you will see that one of your threads shows you the IL <code>Disassembly.asm</code>. You can add breakpoints in and debug it line by line. Here is a screenshot:</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/DKTor.png\"/></p>\n<p>Just a quick note, you may need to resume then freeze again after loading symbols so that Visual Studio synchronizes them. Also, for this to work, you will need the corresponding <code>Disassembly.asm</code> file in the same directory as well.</p>\n<p>Also, Visual Studio has a handy Disassembly View (<code>Debug -&gt; Windows -&gt; Disassembly</code>) which shows you the machine instructions generated by JIT instead of IL instructions, but this window you cannot debug, presumably because JIT generates this stuff dynamically.</p>\n</div>",
+            "votes": "3",
+            "user": "Alexandru",
+            "time": "Jul 20, 2015 at 15:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">This is well-known and might work, however I ask myself in which scenarios. In case you have the C# or VB source, you will probably never apply this method. In case you do not have the original source but only the assembly - as is usual in Reverse Engineering - what is the benefit of this method? IMO, a much more efficient method is e.g. to use Reflector and modify the assembly with Reflexil to produce idagnostic behaviour or output e.g. in form of MessageBoxes.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alexandru",
+                    "text": "<span class=\"comment-copy\">@josh What do you mean? The whole point of my answer is that you don't need a .NET assembly's source code to debug its IL language code line-by-line, and, as a result you can modify it to do what you want by finding out where it does things you don't want it to do. The benefit? You can debug it on run-time so that you see what part of the IL code performs the operations you desire to remove. IMO, you're not going to be able to do much in a multi-threaded application just by looking at the IL code using tools like Reflector or Reflexil for any sizeable application. Plus, its a waste of time.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alexandru",
+                    "text": "<span class=\"comment-copy\">@josh This is a faster method of doing things for any sizeable application.</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">All I wanted to express that this method does not seem very practical to apply for reverse engineering of .net assemblies. IMO, to associate the x86 assembly output with IL or C# code might not be a trivial task. And for a practical application, what would be needed were an assembler/compiler for modified x86 assembler code to IL. Does that exist??</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alexandru",
+                    "text": "<span class=\"comment-copy\">@josh <i>\"to associate the x86 assembly output with IL or C# code might not be a trivial task\"</i> - I never said anything like that in my answer. I talk about modifying IL code, not x86-64 assembly code. I talk about modifying the IL code since that's all you need to do to reroute .NET application logic to make it do what you want it to do. You don't even need to get anywhere near the x86-64 assembly code as the JIT compiler handles that translation for you.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

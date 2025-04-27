@@ -1,0 +1,44 @@
+{
+    "title": "Anyone recognize this variant of Intel HEX firmware format?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14942/anyone-recognize-this-variant-of-intel-hex-firmware-format",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I've got a firmware file for an ARM Cortex-M0+ that is in a format extremely similar to Intel HEX.  All data is encapsulated in a 0x3a ... 0xa wrapper.  The fields seem to mostly match the 16 bit Intel HEX structure, where the second field is definitely the record length, the next two are plausibly an address to load the payload.  The next under Intel HEX should be the record type, and I'll cover what I see here in a second.\n </p>\n <p>\n  I see two significant variations from the standard Intel HEX (I have no experience with it, just what I've read)\n </p>\n <ol>\n  <li>\n   The fields are all specified in raw bytes, NOT ASCII representations of the bytes.  So for instance, most records are 16 bytes long and hexdump shows: 0x3a 0x10 ... 0xa\n  </li>\n  <li>\n   The last field before the record delimiter should be the two's compliment of the LSB of the sum of all fields.  That is not what I'm seeing, and I don't know how it is being calculated.  This is kinda important since I want to modify this firmware.  Also, my python code for two's compliment calculation could be wrong, so feel free to tell me I'm just an idiot.\n  </li>\n </ol>\n <p>\n  Any ideas what this format might be?  Here's a little sample hexdump output:\n </p>\n <pre><code>00000000  3a 10 04 00 00 ff ff ff  ff ff ff ff ff ff ff ff  |:...............|\n00000010  ff 7e fb ff ff 81 0a 3a  10 08 00 00 00 60 00 20  |.~.....:.....`. |\n00000020  c1 08 00 00 49 93 01 00  4d 93 01 00 e1 0a 3a 10  |....I...M.....:.|\n00000030  08 10 00 51 93 01 00 55  93 01 00 59 93 01 00 5d  |...Q...U...Y...]|\n00000040  93 01 00 2c 0a 3a 10 08  20 00 61 93 01 00 65 93  |...,.:.. .a...e.|\n00000050  01 00 69 93 01 00 6d 93  01 00 dc 0a 3a 10 08 30  |..i...m.....:..0|\n00000060  00 71 93 01 00 75 93 01  00 79 93 01 00 1f 2f 02  |.q...u...y..../.|\n00000070  00 4d 0a 3a 10 08 40 00  1f 2f 02 00 1f 2f 02 00  |.M.:..@../.../..|\n</code></pre>\n <p>\n  Back to that record type field.  Out of a 200kb file, I have only 6 records that are not of type 0:\n </p>\n <ul>\n  <li>\n   Type 1:  One instance.  Should be EOF, last record, but it's not.  It is a record of zero payload length, as it should be, but I have one more record after it, Type 6.\n  </li>\n  <li>\n   Type 2:  I have three instances.  Should be Extended Segment Address, according to wikipedia the address field is typically zero and the data length should be two.  That is what I see for all three instances.\n  </li>\n  <li>\n   Type 3: Comes just before the Type 1 (EOF?) record.  Matches what Wikipedia tells me to expect for Type 3.  Looks like: 3a 04 00 00 03 00 00 08 c1 30 0a. Maybe this is the CS:IP that wikipedia says?\n  </li>\n  <li>\n   Type 6:  Last record, looks like: 3a 04 00 00 06 f9 f7 b1 9f b6 0a.\n  </li>\n </ul>\n <p>\n  <strong>\n   UPDATE:\n  </strong>\n  The checksum field in my file is actually the two's compliment, the original code I wrote was broken in several ways.  Dang type-less python code.  What eventually worked for calculating the checksum was:\n </p>\n <pre><code>def twos_comp(val, bits):\n    return val - (1 << bits)        \n\ndef calc_checksum(record_byte_string):\n    return abs(twos_comp(sum(record_byte_string)%256, 8))%256\n</code></pre>\n <p>\n  So my only real question left is:  what is the Type 6 record at the very end?  I'm guessing its a 4-byte CRC over something, but I don't know what.  Anyone seen this before?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "707",
+    "tags": [
+        "firmware",
+        "file-format"
+    ],
+    "user": "user19009",
+    "time": "Mar 19, 2017 at 21:05",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Since it's using raw bytes and not textual representation, it doesn't seem to be related to Intel HEX or Motorola S-Record at all. It's probably just some  custom chunk-based format developed by the manufacturer of the device (possibly inspired by Intel Hex though). I'd suggest you to RE the firmware updater program or the receiving part in the firmware, maybe it will have the code for handling the unknown record.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Mar 20, 2017 at 9:20",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user19009",
+                    "text": "<span class=\"comment-copy\">Thanks for the response. Would upvote you but I'm too rep-poor.  The device updates via bluetooth, and the app that  does the updating appears to simply shlep the bytes out.  In fact, I have a limited access custom serial shell on the device and a command that dumps a limited amount of flash memory.  That command outputs memory in the same format!  I can't imagine that the firmware is regularly processing this format, so I would have to guess I'm seeing a dump of an update stored in flash.  Or maybe the firmware is stored this way in flash but loaded into ROM/RAM after being parsed?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">yeah, maybe the bootloader parses this format directly from the flash</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It turns out that record type 6 is a 32-bit CRC, in bigendian order.  The CRC is the typical (as I understand it) CRC32, producing identical results to the\n  <code>\n   crc32\n  </code>\n  utility included in the\n  <code>\n   Archive::Zip\n  </code>\n  Perl module on Linux systems.  The trick was that the bootloader is actually calculating it over a region of flash memory storing the application code.  I haven't fully traced the bootloader, but the code appears to be installing the firmware update and only\n  <strong>\n   then\n  </strong>\n  checking its integrity against this value, after boot.  I'm not sure what bootloader it is, but it appears to\n  <strong>\n   not\n  </strong>\n  be the Kinetis bootloader, given the absence of the magic string required in the Kinetis bootloader Bootloader Configuration Area (BCA).\n </p>\n <p>\n  So the trick was figuring out what the flash would look like after applying the updates specified in the update file, and doing a CRC over\n  <em>\n   only\n  </em>\n  the region of flash the bootloader was calculating it over. In my case that was\n  <code>\n   0x800\n  </code>\n  to\n  <code>\n   0x3afff\n  </code>\n  . Also in my case, the unspecified bytes were set to\n  <code>\n   0xFF\n  </code>\n  , so I can calculate an offline CRC just by looking at the file. But for one other update file I have, the assumption that unspecified bytes will be\n  <code>\n   0xFF\n  </code>\n  does not hold, so I guess I just got lucky.\n </p>\n <p>\n  One interesting note:  I used the\n  <code>\n   crcmod\n  </code>\n  Python module to try to calculate my CRCs when I was trying to brute-force guess things, when I posted my original question.  Even when I knew the CRC algorithm being used, and over what byte range, I still could not get any crcmod CRC algorithm to give me the right result.  I fiddled with it for a little while, but eventually gave up and just used the\n  <code>\n   crc32\n  </code>\n  shell utility.  I never got to the bottom of that problem, and it easily could have been a bug in my Python code, but I wanted to just note that for anyone experiencing similar issues.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Patrick Mevzek",
+            "time": "Mar 26, 2018 at 8:46",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

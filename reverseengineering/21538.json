@@ -1,0 +1,42 @@
+{
+    "title": "Extracting ARM Boot zImage",
+    "link": "https://reverseengineering.stackexchange.com/questions/21538/extracting-arm-boot-zimage",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to analyze the firmware of a system running Linux and connecting various home automation and security devices. Every time it boots, the <a href=\"http://www.openipcam.com/files/ARM9/GM8126/GM8126%20v1.1/Docs/Datasheet/GM812X_Data_Sheet_V0.4.pdf\" rel=\"nofollow noreferrer\">GM8125 processor</a> running ARMv5TE loads a firmware image from the <a href=\"https://www.winbond.com/resource-files/w25q128jv%20spi%20revc%2011162016.pdf\" rel=\"nofollow noreferrer\">SPI flash</a>. I connected to the flash with a Bus Pirate and pulled off the firmware image. When I run <code>binwalk</code> on it, I get the following.</p>\n<pre><code>$ binwalk spidump.bin \n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n271284        0x423B4         Sega MegaDrive/Genesis raw ROM dump, Name: \"ETIR_ON\", \"ECCAS\",\n744708        0xB5D04         CRC32 polynomial table, big endian\n786432        0xC0000         gzip compressed data, maximum compression, from Unix, last modified: 1970-01-04 16:05:57 (bogus date)\n917760        0xE0100         Linux kernel ARM boot executable zImage (big-endian)\n9306332       0x8E00DC        Zlib compressed data, compressed\n9307424       0x8E0520        Zlib compressed data, compressed\n9308196       0x8E0824        Zlib compressed data, compressed\n9309036       0x8E0B6C        Zlib compressed data, compressed\n9310040       0x8E0F58        Zlib compressed data, compressed\n9310220       0x8E100C        Zlib compressed data, compressed\n9311200       0x8E13E0        Zlib compressed data, compressed\n9312104       0x8E1768        JFFS2 filesystem, little endian\n9317132       0x8E2B0C        Zlib compressed data, compressed\n9317428       0x8E2C34        JFFS2 filesystem, little endian\n9318332       0x8E2FBC        Zlib compressed data, compressed\n[...]\n</code></pre>\n<p>If I run <code>binwalk -Mre</code> it gives me nearly 6000 files and several hundred folders of the extracted <code>Zlib</code> and <code>JFFS2</code> data. After analyzing these, I thought I'd look at the boot image.</p>\n<p>I carved out the zImage by running <code>dd if=spidump.bin of=carved.bin bs=1 skip=917760 count=8388572</code>. Running <code>file</code> returns <code>carved.bin: Linux kernel ARM boot executable zImage (big-endian)</code>.</p>\n<p>So far so good. This is where I get lost.</p>\n<p>From reading other posts here and elsewhere, it seems like I should search for the magic bytes of where compression starts--since this is big-endian, I run <code>objdump</code> with a lot of results (only the first few lines listed).</p>\n<pre><code>$ arm-none-eabi-objdump -EB -D -m armv5te -b binary carved.bin | grep 1f8b\n    9b38:   1f8b3c36    svcne   0x008b3c36\n   1f8b0:   bf2e3abe    svclt   0x002e3abe\n   1f8b4:   0811cabb    ldmdaeq r1, {r0, r1, r3, r4, r5, r7, r9, fp, lr, pc}\n   1f8b8:   baaee7f4    blt 0xfebd9890\n   1f8bc:   fc3711aa    ldc2    1, cr1, [r7], #-680 ; 0xfffffd58\n   20c38:   f3b1f8b9            ; &lt;UNDEFINED&gt; instruction: 0xf3b1f8b9\n   233c0:   d1f8badf    ldrsble fp, [r8, #175]! ; 0xaf\n   2c7d8:   011f8b05    tsteq   pc, r5, lsl #22\n   2d990:   e9ff1f8b    ldmib   pc!, {r0, r1, r3, r7, r8, r9, sl, fp, ip}^  ; &lt;UNPREDICTABLE&gt;\n</code></pre>\n<p>I carve the file starting from the first occurrence of the magic bytes by running <code>dd if=carved.bin of=arm.gz bs=1 skip=39736</code>. <code>file</code> returns <code>arm.gz: gzip compressed data, unknown method, has CRC, extra field, has comment, encrypted, last modified: Mon Sep 15 08:57:49 1975</code> and <code>gunzip</code> refuses to unzip, saying <code>unknown method 60 -- not supported</code>. Most later occurrences of <code>1f8b</code> are not aligned at the beginning of a byte, so I assume they are not good candidates for carving and unzipping. It seems like the first occurrence, and subsequent occurrences, might just all be by chance.</p>\n<p>Is this truly a zImage, or could <code>binwalk</code> and <code>file</code> be confused? How can I tell? How do I extract it?</p>\n<p>Unfortunately, I can't provide the binary for your own perusal.</p>\n<p><strong>Update - 6/25/2019</strong></p>\n<p>I've included a graph of the entropy of the file, as requested by julian. It does look like the section in question is compressed.</p>\n<p><a href=\"https://i.sstatic.net/jFJnQ.png\" rel=\"nofollow noreferrer\"><img alt=\"spidump_entropy\" src=\"https://i.sstatic.net/jFJnQ.png\"/></a></p>\n<p><strong>Update - 7/5/2019</strong></p>\n<p>Upon further review with an expert, it seems like <code>binwalk</code> misidentified the type(s) of files. It looks like there is a custom unpacker I need to either disassemble or have it run and then take the unpacked image from memory.</p>\n</div>",
+    "votes": "5",
+    "answers": 0,
+    "views": "6k",
+    "tags": [
+        "firmware",
+        "arm"
+    ],
+    "user": "theTheodidact",
+    "time": "Jul 5, 2019 at 13:05",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">I think I'm missing something; why are you trying to disassemble compressed data?</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">look at an entropy plot of the suspected zImage to determine whether it is compressed or not</span>",
+            "time": null
+        },
+        {
+            "user": "theTheodidact",
+            "text": "<span class=\"comment-copy\">@IgorSkochinsky I thought perhaps if the file structure didn't contain what I was looking for, the boot image would have more information about specific open ports and information associated with those ports.</span>",
+            "time": null
+        },
+        {
+            "user": "theTheodidact",
+            "text": "<span class=\"comment-copy\">@julian I added a plot of the entropy and it does look like it is legitimately compressed.</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">if a binwalk scan of the compressed data doesn't return any true/legitimate signatures you may need to go over a hex dump manually of the first few bytes of the data to look for anything info pointing to a particular compression algorithm.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

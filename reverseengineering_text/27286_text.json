@@ -1,0 +1,82 @@
+{
+    "title": "kd live local debugging !pte and db don't work (only shows context of the debugger for all contexts), but !vtop works",
+    "link": "https://reverseengineering.stackexchange.com/questions/27286/kd-live-local-debugging-pte-and-db-dont-work-only-shows-context-of-the-debugg",
+    "content": "Says the PDPT and PDs of the process are at the same physcial frames (pfns) in both processes.\nThe first process is <pre><code>winword.exe</code></pre> and the second process is <pre><code>calc.exe</code></pre>\nThe virtual address in the first case is the start of the virtual page containing the header of <pre><code>winword.exe</code></pre>, which VMMap shows to be in the shareable working set, but yet the output shows that the entry in the PDE hasn't ever even been touched.\nI then try that virtual address in <pre><code>calc.exe</code></pre>, where VMMap shows no VAD allocation to that range, and it shows the same identical output.\nThis suggests to me that !pte is showing me the output of some other process, and I can't change it away from that and using <pre><code>.process</code></pre> alone and <pre><code>.process</code></pre> + <pre><code>.context</code></pre> with the correct dirbases (cr3/PML4 physical pages) doesnt work.\nI'm using <pre><code>kd -kl</code></pre>, not <pre><code>livekd</code></pre>.\nThis also happens in <pre><code>windbg</code></pre>. Furthermore, I get the same pfns for both outputs, and those pfns change to a new set every time I reopen the debugger, which suggests that it is using the debuggers context. Is this a limitation with local debugging? I would have thought that a kernel driver would be able to do this correctly.\n<pre><code>process /p</code></pre> does nothing, and <pre><code>!peb</code></pre> correctly shows the different PEBs of the 2 different processes, but <pre><code>!pte</code></pre> still appears to be using the context of <pre><code>kd</code></pre>\n<pre><code>!vtop</code></pre> appears to be working correctly:\n\nThe problem is reproducible also on <pre><code>windbg</code></pre> (version 6.12) and also I tried version 10. This seems to be related. So does this (dreadful answer).\nI translated the virtual address to the virtual address of its PTE using this technique (which is of course the same address that was attempted to be shown in the <pre><code>!pte</code></pre> output, and will be the same PTE address for that virtual address in the context of every process) and <pre><code>db</code></pre> shows nothing at that address either:\n\nYou still need to select the process context because the user side of the page tables as well as PML4 are mapped in differently for each process.\n<pre><code>db</code></pre> lines up with new state of <pre><code>0x13fe60000</code></pre> according to <pre><code>!pte</code></pre>:\n\nbut <pre><code>!vtop</code></pre> works correctly:\n\nI mean, the difference is that <pre><code>!vtop</code></pre> is accessing physical memory whereas <pre><code>!db</code></pre> and <pre><code>!pte</code></pre> access virtual memory. <pre><code>!peb</code></pre> works correctly and accesses virtual memory, but is user mode. It seems that it is struggling with reading kernel virtual addresses.\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "288",
+    "tags": [
+        "windows",
+        "debugging",
+        "windbg",
+        "pages"
+    ],
+    "user": "Lewis Kelsey",
+    "time": "Mar 23, 2021 at 8:32",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "confirm observations with a real live kernel debugging sysinternals livekd and native local kernel debugging are kinda look alikes\n",
+            "time": null
+        },
+        {
+            "user": "Lewis Kelsey",
+            "text": "@blabb I mean it should be able to do this functionality in local debugging just fine, so it seems like a bug to me, unless I've misunderstood the usage. I will try to remote debug at some point -- perhaps a VM, never done it before though.\n",
+            "time": null
+        },
+        {
+            "user": "Lewis Kelsey",
+            "text": "@blabb If i can remember the equation for 4 level paging that allows you to translate a virtual address to the virtual address of the PTE that handles the virtual address, I will use <pre><code>dt</code></pre> as well\n",
+            "time": null
+        },
+        {
+            "user": "Lewis Kelsey",
+            "text": "@blabb Ok, I updated my question with that\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "https://microsoft.public.windbg.narkive.com/3twYsQJV/i-can-t-set-process-context\nThis person also noticed the issue and also came to the conclusion that it is showing the context of the debugger. He then said that it works on <pre><code>livekd</code></pre> ironically, which I can confirm.\n\n\nFinally.\nAlthough, this doesn't explain why <pre><code>livekd</code></pre> works and why <pre><code>kd -kl</code></pre> doesn't, which is what I actually want to know\n",
+            "votes": "0",
+            "user": "Lewis Kelsey",
+            "time": "Mar 23, 2021 at 2:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">Livekd does not even need bcdedit /debug on to work while kd -kl needs  /debug on they use different techniques and when you use livekd the cr3 register will be showing the eprocess-&gt;pcb.directorttablebase of livekd64.exe  check with dx debugger.sessions[0].process.where( a=&gt;a.kob.pcb.dbase==@cr3)</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">and btw pavel lebedynskys answer might provide some clues toyou wrt lkd / live <a href=\"https://community.osr.com/discussion/195991/inchoerence-of-the-pte-base-address\" rel=\"nofollow noreferrer\">here</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Lewis Kelsey",
+                    "text": "<span class=\"comment-copy\">@blabb yes I was right, only user addresses were being translated. Thanks for that link. <code>.process /P</code> solved the issue. On the documentation it said 'live debugging only' which I thought meant live and not local live, so I never tried it. I know that livekd uses some sort of crash dump made when it launches, but I'm not sure of the details – I'd like to know what specifically it does and what it consists of</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">Ntsystemdebugcontrol sysdbg  hacks prevista and official support with proper acls post vista sysinternal had an embedded resource driver and prevista windbg also had a helper  [some utility and src code here ](<a href=\"https://crashdmp.wordpress.com/2014/08/04/livedump-1-0-is-available/\" rel=\"nofollow noreferrer\">crashdmp.wordpress.com/2014/08/04/livedump-1-0-is-available</a>) alsi search my answers in so/windbg iirc i posted some code</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lewis Kelsey",
+                    "text": "<span class=\"comment-copy\">@blabb the point of this was to work out this <a href=\"https://stackoverflow.com/questions/66734103/on-windows-when-is-a-pte-a-vad-prototype-pte-with-address-0xffffffff0000-inst\">question</a>. It seems like mapped data files are all VAD prototype-pointer PTEs and the image files are all prototype-pointer PTEs, which doesn't make sense because multiple sources said all of the PPTEs in the view are deferred and created for data files when the VAD entry is created i.e.  the view is mapped, but that implies that there are no PPTEs to point to, and why waste page table page allocation to do what a missing ...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "@blabb 's link is the correct answer for local debugging\n\nDebugger cache is used only for live targets, local kd doesn't really need it. However, local kd still needs to decide how to translate virtual addresses to physical ones when you switch to a process. This is where the different .process options come into play:\n\n\n.process: No translation is performed. All memory accesses are performed in the context of debugger's process. Kernel memory which is valid in any process context (pool, system PTE mappings etc.) will be displayed correctly, everything else (user memory, session space, page tables etc.) will not.\n\n\n.process /p: User addresses are translated using the page directory of the specified process, so commands like !peb should work correctly. Kernel addresses are not translated, so things like session space and page tables may still be displayed incorrectly.\n\n\n.process /P: All addresses, user and kernel, are translated. Use this option if you need to look at session space, page tables or other process-specific data in the kernel space.\n\nI did not think it would be a bug -- the functionality to do it was clearly available. There has to be a specific usage to account for how local debugging works compared to livekd.\n",
+            "votes": "0",
+            "user": "Lewis Kelsey",
+            "time": "Mar 23, 2021 at 8:10",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

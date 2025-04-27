@@ -1,0 +1,31 @@
+{
+    "title": "XMM register instructions and their c equivalents",
+    "link": "https://reverseengineering.stackexchange.com/questions/19275/xmm-register-instructions-and-their-c-equivalents",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to convert some x86 assembly back into C++, and I cannot figure out how this set of instructions was originally written.\n </p>\n <pre><code>movd xmm0,eax ; byte read from device '0x04'\ncvtdq2pd xmm0,xmm0 ; convert packed to double?\nshr eax,0x1F ; highest bit\naddsd xmm0,qword ptr ds:[eax*8+0x4F6CC0] ; global [0, 4294967296] if I read it right\ncvtpd2ps xmm0,xmm0 ; double to packed?\nmovss dword ptr ds:[ebx+0x34],xmm0 ; store the result\n</code></pre>\n <p>\n  I've tried various forms of casting\n  <code>\n   float\n  </code>\n  and\n  <code>\n   double\n  </code>\n  to other data types on\n  <a href=\"https://godbolt.org/\" rel=\"nofollow noreferrer\">\n   Compiler Explorer\n  </a>\n  but I cannot find anything that reproduces the\n  <code>\n   cvtdq2pd\n  </code>\n  and\n  <code>\n   cvtpd2ps\n  </code>\n  instructions.\n </p>\n <p>\n  What would the above code look like in c/c++ and what is the resulting data type?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "x86",
+        "float"
+    ],
+    "user": "Twifty",
+    "time": "Sep 6, 2018 at 22:18",
+    "comments": [
+        {
+            "user": "Rup",
+            "text": "<html><body><span class=\"comment-copy\">\n I'd guess the first four lines are loading an unsigned 32-bit value into a double: if cvtdq2pd treats the input as signed then you'd need to add 1<<32 to correct the output if the top bit of the input is set.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You likely won't get an exact reproduction because\n  <code>\n   cvtdq2pd\n  </code>\n  takes the lower 64 bits of the second operand but since we're limited to 32 bits because we're using\n  <code>\n   eax\n  </code>\n  here, there are probably better(?) instructions to use.\n </p>\n <p>\n  <code>\n   cvtsi2sd xmm0, eax\n  </code>\n </p>\n <p>\n  will do the same thing as\n </p>\n <p>\n  <code>\n   movd xmm0,eax\n  </code>\n </p>\n <p>\n  <code>\n   cvtdq2pd xmm0,xmm0\n  </code>\n </p>\n <p>\n  See here\n  <a href=\"https://www.felixcloutier.com/x86/CVTDQ2PD.html\" rel=\"noreferrer\">\n   https://www.felixcloutier.com/x86/CVTDQ2PD.html\n  </a>\n  &\n  <a href=\"https://www.felixcloutier.com/x86/CVTSI2SD.html\" rel=\"noreferrer\">\n   https://www.felixcloutier.com/x86/CVTSI2SD.html\n  </a>\n </p>\n <p>\n  So really what it's doing is converting a 32 bit\n  <strong>\n   signed\n  </strong>\n  integer value into a double precision floating point.\n </p>\n <hr/>\n <p>\n  Onto your actual question:\n </p>\n <p>\n  <code>\n   cvtpd2ps xmm0,xmm0 ; double to packed?\n  </code>\n </p>\n <blockquote>\n  <p>\n   CVTPD2PS xmm1, xmm2/m128\n  </p>\n  <p>\n   Convert two packed double-precision floating-point values in xmm2/mem to two single-precision floating-point values in xmm1.\n  </p>\n </blockquote>\n <p>\n  This will pack the two double precision floats at\n  <code>\n   xmm0[0:63]\n  </code>\n  &\n  <code>\n   xmm0[64:127]\n  </code>\n  into the lower 64 bits of\n  <code>\n   xmm0\n  </code>\n  , converting them from double to single precision floating point values (\n  <code>\n   xmm0[0:31]\n  </code>\n  &\n  <code>\n   xmm0[32:63]\n  </code>\n  ).\n </p>\n <p>\n  Ref:\n  <a href=\"https://www.felixcloutier.com/x86/CVTPD2PS.html\" rel=\"noreferrer\">\n   https://www.felixcloutier.com/x86/CVTPD2PS.html\n  </a>\n </p>\n <p>\n  So if the lower 64 bits of\n  <code>\n   xmm0\n  </code>\n  represented a\n  <code>\n   double\n  </code>\n  , it's now been converted to a 32 bit float, which now sits in the lower 32 bits of\n  <code>\n   xmm0\n  </code>\n  .\n </p>\n <p>\n  <code>\n   movss dword ptr ds:[ebx+0x34],xmm0\n  </code>\n </p>\n <blockquote>\n  <p>\n   MOVSS xmm2/m32, xmm1\n  </p>\n  <p>\n   Move scalar single-precision floating-point value from xmm1 register to xmm2/m32.\n  </p>\n </blockquote>\n <p>\n  Now stores the 4 byte result from\n  <code>\n   xmm0[0:31]\n  </code>\n  into\n  <code>\n   [ebx+0x34]\n  </code>\n  , which we know is a single precision\n  <code>\n   float\n  </code>\n  from the result of the\n  <code>\n   cvtpd2ps\n  </code>\n  operation.\n </p>\n <p>\n  So the result of this operation is a 32 bit\n  <code>\n   float\n  </code>\n  .\n </p>\n <p>\n  Ref:\n  <a href=\"https://www.felixcloutier.com/x86/MOVSS.html\" rel=\"noreferrer\">\n   https://www.felixcloutier.com/x86/MOVSS.html\n  </a>\n </p>\n <hr/>\n <p>\n  This code here should be a reasonable approximation.\n  <a href=\"https://gcc.godbolt.org/z/0mi2_9\" rel=\"noreferrer\">\n   In Godbolt\n  </a>\n  it gives me similar assembly to what you have.\n </p>\n <pre><code>double* d_arr = (double*)0x4F6CC0;\n\nint main() {\n\n    int in = 4;\n    int signbit = ((unsigned int)in >> 31);\n    float result = *(double*)(d_arr + signbit) + in;\n    return 0;\n}\n</code></pre>\n <hr/>\n <p>\n  Conclusion:\n </p>\n <p>\n  <code>\n   cvtdq2pd\n  </code>\n  &\n  <code>\n   cvtpd2ps\n  </code>\n  are too powerful for what's actually being calculated here. Unless I'm reading this totally wrong, the upper 64 bits of\n  <code>\n   xmm0\n  </code>\n  are never relevant to the result.\n </p>\n <p>\n  Disclaimer:\n </p>\n <p>\n  I've never used floating point assembly before. I just looked up the docs now. I could be missing something.\n </p>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

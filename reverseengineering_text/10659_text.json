@@ -1,0 +1,41 @@
+{
+    "title": "Offset calculation for branch instruction in ARM",
+    "link": "https://reverseengineering.stackexchange.com/questions/10659/how-to-modify-arm-so",
+    "content": "As the title says, how to calculate offsets for branch instructions?\nFor example i have following assembly code,\n<pre><code>0x60ECE    B loc_60EE6\n;\n;\n;\n0x60EE6    LDR.W R2, #0x123\n</code></pre>\nHex code for location <pre><code>0x60ECE</code></pre> is <pre><code>0A E0</code></pre>. i want to know how it is calculated. According to https://stackoverflow.com/questions/6744661/understanding-arm-assembler-branch-offset-calculation , offset should be <pre><code>04</code></pre> instead of <pre><code>0A</code></pre>.\nI'm working on android binary.\n",
+    "votes": "6",
+    "answers": 2,
+    "views": "11k",
+    "tags": [
+        "ida",
+        "android",
+        "arm",
+        "offset"
+    ],
+    "user": "kandi",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The instruction format is in little-endian, so bytes <pre><code>0A E0</code></pre> gets parsed as machine code <pre><code>0xE00A</code></pre>, or <pre><code>1110000000001010b</code></pre> in binary.\nAccording to the documentation for the THUMB Instruction Set, the first 5 bits (<pre><code>11100b</code></pre>) decode to an unconditional branch opcode, and the last 11 bits (<pre><code>00000001010b</code></pre>) decode to Offset11:\n\nAs per the documentation above, the destination address is calculated as \"PC relative +/- Offset11 << 1\" plus 4 for the prefetch operation.\nIf we do the math, we see that everything works out:\n<pre><code>   0x60ECE + (00000001010b << 1) + 0x4\n== 0x60ECE +       10100b        + 0x4\n== 0x60ECE +        0x14         + 0x4\n== 0x60EE6\n</code></pre>\n",
+            "votes": "5",
+            "user": "Jason Geffner",
+            "time": "Jun 8, 2015 at 13:52",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "You're missing the fact that you're working in THUMB mode, where you have two bytes per instruction (for most instructions at least), and that link describes ARM mode, where every instruction has 4 bytes.\n(How do i know you're in THUMB mode? Apart from your last question, your <pre><code>0x60ECE B loc_60EE6</code></pre> isn't 4-byte aligned, so it must be THUMB).\nIf you add 4 bytes to the instruction at <pre><code>loc_60ECE</code></pre>, you get <pre><code>0x60ED2</code></pre>. Subtract this from <pre><code>60EE6</code></pre> to get <pre><code>14</code></pre>, or 20 decimal. Divide by 2 (2 byte instructions in THUMB mode) to get <pre><code>10</code></pre> decimal, or <pre><code>0A</code></pre> hex.\nAs calculating offsets can be hard and is error-prone, i let the gnu arm assembler handle it for me.  First write an assembly file, like this (named q.s, choose any name you want):\n<pre><code>.thumb\n.arch armv7a\n.syntax unified\n.org 0x60ECE\n    B codecave\noriginal:\n.org 0x60EE6\ncodecave:\nmovw R2, #0x123\nB original\n</code></pre>\nthen assemble it and check the result:\n<pre><code>arm-linux-gnueabi-as q.s\narm-linux-gnueabi-objdump -s a.out | grep -v \"00000000 00000000 00000000 00000000\"\n\nContents of section .text:\n 60ec0 00000000 00000000 00000000 00000ae0  ................\n 60ee0 00000000 000040f2 2312f1e7           ......@.#...    \n</code></pre>\nYou see your <pre><code>0ae0</code></pre> at <pre><code>60ece</code></pre>, and <pre><code>40f22312f1e7</code></pre> at <pre><code>60ee6</code></pre>. You can patch this in IDA directly, or use the idapatcher plugin to copy/paste the hex. I found this to be much easier than crafting the patched bytes manually.\n",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Jun 8, 2015 at 13:56",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user2578525",
+                    "text": "<span class=\"comment-copy\">Thank you sir for pointing out this trick. It made everything a lot easier for me. Finally i was able to create codecave.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

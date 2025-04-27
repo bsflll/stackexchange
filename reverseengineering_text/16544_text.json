@@ -1,0 +1,31 @@
+{
+    "title": "Detecting hardware breakpoints",
+    "link": "https://reverseengineering.stackexchange.com/questions/16544/detecting-hardware-breakpoints",
+    "content": "Since software breakpoints, unlike hardware breakpoints , do change the code, it's relatively easy to write a program that performs a checksum on itself as an anti-debugger technique. Is it possible to do something similar with hardware breakpoints?\n",
+    "votes": "8",
+    "answers": 1,
+    "views": "7k",
+    "tags": [
+        "anti-debugging",
+        "breakpoint"
+    ],
+    "user": "Trey",
+    "time": "Oct 14, 2017 at 2:31",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "yes you can get the context and check /modify/  nullify the debug registers dr7 dr6 etc\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This is a really good question since this topic isn't as popular as anti-debugging techniques to detect software breakpoints. Since you didn't mention the architecture we have to keep in mind that Hardware Breakpoints, as its name hints, are depends on the hardware you're running on and thus the implementation of such breakpoints is differ between each architecture. Since we can't cover in this answer all the architectures, I'll write here in an assumption that we're talking about Intel's x86 architecture on Windows.  \nIn short, the answer is yes. There are basically two common ways to detect hardware breakpoints:\n\nUsing thread's context to access Debug Registers\nCrafting a SEH (Structured Exception Handling), then to cause an exception and access the debug registers  \n\nIn order to understand each method we should understand first what Hardware Breakpoint is and (in short) how it works.  \nHardware Breakpoint\nIn x86 architecture the debugger uses a set of Debug Registers in order to apply hardware breakpoints. There are 8 debug registers exists to control the debugging procedure, ranging from DR0 to DR7. These registers are not accessible from ring3 privileges but only accessible from CPL0 (Current Privilege Levels, ring0). Thus, an attempt to read or write the debug registers when executing at any other privilege level causes a general protection fault. The debug registers allow the debugger to interrupt program execution and transfer the control to it when accessing memory to read or write. \nx86 Debug Registers\n\nDR0 - Linear breakpoint address 0\nDR1 - Linear breakpoint address 1\nDR2 - Linear breakpoint address 2\nDR3 - Linear breakpoint address 3\nDR4 - Reserved. Not defined by Intel\nDR5 - Reserved. Not defined by Intel\nDR6 - Breakpoint Status\nDR7 - Breakpoint control\n\nDR0-DR3 store a linear address of a breakpoint. The stored address can be the same as the physical address or it needs to be translated to the physical address. DR6 indicates which breakpoint is activated. DR7 defines the breakpoint activation mode by the access modes: read, write, or execute.\nDetecting Hardware Breakpoints\nMethod one - ThreadContext Win API \nThe following example is based on an example from this article from CodeProject. The example is commented to describe each piece of code:\n<pre><code>bool IsHWBreakpointExists()\n{\n    // This structure is key to the function and is the \n    CONTEXT ctx;\n    ZeroMemory(&ctx, sizeof(CONTEXT));\n\n    // The CONTEXT structure is an in/out parameter therefore we have\n    // to set the flags so Get/SetThreadContext knows what to set or get.   \n    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;\n\n    // Get a handle to our thread\n    HANDLE hThread = GetCurrentThread();\n    // Get the registers\n    if(GetThreadContext(hThread, &ctx) == 0)\n        return false;   \n\n    if ((ctx.Dr0) || (ctx.Dr1) || (ctx.Dr2) || (ctx.Dr3)) {\n        return true;\n    }\n    else {\n        return false;\n    }\n} \n</code></pre>\nMethod 2 - SEH\nThe SEH method of manipulating the debug registers is much more common and is easier to implement it in Assembly, as shown in the following example, again from CodeProject:\n<pre><code>ClrHwBpHandler proto\n .safeseh ClrHwBpHandler\n\nClearHardwareBreakpoints proc\n     assume fs:nothing\n     push offset ClrHwBpHandler\n    push fs:[0]\n    mov dword ptr fs:[0], esp ; Setup SEH\n     xor eax, eax\n     div eax ; Cause an exception\n     pop dword ptr fs:[0] ; Execution continues here\n     add esp, 4\n     ret\nClearHardwareBreakpoints endp\n\nClrHwBpHandler proc \n     xor eax, eax\n    mov ecx, [esp + 0ch] ; This is a CONTEXT structure on the stack\n     mov dword ptr [ecx + 04h], eax ; Dr0\n     mov dword ptr [ecx + 08h], eax ; Dr1\n     mov dword ptr [ecx + 0ch], eax ; Dr2\n     mov dword ptr [ecx + 10h], eax ; Dr3\n     mov dword ptr [ecx + 14h], eax ; Dr6\n     mov dword ptr [ecx + 18h], eax ; Dr7\n     add dword ptr [ecx + 0b8h], 2 ; We add 2 to EIP to skip the div eax\n     ret\nClrHwBpHandler endp\n</code></pre>\nReferences:\n\nIntel® 64 and IA-32 Architectures Software Developer Manual: Vol 3\nIdentifying Malicious Code Through Reverse Engineering \nAn Anti-Reverse Engineering Guide\nAnti Debugging Protection Techniques\n",
+            "votes": "10",
+            "user": "Megabeets",
+            "time": "Oct 14, 2017 at 18:55",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

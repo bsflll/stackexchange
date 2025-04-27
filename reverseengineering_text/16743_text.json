@@ -1,0 +1,67 @@
+{
+    "title": "TP-Link encrypted backup file TX-VG1530",
+    "link": "https://reverseengineering.stackexchange.com/questions/16743/tp-link-encrypted-backup-file-tx-vg1530",
+    "content": "I have been trying to wrap my head round this stuff so bear with me.\nI have a Tp-Link TX-VG1530. From the gui you can download the config file however the file is encrypted, I include a portion of the conf.bin file below\n<pre><code>q=4‡|&YFË#Tùð¶¿Ä/1Þl^àh[Ú‹³lÙ€ÍÁ.©-&ÚdŠDT•°ôy®jò3R7B®5#B5m¨)½=Q›Î\\ò\u0010ï-ÏÇëÄ+®‡h•Y‡Í@Ý úò%×ýÛâçó›\u000bÐ0&rŸØë÷vj[ñÛx¹Úm‡z†äí}Ös•qêQRsÆðèÍŽ’|Û˜’\u0010²³€¬#ìŸ\u000f4œä³½nÛÿl„¯\u0013~‚,•RÁgÏ;öÏËÀw‡§„,W‰×Jî <§x}ôžZñˆgFPdB§êÁ×gˆÑ=‰»uËžÏHžâKE¢¾.â˜\u000e/×3 Åæç±WÔ\u000f™ŒiõÁÕƒS\\%*\nÕ^çý­<w±ø”ð’´<ØmÎF1ˆÀqû§‘¥ðÛAÈÎ-ÿ1z”­9]ã7”…b\u0010«Yå[ö„*i'{ü'NŒÀç‘4ÑáÐm¹ü´B·\fU^wª½IÙ‚8û]\f³#)Lû-Diž\n</code></pre>\nUsing firmware modification kit I am able to  extract the file system and looking at the upload page for the conf file (/web/main/backNRestore.htm) I can see the following\n<pre><code>formObj.target = \"up_frame\";\nformObj.action = \"/cgi/confup\";\nformObj.submit();\n</code></pre>\nDoing a quick grep I can see that /cgi/confup appears in /usr/bin/httpd. looking at this with IDA pro\n\nFrom the following post I believe I should be able to retrieve the encryption method but I cannot seem to see anything relating to keys etc\nhttp://teknoraver.net Decrypting TP-Link conf file\nI include a link to the file here\nhttpd file link\nUsing the strings command on the file I see nothing that relates to <pre><code>aes</code></pre>, <pre><code>des</code></pre>, <pre><code>md5</code></pre>, <pre><code>key</code></pre>, <pre><code>dec</code></pre>, <pre><code>enc</code></pre> etc.\nThere are some tools such as tlrecode.sh which appear to decode the file slightly (this script seems to utilise the same key found in the teknoraver post), the decrypted file is not 100% though\n<pre><code>×<?xml version=\"1.0\"?>\n<DslCpeConfig>\n  <InternetGatewayDevice\n  <\fSumma¯ry val=\".:1.1[](Baseli`ne:1, EthVLA`N:1)\"\n</code></pre>\nCan anyone suggest the next steps to take\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "linux",
+        "encryption",
+        "embedded"
+    ],
+    "user": "The Humble Rat",
+    "time": "Nov 9, 2017 at 12:10",
+    "comments": [
+        {
+            "user": "cimarron",
+            "text": "/cgi/confup seems to be registered to the function at 0x015744 which appears to parse the POST data for the file and then calls rdp_updateFirmware (imported function) and then reboots. I would look for the library where rdp_updateFirmware is defined.\n",
+            "time": null
+        },
+        {
+            "user": "The Humble Rat",
+            "text": "@cimarron many thanks for the tip. I will dig a bit deeper using this info.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "It seems they also added compression there.\nThis utility seems to decode it: https://www.nirsoft.net/utils/router_password_recovery.html\nAlso, I'd just written my own decoder and encoder for it:\nhttps://encode.su/threads/3005-TP-LINK-router-config-compression\n\nDecrypting:\nopenssl enc -d -des-ecb -K 478DA50BF9E3D2CF -nopad -in conf.bin -out conf.lztp\n\n\nUnpacking:\n<pre><code>struct lztp_t {\n  byte  hash[16];\n  uint  size;\n};\n\nuint bitbuf, bitnum;\n\nuint getbit( void ) {\n  uint r;\n  if( bitnum==0 ) {\n    bitbuf = byte(get());\n    bitbuf|= 256*byte(get());\n    bitnum =16;\n  }\n  r = (bitbuf>>15)&1; bitbuf<<=1; bitnum--;\n  return r;\n}\n\nuint getvar( void ) {\n  uint r = 1; do r = 2*r + getbit(); while( getbit() );\n  return r;\n}\n\nint decode( void ) {\n  uint c,i, winptr, id, l,d;\n\n  enum{ winlog=16, winsize=1<<winlog, winmask=winsize-1 };\n  byte win[winsize];\n\n  lztp_t hdr;\n  for( i=0; i<sizeof(hdr); i++ ) if( (c=get())==-1 ) break; else ((byte*)&hdr)[i]=c;\n  if( c==-1 ) return -1;\n\n  winptr=0; bitbuf=0; bitnum=1;\n  while( winptr<hdr.size ) {\n    id = getbit();\n    if( id==0 ) {\n      // literal\n      c = byte(get());\n      put( win[(winptr++)&winmask]=c );\n    } else {\n      // match\n      l = getvar()-2+4;\n      d = (getvar()-2)*256;\n      d+= byte(get()) + 1;\n      while( l-- ) {\n        c = win[(winptr-d)&winmask];\n        put( win[(winptr++)&winmask]=c );\n      }\n    } // if id\n  } // while\n\n  return 0;\n}\n</code></pre>\nCompression algorithm is similar to LZSS - has interleaved streams of\nbits and bytes, rather than a single bit stream like eg. deflate.\nBut unlike LZSS, also uses bit stream/bitcode for length and distance\nvalues.\n",
+            "votes": "4",
+            "user": "Shelwien",
+            "time": "Aug 6, 2019 at 19:33",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Hi and welcome to RE.SE. Could you please include relevant algorithm for decryption, if possible (for your own tool!). Basically, if that linked hoster goes down or the forum closes down, your answer will be worthless. Thanks!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Shelwien",
+                    "text": "<span class=\"comment-copy\">Sure, didn't think of it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "The Humble Rat",
+                    "text": "<span class=\"comment-copy\">@Shelwien great work, I have checked the tool myself and it works a treat. If you notice it has the serial in the config file which explains why when I upload the file to another device it changes the serial number of that device. I played around with tr69 with this unit but as the serial changes to the one in the config file I ended up with 10 devices all reporting under the same serial rendering it useless, good old TP-Link.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Adapted code Shelwien for linux/gcc\n<pre><code>#define uint int\n#define byte char\n#define put(c) putchar(c)\n#define get() getchar()\n#include <stdio.h>\n\n\nstruct lztp_t {\n  byte  hash[16];\n  uint  size;\n};\n\nuint bitbuf, bitnum;\n\nuint getbit( void ) {\n  uint r;\n  if( bitnum==0 ) {\n    bitbuf = get();\n    bitbuf|= 256*get();\n    bitnum =16;\n  }\n  r = (bitbuf>>15)&1; bitbuf<<=1; bitnum--;\n  return r;\n}\n\nuint getvar( void ) {\n  uint r = 1; do r = 2*r + getbit(); while( getbit() );\n  return r;\n}\n\nint main( void ) {\n  uint c,i, winptr, id, l,d;\n\n  enum{ winlog=16, winsize=1<<winlog, winmask=winsize-1 };\n  byte win[winsize];\n\n  struct lztp_t hdr;\n  for( i=0; i<sizeof(hdr); i++ ) if( (c=get())==-1 ) break; else ((byte*)&hdr)[i]=c;\n  if( c==-1 ) return -1;\n\n  winptr=0; bitbuf=0; bitnum=1;\n  while( winptr<hdr.size ) {\n    id = getbit();\n    if( id==0 ) {\n      // literal\n      c = get();\n      put( win[(winptr++)&winmask]=c );\n    } else {\n      // match\n      l = getvar()-2+4;\n      d = (getvar()-2)*256;\n      d+= get() + 1;\n      while( l-- ) {\n        c = win[(winptr-d)&winmask];\n        put( win[(winptr++)&winmask]=c );\n      }\n    } // if id\n  } // while\n\n  return 0;\n}\n</code></pre>\n",
+            "votes": "0",
+            "user": "rser1911",
+            "time": "Aug 27, 2019 at 8:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "The Humble Rat",
+                    "text": "<span class=\"comment-copy\">Can you give an example of how to use this. I would also like to reencrypt after.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

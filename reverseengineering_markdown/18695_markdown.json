@@ -1,0 +1,63 @@
+{
+  "title": "Is IDA pulling my leg - or can REX.W sometimes not be determined in static analysis?",
+  "link": "https://reverseengineering.stackexchange.com/questions/18695/is-ida-pulling-my-leg-or-can-rex-w-sometimes-not-be-determined-in-static-analy",
+  "content": "NB: I normally dabble with disassembly (i.e. mnemonics) and only ever look at the raw opcodes when I can't avoid it.\n\nI have the following line of disassembly of a Windows x64 kernel mode driver, created by IDA Pro 7.1.180227:\n\n```\nxor     edx, edx\n\n```\nNow I know for a fact that this is in preparation of passing the second parameter to a function via rdx. I also know that the intention of that code is to set said pointer argument to NULL.\n\nThe opcode is 33 D2. And cross-referencing that with the reference or looking at it in ODA yields the same as with IDA: xor edx, edx.\n\nNow what itches me wrong with this disassembly is that rdx, as a superset of edx, is used elsewhere on that exact code path to store other pointers. So in theory the upper double-word of rdx could be \"dirty\".\n\nAnd going by the fact that this is x64 code, I'd expect this to read xor rdx, rdx. Why is that not how it's presented in the disassembly?\n\nNow I understand that, as per section 3.6.1 (Table 3-4) of the Intel SDM (05/2018) the REX.W Prefix of the opcode can affect the operand size.\n\nFor this opcode neither the operand-size (66h) nor the address-size (67h) prefix are present.\n\nSo going by the Intel SDM (section \"XOR—Logical Exclusive OR\") I should indeed be dealing with opcode 33 /r or instruction XOR r32, r/m32, confirming IDAs translation of the opcode. Referring to section 2.1.5 (\"Addressing-Mode Encoding of ModR/M and SIB Bytes\") of the Intel SDM gives us a clue as to how the operand (D2) is encoded and so gives us, from Table 2-2 (\"32-Bit Addressing Forms with the ModR/M Byte\"): EDX/DX/DL/MM2/XMM2 as operand.\n\nFigures.\n\nHowever, that would mean that the \"dirty\" upper double-word in rdx would not be zeroed out and thus a garbled/truncated pointer would end up being passed. Given this is kernel mode code, the consequences should be clear.\n\nI just can't believe that the compiler would make such mistake. So what am I missing?\n\n",
+  "votes": "5",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "ida",
+    "x86-64",
+    "assembly"
+  ],
+  "user": "0xC0000022L",
+  "time": "Jul 5, 2018 at 14:16",
+  "comments": [
+    {
+      "user": "NirIzr",
+      "text": "Could you include some related code? say, code using E/RDX, additional code manipulating it prior to XOR instruction, etc. I've recently encountered a similar issue where after some more thorough investigation the upper half of RDX was indeed always zero, making this an unexploitable bug by the developer.",
+      "time": null
+    },
+    {
+      "user": "Peter Cordes",
+      "text": "duplicate of stackoverflow Why do x86-64 instructions on 32-bit registers zero the upper part of the full 64-bit register?, and see also What is the best way to set a register to zero in x86 assembly: xor, mov or and? which explains that 32-bit operand-size is always best (e.g. xor r10d, r10d is not shorter than xor r10,r10, but Silvermont only recognizes 32-bit operand size as a zeroing idiom!)",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "In x86-64, any operation that affects only the lower 32 bits of a register automatically zeros out the upper 32 bits.\n\nThe relevant part in the Intel Architecture manual is in Volume 1, 3.4.1.1, which states:\n\nThus both forms give the same result, and xor edx, edx is one byte shorter than xor rdx, rdx, so the compiler prefers it.\n\n",
+      "votes": "15",
+      "user": "jakobbotsch",
+      "time": "Jul 5, 2018 at 14:31",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "jakobbotsch",
+          "text": "By the way, this also gives other intricacies. For example the NOP instruction is normally 0x90, which is actually xchg eax, eax. But in 64-bit mode this is not a NOP, because it zeros the upper 32 bits. So xchg eax, eax has different encodings in 64-bit and 32-bit mode.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "I read about that somewhere, but I did not make the connection.",
+          "time": null
+        },
+        {
+          "user": "jakobbotsch",
+          "text": "@IgorSkochinsky Yes, that's what I meant. They had to find a new encoding for xchg eax, eax since that wouldn't be a NOP on x64.",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "@Joshua: Right, I think what Jakob meant to say is that assemblers can't use the 0x90 short form for xchg eax,eax in the asm source, and have to use the xchg r, r/m32 form with a ModRM byte (felixcloutier.com/x86/XCHG.html).  But fun fact, 16 and 64-bit operand sizes can still use 0x90 with a 66 or REX.W prefix.  NASM does assemble xchg ax,ax to 66 90 in 64-bit mode.",
+          "time": null
+        },
+        {
+          "user": "jakobbotsch",
+          "text": "@PeterCordes Exactly. I phrased that badly, but we got there in the end!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

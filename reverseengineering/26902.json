@@ -1,0 +1,42 @@
+{
+    "title": "How to test and debug x86 Assembly exceptions in NASM?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26902/how-to-test-and-debug-x86-assembly-exceptions-in-nasm",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have seen all the exception \"IDs\" in the Intel Manuals, and just came across <a href=\"https://www.sandpile.org/x86/except.htm\" rel=\"nofollow noreferrer\">sandpile's exception guide</a>, which actually shows some hexcodes. For example, \"divide by zero error\":</p>\n<pre><code>00h         #DE\n</code></pre>\n<p>Questions:</p>\n<ol>\n<li>What are these IDs for, just for use in the manuals for easy reference?</li>\n<li>Where do these hexcodes (or machine codes) pop up in running code?</li>\n<li>How do you test for these in your code?</li>\n<li>How do you handle them generally?</li>\n</ol>\n<p>What would be an example to demonstrate their usage, essentially, like this divide by zero error? I am looking for something I could run with NASM, and a general approach to how to debug it if possible.</p>\n<p>From my reading of the table, there are two \"type types\": <code>rIP</code> and <code>B/C</code>. A <code>B</code> is a \"benign\" error, meaning it can't cause a \"double fault\", an error in an error handler. A <code>C</code> is a \"contributory\" error, which can cause a double fault (error in an error handler). There are 3 types of <code>rIP</code> (what does that stand for?): trap, fault, and abort. Divide by zero is a <code>fault</code> <code>rIP</code> type, so how do you generate this error, and how do you handle it, in some example x86 assembly code?</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "443",
+    "tags": [
+        "assembly",
+        "debugging",
+        "x86",
+        "exception",
+        "machine-code"
+    ],
+    "user": "Lance Pollard",
+    "time": "Jan 30, 2021 at 1:41",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Those are vectors for interrupt like int1....intn</p>\n<p>here is sample c code  that generates and a handles\nint0 (#DE) ,int1 (#DB) ,int3 (#BP) and int6 (#UD)</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;windows.h&gt;\nunsigned int Exec_Search(unsigned int code) {\n    printf(\"unknown Exception %x\\n\",code);\n    return EXCEPTION_CONTINUE_SEARCH;\n}\nunsigned int  ExceHandler(unsigned int code ){\n    printf(\"caught %x\\n\" , code);\n    return EXCEPTION_EXECUTE_HANDLER;\n}\nint filter(unsigned int code, struct _EXCEPTION_POINTERS *){\n    if( code == EXCEPTION_BREAKPOINT ) { \n        return ExceHandler(code); \n    }else if( code == EXCEPTION_ACCESS_VIOLATION  ) { \n        return ExceHandler(code); \n    }else if( code == EXCEPTION_ILLEGAL_INSTRUCTION  ) { \n        return ExceHandler(code); \n    }else { \n        return Exec_Search(code); \n    }    \n}\nvoid testint0(void){\n    printf(\"Testing int 0\\n\");\n    __try {\n        __asm {\n            int 0\n        }\n    } __except(filter(GetExceptionCode(), GetExceptionInformation())) {\n        printf(\"Handler for #DE %x\\n\",GetExceptionCode() );\n    }\n}\n\nvoid testint1(void){\n    printf(\"Testing int 1\\n\");\n    __try {\n        __asm {\n            int 1\n        }\n    } __except(filter(GetExceptionCode(), GetExceptionInformation())) {\n        printf(\"Handler for #DB %x\\n\",GetExceptionCode() );\n    }\n}\nvoid testint3(void){\n    printf(\"Testing int 3\\n\");\n    __try {\n        __asm {\n            int 3\n        }\n    } __except(filter(GetExceptionCode(), GetExceptionInformation())) {\n        printf(\"Handler for #BP %x\\n\",GetExceptionCode() );\n    }\n}\n\nvoid testint6(void){\n    printf(\"Testing int 6\\n\");\n    __try {\n        __asm {\n            ud2\n        }\n    } __except(filter(GetExceptionCode(), GetExceptionInformation())) {\n        printf(\"Handler for #UD %x\\n\",GetExceptionCode() );\n    }\n}\nint main (void) {    \n    testint1(); \n    testint3();\n    testint0();\n    testint6();    \n    printf(\"normal program continuation\\n\");\n} \n</code></pre>\n<p>compiled and executed</p>\n<pre><code>:\\&gt;cl /Zi /W4 /analyze /Od /EHsc /nologo inthash.cpp /link /release\ninthash.cpp\n\n:\\&gt;inthash.exe\nTesting int 1\ncaught c0000005\nHandler for #DB c0000005\nTesting int 3\ncaught 80000003\nHandler for #BP 80000003\nTesting int 0\ncaught c0000005\nHandler for #DE c0000005\nTesting int 6\ncaught c000001d\nHandler for #UD c000001d\nnormal program continuation\n</code></pre>\n<p>for generating and handling divide_by_zero<br/>\none could add a testcase like this</p>\n<pre><code>void testdiv0(void){\n    printf(\"Testing integer divided by 0\\n\");\n    __try {\n        __asm {\n            mov edx,0 // remainder\n            mov eax,0 // dividend\n            mov ecx,0 // divisor\n            div ecx   // doing 0/0\n        }\n    } __except(filter(GetExceptionCode(), GetExceptionInformation())) {\n        printf(\"Handler for #DE %x\\n\",GetExceptionCode() );\n    }\n}\n</code></pre>\n<p>Add a filter clause like this</p>\n<pre><code>else if( code == EXCEPTION_INT_DIVIDE_BY_ZERO  ) { \n        return ExceHandler(code); \n</code></pre>\n<p>and execute it in main with</p>\n<pre><code>testdiv0();\n</code></pre>\n<p>resulting in</p>\n<pre><code>Testing integer divided by 0\ncaught c0000094\nHandler for #DE c0000094\nnormal program continuation\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jan 30, 2021 at 6:44",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Lance Pollard",
+                    "text": "<span class=\"comment-copy\">How do you do this entirely in assembly?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The CPU exceptions are reported to the OS fault handler which then may either terminate the program or notify it via an OS specific mechanism. On Windows this is Structured Exception Handling (SEH), on Unix-like systems usually signals. Check your OS documentation for more info.</p>\n<p>If you want to learn how to handle the raw exceptions yourself, you basically need to write an OS. <a href=\"https://wiki.osdev.org/Exceptions\" rel=\"nofollow noreferrer\">Osdev</a> wiki may be a start, otherwise see the processor manuals (system programming volume).</p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Jan 30, 2021 at 22:46",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,39 @@
+{
+    "title": "Page Directory Pointer Table in WinDbg",
+    "link": "https://reverseengineering.stackexchange.com/questions/6406/page-directory-pointer-table-in-windbg",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The !pte command in WinDbg gives all the information one may need regarding a virtual address (PDE and PTE location and content), but even on systems with PAE it says nothing about the Page Directory Pointer Table. \nI know that I can get the physical base of the PDPT by looking at CR3, and then use the highest 2 bits of the VA as a index in that table to get to the PDPT Entry, but I'm just curious if there is a command that works like !pte when it comes to PAE as it will be a nice tool to verify my address translations step by step. </p>\n<p>Also, is there a way to determine MAXPHYADDR? I know it is at most 52. </p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "memory",
+        "windbg"
+    ],
+    "user": "user3002428",
+    "time": "Oct 8, 2014 at 16:29",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>for <code>va to phys address translatio</code>n there is a windbg bang command<br/>\n<code>!vtop 0 &lt; VirtualAddress &gt;</code> .</p>\n<p><strong>a sample output from that command  below</strong></p>\n<pre><code>kd&gt; !vtop 0 403000\nX86VtoP: Virt 00403000, pagedir 11800480\nX86VtoP: PAE PDPE 11800480 - 00000000387a9001\nX86VtoP: PAE PDE 387a9010 - 000000001b6b7067\nX86VtoP: PAE PTE 1b6b7018 - 800000001bb2e225\nX86VtoP: PAE Mapped phys 1bb2e000\nVirtual address 403000 translates to physical address 1bb2e000.\n</code></pre>\n<p>below is a windbg script that i wrote <code>(can be buggy havent tested this in a 64 bit machine )</code><br/>\nthis script takes a process name and a virtual address in that process splits it into pd pde pte and offset and retrieves the physical address and prints the contents.</p>\n<p><strong>script contents</strong> </p>\n<pre><code>r $t0 = ${$arg1}\nr $t1 = ${$arg2}\nr $t2 = (( @$t1 &amp; 0xc0000000 ) &gt;&gt; 0n29 )\nr $t3 = (( @$t1 &amp; 0x3fe00000 ) &gt;&gt; 0n21 )\nr $t4 = (( @$t1 &amp; 0x001ff000 ) &gt;&gt; 0n12 )\nr $t5 = (( @$t1 &amp; 0x00000fff ) &gt;&gt; 0n00 )\n.printf \"Page Directory Index      \\t%x\\n\" , @$t2\n.printf \"Page Directory Entry Index\\t%x\\n\" , @$t3\n.printf \"Page Table Entry Index    \\t%x\\n\" , @$t4\n.printf \"Offset                    \\t%x\\n\" , @$t5\n.foreach /pS 1 /ps 100 ( place { !process 0 0 ${$arg1} } ) { r $t6 = place }\n.process /p /r @$t6\ndb @$t1\nr $t7 = @@c++( *(ULONG *)@$proc-&gt;Pcb.DirectoryTableBase )\n.printf \"printing PDINDEX[%08x]\\n\",@$t2\n!dd @$t7 + @$t2 * @@c++(sizeof(INT64)) l1\n.printf \"printing PDEINDEX[%08x]\\n\",@$t3\n.foreach /pS 1 /ps 100 (place {!dd @$t7 + @$t2 * @@c++(sizeof(INT64)) l1 } ) {r $t8 = ( place &amp; 0xfffff000 ) ; !dd ( place &amp; 0xfffff000) l1 }\n.printf \"printing PTEINDEX[%08x]\\n\",@$t4\n.foreach /pS 1 /ps 100 (place {!dd @$t8 + @$t3 * @@c++(sizeof(INT64)) l1 } ) {r $t9 = ( place &amp; 0xfffff000 ) ; !dd ( place &amp; 0xfffff000) l1 }\n.printf \"printing Offset[%08x]\\n\",@$t5\n.foreach /pS 1 /ps 100 (place {!dd @$t9 + @$t4 * @@c++(sizeof(INT64)) l1 } ) {r $t10 = ( place &amp; 0xfffff000 ) ; !db ( place &amp; 0xfffff000) }\n</code></pre>\n<p><strong>output of a sample run</strong></p>\n<pre><code>lkd&gt; $$&gt;a&lt; .\\scripts\\splitva.txt msgbox.exe 403000\nPage Directory Index        0\nPage Directory Entry Index  2\nPage Table Entry Index      3\nOffset                      0\nImplicit process is now 86389020\nLoading User Symbols\n..........\n00403000  49 63 7a 65 6c 69 6f 6e-27 73 20 74 75 74 6f 72  Iczelion's tutor\n00403010  69 61 6c 20 6e 6f 2e 32-00 57 69 6e 33 32 20 41  ial no.2.Win32 A\n00403020  73 73 65 6d 62 6c 79 20-69 73 20 47 72 65 61 74  ssembly is Great\n00403030  21 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  !...............\n00403040  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................\n00403050  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................\n00403060  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................\n00403070  00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00  ................\nprinting PDINDEX[00000000]\n#11800480 387a9001\nprinting PDEINDEX[00000002]\n#387a9000 297b9067\nprinting PTEINDEX[00000003]\n#1b6b7000 3dcb8025\nprinting Offset[00000000]\n#1bb2e000 49 63 7a 65 6c 69 6f 6e-27 73 20 74 75 74 6f 72 Iczelion's tutor\n#1bb2e010 69 61 6c 20 6e 6f 2e 32-00 57 69 6e 33 32 20 41 ial no.2.Win32 A\n#1bb2e020 73 73 65 6d 62 6c 79 20-69 73 20 47 72 65 61 74 ssembly is Great\n#1bb2e030 21 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 !...............\n#1bb2e040 00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 ................\n#1bb2e050 00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 ................\n#1bb2e060 00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 ................\n#1bb2e070 00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 ................\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Oct 9, 2014 at 10:17",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user3002428",
+                    "text": "<span class=\"comment-copy\">Thanks for !vtop and that script. It's a bit weird that !pte displays all the information on x64, but on x86 PAE it ignores the first paging structure and goes directly to the Page Directory.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To answer your other question, maxphyaddr and the AMD counterpart are found via cpuid leaves, but it's important to note that the bus interface to the MCH (which is typically integrated on the cpu these days) probably only uses 33-36 of those lines on the address bus.</p>\n</div>",
+            "votes": "2",
+            "user": "everdox",
+            "time": "Oct 10, 2014 at 15:44",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+  "title": "Help with identifying race condition in wargame",
+  "link": "https://reverseengineering.stackexchange.com/questions/4101/help-with-identifying-race-condition-in-wargame",
+  "content": "I've been trying for the past week to solve a wargame - where I am given a program and need to find the correct input (usually malformed, malicious, or otherwise) to get it to execute code that I want. I've been struggling with the following problem and wanted to see if anyone here has advice or ideas to try.\nThe code is the following\n\n```\nunsigned long long passcode = 0xbadc0dedecadeull, code = 0, v;\nint finished = 0;\n\nvoid* tryAllCodes(void* ptr) {\n    char** codes = (char**) ptr;\n\n    while(*++codes) {\n        printf(\".\");\n        v = strtoull(*codes, 0, 16); // v is stored in ebx:ecx\n        code = (v != passcode)? v : 0;\n    }\n\n    finished = 1;\n}\n\n\nint main(int argc, char** argv) {\n    char *args[] = { \"/bin/sh\", 0};\n    pthread_t t;\n    pthread_create(&t, NULL, tryAllCodes, argv);\n\n    while(!finished)\n        if(code == passcode) { // code is stored in ebx:ecx\n            printf(\"Win!  \n\");\n            execve(*args, args, 0);\n        }\n\n    pthread_join(t, NULL);\n    return 0;\n}\n\n```\nI believe there is a race condition here because there is no mutex around the access to the variable code, and I've gotten it to happen by setting breakpoints in the tryAllCodes function with gdb and letting the main thread continue to run. I believe this was because the registers that v and code are stored in when checking their value are the same, so if the context jumps out of tryAllCodes with v set to passcode before it gets zeroized I enter the win block.\nUnfortunately I need to get this same behavior without using a debugger - so my question is does my approach of exploiting a race condition seem correct, or is there something else I'm overlooking? If so, is there a way on linux to cause a thread to yield execution more often? I tried renice on the tryAllCodes thread but it seems to just cause to program to spin in the main loop.\n\nThanks a bunch\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "370",
+  "tags": [
+    "exploit",
+    "vulnerability-analysis"
+  ],
+  "user": "PieThon",
+  "time": "Apr 18, 2014 at 23:36",
+  "comments": [
+    {
+      "user": "jvoisin",
+      "text": "This is a spoiler of io.",
+      "time": null
+    },
+    {
+      "user": "0xea",
+      "text": "This is a complete \"do my homework\" kind of spoiler. I suggest question be eddited not to be so obvious spoiler. Remove the exact code, and have a specific question.",
+      "time": null
+    },
+    {
+      "user": "Peter Andersson",
+      "text": "@0xea Hmm do you mean the question itself spoils the challenge by mentioning the race condition and details of it or that my answer spoils the challenge by giving a complete solution? If the latter I thought this meta discussion indicated that we won't remove spoilers. I have to say I still feel the same way as I did when I commented on that meta. If the former I'd have to agree that the question might reveal too much about the solution depending on the level description.",
+      "time": null
+    },
+    {
+      "user": "0xea",
+      "text": "The question itself. The question is how do i solve this level? Another part of the challenge is reaching the said level... And this question even leaks the level source. I'd like it edited to contain a concrete question. As far as your answer is concerned, we agreed on meta how to handle that, so that's fine!",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Hmm this code will probably not work if optimized because the shared globals are not pointers nor are they marked as volatile. This means that the compiler is free to assume the globals are accessed from one thread only so most likely the\n\nwhile(!passcode)\n\nwill be optimized to always be true and therefore result in an eternal loop. Really should mark this volatile if they're intended to be shared between threads.\n\nI think you're right about the race condition being what they expect you to exploit here. The key is to realize that the read from code happens in two instructions in the main thread and the write to code happens in two instructions in the spawned thread due to this being a 64 bit variable. So what you want to do is to hit it like this:\n\nIn order to do this you need a very very long argument list with values such that this condition can happen. Possibly generating a few competing processes for processor time to maximize preemption. \n\nThe order of lower and upper bits being correct depend on the specifics of the machine code the threads are running. Which you probably know since I assume you have access to the binary. \n\nThe two load and store instructions are also likely to be positioned extremely close to each other so whether the exact sequence of events is likely to occur will be very dependent on the CPU architecture. It's possible that the instructions are seen as independent and scheduled on two different pipelines due to superscalarity. This of course depends on how the CPU schedules loads and stores..\n\nThe issue seems much easier to exploit on a multicore system due to you not having to depend on super accurate preemption. It might also be harder to exploit on a 64 bit OS running a 32 bit process.\n\nAll of this doesn't really matter because in the end all you can really do is throw a huge number of arguments at it and pray as far as I can see.\n\nAs I was kind of curious under what conditions this was reliably exploitable I had to test some stuff. If you're doing the same, here's the fixed source and the exploit. This should allow you to do some local experimentation. Like I expected it seems to be extremely unlikely to hit a context switch at the right moment so on a single core CPU this is a nightmare. On a multicore CPU both threads are spinning in parallel so it's much more likely to hit the right conditions.\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n#include <pthread.h>\n#include <unistd.h>\n\nvolatile unsigned long long passcode = 0xbadc0dedecadeull;\nvolatile unsigned long long code = 0;\nvolatile unsigned long long v;\nvolatile int finished = 0;\n\nvoid* tryAllCodes(void* ptr) {\n    char** codes = (char**) ptr;\n\n    while(*++codes) {\n        printf(\".\");\n        v = strtoull(*codes, 0, 16); // v is stored in ebx:ecx\n        code = (v != passcode)? v : 0;\n    }\n\n    finished = 1;\n    return 0;\n}\n\nint main(int argc, char** argv) {\n    char *args[] = { \"/bin/sh\", 0};\n    pthread_t t;\n    pthread_create(&t, NULL, tryAllCodes, argv);\n\n    while(!finished)\n        if(code == passcode) { // code is stored in ebx:ecx\n            printf(\"Win!  \n\");\n            execve(*args, args, 0);\n        }\n\n    pthread_join(t, NULL);\n    return 0;\n}\n\n```\n```\ngcc -std=c99 -Wall -Wpedantic -pthread -m32 -O2 -o race race.c\n\n```\n```\n./race `perl -e \"print 'dedecade badc000000000 'x90870\"`\n\n```\n",
+      "votes": "3",
+      "user": "Peter Andersson",
+      "time": "Apr 19, 2014 at 16:07",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "PieThon",
+          "text": "Thanks a lot for the info - I was also trying to get the program to enter the win block with       ./a python -c 'print \"000badc0ffffffff ffffffffdedecade \"*20000'  but wasn't having much luck with it since I ran it a bunch of times with no \"Win\". I'm glad to hear I'm on the right track.  The machine I'm running on is single core, is there anything besides spawning multiple other processes to eat CPU that I can do to cause the program to switch threads more frequently?",
+          "time": null
+        },
+        {
+          "user": "Peter Andersson",
+          "text": "@PieThon It is possible to exploit this on a single core processor. I've done it. It's just a matter of spawning a lot of these \"race\" processes in parallel and hoping that one process preempts the other on the exact right instruction. It's all an odds game. I did it with 500 parallel race processes running in the background. Then I brought the one surviving process with sh back to the foreground.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

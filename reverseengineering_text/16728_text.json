@@ -1,0 +1,72 @@
+{
+    "title": "Returning value from faux DLL",
+    "link": "https://reverseengineering.stackexchange.com/questions/16728/returning-value-from-faux-dll",
+    "content": "A bit of background; I'm trying to inject my own code into the old game SimTower with the ultimate goal of reverse engineering it in the same way that OpenRCT2 was created.\nSince SimTower is distributed as a 16-bit NE executable I'm having a bit of trouble with injecting my own DLL and changing the main method to my own (as in this article https://bwrsandman.wordpress.com/2014/12/27/first-steps-to-reverse-engineering-an-executable/), but I think I've found another way.\nOne of the first things that SimTower does is to run <pre><code>WAVEMIXINIT</code></pre> from <pre><code>WAVMIX16.DLL</code></pre>. As far as I can tell, if the return value is <pre><code>0</code></pre> it shows a dialog box and disables the sound.\n\nMy plan now is to simply create a faux wavmix16 dll that will (for now) always return 0 from that function. That should allow me to get an entry point to run my own code, and get the game started.\n<pre><code>typedef void *HANDLE;\n\nHANDLE __far __pascal WAVEMIXINIT() {\n  // while (1) {;};\n  return 0;\n}\n\nvoid __far __pascal STUB4() {}\nvoid __far __pascal STUB5() {}\nvoid __far __pascal STUB6() {}\nvoid __far __pascal STUB7() {}\nvoid __far __pascal STUB9() {}\nvoid __far __pascal STUB10() {}\nvoid __far __pascal STUB11() {}\nvoid __far __pascal STUB12() {}\n</code></pre>\nCompiling this into a dll and naming it <pre><code>wavmix16.dll</code></pre> seems to work, and I can see that the call is coming in to my function, since if I uncomment the while loop the program will be stuck inside it.\nFor some reason though, the program crashes as soon as I get to my return statement.\n(wine)\n\nUnhandled page fault on read access to 0x0000fa30 at address 0x148f:0x0000000c (thread 002b)\n\n(Windows XP)\n\nThis is the assembly of my DDL function that gets called. I'm a little bit unsure of why there is more stuff than just a <pre><code>mov</code></pre> and <pre><code>retf</code></pre> (like the <pre><code>nop</code></pre>?), but I'm new to all this so maybe that's normal.\n\nThis is the assembly of the original DLL function:\n\nReally appreciate any help, thank you!\n",
+    "votes": "6",
+    "answers": 1,
+    "views": "313",
+    "tags": [
+        "dll",
+        "calling-conventions"
+    ],
+    "user": "Linus Unnebäck",
+    "time": "Nov 7, 2017 at 7:32",
+    "comments": [
+        {
+            "user": "Nordwald",
+            "text": "Did you check if you are using the correct parameters and calling convention? This seems like a clean-up error.\n",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "As far as I can tell I am. Looking at the header file for the wavemix library I can see that the function is defined as <pre><code>HANDLE WINAPI WaveMixInit(void);</code></pre>. <pre><code>HANDLE</code></pre> is defined as a void pointer which I define in the same way in my code. <pre><code>WINAPI</code></pre>, if I understand this article correct is the same as my <pre><code>__far __pascal</code></pre>... I'll add the decompiled function from the original DLL and see if I can spot any differences...\n",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "To me it seems like my function is pushing 2 values to the stack before returning, and that the original DLL is pushing 6 and popping 4 values (leaving 2 again) before returning, which to me indicates that the calling conventions should be the same...\n",
+            "time": null
+        },
+        {
+            "user": "Nordwald",
+            "text": "WINAPI should resolve to __stdcall (on modern systems). On another node, your function does not restore the orginal bp and sp. Really strange convention\n",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "So, I'm compiling a 16-bit DLL with an ancient compiler since I haven't found any modern system that outputs 16-bit code :) I'm following this guide from DigitalMars and are using their compiler\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Your faux function is not fixing up the stack on the epilog of the function. It should have \n<pre><code>pop ds\npop bp\ndec bp\n</code></pre>\nat the end by the calling convention.\nIf you look at the original function it fixes up the stack correctly. \nLet's say the stack pointer had the value of 1000h coming into the function (after <pre><code>CS:IP</code></pre> is already pushed on the stack for the far call). You would then have in the original function\n<pre><code>; sp = 1000h\nmox ax, ds     \n...\npush bp        ; sp = 0ffeh\nmov bp, sp     ; bp = 0ffeh\n...\nlea sp, [bp-2] ; sp = 0ffch\npop ds         ; sp = 0ffeh\npop bp         ; sp = 1000h\nretf\n</code></pre>\n\nTo make the compiler used in the question, the Digital Mars compiler dmc.exe, generate these instructions when returning from a far function, pass the flag <pre><code>-Wm</code></pre> which will \"Generate INC BP / DEC BP to mark far stack frames\".\n",
+            "votes": "6",
+            "user": "Linus Unnebäck",
+            "time": "Nov 9, 2017 at 0:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">about <code>inc bp</code>/<code>dec bp</code>: <a href=\"https://blogs.msdn.microsoft.com/oldnewthing/20110316-00/?p=11203\" rel=\"nofollow noreferrer\">blogs.msdn.microsoft.com/oldnewthing/20110316-00/?p=11203</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">Thank you! I added <code>xor ax,ax</code>, <code>pop ds</code>, <code>pop bp</code>, <code>dec bp</code>, <code>retf</code> as inline assembly in the function and it solved it!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">That being said, if someone could point me in the right direction to get <a href=\"http://www.digitalmars.com/ctg/win16-dll-programming.html\" rel=\"nofollow noreferrer\">the DigitalMars compiler dmc.exe</a> to output the correct instructions I would be super happy :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">I found it! The flag <code>-Wm</code> will make dmc \"Generate INC BP / DEC BP to mark far stack frames\". Adding this to the answer for completeness. It could potentially be good to add how to do it in other compilers as well :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

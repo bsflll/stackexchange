@@ -1,0 +1,83 @@
+{
+  "title": "How to break on a clipboard operation in cmd.exe with IDA / WinDbg?",
+  "link": "https://reverseengineering.stackexchange.com/questions/12915/how-to-break-on-a-clipboard-operation-in-cmd-exe-with-ida-windbg",
+  "content": "My goal is to see what's going on \"under the hood\" in the Windows command prompt when a user pastes text into it. So I loaded cmd.exe into IDA Pro that is set up in conjunction with the WinDbg debugger.\n\nMy initial guess was to put a breakpoint on OpenClipboard API which must be used to access clipboard, but it seems like cmd.exe doesn't even have a dependency on User32.dll (where OpenClipboard comes from):\n\n\n\nSo am I reading it correctly?\n\nPS. I'm doing this on Windows 10.\n\nEDIT: You know, there's something other than deferred loading. I let the cmd.exe initialize and begin running, after which I suspended it. The loaded modules list still didn't have user32.dll:\n\n\n\nand my deferred breakpoint didn't trigger upon clipboard operation either:\n\n\n\nCould there be some other process that does all the \"command line\" logic?\n\nEDIT 2: Just tried to attach to a running conhost.exe:\n\n\n\nwhile IDA Pro was running as administrator and got this error:\n\n\n\nEDIT 3: Just tried to attach to conhost.exe via just WinDbg itself and got this error. I'm not sure how NTSTATUS 0xC00000BB applies here:\n\n\n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "572",
+  "tags": [
+    "ida",
+    "windows",
+    "debugging",
+    "windbg"
+  ],
+  "user": "c00000fd",
+  "time": "Jul 1, 2016 at 6:07",
+  "comments": [
+    {
+      "user": "Lieven Keersmaekers",
+      "text": "Using depends.exe on cmd.exe in syswow64 shows user32.dll as a delayed loaded module. I assume your screenshot only shows the currently loaded modules thus the discrepency.",
+      "time": null
+    },
+    {
+      "user": "c00000fd",
+      "text": "@LievenKeersmaekers: Sorry for the delay. I updated my original question with additional info. And delayed loading doesn't seem to be the case here.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "looks like you're using x86 windbg to attach to an x64 process :) This is not going to work.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "well if you cant attach with windbg then you have some other problem\nuac / clamped down / policy / whatever // conhost.exe is attachable\n(check if you are attaching to the correct conhost.exe there may be several some of them spawned by system user \n\nscreenshot showing windbg being attached to conhost and broke on OpenClipBoard with Hwnd (HANDLE of consoleWindowClass)\n\n\n\non the paste operation \n\n```\n0:001> kb2\n # ChildEBP RetAddr  Args to Child              \n00 020afc28 00adf554 020afd34 00000111 00000000 conhost!DoPaste+0x3d\n01 020afcb8 773ec4e7 00080260 00000111 0000fff1 conhost!ConsoleWindowProc+0x847\n0:001> ub eip l1\nconhost!DoPaste+0x37:\n00ae2d05 ff155411ad00    call    dword ptr [conhost!_imp__GetClipboardData (00ad1154)]\n0:001> ? @$retreg\nEvaluate expression: 10616892 = 00a2003c\n0:001> du poi(@$retreg)\n00172fa0  \"2580 windbg.exe        Pid 3424 \"\n00172fe0  \"- WinDbg:10.0.10586.567 X86\"\n0:001> g\n\n```\nas to comment yes maybe i dont know\na cursory glance over google says conhost is now a child of cmd in windows 10\nthe conhost enhancements technical preview article by some ms devs don't mention anything about conhost being protected super proteccted or ultra protected process\nand i dont have a win10 handy so i can answer your comment only when i spleunk under winX till then happy hunting\n\nwell it appears i can attach in winX too\n(winx is running in vmware player  (test mode ) ) \nwindbg screen shotted is runnning inside target os \n\n\n\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Jul 1, 2016 at 10:29",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "c00000fd",
+          "text": "Thanks. Yeah, that's the right process. I checked. It was spawned right when cmd.exe was started. I updated my original post with the error message I got in WinDbg. BTW. I'm doing it on Win10. You're using Win7. Could that be the difference?",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "no dont see any logic difference between vii and x  apart from some new dlls / functions //control flow   from console to core APIS",
+          "time": null
+        },
+        {
+          "user": "c00000fd",
+          "text": "OK. I got it solved... somewhat. I was using IDA Pro to start the process and then WinDbg thru it. It turns out that IDA Pro cannot attach to a 64-bit process so it was using a 32-bit version of WinDbg implicitly. Thus I was getting that strange error. I also discovered that I was using an old version of WinDbg. And lastly, even though I was originally starting a 32-bit version of cmd.exe it was implicitly connecting to a 64-bit version of conhost.exe. So eventually I had to ditch IDA and go with bare WinDbg which is somewhat hard to use... but it did the job. So thank you!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "The actual console window is drawn and managed by conhost.exe, not cmd.exe.\n\n\n",
+      "votes": "3",
+      "user": "Igor Skochinsky",
+      "time": "Jun 29, 2016 at 8:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "c00000fd",
+          "text": "Sorry, I'm somewhat new to this. Can you give more details on how you set that breakpoint?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "attach to conhost.exe, pause, switch to asm (Alt-8), enter user32.dll!OpenClipboard in the address field, add breakpoint from asm listing. But VS is not very good debugger when you don't have source, I recommend you to use Windbg or IDA.",
+          "time": null
+        },
+        {
+          "user": "c00000fd",
+          "text": "Thanks. Tried to attach to conhost.exe and got access denied error. I updated my question w/details. Any idea why am I getting that error?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

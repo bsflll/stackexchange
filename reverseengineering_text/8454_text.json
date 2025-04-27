@@ -1,0 +1,38 @@
+{
+    "title": "64-bit integers on 32-bit machines",
+    "link": "https://reverseengineering.stackexchange.com/questions/8454/64-bit-integers-on-32-bit-machines",
+    "content": "Let's say I create a program in C like this and compile it on a regular 64-bit desktop machine:\n<pre><code>#include <stdint.h>\n\nint main(void)\n{\n    uint64_t a = 0x12345679abcdefULL;\n    uint64_t b = 0xfdcba987654321ULL;\n    uint64_t c = a + b;\n    return 0;\n}\n</code></pre>\nI just tested the code using <pre><code>gcc -O0 -S</code></pre>. It seems to allocate two 32-bit values on the stack and add then with <pre><code>addl</code></pre> and <pre><code>adcl</code></pre> separately. This happens for both <pre><code>-m32</code></pre> and <pre><code>-m64</code></pre> switch, even though I am on a 64-bit machine, and there indeed seem to be a dedicated instruction set for 64-bit integers, including operations such as <pre><code>movq</code></pre> and <pre><code>addq</code></pre>.\n\nWhy did <pre><code>gcc</code></pre> produce code like for a 32-bit machine even if I told it to use 64-bit arithmetic with <pre><code>-m64</code></pre>?\n<pre><code>>uname -a\nCYGWIN_NT-6.2-WOW work 1.7.35(0.287/5/3) 2015-03-04 12:07 i686 Cygwin\n\n>gcc --version\ngcc (GCC) 4.9.2\n</code></pre>\n\nNow, let's say I'm on a 32-bit machine and I operate on 64-bit integers.\n\nThe program allocated two 32-bit variables on the stack. Is this part of a C/C++ standard, or is allocating them on the heap to be expected with some compilers (because they try to fit a 64-bit integer into a 32-bit stack in a different way)?\nIf I put <pre><code>movq</code></pre> in a program designed for a 32-bit machine, will the desired behavior be emulated, or will the instruction be misunderstood?\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "11k",
+    "tags": [
+        "x86",
+        "c",
+        "x86-64",
+        "stack-variables"
+    ],
+    "user": "rr-",
+    "time": "Mar 13, 2015 at 14:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "1:\nSee the Immediates section on this 64 bit assembly reference.\n\nImmediate values inside instructions remain 32 bits and their value is sign extended to 64 bits\n\nThere just isn't an instruction to move a 64 bit immediate value to memory (*). And because it can be emulated nicely by moving two chunks of 32 bit, there was no reason to introduce new 64 bit instructions. (They could have changed the immediate <pre><code>mov</code></pre>s to always use 64 bits. But considering that most constants you'll ever use are <= 2^31, using 32 bit only saves a lot of space for the upper zero bytes, and costs a bit when you actually use larger constants, so this saves memory).\n(*) However, there are instructions to move a 64 bit immediate value to the 64 bit registers, because you can't access the high 32 bit in registers, opposed to memory.\nI don't know why your program produced separate addl/adcl instructions; this is what i got from your program:\n<pre><code>    pushq   %rbp\n    movq    %rsp, %rbp\n    movl    $2041302511, -24(%rbp)\n    movl    $1193046, -20(%rbp)\n    movl    $-2023406815, -16(%rbp)\n    movl    $16632745, -12(%rbp)\n    movq    -16(%rbp), %rax\n    movq    -24(%rbp), %rdx\n    leaq    (%rdx,%rax), %rax\n    movq    %rax, -8(%rbp)\n    movl    $0, %eax\n    leave\n    ret\n</code></pre>\nAs you can see, the <pre><code>leaq    (%rdx,%rax), %rax</code></pre> adds 64 bit numbers all right. This was a gcc 4.4.7 on a RHEL 6.6 64 bit system. Please, always state your compiler and OS version, as the output may be quite dependent on those.\n2:\nAs long as you're dealing with an x86/amd64 architecture, you can probably rely on local variables being put on the stack, and global variables not on the stack. But please note the concept of 'stack' and 'heap' aren't as clearly defined as it would seem. The <pre><code>brk/sbrk</code></pre> mechanism of allocating memory is deprecated; modern implementations use <pre><code>mmap</code></pre>. This might mean you have several small heaps in different sections of your address space. On ARM and MIPS, there's no stack pointer at all - there's just a convention that one specific register serves as the stack pointer, but the instructions to push/pop would work with other registers as well(*). In theory, the compiler is free to do a <pre><code>mmap()</code></pre> at the start of each function to allocate local memory, and <pre><code>munmap()</code></pre> it at the end of the function. The only thing the compiler must do is not keep the memory allocated (for reasonable definitions of allocated) after the function exits.\n(*) This is a bit of an oversimplification but demonstrates the concept.\nOf course, the idea of using <pre><code>mmap()</code></pre> to make space for local variables is an extreme example, that probably noone uses. But lots of compilers put local variables into processor registers and never reserve space on the stack for them (if you never use a pointer to them, and on architectures that aren't as register-starved as x86). Many architectures use processor registers for function arguments as well. And i've seen microcontroller C compilers that allow you to put all variables local to a function into a static area, if you use a certain keyword so the compiler knows the function isn't called recursively. So, while most of the time, local variables will be placed on the stack, you shouldn't assume this is carved in stone.\n3.\nThe instruction will be misunderstood. The processor can be in 32 bit or 64 bit mode, and the same instructions (in the meaning of: the same sequence of instruction bytes) have different meanings in each of them. For example, <pre><code>48 89 43 ec</code></pre> is <pre><code>mov [rbx-20],rax</code></pre> in 64 bit mode, but <pre><code>dec eax; mov DWORD PTR [ebx-0x14],eax</code></pre> in 32 bit mode.\n",
+            "votes": "6",
+            "user": "derpasaurus",
+            "time": "Feb 1, 2018 at 9:33",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "rr-",
+                    "text": "<span class=\"comment-copy\">Very well presented answer, thanks! Two further questions arise: regarding 1 - is there anything I can read about how specifically gcc decides which instruction set (64/32 bit) to use? Regarding 2 - using <code>mmap</code> sounds to be <i>much</i> more expensive than moving a stack pointer (standardized or not). Do ARM or MIPS compilers stray from the convention you've mentioned?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Which instruction set gcc uses depends on -m32 or -m64. Which exact instructions within that instruction set are used depends on (at least) compiler version number and optimization; i don't think there's a comprehensive documentation on this except the source code itself. I amended my answer a bit in respect to the local variables conventions.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,50 @@
+{
+    "title": "Question about the limit and base address in x86-64 segmentation model?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18625/question-about-the-limit-and-base-address-in-x86-64-segmentation-model",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to understand how segmentation works under x86-64. From what I see, it's mostly disabled, but not entirely. It looks like GS and FS registers are still using it.\n </p>\n <p>\n  So I was reviewing the structure of the\n  <a href=\"https://en.wikipedia.org/wiki/Segment_descriptor\" rel=\"nofollow noreferrer\">\n   segment descriptor\n  </a>\n  in Windows 7 x64 kernel using WinDbg. Also so that not to crash the OS right away, I decided to play with a segment that doesn't use segmentation. Say SS register:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/3E3z3.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/3E3z3.png\"/>\n  </a>\n </p>\n <p>\n  I then decided to modify it in raw memory and reload it via\n  <code>\n   lgdt\n  </code>\n  instruction. So I changed its lower 16 bits to\n  <code>\n   0x1234\n  </code>\n  , as such (view in memory):\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/3ZGAG.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/3ZGAG.png\"/>\n  </a>\n </p>\n <p>\n  Or so I thought. When I ran the\n  <code>\n   dg\n  </code>\n  command, it showed the limit as\n  <code>\n   01234fff\n  </code>\n  .\n </p>\n <p>\n  So I have two questions:\n </p>\n <ol>\n  <li>\n   <p>\n    Where does that\n    <code>\n     fff\n    </code>\n    come from in the limit reported by WinDbg? (shown in red in the first screenshot.)\n   </p>\n  </li>\n  <li>\n   <p>\n    How can a 32-bit base in the\n    <a href=\"https://en.wikipedia.org/wiki/Segment_descriptor\" rel=\"nofollow noreferrer\">\n     segment descriptor\n    </a>\n    encompass the entire 64-bit flat addressing range?\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "x86",
+        "windbg",
+        "x86-64",
+        "kernel-mode",
+        "segmentation"
+    ],
+    "user": "c00000fd",
+    "time": "Jun 28, 2018 at 20:43",
+    "comments": [
+        {
+            "user": "ahmd0",
+            "text": "<html><body><span class=\"comment-copy\">\n Segment\n <code>\n  18h\n </code>\n has its G (granularity) bit set, see\n <code>\n  Pg\n </code>\n in the\n <code>\n  Gran\n </code>\n column, which means that its segment limit is interpreted in 4-KByte units. 4K=\n <code>\n  1000h\n </code>\n , minus one, gives the last addressable byte, the way segment limits are interpreted. As for the base, I'll let someone else answer it. I think base addresses are not used at all for code and data segments in x86-64.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n this is not really an RE question, stackoverflow may be a better fit for it...\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Q1: In its manual\n  <a href=\"https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf\" rel=\"nofollow noreferrer\">\n   \"Intel® 64 and IA-32 Architectures Software Developer’s Manual Volume 3A: System Programming Guide, Part 1\"\n  </a>\n </p>\n <p>\n  Intel writes in the chapter \"3.5.1 Segment Descriptor Tables\":\n </p>\n <p>\n  \"As with segments, the limit value is added to the base address to get\nthe address of the last valid byte. A limit value of 0 results in exactly one valid byte. Because segment descriptors are always 8 bytes long, the GDT limit should always be one less than an integral multiple of eight (that is, 8N – 1).\"\n </p>\n <p>\n  This could explain why the limit of 01234 is filled with fff, to satisfy that condition.\n </p>\n <p>\n  Q2: Same manual, chapter 3.4.1 \"Logical Address Translation in IA-32e Mode\":\n </p>\n <p>\n  \"In 64-bit mode, the offset and base address of the segment are 64-bits instead of 32 bits. The linear address format is also 64 bits wide and is subject to the canonical form requirement.\nEach code segment descriptor provides an L bit. This bit allows a code segment to execute 64-bit code or legacy 32-bit code by code segment.\"\n </p>\n <p>\n  Although this answers the question in so far as in 64-bit mode there are no 32-bit base addresses in code segments (if I understands their manual correctly), I could nowhere find a picture corresponding to the Fig.3-8 on p.3-10 with 64-bit base addresses instead of 32-bit ones. The L-bit can be retrieved from that picture. It is not decoded in kd, however, in contrast to the other bits. The Flags value of 02xx of the first (Privilege Level 0, highest) and last (Privilege Level 3) code segments indicate the L-bit, and mark these code segments as 64 bit segments.\n </p>\n <p>\n  In the OP's upper screenshot the Base and Limit are indeed 64 bits, if I get this right. However, the mapping to the lower output is not clear to me. My knowledge of kd is limited, however.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/xxZbT.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/xxZbT.jpg\"/>\n  </a>\n </p>\n <p>\n  <strong>\n   Edit\n  </strong>\n </p>\n <p>\n  A limit of 0x1234 was requested. The segment is paged, as indicated by the G (granularity) bit, and decoded by kd. The intel manual is not so very clear, IMO. If one goes into the manual \"AMD64 Architecture Programmer’s Manual Volume 2: System Programming\" , it writes on p.81:\n </p>\n <p>\n  \"Setting the G bit to 1 indicates that the limit field is scaled by 4 Kbytes (4096 bytes)\", also having mentioned in a comment.\n </p>\n <p>\n  This means the limit in bytes translates to 0x01234000. About the 0xfff I\n  <strong>\n   assume\n  </strong>\n  that the system acts in the same way as if entering 0 in the limit field. Quote AMD, p.81: \"Setting the limit of 0 when G=1 [i.e. paging] inidcates a segment limit of 4095 [=0xfff]. In case the system acts in the same way with the request made here this would result in a limit value of 0x01234fff.\n </p>\n <p>\n  Another uncertainty remains, however. The given explanation assumes that WinDbg displays the limit in bytes and not in 4K pages.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "josh",
+            "time": "Jun 29, 2018 at 11:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Multiple of 8 would result in a 3 bit left shift, so if you subtract 1, it will be 7. How is it <code>0FFFh</code> then?</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">Agree. I edited the answer with a more detailed explanation attempt, which would have not fitted in a comment.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

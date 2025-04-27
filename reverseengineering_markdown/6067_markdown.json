@@ -1,0 +1,70 @@
+{
+  "title": "Segments in IDA. How to overcome NONAME problem",
+  "link": "https://reverseengineering.stackexchange.com/questions/6067/segments-in-ida-how-to-overcome-noname-problem",
+  "content": "I'm disassembling a packed 16 bit DOS MZ EXE.\n\nTo deobfuscate it, I've set a breakpoint in DOSbox at the end of the unpacking routine, let it run, and made a memory dump. This way I essentially got the deobfuscated EXE image.\n\nProblems started when I loaded the image in IDA. You see, I don't understand the IDA's concept of segments. They are similar to x86 segments, but there are numerous differences which I can't grasp. When IDA asked me to create at least one segment, I just made a single huge segment 1 MB length, because the code and data in program's address space are mixed and it doesn't make sense to introduce separate segments such as CODE, DATA etc. \n\nAfter showing IDA the entry point, everything worked fine: IDA successfully determined functions, local variables, arguments etc. The only problem is that some calls are marked as NONAME, even though they point at correct subroutines. The strangest thing is that those subroutines have correct XREFs to the 'illegal' calls. Here's an example:\n\n```\nseg000:188FF 004                 call    1AD9h:1         ; Call Procedure\n\n```\nThis line is red and has an associated NONAME problem in Problems List. Why?\n\nThe 1AD9h:1 seg:offset address corresponds to linear address 0x1ad91, which has this:\n\n```\nseg000:1AD91     ; =============== S U B R O U T I N E =======================================\nseg000:1AD91\nseg000:1AD91     ; Attributes: bp-based frame\nseg000:1AD91\nseg000:1AD91     sub_1AD91       proc far                ; CODE XREF: sub_188F2+DP\n\n```\nNote the XREF. So IDA actually processes the call correctly! Why is the call considered invalid? IDA help file says this:\n\nSo, I guess the problem is that I have one gargantuan segment instead of several small ones. But, how do I properly divide the address space into appropriate segments? \n\nI know the register values (including DS, CS, SS, IP, etc) at the entry point. Let's assume I create a CODE segment starting from the segment corresponding to the CS register value at the entry point. But what length should this segment have ?\n\nWhat's the point of segments in IDA at all? If DATA segments can contain instructions, and CODE segments can be read and written as data?\n\nPlease excuse me for such a newbie question, but official IDA manual is notoriously scarce and HexRays forums are closed for me because I use freeware version. \n\n",
+  "votes": "6",
+  "answers": 3,
+  "views": "4k",
+  "tags": [
+    "ida",
+    "disassembly",
+    "segmentation"
+  ],
+  "user": "ScumCoder",
+  "time": "Aug 13, 2014 at 17:45",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "",
+      "votes": "5",
+      "user": "perror",
+      "time": "Aug 13, 2014 at 20:09",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "ScumCoder",
+          "text": "So you are implying that for each far call, IDA should have a segment whose base equals the segment part of the call? But x86 segments can overlap, and IDA segments can not. What if after I create a segment starting at 0x1AD90 I'll stumble upon a far call to segment 1ADAh? Should I shrink the first segment to 16 bytes in order to be able to create a new segment starting at 0x1ADA0? Looks like I'll end up with loads of tiny segments. I doubt that's the intended way to go.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "Real programs rarely use overlapping segments.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I dealt with a ROM image once and faced this problem.  I was confused too about what to do until Igor offered his advice.\n\nWhat seemed to be happening was that the linker was placing every object file into its own segment, so every inter-object function invocation was rendered in the binary as a far call, where the segment base was the base given to all functions within the module.  I.e., the case you mention in your reply to Igor's comment did not materialize for me.\n\nTo fix it, I searched the binary for all far call instructions and then created a new IDA segment (as large as possible) at the linear address of each referenced x86 segment.  I.e., I did indeed end up with lots of tiny segments.  This is not really a problem; really, the problem is that by not doing this, the references won't be disassembled correctly.  It was pretty quick work and probably could be automated with a script.\n\n",
+      "votes": "4",
+      "user": "Rolf Rolles",
+      "time": "Aug 13, 2014 at 19:48",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ScumCoder",
+          "text": "That's right. But there can be a program which calls one and the same function with two different segment values. E.g., the func starts at address 0x12345, and is called from one place as call far 1233h:0015h and from other as call far 1234h:0005h. It may be 'rarely used in real programs', but it is physically possible, and in that case one won't be able to set the func's segment in such way that both calls won't have NONAME problem. It's just strange that such powerful tool as IDA can have problems in such situation, no matter how purely theoretical it is.",
+          "time": null
+        },
+        {
+          "user": "Rolf Rolles",
+          "text": "Yes, it certainly could happen: for obfuscation, or just some assembly coder being clever. Regarding IDA and its limitations, it's my favorite software of all time, along with SoftICE, but many architectural decisions have been made during its long development that can trip you up in your reversing endeavors. Such things used to frustrate and annoy me, until I had a job as a software developer, and now I understand. Hex-Rays makes amazing products considering their limited resources. You can do almost all of what you want, the support is great, and the SDK/IDAPython is good. Make lemonade.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "The problem behind this is that each segment addresses a maximum of 64KB, and, to generate meaningful assembly, IDA needs to know what the segment registers are supposed to be when code is executed.\n\nAssume you have the following code at linear address 0x23456:\n\n```\nmov bx, 6789\ncall [bx]\n\n```\nWhich function does this call? Well, if your CS register has 0x2000, and your IP is 0x3456, then this calls 2000:6789 or (linear) 0x26789. But, just as well, you could have 0x2345 in CS and 0x0006 in IP. In which case 2345:6789 or (0x23450+0x6789=)0x29BD9 gets called.\n\nThere are cases when jump/call targets aren't that ambiguous, for example with absolute far calls, like your call 1AD9:1, or with relative jumps (This is why i used the indirect [bx] call; call 6789 would use an assembly instruction that is relative to IP, so independent of the segment). \n\nStill, offsets don't make sense if you don't know which segment they belong to. If you have code like this\n\n```\nmov ax, 1234\npush ax\npop es\nmov bx, es:[abcd]\nmov ax, 5678\npush ax\npop es\nmov dx, es:[cdef]\n\n```\nyou want a variable definition (for bx) at 1234:abcd, and another one (for dx) at 5678:cdef. Which means IDA must know that one segment starts at 1234 to put the first variable in, and another one starts at 5678 for the second variable. (I used the push/pop because, as far as i remember, there was no processor opcode to load a segment register directly, and i think there were some restrictions with moving them as well, so the push/pop was used heavily to load them).\n\nOf course, the point of segments is that they are a bad idea and caused lots of trouble, but Intel wanted to be able to address more than 64K with a 16 bit processor, so they invented them. Which means they exist, and we need to get them right when disassembling 16-bit programs. Whether or not we like them isn't the question.\n\nThe best you can do is find as many references to segments as you can - initial CS/DS/ES/SS values, far calls to some cs:ip location, and values that get loaded into segment registers. Then, write down which segment values occur, assume each of them is large enough to accomodate all space to the next one, and feed this list to IDA.\n\n",
+      "votes": "2",
+      "user": "Guntram Blohm",
+      "time": "Aug 13, 2014 at 15:47",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ScumCoder",
+          "text": "Thanks, but I know about the x86 segmentation system. Looks like it has nothing to do with IDA segments. (1) the code I'm disassembling has virtually no near jumps, only short and far ones which don't need proper segments. (2) the call    1AD9h:1 instruction I mentioned is a far jump (opcode 9a 01 00 d9 1a), and it's still marked as invalid. (3) I still don't understand why IDA managed to generate proper XREF to this 'invalid' call. (4) AFAIK you control the values of segment registers not by Program Segmentation view but by Segment Registers view, which seems to be a different thing.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

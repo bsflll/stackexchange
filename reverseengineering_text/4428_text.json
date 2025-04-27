@@ -1,0 +1,51 @@
+{
+    "title": "Where the pointer to virtual function table is located?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4428/where-the-pointer-to-virtual-function-table-is-located",
+    "content": "I used to think that the pointer to the Virtual Function Table (VFT, also Virtual Method Table, VMT) is the very first 32-bit word of the object binary representation.\nBut now I see a VFT whose index is 13 (!!!!), that is, offset=0x34. (I write \"index\" because the code to invoke the Qt function <pre><code>o.metaObject()</code></pre> is <pre><code>((func***)o)[13][0](o)</code></pre>). OMG, what is going on? Why the VFT address is located... where?\nEDIT (after complaints that the question is unclear):\nEach object with virtual functions has a pointer to the Virtual Function Table. Usually, this is the very first 32-bit value in the object's binary representation (and may be accessed as <pre><code>((void**)objAddr)[0]</code></pre>). But in the example below the offset of VMT pointer is not 0! (Function names may be demangled by <pre><code>c++filt</code></pre>; for readability, the class names have been shortened to <pre><code>Abc</code></pre> and <pre><code>Xyz</code></pre>):\n<pre><code>.text:02EF171C _ZN3XyzC2EP7QObject ; constructor Xyz::Xyz(QObject*), r0 = objAddr, r1 = QObject addr\n.text:02EF171C                 PUSH.W          {R4-R8,LR}\n.text:02EF1720                 MOV             R4, R0\n.text:02EF1722                 LDR             R5, =(_GLOBAL_OFFSET_TABLE_ - 0x02EF1730)\n.text:02EF1724                 MOV             R7, R1\n.text:02EF1726                 BL.W            _ZN4AbcdC2EP7QObject ; superclass_constructor(objAddr)\n.text:02EF172A ; ---------------------------------------------------------------------------\n.text:02EF172A                 LDR             R3, =(_ZTVN3XyzE_ptr - 0x27E4BE0) ; vtable for Xyz\n.text:02EF172C                 ADD             R5, PC ; _GLOBAL_OFFSET_TABLE_\n.text:02EF172E                 MOV             R6, R4\n.text:02EF1730                 MOV             R1, R7\n.text:02EF1732                 LDR             R3, [R5,R3] ; _ZTVN3XyzE_ptr ; pointer to vtable for Xyz\n.text:02EF1734                 ADDS            R3, #8 ; *_ptr points to the (-2)nd element of VMT\n.text:02EF1736                 STR.W           R3, [R6],#0x34 ; OOPS! the offset is 0x34 !!!\n</code></pre>\nI want to be able to locate the pointer to VMT for any object, but as the example above shows, the pointer to VMT is not necessarily <pre><code>((void**)objAddr)[0]</code></pre>.\nSo the question is:\n1) why the VMT pointer is in the middle of the object's binary representation? There must be something specific about this place.\n2) how do I find out where the VMT pointer actually is? (Ideally, at run-time given the object address. I have the code to tell a valid address from an invalid one. I'm interested in GCC for Android/ARM, although techniques for different platforms may turn out to be applicable.)\nPS the code to detect a valid address on Android is:\n<pre><code>#include <unistd.h>\n#include <fcntl.h>\nint isValidPtr(const void*p, int len) {\n    if (!p) { return 0; }\n    int ret = 1;\n    int nullfd = open(\"/dev/random\", O_WRONLY); // does not work with /dev/null !!!\n    if (write(nullfd, p, len) < 0) {\n        ret = 0; /* Not OK */\n    }\n    close(nullfd);\n    return ret;\n}\n</code></pre>\nUPDATE\nIn the following example, the VMT offset is 0:\n<pre><code>class Base {\npublic:\n  int x,y;\n};\nclass Derived: public Base {\npublic:\n  int z;\n  Derived();\n  virtual int func();\n  virtual int func2();\n};\n</code></pre>\nCoercion from <pre><code>Base*</code></pre> to <pre><code>Derived*</code></pre> compiles to: <pre><code>SUBS R0, #4</code></pre>\n<pre><code>int test3(Base*b) {\n    Derived*d = (Derived*)b;\n    int r = addDerived(*d);\n    return r;\n}\n\n ; test3(Base *)\n _Z5test3P4Base\n CBZ             R0, loc_1C7A\n SUBS            R0, #4\n B.W             _Z10addDerivedR7Derived ;\n</code></pre>\nUPDATE2\nI tried\n<pre><code>struct Cls2 {\n    unsigned x[13];\n    Derived d;\n    Cls2();\n};\n</code></pre>\nand here's the disassembly:\n<pre><code>.text:00001CE2 _ZN4Cls2C2Ev ; Cls2::Cls2(void)\n.text:00001CE2                 PUSH            {R4,LR}\n.text:00001CE4                 MOV             R4, R0\n.text:00001CE6                 ADD.W           R0, R0, #0x34\n.text:00001CEA                 BL              _ZN7DerivedC2Ev ; Derived::Derived(void)\n.text:00001CEE                 MOV             R0, R4\n.text:00001CF0                 POP             {R4,PC}\n</code></pre>\nThat is, the VFT pointer of <pre><code>Cls2::d</code></pre> will indeed be at offset 0x34, but there's no <pre><code>STR.W R3,[R6],#0x34</code></pre>, so it is not #2 suggested by Willem Hengeveld.\nBUT if we comment out the constructor,\n<pre><code>struct Cls2 {\n    unsigned x[13];\n    Derived d;\n//    Cls2();\n};\n</code></pre>\nin\n<pre><code>int testCls2() {\n    Cls2 c;\n    return c.d.func2();\n}\n</code></pre>\nwe get\n<pre><code>.text:00001C9E _Z8testCls2v\n.text:00001C9E var_18          = -0x18\n.text:00001C9E                 PUSH            {LR}\n.text:00001CA0                 SUB             SP, SP, #0x4C\n.text:00001CA2                 ADD             R0, SP, #0x50+var_18\n.text:00001CA4                 BL              _ZN7DerivedC2Ev ; Derived::Derived(void)\n.text:00001CA8                 ADD             R0, SP, #0x50+var_18\n.text:00001CAA                 BL              _ZN7Derived5func2Ev ; Derived::func2(void)\n.text:00001CAE                 ADD             SP, SP, #0x4C\n.text:00001CB0                 POP             {PC}\n</code></pre>\nwhich is very similar to the original code\nBUT in my case the VMT <pre><code>vtable for Xyz</code></pre> is written from <pre><code>Xyz::Xyz()</code></pre> and not from the enclosing function.\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "c++",
+        "arm",
+        "virtual-functions",
+        "gcc"
+    ],
+    "user": "18446744073709551615",
+    "time": "May 27, 2014 at 6:19",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "Show the code/asm/whatever. It's not clear what you mean by \"index\".\n",
+            "time": null
+        },
+        {
+            "user": "Willem Hengeveld",
+            "text": "the call to Derived::Derived(void) could have been inlined with the right optimization flags.\n",
+            "time": null
+        },
+        {
+            "user": "DCoder",
+            "text": "Based on the way you keep editing your question, you might want to read through Inside The C++ Object Model. It contains a lot more information than can be given in a single answer.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I can think of 2 cases where a VMT is not in the first word of an object:\n\nusing multiple inheritance\nwhen the an object has a member variable which has virtual methods\n\nmultiple inheritance\n<pre><code>struct base1 {\n    uint32_t x[12];\n    virtual void m1() { }\n};\n\n\nstruct base2 {\n    virtual void m2() { }\n};\n\nstruct cls : base1, base2 {\n};\n</code></pre>\nnow the VMT of base2 is at offset 0x34\nvirtual member\n<pre><code>struct cls2 {\n    uint32_t x[13];\n    base2   b;\n};\n</code></pre>\nnow also the VMT of base2 is at offset 0x34\n",
+            "votes": "5",
+            "user": "Willem Hengeveld",
+            "time": "May 26, 2014 at 10:47",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "The code to detect and print virtual function table pointers is:\n<pre><code>int isIdentifier(const char* s) { // true if points to [0-9a-zA-Z_]*\\x00\n    if(!isValidPtr(s,0x10)) { return 0; }\n    if(!s[0]) { return 0; }\n    int i;\n    for (i=0; s[i] && i<512; i++) {\n        if( i/0x10 && i%0x10 == 0 && !isValidPtr(s,0x10)) { return 0; }\n        unsigned char c = s[i];\n        if ('0'<=c && c<='9' || 'a'<=c && c <= 'z' || 'A'<=c && c <= 'Z' || '_' == c) {\n        } else {\n            return 0;\n        }\n    }\n    return !s[i];\n}\n\nchar* isVftPtr(void*addr) { // returns addr of mangled class name (prefix it with _Z to demangle with c++filt)\n    unsigned int* vmtaddr = isValidPtr(addr,4)\n                     && 0 == (3 & *(int*)addr)\n                     && isValidPtr(*(int**)addr,4)\n                     ? *(unsigned int**)addr\n                     : (void*)0;\n    if (vmtaddr\n      &&isValidPtr(vmtaddr-2,0x20)\n     ) {\n        char**ptypeinfo = ((char***)vmtaddr)[-1];\n        if (isValidPtr(ptypeinfo,4)\n          &&isValidPtr((char***)ptypeinfo[0]-1,8)\n          &&isValidPtr(((char***)ptypeinfo[0])[-1],8)\n          &&isValidPtr(((char***)ptypeinfo[0])[-1][1],0x20)\n          &&isIdentifier(ptypeinfo[1])\n        ) {\n            return !strncmp(((char***)ptypeinfo[0])[-1][1], \"N10__cxxabiv\",12) ? ptypeinfo[1] : 0;\n        }\n    }\n    return 0;\n}\n// Usage example: printVfts(\"pThis\", pThis, -8, 0x400)\nvoid printVfts(const char*tag, void* addr, int from, int upto) {\n    void** start = addr+from;\n    void** end = addr+upto;\n    DLOG(\"{ %s ====== printVfts %p (%p..%p)\", tag, addr,start,end);\n    void**p;\n    char*n = 0;\n    for(p=addr;p<end;p++) {\n        if (n = isVftPtr(p)) {\n            DLOG(\"vft at %p [off=0x%x] _Z%s\",p,(unsigned)p - (unsigned)addr, n);\n        }\n    }\n    DLOG(\"} %s ====== printVfts %p\", tag, addr);\n}\n</code></pre>\nThe code worked on Android/ARM.\nThe function <pre><code>isValidPtr()</code></pre> is given in the question, the logging macro is given below:\n<pre><code>#include <android/log.h>\n#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG  , \"~~~~~~\", __VA_ARGS__)\n#define DLOG(...) __android_log_print(ANDROID_LOG_DEBUG  , \"~~~~~~\", __VA_ARGS__)\n</code></pre>\nAnd, finally: <pre><code>printVfts()</code></pre> showed that there is another VFT pointer at offset 0.\n",
+            "votes": "1",
+            "user": "18446744073709551615",
+            "time": "May 27, 2014 at 10:42",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

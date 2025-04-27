@@ -1,0 +1,28 @@
+{
+  "title": "Cannot load libvulkan.so on Linux chroot running on Android while normal Android apps can load it",
+  "link": "https://reverseengineering.stackexchange.com/questions/31577/cannot-load-libvulkan-so-on-linux-chroot-running-on-android-while-normal-android",
+  "content": "First I will give a quick summary of my environment\n\nDevice: Samsung Galaxy M20 (m20lte)\nSoC: Exynos 7904 (with Mali-G71 GPU)\nOS: Android 10 (Stock ROM with root using Magisk)\nKernel: 4.4.177\nSELinux is disabled (set to permissive mode)\nVulkan API version: 1.1.108\n\nChroot environment: Debian 11 (arm64) running on Linux Deploy, with full root access. Directories like /dev, /proc, /data, /system, /sdcard are mounted into the chroot.\n\nI know this device support Vulkan API (Vulkan loader avaliable at /system/lib64/libvulkan.so).\n\nNormal Android apps can load and use Vulkan APIs without any problems. For example:\n\nI cannot load libvulkan.so from /system/lib64/libvulkan.so by running program in the chroot.\n\nFor example, I created a simple c source (named dlopen.c):\n\n```\n#include <stdio.h>\n#include <dlfcn.h>\n\nint main() {\n        void *handle = dlopen(\"libvulkan.so\", RTLD_LAZY);\n        if (!handle) {\n                printf(\"Cannot load libvulkan.so  \n\");\n        } else {\n                printf(\"Loaded libvulkan.so  \n\");\n        }\n\n        return 0;\n}\n\n```\nCompile it using gcc: gcc dlopen.c -ldl -o dlopentest\nSetup the environment variable LD_LIBRARY_PATH=/system/lib64/ or symlink /system/lib64/libvulkan.so to (folder in chroot) /lib/aarch64-linux-gnu/libvulkan.so and /lib/aarch64-linux-gnu/libvulkan.so.1\nFinally run it using ./dlopentest, the program always print Cannot load libvulkan.so\n\nUsing strace, but nothing weird found (log link)\n\nI'm not sure about /lib/aarch64-linux-gnu/libc.so, since instead of being a symlink to libc.so.6 or a real .so file, it's some kind of ld script. But replacing it with a symlink to libc.so.6 makes no change.\n\nvulkaninfo also reports an error:\n\n```\nERROR at /build/vulkan-tools-3Ouhix/vulkan-tools-1.2.162.0+dfsg1/vulkaninfo/vulkaninfo.h:628: Failed to initialize: Vulkan loader is not installed, not found, or failed to load.\n\n```\nstrace result is pretty much the same as my dlopentest, so I won't include it here.\n\n(actually I don't know what section to put this, so I put it here)\n\nRunning file on /system/lib64/libvulkan.so:\n\n```\n/system/lib64/libvulkan.so: ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, BuildID[md5/uuid]=e749d3c10d92fcef9b84402783d311f8, stripped\n\n```\nIt's dynamically linked, so I run ldd on it and notice the following line:\n\n```\n/system/lib64/libvulkan.so: /lib/aarch64-linux-gnu/libc.so: version `LIBC' not found (required by /system/lib64/libvulkan.so)\n/system/lib64/libvulkan.so: /lib/aarch64-linux-gnu/libdl.so: version `LIBC' not found (required by /system/lib64/libvulkan.so)\n\n```\nAnd other lines from .so libraries in /system/lib64 claimed the same thing.\n\nSo I check the /system/lib64/libc.so, and found that it's a symbolic link to /apex/com.android.runtime/lib64/bionic/libc.so.\n\nSo I mounted /apex/com.android.runtime to chroot.\n\nAfter doing so, ldd found no more problem (log link)\n\nBut, when I run the program:\n\n```\nroot@localhost:~# ./dlopentest\nTrace/breakpoint trap\n\n```\nRunning strace (log link)\n\nUsing gdb, I found that it was a trap signal from /system/lib64/ld-android.so\n\n```\nProgram received signal SIGTRAP, Trace/breakpoint trap.\n0x0000007fb7fef000 in rtld_db_dlactivity () from /system/lib64/ld-android.so\n\n```\nWhen I check that file:\n\n```\nroot@localhost:~# file /system/lib64/ld-android.so\n/system/lib64/ld-android.so: ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, BuildID[md5/uuid]=62f4de8cdef6f71d65c403ac59427c51, stripped\nroot@localhost:~# ldd /system/lib64/ld-android.so\n        statically linked\n\n```\nI know this section might not related to the question, but I still want to include it, to avoid possible XY problem.\n\nI want to run War Thunder (a game, and it supports x86_64 Linux). I run it on box64 and it runs until report cannot initialize Vulkan. FYI, Vulkan is the only supported render backend for the game on Linux, so I can't use OpenGL or something.\n\nThe game require the real libc (not Android one), so I can't run it on proot, and distro-proof on Termux is too complicated compared to Linux Deploy.\n\nFinally, thank you for reading this\nI just want to run War Thunder :)\n\n",
+  "votes": "2",
+  "answers": 0,
+  "views": "559",
+  "tags": [
+    "android",
+    "linux",
+    "shared-object"
+  ],
+  "user": "raspiduino",
+  "time": "Feb 23, 2023 at 18:35",
+  "comments": [
+    {
+      "user": "raspiduino",
+      "text": "Ok, I think this crash because /lib/aarch64-linux-gnu/libc.so.6 is loaded, then another libc /system/lib64/libc.so is loaded. I don't think libc can be loaded with multiple instances",
+      "time": null
+    },
+    {
+      "user": "raspiduino",
+      "text": "Possible solution: 1) (unlikely) If we can call vulkan api from vulkan kernel driver without using Android libs, then write a simple vulkan loader than redirect the calls. 2) Write a \"Vulkan server\" that create an IPC (pipeline), read Vulkan commands from that pipeline, then calls to Android's libvulkan.so, then compile it using Android NDK. Then write a \"client\" libvulkan.so that communicate through the IPC to redirect the calls from program. Compile it using gcc in chroot.",
+      "time": null
+    }
+  ],
+  "answers_data": []
+}

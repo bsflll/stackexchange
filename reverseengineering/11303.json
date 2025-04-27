@@ -1,0 +1,109 @@
+{
+    "title": "How to break this reversing exercise",
+    "link": "https://reverseengineering.stackexchange.com/questions/11303/how-to-break-this-reversing-exercise",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have reversed the code of this simple crackme(more like reverseme :)) but I don't understand how to create valid password for the algorithm.\nHere's the reversed code:</p>\n<pre><code>#include &lt;stdlib.h&gt;\n#include &lt;stdio.h&gt;\n#include &lt;string.h&gt;\n\nint main(int argc, char* argv[]) {\n    if(argc&lt;2)\n        return -1;\n\n    char *original = argv[1]; \n    char *password = strdup(original);\n    int success = 0xFD0970E7;\n    int i, j;\n    for (i = random() &amp; 0xFF; i &gt; 0; i--) {\n        for (j = 0; j &lt; (int)strlen(original); j++) {\n            password[j] = password[j] ^ random();\n        }\n    }\n\n    i = 0x1337;\n    for (j = strlen(original)-1; j &gt;= 0; j--) {\n        i = i * password[j] + 0x31337;\n    }\n\n    if (i == success) {\n        printf(\"SUCCESS\\n\");\n        return 0;\n    }\n\n    printf(\"WRONG\\n\");\n    return -1;\n}\n</code></pre>\n<p>I understand that since random() isn't seeded I can control the input that gets to the later stages of the program, but I don't get how can I use it to solve it :(</p>\n</div>",
+    "votes": "1",
+    "answers": 3,
+    "views": "1k",
+    "tags": [
+        "crackme"
+    ],
+    "user": "Jack Taylor",
+    "time": "Nov 10, 2015 at 22:07",
+    "comments": [
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<span class=\"comment-copy\">We still cannot yet define recursive function in SMT solvers (so we cannot yet define directly the loop), but we can \"unroll\" the loop to get a valid password, for example: <code>6`SHQe</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<span class=\"comment-copy\">In case of the sequence of generated pseudo random numbers in yours machine is different from mine, you can always find a new password using <code>z3 reverseme.smt2</code> (this file is given <a href=\"http://rise4fun.com/Z3/Dcnb\" rel=\"nofollow noreferrer\">here</a>).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>We can define recursive functions in SMT language (e.g. with <code>define-fun-rec</code>), but some popular solvers (e.g. <code>z3</code>) currently cannot handle them yet (I do not know any can support); so it is not direct to encode loops in such a solver. </p>\n<p>But we can use a trick, that is to just unroll the loop (then it is still obliged to test several lengths of the password) by generating automatically SMT formulae. For example, the following program generate a SMT formula for each length of password:</p>\n<pre><code>#include &lt;stdlib.h&gt;\n#include &lt;stdio.h&gt;\n\n#define PRE_VAL_NUM 0xfff\nint ran_vals[PRE_VAL_NUM];\n\nvoid gen_pre_vals()\n{\n  for (unsigned int i = 0; i &lt; PRE_VAL_NUM; ++i) {\n    ran_vals[i] = random();\n  }\n  return;\n}\n\nint main(int argc, char* argv[])\n{\n  if (argc != 2) {\n    printf(\"please run as keygen length_of_password\\n\");\n    return 0;\n  }\n\n  gen_pre_vals();\n\n  FILE* smt_file = fopen(\"reverseme.smt2\", \"w+\");\n\n  fprintf(smt_file, \"(set-logic QF_BV)\\n\");\n  fprintf(smt_file, \"(set-info :smt-lib-version 2.0)\\n\");\n\n  int passwd_len = strtol(argv[1], NULL, 0);\n\n  fprintf(smt_file, \"\\n\");\n  for (int i = 0; i &lt; passwd_len; ++i) {\n    fprintf(smt_file, \"(declare-fun pw%d () (_ BitVec 8))\\n\", i);\n  }\n  fprintf(smt_file, \"\\n\");\n  fprintf(smt_file, \"(define-fun prev_i ((i (_ BitVec 32)) (pw_i (_ BitVec 8))) (_ BitVec 32)\\n\");\n  fprintf(smt_file, \"(let ((pw_i_ext ((_ sign_extend 24) pw_i)))\\n\");\n  fprintf(smt_file, \"(bvadd (bvmul i pw_i_ext) #x00031337)))\\n\");\n\n  fprintf(smt_file, \"\\n\");\n  for (int i = 0; i &lt; passwd_len; ++i) {\n    fprintf(smt_file, \"(assert (and (bvuge pw%d #x21) (bvule pw%d #x7e)))\\n\", i, i);\n  }\n\n  fprintf(smt_file, \"\\n\");\n  fprintf(smt_file, \"(assert\\n\");\n  fprintf(smt_file, \"(let (\\n\");\n  unsigned int acc_ran;\n  for (int i = 0; i &lt; passwd_len; ++i) {\n    acc_ran = 0x00;\n\n    for (int j = ran_vals[0] &amp; 0xff; j &gt; 0; j--) {\n      acc_ran ^= ran_vals[1 + i + (j - 1) * passwd_len];\n    }\n\n    fprintf(smt_file, \"(pwn%d (bvxor pw%d #x%x))\\n\", i, i, (acc_ran &amp; 0xff));\n  }\n  fprintf(smt_file, \")\\n\");\n  fprintf(smt_file, \"(let ((i%d (prev_i #x1337 pwn%d)))\\n\", passwd_len - 2, passwd_len - 1);\n  for (int i = passwd_len - 2; i &gt;= 1; --i) {\n    fprintf(smt_file, \"(let ((i%d (prev_i i%d pwn%d)))\\n\", i - 1, i, i);\n  }\n  fprintf(smt_file, \"(let ((i (prev_i i0 pwn0)))\\n\");\n  fprintf(smt_file, \"(= i #xfd0970e7))\\n\");\n  for (int i = 0; i &lt; passwd_len; ++i) fprintf(smt_file, \")\");\n  fprintf(smt_file, \")\\n\");\n\n  fprintf(smt_file, \"\\n\");\n  fprintf(smt_file, \"(check-sat)\\n\");\n  fprintf(smt_file, \"(get-value (\\n\");\n  for (int i = 0; i &lt; passwd_len; ++i) fprintf(smt_file, \"pw%d\\n\", i);\n  fprintf(smt_file, \"))\\n\");\n\n  fclose(smt_file);\n\n  printf(\"output smt file: reverseme.smt2\\n\");\n\n  return 1;\n}\n</code></pre>\n<p>It generates a SMT file, named <code>reverseme.smt2</code> for each length of password (e.g. the generated SMT file for the length <code>6</code> is <a href=\"http://rise4fun.com/Z3/Dcnb\" rel=\"nofollow\">here</a>), then we can type: <code>z3 reverseme.smt2</code> to get a valid password. </p>\n<p>I have tested for lengths of <code>2, 3, 4, 5</code> (the length <code>1</code> is obviously impossible). On my machine, <code>z3</code> takes about 1-5 seconds for each test, and gives <code>UNSAT</code> for each of them; the first <code>SAT</code> result \"6`SHQe\" (ASCII codes: <code>0x36, 0x60, 0x53, 0x48, 0x51, 0x65</code> is found for length of <code>6</code>. I do not check whether there exists some valid passwords for lengths larger than <code>6</code> though.</p>\n</div>",
+            "votes": "3",
+            "user": "Ta Thanh Dinh",
+            "time": "Nov 13, 2015 at 12:27",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jack Taylor",
+                    "text": "<span class=\"comment-copy\">Hey thanks for your answer! Maybe it wasn't clear from my first post, but I tried to better explain myself in the comments. I knew that I could brute force, or unroll the loop in a SMT but since another exercise from the same series had a flaw in the algorithm that allowed through a xor property to simply compute the password I thought that maybe I wasn't seeing something. But since everyone here is proposing to \"brute force\" then I'm happy to do it :D</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack Taylor",
+                    "text": "<span class=\"comment-copy\">I never used Z3 so I'll take a look at the documentation and write something down, wanted to learn using it from long time. I'll keep your answer as a reference if I fail during the process XD Again, thank your for you help, it's really appreciated!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In C/C++, rand() has a default seed of 1. </p>\n<p>Consider the following:</p>\n<pre><code>#include &lt;stdlib.h&gt;\n#include &lt;stdio.h&gt;\n\nint main(int argc, char const* argv[])\n{\n  srand(1);\n  int foo = rand();\n  printf(\"%d\\n\", foo);\n  return 0;\n}\n</code></pre>\n<p>This will always give you same results as</p>\n<pre><code>#include &lt;stdlib.h&gt;\n#include &lt;stdio.h&gt;\n\nint main(int argc, char const* argv[])\n{\n  int foo = rand();\n  printf(\"%d\\n\", foo);\n  return 0;\n}\n</code></pre>\n<p>If you change the value in srand() to something different, you will see that you will get a different number. </p>\n<p>Therefore, in the solution to your crackme, you can simply use rand() without using srand(), or you could use srand(1) before rand() since an unseeded rand() (or a rand() preceded by a call to srand(1)) will always yield the same results.</p>\n</div>",
+            "votes": "1",
+            "user": "itsbriany",
+            "time": "Nov 11, 2015 at 3:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jack Taylor",
+                    "text": "<span class=\"comment-copy\">As per my comment after the code snippet, I already knew that. The problem is I don't know what to do with that. What I'm asking is how to solve the \"equation\" of the crackme, since it doesn't seem to have a solution for me, without trying a brute force.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user2823000",
+                    "text": "<span class=\"comment-copy\">If you don't want to bruteforce it, you can always feed it to a SMT solver.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack Taylor",
+                    "text": "<span class=\"comment-copy\">@Dillinur I've already looked into that, but I'm not sure how to do it. Because the equation in this case seems to be recursive a I don't know any solver that supports that :/</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">@JackTaylor: the natural approach is what you said: defining recursive functions (for each of two loops in your crackme) in SMT languages. But current SMT solvers do not handle such a function, so we can \"unroll the loop\" by trying with several concrete lengths of password. It is not really beauty, but it does work.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As with all equations, solve it starting from the end. You might need to have several iterations based on the length of the original password string.</p>\n<p>Start with hypothesizing the length equals 1, solve the last cycle (what the password would need to be to hit the right answer?) then solve the first cycle based on you knowledge of rand(). If the result looks plausible (e.g. it has exactly the length of 1 as you hypothesized), check it and stop. If not - assume length equals 2 and do the same. Etc, up to the length of string fitting into an int. I would just go up to 8, why bother calculating that length.</p>\n<p>P.S. There is no recursion in the code you posted, not sure what you mean.</p>\n</div>",
+            "votes": "0",
+            "user": "Vitaly Osipov",
+            "time": "Nov 11, 2015 at 18:56",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jack Taylor",
+                    "text": "<span class=\"comment-copy\">Thank you for your advice. Then I have to brute force my way to the solution :D I thought that maybe there was something wrong in the math and it was solvable in other ways that were obvious to others! By recursion I mean the iteration to compute \"i\", where we use \"i\" as input for the next iteration. As far as I know there no way to input such thing in a SMT solver, without knowing the length at least.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">@JackTaylor: in principle, we can define recursive functions in SMT languages, but such a function is not handled yet.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Vitaly Osipov",
+                    "text": "<span class=\"comment-copy\">I don't see your problem, you can solve it on paper by iterating over length. Start at 8 and count down to 1 if that's easier :) Or do 8 solver equations if you want to use an SMT solver as in one answer above - someone did all the work for your exercise already.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">@VitalyOsipov: your approach is absolutely correct, I think that the author asks for a more general solution (which do not need to try each length). Since  we cannot yet define recursive function in SMT language, I do not know whether we can get directly a general solution.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">@JackTaylor: strictly speaking, my solution is brute-force but with help of a SMT solver (which is <code>z3</code> here). In your case, the solution is not heavy, it takes several seconds to get a correct password. Of course, in general case,  the running time depends on the length of password.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

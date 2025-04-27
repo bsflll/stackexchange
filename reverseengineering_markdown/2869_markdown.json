@@ -1,0 +1,77 @@
+{
+  "title": "How to use sysenter under Linux?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2869/how-to-use-sysenter-under-linux",
+  "content": "I would like to know what are the different ways to perform a system\ncall in x86 assembler under Linux. But, with no cheating, only\nassembler must be used (i.e. compilation with gcc must be done with\n-nostdlib).\n\nI know four ways to perform a system calls, namely:\n\nI am pretty good at using int $0x80, for example, here is a sample\ncode of a classic 'Hello World!' in assembler using int $0x80 (compile it with gcc -nostdlib -o hello-int80 hello-int80.s):\n\n```\n.data\nmsg:\n  .ascii \"Hello World!  \n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  int   $0x80\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  int   $0x80\n\n```\nBut the sysenter is often ending with a segmentation fault error. Why ? And, how to use it right ?\n\nHere is an example with call *%gs:0x10 (compiled with gcc -o hello-gs10 hello-gs10.s). Note that I need to go through the libc initialization before calling it properly (that is why I am using main and not anymore _start and, that is also why I removed the option -nostdlib from the compile line):\n\n```\n.data\nmsg:\n  .ascii \"Hello World!  \n\"\n  len = . - msg\n\n.text\n.globl main\n\nmain:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  call  *%gs:0x10\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  call  *%gs:0x10\n\n```\nAlso, the syscall is working pretty well also if you know the syscall codes for this architecture (thanks to lfxgroove) (compiled with: gcc -m64 -nostdlib -o hello-syscall hello-syscall.s):\n\n```\n.data\nmsg:\n  .ascii \"Hello World!  \n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movq  $len, %rdx\n  movq  $msg, %rsi\n  movq  $1, %rdi\n  movq  $1, %rax\n  syscall\n# and exit\n  movq  $0, %rdi\n  movq  $60, %rax\n  syscall\n\n```\nSo, the only problem I have to trigger a system call is this sysenter way. Here is an example with sysenter ending with a segmentation fault (compiled with gcc -m32 -nostdlib -o hello-sysenter hello-sysenter.s):\n\n```\n.data\nmsg:\n  .ascii \"Hello World!  \n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n\n  push    final\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n# and exit\nfinal:  \n  movl  $0, %ebx\n  movl  $1, %eax\n\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n\n```\n",
+  "votes": "24",
+  "answers": 1,
+  "views": "10k",
+  "tags": [
+    "assembly",
+    "x86"
+  ],
+  "user": "perror",
+  "time": "Sep 23, 2014 at 10:28",
+  "comments": [
+    {
+      "user": "lfxgroove",
+      "text": "A first guess for the syscall try is that you've got the wrong syscall numbers as it seems that for 64-bits mode (which it seems syscall is for) the numbers are all scrambled, ie: exit is 60 instead of what you're using right now, see lxr.linux.no/#linux+v2.6.32/arch/x86/include/asm/unistd_64.h for the numbers",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "Indeed, you are right. I was really puzzled but it seems that in my example it was the second syscall that was calling the write (and not the first one, as I was expecting).",
+      "time": null
+    },
+    {
+      "user": "k0ng0",
+      "text": "Rather than making another QA. @perror would you mind explaining len = . - msg - edit : I know of the purpose by obvious reasons but the semantics of it. - Thanks",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "The '.' in the gas syntax refer to the current address. So, len = . - msg is a way to store in len the size of the string msg (it computes the difference between the current address and the position of the msg label).",
+      "time": null
+    },
+    {
+      "user": "nh2",
+      "text": "Thank you so much, you have helped me figure out this systemd assertion failure on a bugged ChromiumOS kernel by layong out the different ways how syscalls can be made and the code example in the answer.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "sysenter is a i586 instruction, specifically tight to 32-bits\napplications. It has been subsumed by syscall on 64-bits plateforms.\n\nOne particularity of sysenter is that it does require, in addition\nto the usual register setting, a few manipulations on the stack before\ncalling it. This is because before leaving sysenter, the process\nwill go through the last part of the __kernel_vsyscall assembler\nsnippet (starting from 0xf7ffd430):\n\n```\nDump of assembler code for function __kernel_vsyscall:\n   0xf7ffd420 <+0>:        push   %ecx\n   0xf7ffd421 <+1>:        push   %edx\n   0xf7ffd422 <+2>:        push   %ebp\n   0xf7ffd423 <+3>:        mov    %esp,%ebp\n   0xf7ffd425 <+5>:        sysenter \n   0xf7ffd427 <+7>:        nop\n   0xf7ffd428 <+8>:        nop\n   0xf7ffd429 <+9>:        nop\n   0xf7ffd42a <+10>:       nop\n   0xf7ffd42b <+11>:       nop\n   0xf7ffd42c <+12>:       nop\n   0xf7ffd42d <+13>:       nop\n   0xf7ffd42e <+14>:       int    $0x80\n=> 0xf7ffd430 <+16>:       pop    %ebp\n   0xf7ffd431 <+17>:       pop    %edx\n   0xf7ffd432 <+18>:       pop    %ecx\n   0xf7ffd433 <+19>:       ret    \nEnd of assembler dump.\n\n```\nSo, the sysenter instruction expect to have the stack forged in that\nway:\n\n```\n0x______0c  saved_eip   (ret)\n0x______08  saved_%ecx  (pop %ecx)\n0x______04  saved_%edx  (pop %edx)\n0x______00  saved_%ebp  (pop %ebp)\n\n```\nThat's why, each time we need to call sysenter, we first have to\npush the values of the saved %eip, and the same with%ecx, %edx\nand %ebp. Which leads to:\n\n```\n.data\nmsg:\n    .ascii \"Hello World!  \n\"\n    len = . - msg\n\n.text\n.globl _start\n_start:\n    pushl  %ebp\n    movl   %esp, %ebp\n# Write the string to stdout\n    movl   $len, %edx\n    movl   $msg, %ecx\n    movl   $1, %ebx\n    movl   $4, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n# and exit\nsysenter_ret:    \n    movl   $0, %ebx\n    movl   $1, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret # Who cares, this is an exit !\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n\n```\n",
+      "votes": "14",
+      "user": "perror",
+      "time": "Oct 6, 2013 at 18:05",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "I really do not know how the Linux kernel can re-route the result of the instruction sysenter to __kernel_vsyscall+16. If somebody can clarify this for me, I would be pleased.",
+          "time": null
+        },
+        {
+          "user": "sandun dhammika",
+          "text": "it's via the MSR called registers , x86.renejeschke.de/html/file_module_x86_id_313.html , in SYSEXIT they used those registers too. Don't know how they were setten up or what is the source files they were declared in.",
+          "time": null
+        },
+        {
+          "user": "Ruslan",
+          "text": "@perror in fact you don't have to push anything on the stack to exit, just make sure ebp has an accessible address, so that the kernel reads ahead the potential 6th syscall argument without #GP (the value doesn't have to mean anything, so no need to push ebp too). I. e. the exit call would reduce to mov eax,1; xor ebx,ebx; mov ebp, esp; sysenter.",
+          "time": null
+        },
+        {
+          "user": "Aleksander Alekseev",
+          "text": "@Ruslan I'm afraid code you suggested just doesn't work - program terminates with segfault.",
+          "time": null
+        },
+        {
+          "user": "Ruslan",
+          "text": "@AleksanderAlekseev what Linux version are you using? And what do you have in esp?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

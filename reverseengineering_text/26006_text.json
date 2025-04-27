@@ -1,0 +1,88 @@
+{
+    "title": "how to use class member function defined in a exe within a dll",
+    "link": "https://reverseengineering.stackexchange.com/questions/26006/how-to-use-class-member-function-defined-in-a-exe-within-a-dll",
+    "content": "I have an executable (.exe) containing some classes and functions definition and plan on using those functions from within a DLL, although I know to call a regular C style function using calling convention such as __stdcall e.g.\n<pre><code>typedef int(*__stdcall CalleeType)(...);\n\nint Caller(...)\n{\n    CalleeType pCallee = nullptr;\n    pCallee = reintepret_cast<CalleeType>(BaseAddress + RVA);\n    return pCallee(); //calls the function as expected from within the dll\n}\n</code></pre>\nNow my problem starts when I am trying to call functions in which <pre><code>ecx</code></pre> register is set before the call mostly a method used by _cdecl calling convention in c++. And if this <pre><code>ecx</code></pre> register is not set before the call of the function the application crashes.\nI found a solution here to load a using <pre><code>Loadlibrary</code></pre>, it is for me to patch the entry point and set it to return 1, and other stuff that needs to be done before the EXE can become usable as a DLL although this method is a hack but it does show promising results in helping me load this program into memory and call those functions as expected. Although I am confused as to how I can be able to make use of those functions passing <pre><code>ecx</code></pre> since those are c++ style function calls.\nMy Questions are\n\nHow do I make this program to execute after loading it using loadlibrary, so that the program can be able to initialize itself properly and can now be able to use properly?\nHow do I make use of a function requiring that <pre><code>ecx</code></pre> register is set to the <pre><code>this</code></pre> pointer?\n\nAny ideas or hint will be very useful to me thanks\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "assembly",
+        "c++",
+        "c"
+    ],
+    "user": "Dexter's",
+    "time": "Sep 29, 2020 at 19:28",
+    "comments": [
+        {
+            "user": "morsisko",
+            "text": "In MSVC x86 __thiscall puts <pre><code>this</code></pre> into <pre><code>ecx</code></pre>\n",
+            "time": null
+        },
+        {
+            "user": "Dexter's",
+            "text": "I will give it a try, thanks\n",
+            "time": null
+        },
+        {
+            "user": "Dexter's",
+            "text": "But does this also apply with x64?\n",
+            "time": null
+        },
+        {
+            "user": "fpmurphy",
+            "text": "@Dexter's.  In Microsoft 64-bit calling convention, C++ <pre><code>this</code></pre> is passed in RCX.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "josh's answer is a good one, but one thing to note is that there is an alternative scheme that (usually) does not require inline assembly, and which handles the virtual functions case also. This is how I prefer to interact with C++ programs when I'm doing DLL injection/code reuse like your question is asking.\nBegin by defining something for the class whose methods you want to call. If you know the full class declaration, recreate it in your calling program. If you know less than that -- say, you only know the size of the class -- you can do something like:\n<pre><code>class MyClass {\n  public:\n  char mData[0x80]; // sizeof(MyClass) = 0x80\n};\n</code></pre>\n(If you don't know the size of the class, pick a large number in place of <pre><code>0x80</code></pre> and hope for the best. If the program crashes, pick a larger number and try again. Really though, try to figure out the size of the class, at minimum.)\nNow, we can use member function pointers to force the compiler to set <pre><code>ecx</code></pre> (the <pre><code>this</code></pre>) pointer for us during the function pointer call. Namely:\n<pre><code>typedef void (MyClass::*FuncToCall)(int arg1, void *arg2);\n</code></pre>\nSimilarly to josh's answer, now we want to cast the raw address of the member function in the DLL to a member function pointer of that type, and then call it:\n<pre><code>#define FUNC_OFFSET 0x4320\nFuncToCall f = (FuncToCall)((byte*)pDLL + FUNC_OFFSET);\nMyClass *m = new MyClass();\nm->*f(123, NULL); // member function pointer invocation syntax\n</code></pre>\nEDITED TO NOTE: in my original answer, I'd forgotten to note that C++ is not as liberal about accepting casts of arbitrary types to member function pointers as C is about casting to ordinary function pointers. That is to say, the code in the below won't work directly; you'll need to basically twist the compiler's arm to make it work, but it is doable. See this StackExchange discussion of the situation. One of the answers proposes using a <pre><code>union</code></pre>, which is what I've typically done. See these two blog entries by Raymond Chen discussing why C++ is less tolerant about casts involving member function pointers (TL;DR multiple inheritance): one, two. Finally, here's an example of how I used these techniques in a recent project.\nORIGINAL TEXT CONTINUES HERE: You can even wrap this up into a proxy stub function:\n<pre><code>#define FUNC1_OFFSET 0x4320\n\n// Global function pointer(s)\n// Note: these are GLOBAL variables, not class members\nFuncToCall gfp_MemFunc1;\n\n// Relocate all necessary addresses\n// Call this once before calling member function pointers\nvoid Init(byte *pDLL) {\n  gfp_MemFunc1 = (FuncToCall)(pDLL + FUNC1_OFFSET);\n}\n\nclass MyClass {\n  public:\n  char mData[0x80];\n\n  // Make stub functions for members you want to call\n  // Does not affect the layout of the class\n  void MemFunc1Proxy(int arg1, void *arg2) {\n    this->*gfp_MemFunc1(arg1, arg2);\n  };\n};\n\nint main() {\n  MyClass m();\n  Init(/* address of DLL */);\n\n  // Call member functions easily via stubs\n  m.MemFunc1Proxy(123,NULL);\n}\n</code></pre>\nFor virtual functions, there are two cases. In both cases, you'll need to add compatible virtual function delcarations (in the proper order) to the mock class declaration. Something like:\n<pre><code>class MyClass {\n  public:\n  char mData[0x80];\n  virtual void ~MyClass();\n  virtual int VFunc0x4(int);\n};\n</code></pre>\nNow, as for the two different cases. First case: if you're able to call a function in the DLL to obtain an instantiated instance of your object, that's all you need; call a virtual function as follows:\n<pre><code>MyClass *p = fpDLLFuncThatAllocatesMyClass();\nint x = p->VFunc0x4(1);\n</code></pre>\nIf it's not easy or feasible to obtain a memory instance for <pre><code>MyClass</code></pre> from the DLL, you can just install its VTable yourself.\n<pre><code>#define VTABLE_OFFSET 0x5670\nMyClass *m = new MyClass();\nvoid *VTableAddr = (byte*)pDLL + VTABLE_OFFSET;\n// Set the VTable pointer to be the VTable address in the DLL\n*reinterpret_cast<void *>(m) = VTableAddr;\nint x = p->VFunc0x4(1);\n</code></pre>\nThis scheme gives you a bit more flexibility, and does not usually require inline assembly. The exception to this happens when the non-virtual member function that you want to call uses a non-standard calling convention, as happens frequently in MSVC-compiled x86. If the compiler determines that the function will not be accessed outside of the DLL, it's under no obligation to use plain <pre><code>__thiscall</code></pre> as the calling convention, and may use alternative register argument locations. In this situation, you'll have no choice but to use inline assembly language as in josh's answer above.\n",
+            "votes": "1",
+            "user": "Rolf Rolles",
+            "time": "Oct 31, 2020 at 18:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">Rolf, the primary intention of inline assembly in my answer was to show the role of the ecx register by explicitly assigning it. In your answer the ecx assignment is hidden in the compiler code generation. The virtual functions calls are - as I stated - an additional complication, but of course useful to have demonstrated it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">Yep, your answer was a good one and there's nothing wrong with it. Once I started using these techniques regularly in DLL injection/code reuse, I found that the kind of techniques I demonstrated in my answer were useful in practice to keep my code clean. Our answers largely focused on different aspects -- yours, background and demonstration; mine, using the techniques efficiently at scale.</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">Very much agree!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dexter's",
+                    "text": "<span class=\"comment-copy\">@RolfRolles is right, his idea does present a clean code indeed and does work. Thanks a lot</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "This is an interesting problem where some issues have to be solved.\nFor the first part of your question: How to run an exe from memory, you might want to consult the following link:\nhttps://stackoverflow.com/questions/305203/createprocess-from-memory-buffer\nIn the following, I will try to show you how to tackle your second question, how to call a class method of that exe being present in memory.\nThe following example (keep it as simple as possible) does not assume a DLL as a caller, but another exe. The mechanics should be exactly the same, however.\nPart 1 : Called exe\nLet us start with a very simple C++ Windows (VS2013) exe serving as the one to be called from another exe (or DLL in your case). I named this exe \"ExeToBeCalled\".\n<pre><code>#include <iostream>\n\nclass myClass\n{\npublic: \n    int myVar;\n    void myFunc(int a, int b)\n    {\n        myVar = a - b;\n    }\n};\n\nint main(int argc, char* argv[])\n{\n    myClass* pmc = new myClass();  //parameterless constructor\n    myClass* pmc2 = new myClass(); //parameterless constructor\n    pmc->myFunc(123, 23);\n    pmc2->myFunc(456, pmc->myVar);\n    std::cout << pmc2->myVar;\n    return 0;\n}\n</code></pre>\nIt contains a class with one method, called myFunc, which subtracts its two parameters and stores it into a public member variable, called myVar. The subtraction instead of e.g. an addition has been chosen to be easily able to decide whether the correct parameter calling sequence is used.\nTwo instances of this class are created, and the result is output to the console. Sloppy programming, as the delete has been omitted.\nThe interesting part is the fact that the class instances (created with \"new\" on the heap) contain only the myVar on the heap, because each instance must have its own myVar, whereas the myFunc is common for all instances and as a consequence its address is statically assigned by the compiler. This address has to be found out, e.g. by inspection in Ida. From your posting I assumed that you solved this problem already.  The problem becomes more difficult for virtual methods, not considered in our simple example.\nPart 2 : Caller exe\nThis of course is the interesting part. I also created an example (VS2013), like so:\n<pre><code>#include <Windows.h> // necessary for the \"LoadLibrary\"\n#include <iostream>\n\n// class method, statically assigned by the compiler\n// The address has to be found out, e.g. by inspection in Ida\n// You solved this part of the problem already.\n// As we call the function from assembler, the __cdecl is irrelevant.\n// It would matter though if we called from C++.\n// Note that the callee needs a valid ecx for the function to succeed.\ntypedef void(*__cdecl pmyFunc)(int a, int b);\n\n    // assumed myClass layout, being a guess of the real layout of the class.\n    // We only need the member variable\n    // This \"class\" is for problem illustration only, we do NOT need it in our program.\n    class myClass\n    {\n    public:\n        int myResult;\n    };\n\nint main(int argc, char* argv[])\n{\n    HANDLE pExe = LoadLibrary(\"ExeToBeCalled.exe\");\n\n    // Address e.g. obtained by investigation of the callee in Ida.\n    pmyFunc myFunc = (pmyFunc)((byte*)pExe + 0x4320); \n\n    // let us get some memory from the heap for the class\n    // As we do not know the \"real\" layout of the class, we allocate one kB, hoping it will be enough\n    // We do NOT refer to the \"myClass\" above\n    void* pmyClass = new byte[1000];\n\n    // Set it all to zero.\n    for (int i = 0; i < 1000; i++)\n        ((byte*)pmyClass)[i] = 0;\n\n    // let us switch to assembler for the call\n    _asm\n    {\n        // We have to provide a valid memory in ecx where the real myclass can store its result\n        // If we provide here for testing a zero into ecx, the app crashes.\n        mov ecx, pmyClass;\n        push 333;\n        push 222;\n        call myFunc; //result should be 222-333 = -111\n    }\n    // By inspection of the pmyClass memory in the debugger after the call to myFunc,\n    //    we saw that the real myClass just stored the result into the first four bytes.\n    // Of course, in reality this is not known beforehand, thus - in a real situation -\n    //    the whole 1kB could have been searched for the expected result, determining\n    //    the offset of myResult from the ecx value in reality.\n    int result = *(((int*)pmyClass));\n    std::cout << result;\n    return 0;\n}\n</code></pre>\nIt has to be noted that our test exe from part 1 has to be compiled in Debug instead of Release mode. It is too simple for the compiler which optimizes it and does not even bother to call the myFunc, but directly calculates the result.\nTo summarize, for the solution of your problem the following must be assumed or known:\n\nThe address of the class method. We assumed a static address which need not to be the case in general. \"Static Address\" here means a constant offset (RVA) of the exe's start address obtained by LoadLibrary, which usually differs on every load (ASLR).\n\nThe way the compiler of the exe used to call a method of a class. Here we assumed the passing of the \"this\" pointer in the ecx register.\n\nThe memory location where the result of the method call is stored. This also can be arbitrarily complicated in general, in our demo the simplest possible memory layout turned out to be correct.\n\n\nIn one of the comments the question about 64Bit has been asked. Of course, there the situation might be different, the method to investigate the problem would be rather similar.\nI hope this little example could enlighten one method how to attack your problem.\n",
+            "votes": "1",
+            "user": "josh",
+            "time": "Oct 1, 2020 at 14:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Dexter's",
+                    "text": "<span class=\"comment-copy\">It does help, although I am still not clear on other forms or method I can use to set the <code>ecx</code> to <code>this</code> without having to pass it manually using inline assembly.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dexter's",
+                    "text": "<span class=\"comment-copy\">I am assuming there's a way around this, maybe a hack or something that makes it easy. What about using the vtable of the class?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

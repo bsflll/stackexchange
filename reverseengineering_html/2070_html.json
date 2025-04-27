@@ -1,0 +1,95 @@
+{
+    "title": "Can I statically link (not import) the Windows system DLLs?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2070/can-i-statically-link-not-import-the-windows-system-dlls",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have compiled following C source code in VS2010 console project.\n </p>\n <pre><code>#include <stdio.h>\nint main(int argc, char* argv[]){\n    printf(\"hello world\n\");\n    return 0;\n}\n</code></pre>\n <p>\n  then I used\n  <code>\n   /MT\n  </code>\n  option for release mode to statically link the C-runtime library.\nHowever, as far as I know, C-runtime library still invokes lower level system functions - \nfor example, C-runtime function\n  <code>\n   printf\n  </code>\n  eventually calls\n  <code>\n   WriteFile\n  </code>\n  Windows API.\n </p>\n <p>\n  And the actual function body of\n  <code>\n   WriteFile\n  </code>\n  is in\n  <code>\n   kernel32.dll\n  </code>\n  .\nSo, even if I link the C-runtime library statically, the binary doesn't contain\nthe entire routine including the\n  <code>\n   SYSENTER\n  </code>\n  , or\n  <code>\n   INT 0x2E\n  </code>\n  instructions...\nThe core part is still in a DLL. The following diagram describes how I understand it:\n </p>\n <p>\n  <img alt=\"enter image description here\" src=\"https://i.sstatic.net/w2XJH.png\"/>\n </p>\n <p>\n  What I want is to statically link EVERYTHING into single EXE file. Including\n  <code>\n   kernel32.dll\n  </code>\n  ,\n  <code>\n   user32.dll\n  </code>\n  to eliminate the necessity of loader parsing the IAT and resolving the function names.\n </p>\n <p>\n  The following picture describes what I want:\n </p>\n <p>\n  <img alt=\"enter image description here\" src=\"https://i.sstatic.net/IQtdo.png\"/>\n </p>\n <p>\n  I understand this is simple in Linux with\n  <code>\n   gcc\n  </code>\n  . All I have to do is give the option\n  <code>\n   -static\n  </code>\n </p>\n <p>\n  Is there any option like this in VS2010? Please correct me if I'm misunderstanding.\n </p>\n</div>\n</body></html>",
+    "votes": "30",
+    "answers": 4,
+    "views": "14k",
+    "tags": [
+        "windows",
+        "dll",
+        "compilers",
+        "symbols",
+        "dynamic-linking"
+    ],
+    "user": "daehee",
+    "time": "Sep 18, 2013 at 22:03",
+    "comments": [
+        {
+            "user": "newgre",
+            "text": "<html><body><span class=\"comment-copy\">\n The answer is clearly \"no\". You would have to write your own OS specific syscall layer. The question is: why don't you want to use a standard CRT? To what advantage?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "daehee",
+            "text": "<html><body><span class=\"comment-copy\">\n thank you. in fact, I was not looking for performance advantage. I thought, in this way, I can remove every symbols just like Linux stripped binary and make the reversing harder.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n @daehee: that gives your question a whole different angle, you see.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Lorenzo Dematté",
+            "text": "<html><body><span class=\"comment-copy\">\n Your description is correct, overall, but you need to add yet another layer, the NT native api: fread(msvcrt) -> ReadFile(kernel32) -> NtReadFile(ntdll.dll) -> kernel\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "CodesInChaos",
+            "text": "<html><body><span class=\"comment-copy\">\n With enough effort you might be able to do inline windows functions, but then you're bound to that specific windows version, and you'd probably violate MS's copyright.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Let me start by telling you that what you want would be impossible, because of how well-known DLLs work. You can attempt something similar with tools like\n  <a href=\"https://bitsum.com/pebundle.asp\" rel=\"noreferrer\">\n   PEBundle\n  </a>\n  or\n  <a href=\"https://github.com/rwfpl/rewolf-dllpackager\" rel=\"noreferrer\">\n   dllpackager\n  </a>\n  , but that will usually (I'd say certainly) fail with the well-known DLLs (such as system DLLs as well as even the MSVC runtime DLLs in their different incarnations). See\n  <a href=\"https://docs.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order\" rel=\"noreferrer\">\n   this\n  </a>\n  and\n  <a href=\"https://web.archive.org/web/20150629150222/http://blogs.msdn.com:80/b/larryosterman/archive/2004/07/19/187752.aspx\" rel=\"noreferrer\">\n   this\n  </a>\n  on the relevance and meaning of well-known DLLs.\n </p>\n <p>\n  <code>\n   kernel32.dll\n  </code>\n  plays a\n  <em>\n   very\n  </em>\n  special role in in the Win32 subsystem in that it helps to register Win32 threads and processes with the subsystem (\n  <code>\n   csrss.exe\n  </code>\n  ).\n </p>\n <hr/>\n <p>\n  Answering the part from the comment of the OP on the question:\n </p>\n <blockquote>\n  <p>\n   in fact, I was not looking for performance advantage. I thought, in this way, I can remove every symbols just like Linux stripped binary and make the reversing harder.\n  </p>\n </blockquote>\n <p>\n  There is no point in doing it this way then. You could still only import a single function and use a convoluted way of importing DLLs and/or resolving functions. I.e. concealing which functions you are importing from which DLLs. One thing that is rather popular in hacker circles is to hash the exported function names and then walk the exports of the loaded image yourself, hashing each of the function names found and comparing with the known hashed values.\n </p>\n <p>\n  <a href=\"http://www.hick.org/code/skape/papers/win32-shellcode.pdf\" rel=\"noreferrer\">\n   Here's a good paper\n  </a>\n  on one method used for what you want, because shell code has no clue about imported function addresses in a hijacked process.\n </p>\n <p>\n  As Igor pointed out\n  <code>\n   kernel32.dll\n  </code>\n  will be loaded into the process and AFAIR the order of that has changed as well with Vista (previously\n  <code>\n   ntdll.dll\n  </code>\n  was the first one in the\n  <a href=\"http://undocumented.ntinternals.net/UserMode/Undocumented%20Functions/NT%20Objects/Process/PEB.html\" rel=\"noreferrer\">\n   PEB\n  </a>\n  's DLL list, aka\n  <a href=\"http://undocumented.ntinternals.net/UserMode/Structures/PEB_LDR_DATA.html\" rel=\"noreferrer\">\n   <code>\n    LoaderData\n   </code>\n  </a>\n  ). So the exact method has been laid out in above paper.\n </p>\n <p>\n  A few more points:\n </p>\n <ol>\n  <li>\n   if you don't want to use\n   <code>\n    LoadLibrary\n   </code>\n   (or its\n   <code>\n    ntdll.dll\n   </code>\n   counterpart) to dynamically load the DLLs, you can keep a reference to a single imported function in the IAT - this is how some executable packers do it.\n  </li>\n  <li>\n   if not, start by resolving\n   <code>\n    LoadLibraryA\n   </code>\n   , loading the DLLs you want and then using the resolved\n   <code>\n    GetProcAddress\n   </code>\n   (or your own method used already on\n   <code>\n    kernel32.dll\n   </code>\n   and outlined in the paper) to load more functions.\n  </li>\n  <li>\n   you may be making your life harder while not making it noticeably harder to a skilled/experienced reverse engineer. Most of them will have seen a similar scheme ;) ... dynamic analysis will easily reveal your tricks and enable a reverse engineer to work around them.\n  </li>\n </ol>\n <hr/>\n <p>\n  As an alternative you could resort to the system call numbers by writing a simplified disassembler that is able to pick out the index into the SSDT (system service descriptor table) and then you do the rest yourself. This has been documented long ago because it is how people used to find the index into the SSDT when they wanted to hook it from within a kernel mode driver. Roughly, if you have the pointer to the function in\n  <code>\n   ntdll.dll\n  </code>\n  to which you need the SSDT index, you'd check your assumptions and then retrieve the appropriate value. In Windows NT 4 through 2003 (32 bit) this would look like\n </p>\n <pre><code>  B8 ?? ?? ?? ??\n</code></pre>\n <p>\n  where\n  <code>\n   B8\n  </code>\n  is for\n  <code>\n   mov eax, ????????\n  </code>\n  and the question marks are the index into the SSDT. So after checking for the\n  <code>\n   B8\n  </code>\n  you'd skip over it and fetch the next DWORD. Example in C code:\n </p>\n <pre><code>if ((lpAddr) && *((unsigned char *)lpAddr) == 0xB8)\n{\n    result = *((ULONG *)((unsigned char *)lpAddr+1));\n}\n</code></pre>\n <p>\n  Things will be different on different operating system versions and depending on the bitness - you have been warned.\n </p>\n <p>\n  But I don't see any advantage - neither performance-wise nor in deterring reverse engineering efforts.\n </p>\n</div>\n</body></html>",
+            "votes": "21",
+            "user": "0xC0000022L",
+            "time": "Dec 16, 2021 at 10:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">actually, the only import that you need is GetProcAddress, because you can GetProcAddress(\"LoadLibrary\") and go from there.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The Windows kernel, unlike Linux or OS X, does not use consistent syscall numbering across versions. The numbers can change even after a servicepack release. For example, the\n  <code>\n   NtReadFile\n  </code>\n  syscall was\n  <code>\n   0x0086\n  </code>\n  on Windows NT 4 but on Windows 7 it's\n  <code>\n   0x0111\n  </code>\n  (see\n  <a href=\"http://j00ru.vexillium.org/ntapi/\" rel=\"noreferrer\">\n   here\n  </a>\n  for the full list).\nThat's why all proper programs use the\n  <code>\n   kernel32.dll\n  </code>\n  (or\n  <code>\n   ntdll.dll\n  </code>\n  ) to perform the actual call - these DLLs are guaranteed to use the syscall numbers matching the kernel.\n </p>\n <p>\n  By the way, you won't save anything by not listing\n  <code>\n   kernel32.dll\n  </code>\n  in your IAT - it's always mapped into Win32 processes by the system loader (starting from Windows 2000 IIRC).\n </p>\n</div>\n</body></html>",
+            "votes": "17",
+            "user": "0xC0000022L",
+            "time": "Sep 18, 2013 at 16:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "daehee",
+                    "text": "<span class=\"comment-copy\">I thought Windows syscall numbering was same as Linux. thank you for the information, it helps my understanding a lot!</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@daehee: it changes every once in a while. It's the reason why <code>file</code> lists the kernel version for ELF files.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Probably with full intent from MS, not only does syscall numbering change between versions, but also many DLL ordinal values do, too. Need to bind to Win32 and use the full function name if you want your code to work across OS releases.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "MarianD",
+            "time": "Dec 26, 2021 at 0:24",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Other people have mentioned the downsides of this, but if you're still interested in this path, then\n  <a href=\"https://github.com/jthuraisamy/SysWhispers2\" rel=\"nofollow noreferrer\">\n   here's a lib\n  </a>\n  that converts the ntdll API names into syscalls.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "MarianD",
+            "time": "Dec 19, 2021 at 13:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+    "title": "How to get the runtime memory region information when instrumenting using Pin?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12524/how-to-get-the-runtime-memory-region-information-when-instrumenting-using-pin",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am using <code>Pin</code> for some execution monitoring tasks towards <code>x64 ELF</code> binary code.</p>\n<p>During the monitoring, for any memory write/read operation of the original code, I would like to record it as long as it refers the <code>heap</code>. However, given a memory address, I have no idea whether it refers the <code>heap</code> memory region or not.</p>\n<p>One possible solution I can come up with is that, before every memory operation, I acquire the runtime memory region information of the target process, and check whether the current memory address is within the <code>heap</code> region. This can be done by following the steps below inside the Pintool.</p>\n<ol>\n<li>acquire the process ID of monitored process (This step can use <code>Pin</code> API <code>Pin_GetPid</code>)</li>\n<li>read the process memory region information in <code>/proc/XXX/maps</code> </li>\n<li>find the <code>heap</code> memory region</li>\n<li>check whether the current address is within the <code>heap</code> region</li>\n</ol>\n<p>However, this is tedious and my test shows that this is extremely slow, as the size of memory <code>heap</code> can change during the runtime which means I need to go through the above steps everytime before memory operation. </p>\n<p>So I am wondering, does <code>Pin</code> has APIs to provide the <code>heap</code> memory region information? Or is there any solution more efficient that the above one? </p>\n<p>===================== update ===============================</p>\n<p><a href=\"https://i.sstatic.net/VGeAi.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/VGeAi.png\"/></a></p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "dynamic-analysis",
+        "pintool"
+    ],
+    "user": "lllllllllllll",
+    "time": "Apr 25, 2016 at 16:41",
+    "comments": [
+        {
+            "user": "user26860",
+            "text": "<span class=\"comment-copy\">I want to know how to solve this problem .Could you give me some advice?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As you're saying you're using ELF code, i assume you're running under Linux, or another unix-y system. And <code>proc/self/maps</code> (you don't have to <code>getpid()</code> and use <code>/proc/XXX/maps</code>, really) hints at Linux as well.</p>\n<p>One problem i see is the definition of <code>heap</code> - what about memory mapped regions, do they count as \"heap\" or not? Linux <code>malloc</code> uses <code>mmap</code> in some cases instead of expanding the heap, which is typically done by <code>brk</code> (which may itself be just a wrapper around <code>mmap</code>/<code>mremap</code> depending on your libc).</p>\n<p>If you want to trace everything that's in <code>malloc</code>ed memory, i'd just compare the address to the end of the code segment (but beware of dynamic libraries; or omit that comparison completely as code typically isn't read and can't be written anyway) and the current value of the stack pointer. If the address is below the stack pointer, assume heap.</p>\n<p>If you want to trace what's in the original, <code>brk</code>-managed heap only, read your memory map just once at the start, getting the heap start address, and monitor <code>brk</code> calls, adjusting the end address after each <code>brk</code>.</p>\n<p>On x64, \"below the stack pointer\" must be taken with a grain of salt. On 16- and 32-bit x86 processors, anything below the stack pointer can be clobbered by hardware interrupts at any time, so <code>sp</code>/<code>esp</code> are a barrier to what software can use. On 64 bit processors, however, <a href=\"http://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64/\" rel=\"nofollow\">the ABI guarantees that 128 bytes below the stack pointer aren't changed by interrupts</a>, so the compiler is free to use them (and will do so in leaf functions). Which means, you really need to compare your address to <code>esp-0x80</code> if you're dealing with x64 code.</p>\n</div>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Apr 25, 2016 at 17:31",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Very smart idea! I will check whether the address is within code section and stack pointer <code>rsp</code>. Thank you for saving my ass ;)</span>",
+                    "time": null
+                },
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Hi Guntram, recall <code>rsp</code> does not always refer to the top of the stack.. For example, at the beginning of one function, it can be something like this: <code>mov esp, ebp;  mov eax, [ebp-16]</code>...</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Are you certain about this? Every function i've encountered makes sure to not access any memory below <code>[er]sp</code>, and function prologues typically push the old <code>[er]bp</code>, move <code>sp</code> into <code>bp</code> (the other way round than you describe), and subtract something from <code>sp</code>. Whatever is a few bytes below <code>sp</code> is subject to change without visible reason, because a hardware interrupt will cause the processor to push flags, <code>cs</code> and <code>ip</code> on the stack, and software can't predict when they arrive.</span>",
+                    "time": null
+                },
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Hi Guntram, I uploaded a screen shot</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Found something: <a href=\"http://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64/\" rel=\"nofollow noreferrer\">eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64</a> - going to include the essentials of that in my answer. Seems like <i>on x64 only</i> 128 bytes below the stack are \"reserved\", i.e. won't be clobbered by interrupts.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

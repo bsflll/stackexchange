@@ -1,0 +1,65 @@
+{
+    "title": "Strange vtable setup in constructor disassembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/22553/strange-vtable-setup-in-constructor-disassembly",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In a program I'm trying to recover data structures I've discovered the following strange (ARM) disassembly code:</p>\n<pre><code>ctor_1:\n    ldr  r1, =vtable_base\n    str  r1, [r0]             ;r0 always contains object instance ptr\n    ;... more setup\n    bx   lr\n\nctor_2:\n    push {r4,lr}\n    mov  r4, r0\n    bl   ctor_1\n    ldr  r1, =vtable_derived\n    str  r1, [r0]             ;vtable override in derived class\n    add  r0, r0, #0x20\n    bl   obj_ctor             ;calls an object's ctor at r0+0x20\n    ldr  r1, =vtable_derived_so\n    str  r1, [r0, 0x20]       ;overrides object vtable\n    ;...\n    pop  {r4,lr}\n    bx   lr\n</code></pre>\n<p>So far it looks all fine. There seems to be a derived class overriding the vptr after the base class ctor has been called. An internal subobject is first initialized in <code>obj_ctor</code> and then the vtable is set to a derived subobject. The first strange thing is why <code>ctor_2</code> doesn't directly call the subobject's derived ctor which in turn sets up first the base subobject. I suppose this happened because the call has been inlined by the compiler.</p>\n<p>However, things get spicy when the whole object is again subclassed:</p>\n<pre><code>ctor_3:\n    push {r4,lr}\n    mov  r4, r0\n    bl   ctor_2\n    ldr  r1, =vtable_derived2\n    ldr  r2, =vtable_derived2_so\n    str  r1, [r0]           ;vtable to the new subclass\n    str  r2, [r0, 0x20]     ;what??\n    ;...\n    pop  {r4,lr}\n    bx   lr\n</code></pre>\n<p>I have absolutely no idea how this is possible. How can a subclass 'change' a member type (which is definitely not even a pointer) which has already been setup in a superclass? It is confirmed that <code>ctor_2</code> and <code>ctor_3</code> create both valid opaque objects.</p>\n<p><strong>Do I misunderstand how vtables work in disassembly? Could a compiler generate such code from valid C++?</strong></p>\n<p>I don't know if that's important, but the symbols <code>ctor_2</code> and the <code>ctor_2</code> called from <code>ctor_3</code> are actually different albeit executing the exact same code (maybe because of different ctors?).</p>\n<p><strong>EDIT:</strong></p>\n<p>This is how the destructors look like:</p>\n<pre><code>dtor_1:\n    push {r4, lr}\n    ldr  r1, =vtable_base\n    str  r1, [r0]                      ;why overwrite the vtable with the same value?\n    ;...calls to delete for heap objects\n    pop  {r4, lr}\n    bx   lr\n\ndtor_2:\n    push {r4, lr}\n    mov  r4, r0\n    ldr  r1, =vtable_derived\n    ldr  r2, =vtable_derived_so\n    str  r1, [r0]\n    str  r2, [r0, #0x20]\n    add  r0, r0, #0x20\n    bl   dtor_base_so\n    mov  r0, r4\n    bl   dtor_1\n    pop  {r4, lr}\n    bx   lr\n\ndtor_3:\n    push {r4, lr}\n    mov  r4, r0\n    ldr  r1, =vtable_derived2\n    ldr  r2, =vtable_derived2_so\n    str  r1, [r0]\n    str  r2, [r0, #0x20]\n    ;...\n    bl   dtor_2\n    pop  {r4, lr}\n    bx   lr\n</code></pre>\n<p>As you can see, the vtables are overwritten with the same value. There is no call to <code>dtor_derived2_so</code>, so the vtable overwrite seems unneccesary. Even more interesting is that when the subobject should be destructed, there's always a call to <code>dtor_base_so</code> and not <code>dtor_derived_so</code>. I checked the vtables of <code>derived_so</code> and <code>derived2_so</code> and they have the following two destructors:</p>\n<pre><code>dtor_derived_so:\n    ldr  r12, =0xFFFFFFE0              ;-0x20\n    add  r0, r0, r12\n    b    dtor_2\n\ndtor_derived2_so:\n    ldr  r12, =0xFFFFFFE0              ;-0x20\n    add  r0, r0, r12\n    b    dtor_3\n</code></pre>\n<p>When they're called they call immediately the corresponding dtor. Since they reference fixed locations at which the object should be destroyed, the subobjects seem to only exist inside <code>derived2</code>'s class. What is going on here? Why would one force the object's destruction if a subobject is destroyed? Or do we have here a special case of virtual inheritance?</p>\n<p>Here are the vtables:</p>\n<pre><code>vtable_base:\n    dcd  0x82016D20          ;dtor_1\n    dcd  0x82016CE0          ;dtor_1 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x82016C98\n    dcd  0x82016BB8\n    dcd  0x82016B78\nvtable_derived:\n    dcd  0x8201691C          ;dtor_2\n    dcd  0x820168D8          ;dtor_2 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x8201686C\n    dcd  0x8201682C\n    dcd  0x820167F8\n    dcd  0x820167C4\nvtable_derived2:\n    dcd  0x82016364          ;dtor_3\n    dcd  0x82016320          ;dtor_3 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x8201686C\n    dcd  0x8201682C\n    dcd  0x820167F8\n    dcd  0x820167C4\nvtable_base_so:\n    dcd  0x82015CE8          ;dtor_base_so\n    dcd  0x82015CC4          ;dtor_base_so (destruct and free)\nvtable_derived_so:\n    dcd  0x82017178          ;dtor_derived_so\n    dcd  0x82017168          ;dtor_derived_so (destruct and free)\nvtable_derived2_so:\n    dcd  0x820171B8          ;dtor_derived2_so\n    dcd  0x820171A8          ;dtor_derived2_so (destruct and free)\n</code></pre>\n</div>",
+    "votes": "3",
+    "answers": 3,
+    "views": "645",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "c++",
+        "arm",
+        "vtables"
+    ],
+    "user": "Overblade",
+    "time": "Nov 18, 2019 at 19:38",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">can you also add the vtables, including the two dwords before each if they're not zero?</span>",
+            "time": null
+        },
+        {
+            "user": "Overblade",
+            "text": "<span class=\"comment-copy\">You mean the data before the address the vptr points to? Yeah sure, there is always an address to some other location close to the vtables.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">I mean a list of <code>DCD xxx</code> at <code>vtable_base</code>, <code>vtable_derived</code> etc.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">Thanks for vtables. I’ll check them and update my answer some time soon.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You're correctly interpreting C++'s way of implementing class inheritance, however your assumption that the \"subobject\" is a member object of the class may be incorrect.</p>\n<p>Through compiled code alone, It is impossible to completely distinguish member objects from additional inheritance in multiple inheritance classes as both appear the same. As a matter of fact, seeing something like this is one of the ways to distinguish a member object from multiple inheritance. Another is using <a href=\"https://en.wikipedia.org/wiki/RTTI\" rel=\"nofollow noreferrer\">RTTI</a> information, if it exists.</p>\n<p>In C++, multiple inheritance is implemented by appending one base class structure after the other, where all additional members are often be added to the first class (although if I remember correctly, that's not required by the standard). You can read about the memory layout of multiple inheritance classes in <a href=\"https://www.drdobbs.com/cpp/multiple-inheritance-considered-useful/184402074\" rel=\"nofollow noreferrer\">this</a> article, which also covers the diamond inheritance problem and it's common solution - <a href=\"https://en.wikipedia.org/wiki/Virtual_inheritance\" rel=\"nofollow noreferrer\"><em>virtual inheritance</em></a> - and the resulting memory layout.</p>\n<p>The following figure (taken from the article) illustrates the memory layout of a multiple-inheritance class:</p>\n<p><a href=\"https://twimgs.com/ddj/cuj/images/cuj0602reeves/0602reevesf2.jpeg\" rel=\"nofollow noreferrer\"><img alt=\"multiple inheritance class structure\" src=\"https://twimgs.com/ddj/cuj/images/cuj0602reeves/0602reevesf2.jpeg\"/></a></p>\n<p>I also found <a href=\"https://gist.github.com/airekans/3215428\" rel=\"nofollow noreferrer\">this</a> gist example code that shows how multiple inheritance works under the hood and includes the expected structure in the comments at the top of the file.</p>\n<p>You should definitely check it out in <a href=\"https://godbolt.org/z/V5MZy8\" rel=\"nofollow noreferrer\">compiler explorer</a>. Where you could easily see how this all looks in most compiler and architecture configurations.</p>\n<p>I think the inclusion of names and symbols together with instant update upon modifications and the control over the optimization levels makes this a great way to understand the memory layout and code of multiple inheritance.</p>\n</div>",
+            "votes": "4",
+            "user": "NirIzr",
+            "time": "Nov 20, 2019 at 12:34",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Could it be multiple inheritance? That could explain why the vptr of the supposed subobject is overwritten by <code>ctor_2</code> without having to assume the compiler to inline anything. The <code>derived</code> class might actually have two base classes, the \"base\" and the \"subobject\". If this is the case, it kinda makes sense why the compiler would make <code>ctor_3</code> to change the vptr of both base classes instead of just one of them. I'm not quite sure what exactly this would mean for the destructors, though.</p>\n</div>",
+            "votes": "3",
+            "user": "pants64",
+            "time": "Nov 19, 2019 at 22:48",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You have here multiple inheritance where both base classes have virtual destructors. The pattern you see in <code>dtor_derived_so</code> is a so-called \"non-virtual thunk\", which adjusts <code>this</code> before calling the whole class destructor. Normally you should also see <code>0xFFFFFFE0</code> (offset to base) in the second dword before the secondary vtables. I was able to produce code and vtable layout very similar to your example with the following source code:</p>\n<pre><code>class A\n{\n  int a, b, c, d;\npublic:\n  A() {};\n  virtual ~A() {};\n  virtual int f1() { return 0;};\n};\n\nclass B\n{\n  int x;\npublic:\n  virtual ~B() {};\n};\n\n\nclass C: public A, B\n{\npublic:\n  virtual int f1() { return 2;};\n};\n\nclass D: public C\n{\npublic:\n  virtual int f1() { return 3;};\n};\n\n\nint main()\n{\n D d;\n}\n</code></pre>\n<p>For more info, see the <a href=\"https://itanium-cxx-abi.github.io/cxx-abi/abi.html\" rel=\"nofollow noreferrer\">Itanium C++ ABI</a>, in particular <em>2.5 Virtual Table Layout</em>.</p>\n</div>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Nov 20, 2019 at 12:06",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

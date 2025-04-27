@@ -1,0 +1,24 @@
+{
+    "title": "Behringer CRC8 algorithm",
+    "link": "https://reverseengineering.stackexchange.com/questions/23099/behringer-crc8-algorithm",
+    "content": "The Behringer DEQ2496 audio device can have commands sent to it via MIDI, however they require a valid CRC code in order for the device to accept them.\nI have thus far been unable to work out how the CRC code is calculated.  The manual suggests it is CRC8 however I have not been able to configure a CRC8 algorithm to produce matching values.\nHere is some sample data, including valid CRC codes:\n\nBlock 0x0040\nBlock 0x0041\nBlock 0x0042\nBlock 0x0043\nBlock 0x0043\nBlock 0xFF00\n\nThe DEQ2496 SysEx manual says of the layout of each of the above files:\n\nblockdata: 7/8 coded: blockno_h, blockno_l, crc, data[256].\ncrc: crc8 checksum of blockno_h, blockno_l, data[256]\nblockno: transferred 256 byte data block number (bits 21..15, 14..8 of flash offset); blocks 0-0x1f: boot loader; blocks 0x20..0x5ef: application; blocks 0x5f0-0x5ff: startup screen; blocks 0x600-0x67f: presets; blocks 0x680-0x69f: temporary buffers; blocks 0x6a0-0x7ff: hw configuration; block no 0xff00 shows text message data[0..52] on screen\ndata: data block\n\nI have taken care of the 7/8 coding, so now I have a block of 3+256 bytes, consisting of:\n\nOffset 0: 16-bit big endian integer, block number\nOffset 2: 8-bit integer, CRC (this is the value I am trying to calculate)\nOffset 3+: Actual data\n\nI've tried a couple of CRC algorithms (with and without a lookup table), written code to run through all possible 8-bit polynomials, initial and final XOR values, and yet I can't find any parameters that work for more than one block.\nAlthough the manual suggests the CRC byte itself is not included in the CRC calculation, I also tried leaving it in place and setting it to various values like <pre><code>0x00</code></pre> and <pre><code>0xFF</code></pre> however this didn't yield any results either.\nIs there anyone with more CRC knowledge than me who is able to figure out what they mean here by \"crc8 checksum\"?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "217",
+    "tags": [
+        "crc"
+    ],
+    "user": "Malvineous",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Well thanks to @IgorSkochinsky who suggested in another question of mine to try a disassembler, I found a Docker image that contained a Blackfin toolchain which allowed me to use <pre><code>objdump</code></pre> to disassemble the code:\n<pre><code>bfin-elf-objdump -D -b binary -mbfin bootloader.bin > bootloader.disasm\n</code></pre>\nAfter hastily consulting a manual on Blackfin assembler and poking around a bit, I was able to get a vague idea of what was going on, and I was able to find the CRC function, which turned out not to be a CRC function at all, but a DIY checksum.\nUsing the disassembly as a reference, I was able to replicate the algorithm in my Javascript code:\n<pre><code>function behringer_crc8(data) {\n    let crc = 0;\n    for (let b of data) {\n        for (let j = 0; j < 8; j++) {\n            if (!((b ^ crc) & 1)) crc ^= 0x19;\n            b >>= 1;\n            // Rotate (shift right, move lost LSB to new MSB)\n            crc = ((crc & 1) << 7) | (crc >> 1);\n        }\n    }\n    return crc ^ 0xbf;\n}\n</code></pre>\nComparing this code against the distributed firmware update shows that it is able to reproduce the CRC bytes correctly!\nIt also turned out that despite the manual saying the two-byte block number prefix was included in the checksum, it turned out it wasn't, and only the 256-byte content is checksummed.\n",
+            "votes": "3",
+            "user": "Malvineous",
+            "time": "Jan 26, 2020 at 9:57",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

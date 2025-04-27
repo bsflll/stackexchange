@@ -1,0 +1,80 @@
+{
+  "title": "Objdump - How to output text (eg ASCII strings) alongside assembly code?",
+  "link": "https://reverseengineering.stackexchange.com/questions/14633/objdump-how-to-output-text-eg-ascii-strings-alongside-assembly-code",
+  "content": "Aim: I want to take hex and ascii data (derived from a binary file using xxd) and use Objdump (or a suitable other tool that Linux comes with) to output the memory addresses / offsets, assembly code, and text data. \n\nCurrently I can get the offsets and assembly code, but not text strings alongside.\n\nI used the following:\nobjdump -D -b binary -mi386 -Maddr16,data16 <filename>\n\nShould I need to use the -s switch?\n\n",
+  "votes": "25",
+  "answers": 1,
+  "views": "61k",
+  "tags": [
+    "disassembly",
+    "disassemblers",
+    "binary",
+    "objdump",
+    "hexadecimal"
+  ],
+  "user": "unseen_rider",
+  "time": "Jan 26, 2018 at 12:42",
+  "comments": [
+    {
+      "user": "julian",
+      "text": "Are you analyzing data from binaries that conform to a particular ABI or format (ELF, COFF, MACHO, etc)?",
+      "time": null
+    },
+    {
+      "user": "Willem Hengeveld",
+      "text": "You will need a tool like IDA to automatically determine what is data and code in your binary.",
+      "time": null
+    },
+    {
+      "user": "unseen_rider",
+      "text": "I can't use IDA at this moment. I am looking for manual methods or those that come with common Linux distributions.",
+      "time": null
+    },
+    {
+      "user": "blabb",
+      "text": "Some py scripts by iirc dion mendel in the old honeynet sotm reversing challenges  used objdump and could beautify the deadlisting here is a link to a tut that adapts them to analyze a simple binary see if that helps ( the contents concepts and thevinevitable assumptions are old so you may need a pitcher full of salt nearby )  reversing.be/article.php?story=2005030218170966",
+      "time": null
+    },
+    {
+      "user": "unseen_rider",
+      "text": "@blabb the site you linked in previous comment is blacklisted by Firefox. Any other page you know?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It is assumed here that Linux ELF32 binaries are being analyzed.\n\nCode and data such as strings are stored in separate parts of ELF binaries. \n\nCode and hardcoded strings are not intermingled in x86 or x86-64 ELF binaries. When the compiler toolchain generates a binary, hardcoded strings are placed in a separate area of the binary from the executable code and are referenced/accessed by their virtual memory address. Here is a diagram by Ange Albertini of the how different sections are laid out in ELF binaries:\n       \n\nTo make this more clear, below are visualizations of the Linux utilities ls, cat, mkdir and mv (accomplished via binvis.io). The solid blue areas consist of ASCII string data (the .rodata section, for example), and the large blocks of blue, white, red and black mixed together are regions that consist of executable code (the .text section, for example).\n\n*       ls                  cat              mkdir                mv\n\n\n\n\n\n\nAs we can see from these visualizations, these binaries are organized in a similar fashion. Each binary has discrete areas, or sections, which contain different information. We can also see here that there are multiple areas (i.e. sections) containing ASCII string data, not just one.\n\nSections with executable instructions will not contain meaningful strings, only code. This can be observed directly by using the -s option with objdump when examining the .text section of the Linux date utility:\n\n```\n$ objdump -sj .text /bin/date\n/bin/date:     file format elf64-x86-64\n\nContents of section .text:\n 401af0 41574531 ff415645 31f64155 41544531  AWE1.AVE1.AUATE1\n 401b00 e45589fd 534889f3 4881ecd8 00000048  .U..SH..H......H\n 401b10 8b3ee8f9 530000be a1c84000 bf060000  .>..S.....@.....\n 401b20 00e8bafe ffffbe87 944000bf 61944000  .@.\n 401b30 e83bfcff ffbf6194 4000e811 fcffffbf  .;....a.@.......\n 401b40 102c4000 e8877800 00c64424 0f0048c7  .,@...x...D$..H.\n < snip >\n\n```\nIn ELF binaries, the .text section holds the executable instructions of the program. The bytes the instructions are composed of are being treated as ASCII in this hexdump, so there are meaningless sequences of characters being printed. \n\nobjdump relies on an ELF binary's section headers to determine which sections of the binary contain code and which sections contain data. Only sections with instructions (.text, for example) should be disassembled using objdump.The -D argument to objdump will result in all sections of an ELF binary being disassembled, even non-code sections like .data and .rodata.\n\nFrom the manual page:\n\nThis means that even if a section contained hardcoded strings (.dynstr, .shstrtab, .rodata, etc.) objdump would treat this data as instructions and dissasemble them accordingly.\n\nHere is an example using /bin/date:\n\n```\n/bin/date:     file format elf64-x86-64\n\n\nDisassembly of section .rodata:\n\n0000000000409400 <.rodata>:\n  409400:       01 00                   add    %eax,(%rax)\n  409402:       02 00                   add    (%rax),%al\n  409404:       74 69                   je     40946f <__sprintf_chk@plt+0x798f>\n  409406:       6d                      insl   (%dx),%es:(%rdi)\n  409407:       65 20 25 73 20 69 73    and    %ah,%gs:0x73692073(%rip)        # 73a9b481 <stderr+0x7348d131>\n  40940e:       20 6f 75                and    %ch,0x75(%rdi)\n  409411:       74 20                   je     409433 <__sprintf_chk@plt+0x7953>\n  409413:       6f                      outsl  %ds:(%rsi),(%dx)\n  409414:       66                      data16\n  409415:       20 72 61                and    %dh,0x61(%rdx)\n  409418:       6e                      outsb  %ds:(%rsi),(%dx)\n  409419:       67 65 00 0a             add    %cl,%gs:(%edx)\n  40941d:       52                      push   %rdx\n  40941e:       65                      gs\n  40941f:       70 6f                   jo     409490 <__sprintf_chk@plt+0x79b0>\n  < snip >\n\n```\nIt looks like there are instructions being disassembled, when in reality is data being treated as code:\n\n```\n$ readelf -x .rodata /bin/date\nHex dump of section '.rodata':\n  0x00409400 01000200 74696d65 20257320 6973206f ....time %s is o\n  0x00409410 7574206f 66207261 6e676500 0a526570 ut of range..Rep\n\n```\nFurthermore, the arguments -b binary result in objdump treating the binary as a blob with a single section, obliterating any distinction between code and data within the binary, resulting in the entire contents of the binary being treated as code.\n\nReference: the System V ABI section 4: \"Object Files\"\n\n",
+      "votes": "37",
+      "user": "julian",
+      "time": "Jan 24, 2018 at 14:22",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "unseen_rider",
+          "text": "Ok, so what syntax should I use for just disassembling the code sections using objdump?",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "objdump -d <file name>. The -d option results in only the sections expected to contain code to be disassembled.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "In fact, read-only strings may be present in code sections too, especially on embedded platforms like ARM or MIPS",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "ARM linker can add special symbols like $d to mark data areas in code sections (though I think these are mostly used for jump tables and such) but I don't know if objdump makes use of them. Your answer is fine for the common case, you can just mention your assumptions at the beginning.",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@unseen_rider a hexdump of an unstripped binary will include the contents of the .strtab section. This section contains strings corresponding to the symbols in the binary's symbol table (.symtab). Among these strings there will be function names. If the binary is dynamically linked then this holds true for the .dynstr section as well. The .dynstr section will be present in a dynamically linked binary even if the binary is stripped.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

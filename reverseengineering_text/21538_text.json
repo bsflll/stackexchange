@@ -1,0 +1,42 @@
+{
+    "title": "Extracting ARM Boot zImage",
+    "link": "https://reverseengineering.stackexchange.com/questions/21538/extracting-arm-boot-zimage",
+    "content": "I'm trying to analyze the firmware of a system running Linux and connecting various home automation and security devices. Every time it boots, the GM8125 processor running ARMv5TE loads a firmware image from the SPI flash. I connected to the flash with a Bus Pirate and pulled off the firmware image. When I run <pre><code>binwalk</code></pre> on it, I get the following.\n<pre><code>$ binwalk spidump.bin \n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n271284        0x423B4         Sega MegaDrive/Genesis raw ROM dump, Name: \"ETIR_ON\", \"ECCAS\",\n744708        0xB5D04         CRC32 polynomial table, big endian\n786432        0xC0000         gzip compressed data, maximum compression, from Unix, last modified: 1970-01-04 16:05:57 (bogus date)\n917760        0xE0100         Linux kernel ARM boot executable zImage (big-endian)\n9306332       0x8E00DC        Zlib compressed data, compressed\n9307424       0x8E0520        Zlib compressed data, compressed\n9308196       0x8E0824        Zlib compressed data, compressed\n9309036       0x8E0B6C        Zlib compressed data, compressed\n9310040       0x8E0F58        Zlib compressed data, compressed\n9310220       0x8E100C        Zlib compressed data, compressed\n9311200       0x8E13E0        Zlib compressed data, compressed\n9312104       0x8E1768        JFFS2 filesystem, little endian\n9317132       0x8E2B0C        Zlib compressed data, compressed\n9317428       0x8E2C34        JFFS2 filesystem, little endian\n9318332       0x8E2FBC        Zlib compressed data, compressed\n[...]\n</code></pre>\nIf I run <pre><code>binwalk -Mre</code></pre> it gives me nearly 6000 files and several hundred folders of the extracted <pre><code>Zlib</code></pre> and <pre><code>JFFS2</code></pre> data. After analyzing these, I thought I'd look at the boot image.\nI carved out the zImage by running <pre><code>dd if=spidump.bin of=carved.bin bs=1 skip=917760 count=8388572</code></pre>. Running <pre><code>file</code></pre> returns <pre><code>carved.bin: Linux kernel ARM boot executable zImage (big-endian)</code></pre>.\nSo far so good. This is where I get lost.\nFrom reading other posts here and elsewhere, it seems like I should search for the magic bytes of where compression starts--since this is big-endian, I run <pre><code>objdump</code></pre> with a lot of results (only the first few lines listed).\n<pre><code>$ arm-none-eabi-objdump -EB -D -m armv5te -b binary carved.bin | grep 1f8b\n    9b38:   1f8b3c36    svcne   0x008b3c36\n   1f8b0:   bf2e3abe    svclt   0x002e3abe\n   1f8b4:   0811cabb    ldmdaeq r1, {r0, r1, r3, r4, r5, r7, r9, fp, lr, pc}\n   1f8b8:   baaee7f4    blt 0xfebd9890\n   1f8bc:   fc3711aa    ldc2    1, cr1, [r7], #-680 ; 0xfffffd58\n   20c38:   f3b1f8b9            ; <UNDEFINED> instruction: 0xf3b1f8b9\n   233c0:   d1f8badf    ldrsble fp, [r8, #175]! ; 0xaf\n   2c7d8:   011f8b05    tsteq   pc, r5, lsl #22\n   2d990:   e9ff1f8b    ldmib   pc!, {r0, r1, r3, r7, r8, r9, sl, fp, ip}^  ; <UNPREDICTABLE>\n</code></pre>\nI carve the file starting from the first occurrence of the magic bytes by running <pre><code>dd if=carved.bin of=arm.gz bs=1 skip=39736</code></pre>. <pre><code>file</code></pre> returns <pre><code>arm.gz: gzip compressed data, unknown method, has CRC, extra field, has comment, encrypted, last modified: Mon Sep 15 08:57:49 1975</code></pre> and <pre><code>gunzip</code></pre> refuses to unzip, saying <pre><code>unknown method 60 -- not supported</code></pre>. Most later occurrences of <pre><code>1f8b</code></pre> are not aligned at the beginning of a byte, so I assume they are not good candidates for carving and unzipping. It seems like the first occurrence, and subsequent occurrences, might just all be by chance.\nIs this truly a zImage, or could <pre><code>binwalk</code></pre> and <pre><code>file</code></pre> be confused? How can I tell? How do I extract it?\nUnfortunately, I can't provide the binary for your own perusal.\nUpdate - 6/25/2019\nI've included a graph of the entropy of the file, as requested by julian. It does look like the section in question is compressed.\n\nUpdate - 7/5/2019\nUpon further review with an expert, it seems like <pre><code>binwalk</code></pre> misidentified the type(s) of files. It looks like there is a custom unpacker I need to either disassemble or have it run and then take the unpacked image from memory.\n",
+    "votes": "5",
+    "answers": 0,
+    "views": "6k",
+    "tags": [
+        "firmware",
+        "arm"
+    ],
+    "user": "theTheodidact",
+    "time": "Jul 5, 2019 at 13:05",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "I think I'm missing something; why are you trying to disassemble compressed data?\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "look at an entropy plot of the suspected zImage to determine whether it is compressed or not\n",
+            "time": null
+        },
+        {
+            "user": "theTheodidact",
+            "text": "@IgorSkochinsky I thought perhaps if the file structure didn't contain what I was looking for, the boot image would have more information about specific open ports and information associated with those ports.\n",
+            "time": null
+        },
+        {
+            "user": "theTheodidact",
+            "text": "@julian I added a plot of the entropy and it does look like it is legitimately compressed.\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "if a binwalk scan of the compressed data doesn't return any true/legitimate signatures you may need to go over a hex dump manually of the first few bytes of the data to look for anything info pointing to a particular compression algorithm.\n",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

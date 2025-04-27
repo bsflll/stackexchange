@@ -1,0 +1,81 @@
+{
+  "title": "Added instruction to shellcode",
+  "link": "https://reverseengineering.stackexchange.com/questions/16250/added-instruction-to-shellcode",
+  "content": "I have the following shellcode:\n\n```\nxor  eax, eax   ; eax = 0\npush eax        ; 0 (end of the string)\npush 0x68732f2f ; //sh\npush 0x6e69622f ; /bin\nmov  ebx, esp   ; ebx = &(/bin//sh)\nxor  ecx, ecx   ; ecx = 0\nmov  al, 0xb    ; execve\nint  0x80\n\n```\nWhich, converted into hex is used in the following C program:\n\n```\nconst char shellcode[] =\n     \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x31\\xc9\\xb0\\x0b\\xcd\\x80\";\n\nint main(){\n    (*(void(*)()) shellcode)();\n    return 0;\n}\n\n```\nThis works just fine, but when I step through the payload with gdb I see an extra instruction added to the shellcode:\n\n```\n$ gdb shellcode\n(gdb) disass main\nDump of assembler code for function main:\n   0x080483ed <+0>:     push   %ebp\n   0x080483ee <+1>:     mov    %esp,%ebp\n   0x080483f0 <+3>:     and    $0xfffffff0,%esp\n   0x080483f3 <+6>:     mov    $0x80484a0,%eax\n   0x080483f8 <+11>:    call   *%eax\n   0x080483fa <+13>:    mov    $0x0,%eax\n   0x080483ff <+18>:    leave\n   0x08048400 <+19>:    ret\nEnd of assembler dump.\n(gdb)  x/14i 0x80484a0\n   0x80484a0 <shellcode>:       xor    %eax,%eax\n   0x80484a2 <shellcode+2>:     push   %eax\n   0x80484a3 <shellcode+3>:     push   $0x68732f2f\n   0x80484a8 <shellcode+8>:     push   $0x6e69622f\n   0x80484ad <shellcode+13>:    mov    %esp,%ebx\n   0x80484af <shellcode+15>:    xor    %ecx,%ecx\n   0x80484b1 <shellcode+17>:    mov    $0xb,%al\n   0x80484b3 <shellcode+19>:    int    $0x80\n   0x80484b7 <shellcode+21>:    add    %al,(%ecx)\n   ... (gibberish)\n\n```\nYou can see the shellcode+23 is an extra line, added to the shellcode.\nWhile searching for an answer here I discovered that it was making the shellcode to crash, and I had to clear the ecx register before calling the interrupt.\n\nDo you know what is this extra command?\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "470",
+  "tags": [
+    "gdb",
+    "register"
+  ],
+  "user": "nobe4",
+  "time": "Sep 4, 2017 at 9:45",
+  "comments": [
+    {
+      "user": "Michael Pittino",
+      "text": "gibberish isn't very helpful..",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The original shellcode contains only eight instructions, but because you asked gdb to disassemble 14 instructions, it went ahead and did just what you asked. Since you asked to disassemble more than there actually are, it disassembled whatever bytes happened to be present after the variable (likely zero padding but maybe also other parts of the executable).\n\nSo no instructions were \"added\", you're just disassembling some junk that happens to be in the memory after it.\n\n",
+      "votes": "3",
+      "user": "Igor Skochinsky",
+      "time": "Sep 4, 2017 at 9:13",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "nobe4",
+          "text": "I see, but the instruction +21 is considere part of the shellcode, whereas the next one (which I should have provided, my bad) doesn't have the <shellcode+XX>.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "how did you compile it? normally there should be ret after int 0x80",
+          "time": null
+        },
+        {
+          "user": "nobe4",
+          "text": "gcc -o shellcode shellcode.c, is there anywhere I can look for more settings?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "are you sure you compiled the same source you mention in this question and not the previous version? (without \\xc3)",
+          "time": null
+        },
+        {
+          "user": "nobe4",
+          "text": "yeah, sorry it was a bad copy/paste. There is no \\xc3 at the end of the shellcode",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Igor is right... The original shellcode does not include any ret (0xc3), so there are none in the decompiled asm. The thing is that when you ask gdb to disassemble 14 instructions, it disassembles 14 instructions interpreting the content of the memory as if it was instructions.\n\nAs a proof of what I say, here is a disassembly of the instruction add %al,(%ecx):\n\n```\n$ rasm2 -a x86 -C 'add %al,(%ecx)'\n\"\\xc0\\x00\"\n\n```\nWhich is, in fact, \"\\x00\\xc0\" (because of the endianness) and where the first \"\\x00\" is, in fact, the final character of the shellcode string.\n\nThe following characters are very likely the code of the main function or whatever is in the memory at this place.\n\nAnyway, reread more carefully the answer of Igor (he's right!).\n\n",
+      "votes": "1",
+      "user": "perror",
+      "time": "Sep 4, 2017 at 17:43",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "nobe4",
+          "text": "Got it now, thanks for insisting on Igor's answer. Should I also not believe gdb when he tells me that an instruction is part of the shellcode?",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "gdb never told you that it was part of the shellcode. You asked for 14 instructions after the address you set, and voilà, you have 14 instructions... But, there is absolutely nothing that tells you if you are within or outside the bounds of the shellcode. You have to understand that the securing frontiers that you have at a high-level totally disappear when you are at the asm level. :-)",
+          "time": null
+        },
+        {
+          "user": "nobe4",
+          "text": "Hehe thanks, I feel like going down the rabbit hole makes you more responsible for your actions!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

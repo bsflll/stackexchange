@@ -1,0 +1,63 @@
+{
+    "title": "How to Find All Switch Jump Tables in IDAPython",
+    "link": "https://reverseengineering.stackexchange.com/questions/13358/how-to-find-all-switch-jump-tables-in-idapython",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm using IDAPython on IDA 6.5 and I'm trying to get all the switch jump tables in a DLL. Mainly I'm interested in jump tables that are jumped indirectly:\n </p>\n <pre><code>jmp     ds:off_65018790[ecx*4] ; switch jump\n</code></pre>\n <p>\n  Basically, what interests me is:\n </p>\n <ul>\n  <li>\n   The address from where the jmp happens\n  </li>\n  <li>\n   The list of the possible locations, for example - loc_65018723, loc_65018736...\n  </li>\n </ul>\n <p>\n  I already know how to get all the jmp addresses using IDAPython, but I don't know if it's a jmp to a jump table or just a normal jmp.\n </p>\n <p>\n  In most cases, IDA knows to identify those jump tables, so is there a way to get that info from the API?\n </p>\n <p>\n  Thanks a lot!\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ida",
+        "idapython",
+        "ida-plugin",
+        "disassemblers",
+        "idapro-sdk"
+    ],
+    "user": "Alex",
+    "time": "Aug 25, 2016 at 8:27",
+    "comments": [
+        {
+            "user": "w s",
+            "text": "<html><body><span class=\"comment-copy\">\n Unfortunately I don't have IDA 6.5 installed, but as far as I remember idaapi.get_switch_info_ex(ea) already was there. The simplest way to see reference usage of this function is searching python code with call to this function on github.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Alex",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks a lot! It was exactly what I needed. If you post it as an answer, I will mark it as answered :)\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Decided to add a small code snippet to show how to iterate through the .text segment, obtaining all the switch table locations and storing the jump targets in a dictionary.\n </p>\n <pre><code>text_seg = idaapi.get_segm_by_name('.text')\njump_table = dict()\n\n# iterate through all items within the segment\nfor head_ea in idautils.Heads(text_seg.startEA, text_seg.endEA):\n    if idc.isCode(idc.GetFlags(head_ea)):\n        switch_info = idaapi.get_switch_info_ex(head_ea)\n        if (switch_info and switch_info.jumps != 0):\n            loc = switch_info.jumps\n            jump_table[loc] = list()\n            element_num = switch_info.get_jtable_size()\n            element_size = switch_info.get_jtable_element_size()\n            for num in range(0, element_num):\n                table_entry = loc+num*element_size\n                jump_table[loc].append(idc.GetManyBytes(table_entry), element_size)\n</code></pre>\n <p>\n  <strong>\n   Update\n  </strong>\n  : To build upon this for newer versions of IDA\n </p>\n <pre><code>def find_jumps(si: ida_nalt.switch_info_t) -> list:\n    jtable = []\n    e_size = si.get_jtable_element_size()\n\n    for num in range(0, si.get_jtable_size()):\n        jtable.append(int.from_bytes(ida_bytes.get_bytes(si.jumps + (num * e_size), e_size), 'little') + si.elbase)\n\n    return jtable\n\nea = 0x0000000000000000 # some ea\nsi = ida_nalt.switch_info_t()\nif (ida_nalt.get_switch_info(si, ea) is not None): # jump table\n    jtable = find_jumps(si)\n</code></pre>\n <p>\n  This resolves the offsets to the with respect to\n  <code>\n   elbase\n  </code>\n  of the\n  <code>\n   switch_info_t\n  </code>\n  structure which IDA provides if\n  <code>\n   get_switch_info\n  </code>\n  is succesful. See:\n  <a href=\"https://hex-rays.com/products/ida/support/idapython_docs/ida_nalt.html#ida_nalt.switch_info_t.elbase\" rel=\"nofollow noreferrer\">\n   https://hex-rays.com/products/ida/support/idapython_docs/ida_nalt.html#ida_nalt.switch_info_t.elbase\n  </a>\n  for more information, and cross reference this to the\n  <code>\n   c++\n  </code>\n  support if need-be at\n  <a href=\"https://hex-rays.com/products/ida/support/sdkdoc/structswitch__info__t.html\" rel=\"nofollow noreferrer\">\n   https://hex-rays.com/products/ida/support/sdkdoc/structswitch__info__t.html\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Supernovah",
+            "time": "Nov 21, 2021 at 3:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\"><code>getnseg</code> receives a segment number, while <code>SegByName</code> returns a segment selector, these are not the same thing. Your first line is erroneous.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Additionally, using <code>idc.Dword</code> feels insecure and assumes the switch code is indeed structured the way OP described, which isn't always the case.</span>",
+                    "time": null
+                },
+                {
+                    "user": "chuazl",
+                    "text": "<span class=\"comment-copy\">Thanks Nirlzr, the above snippet comes from my old script I used on ARM32 binaries to extract out jumptables in order to rewrite them. I've updated it to fix the mistakes you've pointed out.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  To safely get all references from a certain\n  <code>\n   EA\n  </code>\n  , there's\n  <code>\n   idc.XrefsFrom(ea, flags)\n  </code>\n  . You'll get an iterator for cross references from a certain\n  <code>\n   EA\n  </code>\n  (the switch-case's branch/jump instruction). switch-cases are easy to identify as they're always with more than two cross references targets.\n </p>\n <p>\n  According to\n  <a href=\"https://www.hex-rays.com/products/ida/support/idapython_docs/ida_xref-module.html\" rel=\"nofollow\">\n   this\n  </a>\n  the\n  <code>\n   flags\n  </code>\n  parameter is one of the following:\n </p>\n <blockquote>\n  <p>\n   XREF_USER = 32\n   \n\n   XREF_TAIL = 64\n   \n\n   XREF_BASE = 128\n   \n\n   XREF_MASK = 31\n   \n\n   XREF_PASTEND = 256\n   \n\n   XREF_ALL = 0\n   \n\n   XREF_FAR = 1\n   \n\n   XREF_DATA = 2\n  </p>\n </blockquote>\n <p>\n  The object you'll get from each iteration is an\n  <code>\n   ida_xref\n  </code>\n  object, exposing the following attributes:\n </p>\n <ol>\n  <li>\n   <code>\n    frm\n   </code>\n   - The source of the cross reference, the code that performs the jump in our case.\n  </li>\n  <li>\n   <code>\n    to\n   </code>\n   - The target of the cross reference, the code that will be executed according to the jump table selector in our case.\n  </li>\n  <li>\n   <code>\n    iscode\n   </code>\n   - Boolean,\n   <code>\n    True\n   </code>\n   if cross reference is a code cross reference, must be\n   <code>\n    True\n   </code>\n   in our case.\n  </li>\n  <li>\n   <code>\n    type\n   </code>\n   - One of the available type values, see below. You could use\n   <code>\n    idautils.XrefTypeName(typecode)\n   </code>\n   to translate the integer you get here to a readable string.\n  </li>\n  <li>\n   <code>\n    user\n   </code>\n   - Boolean, True if this cross reference was created by the user, opposed to being automatically created by IDA.\n  </li>\n </ol>\n <p>\n  The valid cross reference types are, according to\n  <a href=\"https://github.com/idapython/src/blob/master/python/idautils.py#L119\" rel=\"nofollow\">\n   this\n  </a>\n  :\n </p>\n <blockquote>\n  <p>\n   ref_types = {\n   \n\n   0  : 'Data_Unknown',\n   \n\n   1  : 'Data_Offset',\n   \n\n   2  : 'Data_Write',\n   \n\n   3  : 'Data_Read',\n   \n\n   4  : 'Data_Text',\n   \n\n   5  : 'Data_Informational',\n   \n\n   16 : 'Code_Far_Call',\n   \n\n   17 : 'Code_Near_Call',\n   \n\n   18 : 'Code_Far_Jump',\n   \n\n   19 : 'Code_Near_Jump',\n   \n\n   20 : 'Code_User',\n   \n\n   21 : 'Ordinary_Flow'\n   \n\n   }\n  </p>\n </blockquote>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "NirIzr",
+            "time": "Sep 9, 2016 at 11:07",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

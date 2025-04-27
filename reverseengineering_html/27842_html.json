@@ -1,0 +1,72 @@
+{
+    "title": "How to jump to a new empty memory that related to the program to write another code there?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27842/how-to-jump-to-a-new-empty-memory-that-related-to-the-program-to-write-another-c",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a line of code like that  ex:\n  <code>\n   MOV EAX, 100\n  </code>\n  , I want to write a little bigger code instead of that code but I can't, so I want to write a jump instruction ex:\n  <code>\n   jmp 0x123456\n  </code>\n  that jumps to another empty memory that related to my program to write the new code there.\n </p>\n <p>\n  <strong>\n   How do I know/reserve an empty memory that related to my program to write the new code?\n  </strong>\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "221",
+    "tags": [
+        "disassembly",
+        "memory"
+    ],
+    "user": "Lion King",
+    "time": "Jun 15, 2021 at 2:59",
+    "comments": [
+        {
+            "user": "saquintes",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you wanting to patch a binary on disk and then run that patched binary, or are you wanting to patch a binary at runtime?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Lion King",
+            "text": "<html><body><span class=\"comment-copy\">\n @saquintes: Patching at runtime.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "saquintes",
+            "text": "<html><body><span class=\"comment-copy\">\n There is a lot of nuance in finding a space, but one option might be to find the end of the .text section and use any slack space that might there.  Pages are allocated in 4K blocks, so if the last page only uses 2K, you might have 2K to work with.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Lion King",
+            "text": "<html><body><span class=\"comment-copy\">\n @saquintes: Sorry, but maybe that talking is ambiguous to me.  Could you clarify that ambiguity in more detail?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Get Yourself Acquainted with the Binary Format Two Major  Formats Are\n  \n\n  PE or COFF for Windows\n  \n\n  ELF For Linux\n </p>\n <p>\n  A Windows PE Section Named .xyz might have the following properties\n </p>\n <pre><code>SECTION HEADER #1\n    .xyz name\n      15 virtual size\n    1000 virtual address (00401000 to 00401014)\n     200 size of raw data\n     200 file pointer to raw data (00000200 to 000003FF)\n       0 file pointer to relocation table\n       0 file pointer to line numbers\n       0 number of relocations\n       0 number of line numbers\n60000020 flags\n         Code\n         Execute Read\n</code></pre>\n <p>\n  a Section is normally Aligned on a 0x200 bytes in the physical binary\n  \n\n  a Section is normally mapped with an alignment of 0x1000 by the windows loader when you execute the binary\n </p>\n <p>\n  this space of either\n </p>\n <p>\n  <strong>\n   ( sizeof(RawData) - sizeof(VirtualSize) )\n  </strong>\n  or\n  \n\n  <strong>\n   ( sizeof(PageSize) - sizeof(VirtualSize) )\n  </strong>\n </p>\n <p>\n  is inherently available for Manipulation\n </p>\n <p>\n  in the section header above you either have physical and permanent modifiable space of\n </p>\n <pre><code>:\\>python -c print(hex(0x200-0x15))\n0x1eb \n</code></pre>\n <p>\n  or a transient temporarily modifiable space of\n </p>\n <pre><code>:\\>python -c print(hex(0x1000-0x15))\n0xfeb\n</code></pre>\n <p>\n  just as confirmation you can dump 50 bytes from this .xyz section\n  \n\n  which is located at 0x200 in the physical file and\n  \n\n  Notice after the VirtualSize of 0x15 it is filled with 0x00 (NULLS) upto 0x400 (The File Alignment Size)\n </p>\n <pre><code>:\\>xxd -s 0x200 -l 0x50 -g 0x16 winmsgbox.exe\n00000200: 558bec6a006a006a006a00ff15002040  U..j.j.j.j.... @\n00000210: 005dc210000000000000000000000000  .]..............\n00000220: 00000000000000000000000000000000  ................\n00000230: 00000000000000000000000000000000  ................\n00000240: 00000000000000000000000000000000  ................\n\n0x215 to 0x3ff is free in the section shown above \n\n\n:\\>xxd -s 0x3f0 -l 0x20 -g 0x16 winmsgbox.exe\n000003f0: 00000000000000000000000000000000  ................\n00000400: fc200000000000000000000000000000  . ..............\n</code></pre>\n <p>\n  since this section is already an Executable Section you can add your code in this Section and execute it without worrying about Page Protection Limitations enforced by the system.\n </p>\n <p>\n  you can either physically modify the binary using a hex editor up to 0x1eb bytes\n  \n\n  or\n  \n\n  patch it in Memory up to 0xfeb bytes\n </p>\n <p>\n  the sample code below is a simple MessageBox  with no Message or Caption\ncompiled using vs 2017 as x86 (32bit) from which  the Section Header is Displayed above\n </p>\n <pre><code>:\\>ls -lg\ntotal 2\n-rw-r--r-- 1 197121 130 Jun 20 19:51 complink.bat\n-rw-r--r-- 1 197121 215 Jun 20 20:08 winmsgbox.cpp\n\n:\\>type winmsgbox.cpp\n#include <windows.h>\n#pragma comment(lib, \"user32.lib\")\n#pragma code_seg(\".xyz\")\nint WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int)\n{\n    return MessageBoxW(NULL, NULL, NULL, NULL);\n}\n\n\n:\\>type complink.bat\ndel *.exe\ncl /W4 /analyze:autolog- /Od /nologo /GS- %1.cpp /link /release /ENTRY:WinMain /SUBSYSTEM:Windows /FIXED\ndel *.obj\n</code></pre>\n <p>\n  on execution The Message box will display a caption of System Default String \"Error\"\n </p>\n <p>\n  as below\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/ZpvPp.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/ZpvPp.png\"/>\n  </a>\n </p>\n <p>\n  think of ways and means to Change the Caption to \"Success\"\n </p>\n <p>\n  one possible way is to recompile it with required info rip the bytes paste and adjust\nanother possible way is to hexedit the strings calculate offsets and Detour\n </p>\n <p>\n  any other ways ?\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Jun 20, 2021 at 15:20",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Lion King",
+                    "text": "<span class=\"comment-copy\">I tried to change that word from \"error\" to \"success\" but I have failed, I must first allocate memory to store the word then changing the instruction that gets the \"error\" word from memory. That's what I thought. (I have used x64dbg for that work).</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">well think if you really need to allocate memory i already hinted you you have 0x1eb free space by way of FileAlignment</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lion King",
+                    "text": "<span class=\"comment-copy\">But this range <code>0x15</code> to <code>0x200</code> has data! take a look <a href=\"https://i.ibb.co/Ntbcxxy/ksnip-20210621-224704.png\" rel=\"nofollow noreferrer\">ScreenShot</a>, (1) is that data not important if I overwrite it? (2) Also, is this range available to be overwritten with all executable files?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">well you need basics please go to the drawing board and memorize multiplication tables aka pe header format  this qa web service is not a suitable format for a lengthy tete a tete  take a look at 215 to 3ff in the compiled code i provided you cannot use a size small t shirt on a sumo wrestler or. use a sumo wrestller's boxers for a lean slim and trim boy</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lion King",
+                    "text": "<span class=\"comment-copy\">I did my best to change the string from \"error\" to \"success\" but the final executable file becomes corrupt. the instruction that loads the \"error\" word is in a DLL file named ntdll.dll and it's impossible to change anything in that DLL file. Am I took the correct path or I took the wrong path?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,95 @@
+{
+    "title": "Can I statically link (not import) the Windows system DLLs?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2070/can-i-statically-link-not-import-the-windows-system-dlls",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have compiled following C source code in VS2010 console project.</p>\n<pre><code>#include &lt;stdio.h&gt;\nint main(int argc, char* argv[]){\n    printf(\"hello world\\n\");\n    return 0;\n}\n</code></pre>\n<p>then I used <code>/MT</code> option for release mode to statically link the C-runtime library.\nHowever, as far as I know, C-runtime library still invokes lower level system functions - \nfor example, C-runtime function <code>printf</code> eventually calls <code>WriteFile</code> Windows API.</p>\n<p>And the actual function body of <code>WriteFile</code> is in <code>kernel32.dll</code>.\nSo, even if I link the C-runtime library statically, the binary doesn't contain\nthe entire routine including the <code>SYSENTER</code>, or <code>INT 0x2E</code> instructions...\nThe core part is still in a DLL. The following diagram describes how I understand it:</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/w2XJH.png\"/></p>\n<p>What I want is to statically link EVERYTHING into single EXE file. Including <code>kernel32.dll</code>, <code>user32.dll</code> to eliminate the necessity of loader parsing the IAT and resolving the function names.</p>\n<p>The following picture describes what I want:</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/IQtdo.png\"/></p>\n<p>I understand this is simple in Linux with <code>gcc</code>. All I have to do is give the option <code>-static</code></p>\n<p>Is there any option like this in VS2010? Please correct me if I'm misunderstanding.</p>\n</div>",
+    "votes": "30",
+    "answers": 4,
+    "views": "14k",
+    "tags": [
+        "windows",
+        "dll",
+        "compilers",
+        "symbols",
+        "dynamic-linking"
+    ],
+    "user": "daehee",
+    "time": "Sep 18, 2013 at 22:03",
+    "comments": [
+        {
+            "user": "newgre",
+            "text": "<span class=\"comment-copy\">The answer is clearly \"no\". You would have to write your own OS specific syscall layer. The question is: why don't you want to use a standard CRT? To what advantage?</span>",
+            "time": null
+        },
+        {
+            "user": "daehee",
+            "text": "<span class=\"comment-copy\">thank you. in fact, I was not looking for performance advantage. I thought, in this way, I can remove every symbols just like Linux stripped binary and make the reversing harder.</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">@daehee: that gives your question a whole different angle, you see.</span>",
+            "time": null
+        },
+        {
+            "user": "Lorenzo Dematté",
+            "text": "<span class=\"comment-copy\">Your description is correct, overall, but you need to add yet another layer, the NT native api: fread(msvcrt) -&gt; ReadFile(kernel32) -&gt; NtReadFile(ntdll.dll) -&gt; kernel</span>",
+            "time": null
+        },
+        {
+            "user": "CodesInChaos",
+            "text": "<span class=\"comment-copy\">With enough effort you might be able to do inline windows functions, but then you're bound to that specific windows version, and you'd probably violate MS's copyright.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Let me start by telling you that what you want would be impossible, because of how well-known DLLs work. You can attempt something similar with tools like <a href=\"https://bitsum.com/pebundle.asp\" rel=\"noreferrer\">PEBundle</a> or <a href=\"https://github.com/rwfpl/rewolf-dllpackager\" rel=\"noreferrer\">dllpackager</a>, but that will usually (I'd say certainly) fail with the well-known DLLs (such as system DLLs as well as even the MSVC runtime DLLs in their different incarnations). See <a href=\"https://docs.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order\" rel=\"noreferrer\">this</a> and <a href=\"https://web.archive.org/web/20150629150222/http://blogs.msdn.com:80/b/larryosterman/archive/2004/07/19/187752.aspx\" rel=\"noreferrer\">this</a> on the relevance and meaning of well-known DLLs.</p>\n<p><code>kernel32.dll</code> plays a <em>very</em> special role in in the Win32 subsystem in that it helps to register Win32 threads and processes with the subsystem (<code>csrss.exe</code>).</p>\n<hr/>\n<p>Answering the part from the comment of the OP on the question:</p>\n<blockquote>\n<p>in fact, I was not looking for performance advantage. I thought, in this way, I can remove every symbols just like Linux stripped binary and make the reversing harder.</p>\n</blockquote>\n<p>There is no point in doing it this way then. You could still only import a single function and use a convoluted way of importing DLLs and/or resolving functions. I.e. concealing which functions you are importing from which DLLs. One thing that is rather popular in hacker circles is to hash the exported function names and then walk the exports of the loaded image yourself, hashing each of the function names found and comparing with the known hashed values.</p>\n<p><a href=\"http://www.hick.org/code/skape/papers/win32-shellcode.pdf\" rel=\"noreferrer\">Here's a good paper</a> on one method used for what you want, because shell code has no clue about imported function addresses in a hijacked process.</p>\n<p>As Igor pointed out <code>kernel32.dll</code> will be loaded into the process and AFAIR the order of that has changed as well with Vista (previously <code>ntdll.dll</code> was the first one in the <a href=\"http://undocumented.ntinternals.net/UserMode/Undocumented%20Functions/NT%20Objects/Process/PEB.html\" rel=\"noreferrer\">PEB</a>'s DLL list, aka <a href=\"http://undocumented.ntinternals.net/UserMode/Structures/PEB_LDR_DATA.html\" rel=\"noreferrer\"><code>LoaderData</code></a>). So the exact method has been laid out in above paper.</p>\n<p>A few more points:</p>\n<ol>\n<li>if you don't want to use <code>LoadLibrary</code> (or its <code>ntdll.dll</code> counterpart) to dynamically load the DLLs, you can keep a reference to a single imported function in the IAT - this is how some executable packers do it.</li>\n<li>if not, start by resolving <code>LoadLibraryA</code>, loading the DLLs you want and then using the resolved <code>GetProcAddress</code> (or your own method used already on <code>kernel32.dll</code> and outlined in the paper) to load more functions.</li>\n<li>you may be making your life harder while not making it noticeably harder to a skilled/experienced reverse engineer. Most of them will have seen a similar scheme ;) ... dynamic analysis will easily reveal your tricks and enable a reverse engineer to work around them.</li>\n</ol>\n<hr/>\n<p>As an alternative you could resort to the system call numbers by writing a simplified disassembler that is able to pick out the index into the SSDT (system service descriptor table) and then you do the rest yourself. This has been documented long ago because it is how people used to find the index into the SSDT when they wanted to hook it from within a kernel mode driver. Roughly, if you have the pointer to the function in <code>ntdll.dll</code> to which you need the SSDT index, you'd check your assumptions and then retrieve the appropriate value. In Windows NT 4 through 2003 (32 bit) this would look like</p>\n<pre><code>  B8 ?? ?? ?? ??\n</code></pre>\n<p>where <code>B8</code> is for <code>mov eax, ????????</code> and the question marks are the index into the SSDT. So after checking for the <code>B8</code> you'd skip over it and fetch the next DWORD. Example in C code:</p>\n<pre><code>if ((lpAddr) &amp;&amp; *((unsigned char *)lpAddr) == 0xB8)\n{\n    result = *((ULONG *)((unsigned char *)lpAddr+1));\n}\n</code></pre>\n<p>Things will be different on different operating system versions and depending on the bitness - you have been warned.</p>\n<p>But I don't see any advantage - neither performance-wise nor in deterring reverse engineering efforts.</p>\n</div>",
+            "votes": "21",
+            "user": "0xC0000022L",
+            "time": "Dec 16, 2021 at 10:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">actually, the only import that you need is GetProcAddress, because you can GetProcAddress(\"LoadLibrary\") and go from there.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The Windows kernel, unlike Linux or OS X, does not use consistent syscall numbering across versions. The numbers can change even after a servicepack release. For example, the <code>NtReadFile</code> syscall was <code>0x0086</code> on Windows NT 4 but on Windows 7 it's <code>0x0111</code> (see <a href=\"http://j00ru.vexillium.org/ntapi/\" rel=\"noreferrer\">here</a> for the full list).\nThat's why all proper programs use the <code>kernel32.dll</code> (or <code>ntdll.dll</code>) to perform the actual call - these DLLs are guaranteed to use the syscall numbers matching the kernel. </p>\n<p>By the way, you won't save anything by not listing <code>kernel32.dll</code> in your IAT - it's always mapped into Win32 processes by the system loader (starting from Windows 2000 IIRC).</p>\n</div>",
+            "votes": "17",
+            "user": "0xC0000022L",
+            "time": "Sep 18, 2013 at 16:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "daehee",
+                    "text": "<span class=\"comment-copy\">I thought Windows syscall numbering was same as Linux. thank you for the information, it helps my understanding a lot!</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@daehee: it changes every once in a while. It's the reason why <code>file</code> lists the kernel version for ELF files.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Probably with full intent from MS, not only does syscall numbering change between versions, but also many DLL ordinal values do, too. Need to bind to Win32 and use the full function name if you want your code to work across OS releases.</p>\n</div>",
+            "votes": "2",
+            "user": "MarianD",
+            "time": "Dec 26, 2021 at 0:24",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Other people have mentioned the downsides of this, but if you're still interested in this path, then <a href=\"https://github.com/jthuraisamy/SysWhispers2\" rel=\"nofollow noreferrer\">here's a lib</a> that converts the ntdll API names into syscalls.</p>\n</div>",
+            "votes": "1",
+            "user": "MarianD",
+            "time": "Dec 19, 2021 at 13:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

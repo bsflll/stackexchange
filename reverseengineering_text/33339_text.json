@@ -1,0 +1,46 @@
+{
+    "title": "How to decrypt ZTE F670 router's encrypted config.bin with payload type 5 with telnet access?",
+    "link": "https://reverseengineering.stackexchange.com/questions/33339/how-to-decrypt-zte-f670-routers-encrypted-config-bin-with-payload-type-5-with-t",
+    "content": "I’m from Indonesia.\nI have a ZTE F670 (Software Version V6.0.10) router provided by my ISP, and I'm trying to retrieve certain credentials stored in the configuration.\nPreviously, with a different router, I could download the config.xml file directly from the web interface and extract the needed information. However, with this new router, the backup file is in an encrypted config.bin format.\nSo far, I've tried the following:\nDownloaded the config.bin file from the router's web interface. Used tools like the ZTE config utility, but the router appears to use a newer encryption algorithm (payload type 5), which isn't supported by the tools I've found.\nI tried to use the serial number as an encryption key, without success.\nThen I tried using https://github.com/mkst/zte-config-utility but no success.\nTelnet are open and I can access root user. I can download telnet file like cspd, dataprotocol and etc… but don’t know to use it.\nCan someone help me decrypt the config.bin file, or suggest any tools that work with newer ZTE models?\nthis my file on telnet\nhttps://drive.google.com/drive/folders/1GyQrkNc6WXQoICSP4wMUzigPTtmn4fpW?usp=sharing\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "221",
+    "tags": [
+        "decryption",
+        "router"
+    ],
+    "user": "Lukman Lantowa",
+    "time": "Dec 13, 2024 at 7:11",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "So there was a rabbithole I had to go through.\nStep 1: Download the firmware - https://www.tripleoxygen.net/files/devices/zte/f670l/v1/firmware/stock/?SD\nStep 2: Extract with <pre><code>binwalk</code></pre> - it has a <pre><code>jffs2-root</code></pre> of the file system\nStep 3: Interact with the file system enough to see the <pre><code>httpd</code></pre> service - js files associated and the <pre><code>httpd</code></pre> ELF file that is the server binary\nStep 4: load <pre><code>httpd</code></pre> into IDA - See that it uses <pre><code>libdb.so</code></pre> to manage the database. Load <pre><code>libdb.so</code></pre> into IDA - it uses <pre><code>libharcode.so</code></pre>\nStep 5: <pre><code>libhardcode.so</code></pre> uses <pre><code>/etc/hardcode</code></pre> as input to decrypt files in <pre><code>/etc/hardcodefile</code></pre> - See <pre><code>CspHardCodeParamGet</code></pre> - both key and IV are derived from SHA256 of parts of <pre><code>/etc/hardcodefile</code></pre>\nStep 6: RE the implementation to decrypt the file <pre><code>/etc/hardcodefile/dataprotocol</code></pre> to reveal\n<pre><code>DefAESCBCKey=L04&Product@5A238dc79b15726d5c06\nDefAESCBCIV=ZTE%FN$GponNJ025678b02a85c63c706\nAESENCRYKey=\nuserkey=608158c36497b00221db14afb845c9e3\n</code></pre>\nfor the files attached in the question\nStep 7: With - https://github.com/mkst/zte-config-utility\n<pre><code>$ python examples/auto.py --key \"L04&Product@5A238dc79b15726d5c06\" --iv 'ZTE%FN$GponNJ025678b02a85c63c706' /tmp/f670/user_cfg.bin /tmp/f670/some.xml\n</code></pre>\nand voila you can decrypt the file too\nScript to decrypt the harcodefiles\n<pre><code>from struct import unpack\nimport glob\n\nfrom Crypto.Cipher import AES\nfrom Crypto.Hash import SHA256\n\n\ndef decrypt():\n    key_file = \"./etc/hardcode\"\n    config_paths = glob.glob(\"./etc/hardcodefile/*\")\n\n    with open(key_file, \"rb\") as f:\n        key_data = f.readline().strip()\n    offset_bytes = lambda data, offset: bytes(b + offset for b in data)\n\n    key = SHA256.new(offset_bytes(key_data[5:21], 3) + key_data[64:]).digest()\n    iv = SHA256.new(offset_bytes(key_data[7:39], 1)).digest()[:16]\n\n    for path in config_paths:\n        cipher = AES.new(key, AES.MODE_CBC, iv)\n        try:\n            with open(path, \"rb\") as config:\n                print(f\"Decrypting {path}\")\n                header = config.read(8)\n                magic1, magic2 = unpack(\">II\", header)\n                if magic1 != 0x01020304 or magic2 != 0x00000003:\n                    print(f\"{path} is not a valid config file, skipping\")\n                    continue\n                config.read(52)\n                with open(f\"{path}.decrypted.txt\", \"wb\") as output:\n                    while True:\n                        chunk_header = config.read(12)\n                        if not chunk_header:\n                            break\n                        plain_len, cipher_len, eof = unpack(\">III\", chunk_header)\n                        plaintext = cipher.decrypt(config.read(cipher_len))[:plain_len]\n                        output.write(plaintext)\n                        if not eof:\n                            break\n        except FileNotFoundError:\n            print(f\"File {path} not found, skipping\")\n\nif __name__ == \"__main__\":\n    decrypt()\n</code></pre>\n",
+            "votes": "3",
+            "user": "hold-me",
+            "time": "Dec 13, 2024 at 18:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello its work!!!</span>",
+                    "time": null
+                },
+                {
+                    "user": "hold-me",
+                    "text": "<span class=\"comment-copy\">You can accept the answer if it works</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello, I'm willing for you to make a donation to your PayPal as a thank you for your time and effort to help</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello okay I have reply your email Thank you friend</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

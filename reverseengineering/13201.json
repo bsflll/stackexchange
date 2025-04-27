@@ -1,0 +1,41 @@
+{
+    "title": "How do I change a string correctly in IDA Pro?",
+    "link": "https://reverseengineering.stackexchange.com/questions/13201/how-do-i-change-a-string-correctly-in-ida-pro",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to patch a cydia tweak which has been developed by using Objective-C. I would like to modify a piece of code to suite my need.</p>\n<p>I'm using IDA Pro V6.8 for my examining. After inspecting, I recognize that each Hex byte would represent a part of an assembly line code.</p>\n<p><em>Bellow is a screenshot for the code that I need to change.</em>\n<a href=\"https://i.sstatic.net/I0Yb2.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/I0Yb2.png\"/></a></p>\n<p>Looking at the above screenshot, we need to have 8 bytes <em>(4A F2 A6 50 C0 F2 01 00)</em> to represent a \"MOV\" instruction. Let's me say something about these 8 bytes:</p>\n<ol>\n<li>As I know, the first four bytes <em>(4A F2 A6 50)</em> represent for \"#(cfstr_UnknownCallbac - 0x9F56)\" which you see in the screenshot.</li>\n<li>The two following bytes <em>(C0 F2)</em> represent for an MOV instruction.</li>\n<li>The last two bytes <em>(01 00)</em> would tell the system to move value from the string into the register, in this case, the register is R0.</li>\n</ol>\n<p><strong>I have some concerns about the MOV instruction and the first four HEX bytes (4A F2 A6 50)</strong></p>\n<ol>\n<li><p>What does the \"0x9F56\" in the instruction means?</p></li>\n<li><p>How does the system know that the first four bytes reflect correctly to \"#(cfstr_UnknownCallbac - 0x9F56)\" not any other string variables?</p></li>\n<li><p><em>I need to create a new string and then I will use it to replace the existing \"#(cfstr_UnknownCallbac - 0x9F56)\"</em>. I believe that I just need to replace the first four HEX bytes so that it would point to the new string, but I don't know what are the HEX codes should I have here.</p></li>\n</ol>\n<p>Any help is appreciated, thank you very much.</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "10k",
+    "tags": [
+        "patch-reversing"
+    ],
+    "user": "Josh",
+    "time": "Aug 3, 2016 at 15:18",
+    "comments": [
+        {
+            "user": "joxeankoret",
+            "text": "<span class=\"comment-copy\">Isn't it easier to just overwrite the previous string where that string actually is?</span>",
+            "time": null
+        },
+        {
+            "user": "Josh",
+            "text": "<span class=\"comment-copy\">I would like to have a new string something like \"There is an error when processing your request.\"</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To understand what's happening, you need to learn about <a href=\"https://en.wikipedia.org/wiki/Position-independent_code\" rel=\"nofollow noreferrer\">Position Independent Code</a> (PIC). </p>\n<p>In a nutshell, the compiler wants the executable code to be correct independent of where in memory it gets loaded. In the case of a shared library, the OS may load it at a different place every time; even if statically linked, PIC will make the linker's life easier.</p>\n<p>The \"trick\" that's normally used on ARM processors to produce PIC is using PC (Program Counter) relative addresses. The compiler doesn't produce code that says \"the string is at address 0x123456\", it produces \"the string is 0x1234 bytes behind this instruction\". Thus, when the program is moved in memory, the \"0x1234\" stays the same.</p>\n<p>Which is why your 2nd instruction adds the program counter to the relative address in R0.</p>\n<p>Now, to know what <code>ADD R0, PC</code> really does, you need to know how the processor works. The processor is in Thumb (2 byte instructions) mode as you can see from the 2 bytes difference between <code>9F52</code> and <code>9F54</code>, and when the processor executes the <code>ADD R0, PC</code> instruction, the prefetch unit will already have read the first two bytes of <code>BLX _MSlog</code>. So the PC that gets added is actually <code>9F56</code>. This should answer your <strong>first question</strong>: in the display of the opcode's meaning, IDA subtracts the value it knows to be added in the next instruction.</p>\n<p><strong>Second question</strong>: I don't know the internals of IDA, but I'm 99% sure it looks for <code>ADD Rx, PC</code> instructions, and produces a string reference like yours at the preceding instruction that loads <code>Rx</code>, just because it knows this is the standard way of achieving PIC on ARM.</p>\n<p><strong>Third question</strong>: Manually disasembling Thumb is hard - really hard - as you can see if you check the <a href=\"https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf\" rel=\"nofollow noreferrer\">Thumb instruction set</a>. And no, <code>4a f2 a6 50</code> isn't just a data offset; it loads the lower 16 bits of the value, and <code>C0 F2 01 00</code> loads the higher 16 bits of the value. The <a href=\"https://www.onlinedisassembler.com/odaweb/6xokUFH4/0\" rel=\"nofollow noreferrer\">Online Disassembler</a> translates those two sets of 4 byte instructions to </p>\n<pre><code>movw r0, #42406 ; 0xa5a6          \nmovt r0, #1\n</code></pre>\n<p>and you can read <a href=\"https://stackoverflow.com/questions/7800055/movw-and-movt-in-arm-assembly\">here</a> about the <code>movw</code> and <code>movt</code> instructions. IDA is friendly enough to show all of this as one single 8-byte instruction, but under the hood, a lot more is going on.</p>\n<p>So if you really want to change an offset like this, get familiar with the thumb manual I linked above, learn each and every bit, and assemble the new instructions manually. Or, just (ab)use the gnu assembler in the way I outlined in my answer to <a href=\"https://reverseengineering.stackexchange.com/questions/9094/offset-calculation-for-branch-instruction-in-arm/9096#9096\">this question</a>. Just write a bare minimum assembler snippet and have <code>as</code> handle the gory details for you.</p>\n<p>But, as @joxeankoret said: if you just want to change a string, and don't need the original string anwhere else, and the new string isn't longer than the old one, overwriting the string with the new one will be much easier than finding a place for your new string and adjusting the offsets. You can jump to that position by double clicking the label in IDA, or just scroll to the address <code>2FF4C</code> (<code>1A5A6+9F56</code>).</p>\n</div>",
+            "votes": "4",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Josh",
+                    "text": "<span class=\"comment-copy\">Much appreciate your very detailed answer. PIC and the thumb are quite new for me. I am going to look at these terms right away. Hopefully I will figure out the solution soon. Have a nice day!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

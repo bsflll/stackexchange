@@ -1,0 +1,41 @@
+{
+    "title": "Link between C and x86 asm",
+    "link": "https://reverseengineering.stackexchange.com/questions/15872/link-between-c-and-x86-asm",
+    "content": "I wonder how to link theses instructions (down to register details) to the original C code. Where are the variables (whether they are local variables, global variables, static variables, or parameters for a function), and what are the size of the variables (when applicable):\n<pre><code>mov     DWORD PTR [ebp-0x4], 0x8    //DWORD PTR [ebp-0x4]-Global variable\nmov     eax, DWORD PTR [ebp+0x8]    // DWORD PTR [ebp+0x8]  global V\nlea     eax, [ecx + eax*1]\ncall    _htons\ncmp     [ebp+0x8], 0\nret\n</code></pre>\nAnd here is my C-code:\n<pre><code>#include <stdio.h>\n\nint my_global_var ;\n\nint main() { \n    i = 8;\n    my_global_var = htons(i);    \n} \n</code></pre>\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "309",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "GMB",
+    "time": "Jul 21, 2017 at 8:46",
+    "comments": [
+        {
+            "user": "Mohamad-Jaafar NEHME",
+            "text": "Would you please correct the title. All the forum is about Reverse engineering problems\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "I fully agree with Mohamad-jaafar! Try to find more specific title next time... I edited your post, but next time I'll just vote to close it.\n",
+            "time": null
+        },
+        {
+            "user": "Vitaly Osipov",
+            "text": "In general - everything depends on how the compiler was set up at the time the code has been compiled. Most of what you are looking for could be in the debugging information (if the compiler was told to produce a lot of it), or, on the other end of the spectrum, practically all information can be lost, if the complier was doing a lot of optimisation.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "i=8; this is local to your function main\nthis i is referenced in the disassembled instruction a \n<pre><code>a) mov     DWORD PTR [ebp-0x4], 0x8  <-- i local variable\n</code></pre>\ninstruction b references my_global_var \n<pre><code>b) mov     eax, DWORD PTR [ebp+0x8]\n</code></pre>\ninside a normal function scope all address below ebp (ebp-4,ebp-8,ebp-100) etc are local variable access    \nall address above ebp (ebp+8 , ebp+1c , ebp + 256) etc access either the arguments that were passed to the function or other global variables that are visible outside the function\necx as posted is undefined  and you probably didnt paste a push instruction\nalso _htons() takes a u_short not an int \n<pre><code>u_short WSAAPI htons(\n  _In_ u_short hostshort\n);\n</code></pre>\nyou should post a proper query with code or disassembly  that is reproducible trivially by anyone for getting a proper answer\nthe code that would compile and produce a result would look like this \n<pre><code>#include <stdio.h>\n#include <windows.h>\n#pragma comment(lib,\"ws2_32.lib\")\n\nint my_global_var ;\n\nint main()\n{ \n    u_short i = 8;\n    my_global_var = htons(i); \n    printf(\"%d\n\" , my_global_var);    \n} \n</code></pre>\nyou should always compile with maximum warnings possible and possibly let the compiler do code analysis if possible to reduce defects \nif you are using visual studio you should replicate this command line or \nuse the appropriate settings that reflects these switches in your project \n<pre><code>cl /Zi /Od /W4 /analyze:log foo.txt htons.cpp /link /RELEASE\n</code></pre>\nthe W4 enables the highest levels of warning \nthe /analyze:log foo.txt does a code analysis and shows what possible \ndefects you have in your code \n<pre><code>cat foo.txt\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<DEFECTS></DEFECTS>\n</code></pre>\ncompiled and executed this should produce 2048 or 0x800 as result \n_htons basically does this operation\n<pre><code>0:000> ?? 8 << 0x8 | 8 >> 0x8\nint 0x800\n0:000> .enable_long_status 0\n0:000> ?? 8 << 0x8 | 8 >> 0x8\nint 0n2048\n</code></pre>\nthe relevent disassembly the scope and contents of local / global vars would be as below \ncurrent src line \n<pre><code>0:000> lsa .\n     6: \n     7: int main()\n     8: { \n     9:     u_short i = 8;\n>   10:     my_global_var = htons(i); \n    11:     printf(\"%d\n\" , my_global_var);    \n    12: } \n</code></pre>\ndisassembly of the function main\n<pre><code>0:000> uf .\nhtons!main [c:\\xxx\\htons.cpp @ 8]:\n    8 00861000 55              push    ebp\n    8 00861001 8bec            mov     ebp,esp\n    8 00861003 51              push    ecx\n    9 00861004 b808000000      mov     eax,8\n    9 00861009 668945fc        mov     word ptr [ebp-4],ax\n   10 0086100d 0fb74dfc        movzx   ecx,word ptr [ebp-4]\n   10 00861011 51              push    ecx\n   10 00861012 e8b9000000      call    htons!htons (008610d0)\n   10 00861017 0fb7d0          movzx   edx,ax\n   10 0086101a 891578488a00    mov     dword ptr [htons!my_global_var (008a4878)],edx\n   11 00861020 a178488a00      mov     eax,dword ptr [htons!my_global_var (008a4878)]\n   11 00861025 50              push    eax\n   11 00861026 68b0b18900      push    offset htons!__xt_z+0x10 (0089b1b0)\n   11 0086102b e860000000      call    htons!printf (00861090)\n   11 00861030 83c408          add     esp,8\n   12 00861033 33c0            xor     eax,eax\n   12 00861035 8be5            mov     esp,ebp\n   12 00861037 5d              pop     ebp\n   12 00861038 c3              ret\n</code></pre>\nlocal i\n<pre><code>0:000> dv /v /t\n0016fc10          unsigned short i = 8\n</code></pre>\nglobal \n<pre><code>0:000> dt /v /t my_global_var\nGot address 008a4878 for symbol\nhtons!my_global_var\n0n0\n</code></pre>\n",
+            "votes": "5",
+            "user": "blabb",
+            "time": "Jul 21, 2017 at 9:14",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

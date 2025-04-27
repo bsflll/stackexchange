@@ -1,0 +1,33 @@
+{
+    "title": "Where is the ESP after call instruction?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22280/where-is-the-esp-after-call-instruction",
+    "content": "I've started learning the Reverse Engineering and when I read the Stack Operations and function invocation, there are an issue that I'm confused.\n-What is the address of ESP after \"pop ebp\" and \"retn\" instruction??\nC program\n<pre><code>int __cdecl addme(short a, short b)\n{\n     return a+b;\n}\n</code></pre>\nAssembly program\n<pre><code>01: push ebp\n02: mov ebp , esp\n03:...\n04:movsx eax ,word ptr [ebp+8]\n05:movsx ecx ,word ptr [ebp+0Ch]\n06:add eax ,ecx\n07:...\n08:mov esp , ebp\n09:pop ebp\n10:retn\n</code></pre>\nAs I though , esp is set to ebp in step 08 so the ESP address is right after the the first address comes inside the stack.But the step 09 makes it wrong. Help me understand this.\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "x86"
+    ],
+    "user": "Thành Công",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "To further expand on perrors answer, you're looking at a function that preserves the stack frame, which is a nice little trick to simplify walking backwards through the call stack. When you initially <pre><code>push EBP</code></pre> in the prologue, it subtracts pointer size (which is of course <pre><code>0x4</code></pre> in x86) before writing the old <pre><code>EBP</code></pre> to the stack, as seen below in equivalent code.\n<pre><code>SUB ESP, 0x4 ; Result from PUSH  \nMOV [ESP], EBP ; Save old EBP  \nMOV EBP, ESP ; Set new EBP  \n</code></pre>\nNow once it reaches the epilogue and restores the stack pointer (<pre><code>ESP</code></pre>) from the frame pointer (<pre><code>EBP</code></pre>) it's still 4 bytes below the original stack when entering the function. What's at the current stack pointer? It holds the previous frame pointer from before invoking the current function. By popping <pre><code>EBP</code></pre> you are both restoring the frame pointer to what it was and fixing the stack at the same time, as shown below.\n<pre><code>MOV ESP, EBP ; Restore ESP from prologue  \nMOV EBP, [ESP] ; Restore saved EBP  \nADD ESP, 0x4 ; Result from POP  \n</code></pre>\nThe return following this can be interpreted as a <pre><code>POP EIP</code></pre> instruction, as shown below.\n<pre><code>MOV EIP, [ESP] ; Redirect execution to return address  \nADD ESP, 0x4 ; Result from pop  \n</code></pre>\nI should also add that CALL can be simplified as a <pre><code>push</code></pre>/<pre><code>jump</code></pre>, as shown below.  \n<pre><code>SUB ESP, 0x4 ; Result from PUSH  \nMOV [ESP], ReturnAddress ; Save next instruction as return address  \nJMP CallAddress ; Redirect execution to call address  \n</code></pre>\nAs you can probably see, this allows you to simply work backwards to get both the frame pointer and return address from previous function calls that led to the current function. Hopefully that explains both the purpose and logic behind the frame pointer preservation your question is based on.  \nNote: In terms of the post by perror, I also wanted to point out a couple things. First the constant <pre><code>0x4</code></pre> should be <pre><code>sizeof(uintptr_t)</code></pre>. I know your code is x86 so he's not wrong, it's just good to know. Second is that push can be thought of as subtracting the stack before setting the value, while pop can be thought of as the exact opposite, getting the value first before adding the stack.\n",
+            "votes": "1",
+            "user": "perror",
+            "time": "Oct 11, 2019 at 18:24",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "The <pre><code>esp</code></pre> is updated when a <pre><code>push</code></pre> or a <pre><code>pop</code></pre> is called. Remember that the <pre><code>esp</code></pre> is used to point to the current last item on the stack. So, each <pre><code>push</code></pre> or <pre><code>pop</code></pre> operation move it up or down.\nTo be more explicit, we can decompose in smaller instructions (only <pre><code>mov</code></pre>) the <pre><code>pop</code></pre> and the <pre><code>push</code></pre> as follow:\n<pre><code>pop ebp == (mov ebp, [esp] ; mov esp, esp + 4)\n</code></pre>\n<pre><code>push ebp == (mov [esp], ebp ; mov esp, esp - 4)\n</code></pre>\nI hope this is just clearer now.\n",
+            "votes": "1",
+            "user": "perror",
+            "time": "Oct 10, 2019 at 7:39",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,52 @@
+{
+    "title": "IDA API - query number of parameters for cdecl functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/6170/ida-api-query-number-of-parameters-for-cdecl-functions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm writing a script that, among other things, reads and does some processing with parameters to a function. Right now my solution to find the number of arguments for a given function at <code>addr</code> is:</p>\n<pre><code>(GetStrucSize(GetFrame(addr)) - GetFrameSize(addr))/4\n</code></pre>\n<p>This is on x86. The issue is when I'm calling, for example, <code>printf()</code>, the difference between the two <code>GetXXX()</code> calls is 5 which obviously messes up the math.</p>\n<p>At the moment I've worked around it by checking if the first parameters is a format string with format specifiers and then parsing it manually to get the real count, but that's not really extensible.</p>\n<p>Is there a way in the confines of the API to deal with this?</p>\n<p>Edit: I should have made this clearer in the question but this is specifically referring to the IDA API. I could write the code myself to calculate cleanup but in interest of keeping my code clean I'm trying to avoid a lot of code querying if it's stdcall and cdecl and then searching/parsing myself</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "python",
+        "functions"
+    ],
+    "user": "Fewmitz",
+    "time": "Sep 4, 2014 at 18:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>For cdecl the caller needs to clean up the stack. So somewhere after the function call there HAS to be a stack operation that removes the parameters from the stack (remove as in adjust the stack pointer)</p>\n<pre><code>PUSH 0xABCDEF01\nCALL function\nADD ESP, 4 ; sizeof(DWORD) (the parameter)\n</code></pre>\n<p>It does NOT need to be directly after the call. (I think VS08 sometimes puts the return value check before it)\nSo this is equally valid</p>\n<pre><code>PUSH 0xABCDEF01\nCALL function\nTEST EAX, EAX\nADD ESP, 4 ; sizeof(DWORD) (the parameter)\n; A conditional jump probably\n</code></pre>\n<p>as is this</p>\n<pre><code>PUSH 0xABCDEF01\nCALL function\nPOP EAX \n</code></pre>\n<p>Because EAX holds a DWORD and thus removes <code>sizeof(DWORD)</code> == 4 bytes from the stack. (This obviously also holds true for all other general purpose extended registers).\n(It is POSSIBLE that e.g. for <code>N</code> parameters one could use <code>N</code> <code>POP</code> but I'm certain that no compiler does that and for every <code>N</code> &gt; 2 it will lead to bigger code so it is unrealistic to happen in handwritten assembly too.)</p>\n<p>There doesn't exists a maximum <code>N</code> of instructions that you could check after the call to determine whether that stack operation is the cleanup code. However I think that 5 will work for almost all cases (If you by chance do already know that this function is CDECL then check as many as you want)</p>\n<p>Also for functions where the return value isn't important but is called before the return value of another function is inspected, one can save a variable like this:</p>\n<pre><code>CALL function1\nPUSH EAX ; Save EAX\nPUSH something\nCALL function2\nPOP EAX ; Remove the something parameter\nPOP EAX ; Restore the return value of function1\n</code></pre>\n<p>You could try to also count the <code>PUSH</code> but that comes with it's own sort of intermediate instructions - this is really common:</p>\n<pre><code>PUSH something\nLEA EAX, something_else ; Get a pointer to something_else\nPUSH EAX \nPUSH more\nCALL function\n</code></pre>\n<p>So you cannot stop working 'up' as soon as you hit an instruction that isn't a <code>PUSH</code>. </p>\n<p>In conclusion there isn't a perfect solution but I think both can lead to a pretty reliable value; Which one you choose (or maybe both?) is up to you, IMO the first one (Searching for the stack cleanup) is easier to implement.</p>\n</div>",
+            "votes": "4",
+            "user": "user45891",
+            "time": "Sep 4, 2014 at 17:24",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Fewmitz",
+                    "text": "<span class=\"comment-copy\">Thanks for the answer; I'll probably accept this one as a solution. I understood cdecl's calling convention but was hoping there was an already implemented way to do this :(</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">@Fewmitz I'm sure someone can provide the proper name for those techniques which will probably lead to a finished implementation. I imagine it's a rather common task so someone's bound to have done it already</span>",
+                    "time": null
+                },
+                {
+                    "user": "Fewmitz",
+                    "text": "<span class=\"comment-copy\">Yeah I should have made it clearer that this is about the API specifically; I could write it myself but trying to keep the code clean, particularly when going to different architectures, etc.</span>",
+                    "time": null
+                },
+                {
+                    "user": "DCoder",
+                    "text": "<span class=\"comment-copy\">Trivia factoid, I've seen a compiler optimize consecutive <code>esp</code> cleanups - when two <code>cdecl</code> functions were called in a sequence, the compiler (VC6) did not perform cleanup after the first call, only after the second one.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">@DCoder Nice. I did a quick test and VS2008 still does that when any kind (speed or size) of optimization is enabled (With enabled link-time code-generation - I'm unsure whether module in that case also means <code>printf()</code>).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

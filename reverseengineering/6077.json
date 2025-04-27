@@ -1,0 +1,58 @@
+{
+    "title": "Get section's names and headers for a file using C++",
+    "link": "https://reverseengineering.stackexchange.com/questions/6077/get-sections-names-and-headers-for-a-file-using-c",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm implementing a software for performing some PE classification. Among the features values I'm gathering from each PE are, the <strong>amount of sections</strong>, the <strong>name of sections</strong>, <strong>image section headers</strong>.</p>\n<p>I have been reading about <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms680198(v=vs.85).aspx\" rel=\"nofollow noreferrer\">ImageHlp Structures</a>. But there is no example on how to get those struct initialized from a file/path_to_a_file you pass. I'm specially interested in the <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms680341(v=vs.85).aspx\" rel=\"nofollow noreferrer\">IMAGE_SECTION_HEADER</a> structure.</p>\n<p>How can I get the <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms680341(v=vs.85).aspx\" rel=\"nofollow noreferrer\">IMAGE_SECTION_HEADER</a>s form an executable file programatically?</p>\n</div>",
+    "votes": "6",
+    "answers": 1,
+    "views": "7k",
+    "tags": [
+        "binary-analysis",
+        "c++",
+        "pe"
+    ],
+    "user": "Raydel Miranda",
+    "time": "May 27, 2022 at 13:27",
+    "comments": [
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\">The PE format is well documented. Parse the file manually. <i><a href=\"http://blog.breakinsecurity.com/parsing-the-portable-executable-pe-file-format-with-pefile/\" rel=\"nofollow noreferrer\">This</a></i> page can serve as a reference although the examples are in python. Other than this you can use a prebuilt parser library such as <i><a href=\"https://github.com/trailofbits/pe-parse\" rel=\"nofollow noreferrer\">pe-parse</a></i></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have extensive experience with parsing the PE on Windows, mainly for use in function interception. Here are the steps you should follow to achieve your goal.</p>\n<p>The first step is to find the base address of the image loaded into memory. This step will be different depending on if the executable has or hasn't been mapped into memory, but the basic idea will be the same. Assuming that you are interested in doing this for a file on disk, then you may do this with the <a href=\"https://docs.microsoft.com/en-us/windows/win32/memory/file-mapping\" rel=\"nofollow noreferrer\">file mapping API</a>, if you would prefer to implement this on an executable loaded into memory as a running process, you can achieve the equivalent by using the the <a href=\"https://docs.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-module-list\" rel=\"nofollow noreferrer\">tool help snapshot API</a>. The base address will be the same as the field <code>hModule</code> in the <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/tlhelp32/ns-tlhelp32-moduleentry32\" rel=\"nofollow noreferrer\"><code>MODULEENTRY32</code></a> data retrieved from the snapshot. For more information about what a module handle is, see <a href=\"https://devblogs.microsoft.com/oldnewthing/2004/06/14\" rel=\"nofollow noreferrer\">here</a>.</p>\n<p>Once you have completed the first step, the structure at the base address is the <a href=\"https://stackoverflow.com/questions/6126980/get-pointer-to-image-dos-header-with-getmodulehandle\"><code>IMAGE_DOS_HEADER</code></a>, while this is not documented on MSDN, it has two very important but cryptic fields.  The two fields you will need to know are the <code>e_magic</code> field and the <code>e_lfanew</code> field. The <code>e_magic</code> field contains a double word for 32-bit or quadruple for 64-bit that allows you to test if the file being read or your implementation is correctly formatted with the correct value being defined as <code>IMAGE_DOS_SIGNATURE</code>, which is the ASCII-Z string of \"MZ\\0\". The <code>e_lfanew</code> field contains a <a href=\"https://stackoverflow.com/questions/2170843/va-virtual-address-rva-relative-virtual-address\">relative virtual address</a> which you need to add to the image base you found in step one to calculate the <a href=\"https://stackoverflow.com/questions/2170843/va-virtual-address-rva-relative-virtual-address\">virtual address</a> of the <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_nt_headers32\" rel=\"nofollow noreferrer\"><code>IMAGE_NT_HEADERS</code></a> structure.</p>\n<p>The third step will be to check the first member of the <code>IMAGE_NT_HEADERS</code> to see if it is an actual PE file, this will be defined by the <code>Signature</code> field of the structure, and the defined constant to test for will be <a href=\"https://web.archive.org/web/20180706112517/http://win32assembly.programminghorizon.com:80/pe-tut2.html\" rel=\"nofollow noreferrer\"><code>IMAGE_NT_SIGNATURE</code></a>. This is not typically nessecary, since most Windows versions will be using the PE format of executable file, but it's good practice in order to ensure your code is a bit more robust.</p>\n<p>Once everything checks out and you have performed steps 1-3, step four will be when you can finally calculate the address of the <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_section_header\" rel=\"nofollow noreferrer\"><code>IMAGE_SECTION_HEADER</code></a> structures. The IMAGE_SECTION_HEADER structures are stored as an array in the file, so to obtain the size of the array, you will need to use the <code>NumberOfSections</code> member in the <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_file_header\" rel=\"nofollow noreferrer\"><code>IMAGE_FILE_HEADER</code></a> structure which is nested in the <code>IMAGE_NT_HEADERS</code> structure mentioned above.Once you have that value, you may find the virtual address of the first <code>IMAGE_SECTION_HEADER</code> by adding the size of the <code>Signature</code> member of the <code>IMAGE_NT_HEADERS</code> structure, the size of the <code>FileHeader</code> member in the <code>IMAGE_NT_HEADERS</code> structure, and finally the <code>SizeOfOptionalHeader</code> value in the <code>IMAGE_FILE_HEADER</code> structure. The reason you can't simply do a <code>sizeof(</code> <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms680339(v=vs.85).aspx\" rel=\"nofollow noreferrer\"><code>IMAGE_OPTIONAL_HEADER</code></a> <code>)</code> for the last value in the formula listed above is because a file on disk <em><strong>will not</strong></em> have the <code>IMAGE_OPTIONAL_HEADER</code>, so to obtain the proper size dynamically, you should do so through the structure member I mentioned earlier.</p>\n<p>Now you may simply copy the array of <code>IMAGE_SECTION_HEADER</code> structures from memory any way you please. Just remember, that these structures <em>are contigous</em> in memory, so all you need to do is multiply the size of each structure by the number of sections to find the total size of the entire array in memory. After you have calculate that value, it will be trivial to collect the data.</p>\n<p>For more resources on the PE executable format, see this wonderful article written by Matt Pietrek, <a href=\"https://docs.microsoft.com/en-us/previous-versions/ms809762%28v=msdn.10%29\" rel=\"nofollow noreferrer\"><em>Peering Inside the PE</em></a>. You may also take a look at the official specification <a href=\"https://docs.microsoft.com/en-us/windows/win32/debug/pe-format\" rel=\"nofollow noreferrer\">here</a>.</p>\n</div>",
+            "votes": "9",
+            "user": "Glorfindel",
+            "time": "May 27, 2022 at 13:13",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Nice effort but many small issues. 1) DOS header's <code>e_magic</code> is always a <code>WORD</code> (16-bit), never 32 or 64 bits; 2) <code>IMAGE_DOS_SIGNATURE</code> matches the two-character \"MZ\" sequence - zero terminator is not required; 3) strictly speaking, <code>e_lfanew</code> is a file offset and not RVA (though they happen to match in this case); 4) <code>IMAGE_OPTIONAL_HEADER</code> definitely <i>is</i> present in the file on disk, it does not appear magically just because you use file mapping; 5) the reason you need to use <code>SizeOfOptionalHeader</code> is because some malware/packers use a value different from <code>sizeof(IMAGE_OPTIONAL_HEADER)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "CaptainObvious",
+                    "text": "<span class=\"comment-copy\">@Igor Oops, I was thinking of an object file. My mistake.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">The \"file mapping API\" mentioned is for Windows only. The PE format is described in detail in various sources, and there is no actual need to use Windows API's - for example, I wrote my latest PE disassembler from scratch on my Mac.</span>",
+                    "time": null
+                },
+                {
+                    "user": "CaptainObvious",
+                    "text": "<span class=\"comment-copy\">@Jongware Well, if he wants, he can always use some third party library to parse the PE in a more portable fashion. Windows is the only operating system I use, so if someone wants to give an answer for other systems, feel free to. The references he posted were for Windows implementations, so I answered the question as such.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Yes, you're correct, the OP indeed appears to be using Windows. My <code>load_exec</code> source code is (.. checking) close to 300 lines of code, and it makes use of another 250-or-so lines of structures and #define's. All in all, it takes about 2,000 lines of C code to only <i>load</i> an executable (mind, it displays generous amounts of debugging data as well). I would hazard that's way too much for an RE answer.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

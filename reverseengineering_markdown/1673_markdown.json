@@ -1,0 +1,84 @@
+{
+  "title": "What is \"instruction camouflage\" obfuscation?",
+  "link": "https://reverseengineering.stackexchange.com/questions/1673/what-is-instruction-camouflage-obfuscation",
+  "content": "I have an obfuscated binary which only print a simple Hello World!\nand exit like this:\n\n```\nHello World!\n\n```\nBut, when I am looking at the assembly with objdump, I cannot find any\ncall to printf or write, nor find the string Hello World!.\n\n```\n0804840c <main>:\n 804840c:       be 1e 84 04 08          mov    $0x804841e,%esi\n 8048411:       89 f7                   mov    %esi,%edi\n 8048413:       b9 26 00 00 00          mov    $0x26,%ecx\n 8048418:       ac                      lods   %ds:(%esi),%al\n 8048419:       34 aa                   xor    $0xaa,%al\n 804841b:       aa                      stos   %al,%es:(%edi)\n 804841c:       e2 fa                   loop   8048418 <main+0xc>\n 804841e:       23 4f 29                and    0x29(%edi),%ecx\n 8048421:       46                      inc    %esi\n 8048422:       ae                      scas   %es:(%edi),%al\n 8048423:       29 4e 5a                sub    %ecx,0x5a(%esi)\n 8048426:       29 6e ae                sub    %ebp,-0x52(%esi)\n 8048429:       c2 9c 2e                ret    $0x2e9c\n 804842c:       ae                      scas   %es:(%edi),%al\n 804842d:       a2 42 17 54 55          mov    %al,0x55541742\n 8048432:       55                      push   %ebp\n 8048433:       23 46 69                and    0x69(%esi),%eax\n 8048436:       e2 cf                   loop   8048407 <frame_dummy+0x27>\n 8048438:       c6 c6 c5                mov    $0xc5,%dh\n 804843b:       8a fd                   mov    %ch,%bh\n 804843d:       c5 d8 c6 ce 8b          vshufps $0x8b,%xmm6,%xmm4,%xmm1\n 8048442:       a0 aa 90 90 90          mov    0x909090aa,%al\n 8048447:       90                      nop\n ...\n 804844f:       90                      nop\n\n```\nThe obfuscation technique claimed to be used here is called instruction\ncamouflage (see this paper). Can someone explain what is it and how does it works ?\n\n",
+  "votes": "10",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "obfuscation"
+  ],
+  "user": "perror",
+  "time": "Apr 15, 2013 at 13:17",
+  "comments": [
+    {
+      "user": "Ange",
+      "text": "In general, a mask is a value applied on a bitfield via a bitwise operation, to read, set or reset a particular bit.",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "I agree the name must be changed. But, it seems to be extremely difficult to find a proper one. The point of this technique is mainly to conceal the executed code from a simple naive static analysis. For now, after discussions, \"code cloaking\" is the best I can come with... but I don't know if it would be accepted.",
+      "time": null
+    },
+    {
+      "user": "Ange",
+      "text": "For me (personally), being understood by most of the community is more important than using a perfect - but new - word that no one has heard of and that might be misinterpreted (for that reason, I tend to use 'ROP' even if I personally prefer 'return-to-libc'). And 'hiding' and 'obfuscating' are way more widespread than 'cloaking' IMHO.",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "So, you would advise \"code hiding\" ? (code obfuscation cannot be an option because it cannot tag one technique among others). It is perfectly okay with me also. (Post-scriptum: 'ROP' and 'return-into-libc' are really two different techniques)",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "I found a reference about instruction camouflage. Though it is not a very well known paper, their name seems okay (I hope this is the last time I modify this... I'm just a mess, sorry).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Instruction camouflage is an obfuscation technique against simple naive static\nanalysis of the binary. The binary program is composed of two parts:\n\nWhen executed, the binary first goes to the decoder and decode the\npayload that unveil the real assembly code. At the end, the decoder\njumps to the decoded payload and execute the code.\n\nThe benefit of this technique is that statically disassembling the\nbinary will not give you hints on what is really doing the program.\nSomehow, it forces the analyst to execute first the decoder part (for\nreal or symbolically) and, then, look at the decoded payload.\n\nIn the proposed example, the decoder part is the following:\n\n```\n0804840c <main>:\n 804840c:       be 1e 84 04 08          mov    $0x804841e,%esi\n 8048411:       89 f7                   mov    %esi,%edi\n 8048413:       b9 26 00 00 00          mov    $0x26,%ecx\n 8048418:       ac                      lods   %ds:(%esi),%al\n 8048419:       34 aa                   xor    $0xaa,%al\n 804841b:       aa                      stos   %al,%es:(%edi)\n 804841c:       e2 fa                   loop   8048418 <main+0xc>\n\n```\nYou can see that there is a loop between 0x8048418 and 0x804841c\nwhich apply a xor 0xaa to each byte in the payload (from 0x804841e\nto  0x804841e + 0x25 = 0x8048443, the loop counter is %ecx).\n\nSo, the best way to know what is done in the payload is to take gdb\nand to set a breakpoint after the decoder has completed his task:\n\n```\nGNU gdb (GDB) 7.4.1-debian\nCopyright (C) 2012 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later\n(gdb) break main\nBreakpoint 1 at 0x804840c\n(gdb) run\nStarting program: ./instruction_camouflage\n\nBreakpoint 1, 0x0804840c in main ()\n\n```\nLets check that the code hasn't change.\n\n```\n(gdb) disas\nDump of assembler code for function main:\n=> 0x0804840c <+0>: mov    $0x804841e,%esi\n   0x08048411 <+5>: mov    %esi,%edi\n   0x08048413 <+7>: mov    $0x26,%ecx\n   0x08048418 <+12>:    lods   %ds:(%esi),%al\n   0x08048419 <+13>:    xor    $0xaa,%al\n   0x0804841b <+15>:    stos   %al,%es:(%edi)\n   0x0804841c <+16>:    loop   0x8048418 <main+12>\n   0x0804841e <+18>:    and    0x29(%edi),%ecx\n   0x08048421 <+21>:    inc    %esi\n   0x08048422 <+22>:    scas   %es:(%edi),%al\n   0x08048423 <+23>:    sub    %ecx,0x5a(%esi)\n   0x08048426 <+26>:    sub    %ebp,-0x52(%esi)\n   0x08048429 <+29>:    ret    $0x2e9c\n   0x0804842c <+32>:    scas   %es:(%edi),%al\n   0x0804842d <+33>:    mov    %al,0x55541742\n   0x08048432 <+38>:    push   %ebp\n   0x08048433 <+39>:    and    0x69(%esi),%eax\n   0x08048436 <+42>:    loop   0x8048407 <frame_dummy+39>\n   0x08048438 <+44>:    mov    $0xc5,%dh\n   0x0804843b <+47>:    mov    %ch,%bh\n   0x0804843d <+49>:    vshufps $0x8b,%xmm6,%xmm4,%xmm1\n   0x08048442 <+54>:    mov    0x909090aa,%al\n   0x08048447 <+59>:    nop\n...\n   0x0804844f <+67>:    nop\nEnd of assembler dump.\n\n```\nLet's put a breakpoint just after the loop and continue till it is reached.\n\n```\n(gdb) break *0x0804841e\nBreakpoint 2 at 0x804841e\n(gdb) continue\nContinuing.\n\nBreakpoint 2, 0x0804841e in main ()\n\n```\nNow, we should be able to access the code as it will be executed.\n\n```\n(gdb) disas\nDump of assembler code for function main:\n   0x0804840c <+0>: mov    $0x804841e,%esi\n   0x08048411 <+5>: mov    %esi,%edi\n   0x08048413 <+7>: mov    $0x26,%ecx\n   0x08048418 <+12>:    lods   %ds:(%esi),%al\n   0x08048419 <+13>:    xor    $0xaa,%al\n   0x0804841b <+15>:    stos   %al,%es:(%edi)\n   0x0804841c <+16>:    loop   0x8048418 <main+12>\n=> 0x0804841e <+18>:    and    %ebp,%esp\n   0x08048420 <+20>:    sub    $0x4,%esp\n   0x08048423 <+23>:    and    $0xfffffff0,%esp\n   0x08048426 <+26>:    add    $0x4,%esp\n   0x08048429 <+29>:    push   $0x8048436\n   0x0804842e <+34>:    call   0x80482f0 <puts@plt>\n   0x08048433 <+39>:    mov    %ebp,%esp\n   0x08048435 <+41>:    ret    \n   0x08048436 <+42>:    dec    %eax\n   0x08048437 <+43>:    gs\n   0x08048438 <+44>:    insb   (%dx),%es:(%edi)\n   0x08048439 <+45>:    insb   (%dx),%es:(%edi)\n   0x0804843a <+46>:    outsl  %ds:(%esi),(%dx)\n   0x0804843b <+47>:    and    %dl,0x6f(%edi)\n   0x0804843e <+50>:    jb     0x80484ac <__libc_csu_init+76>\n   0x08048440 <+52>:    and    %ecx,%fs:(%edx)\n   0x08048443 <+55>:    add    %dl,-0x6f6f6f70(%eax)\n   0x08048449 <+61>:    nop\n   ...\n   0x0804844f <+67>:    nop\nEnd of assembler dump.\n\n```\nAnd, still there is these strange instructions after the ret, lets visualize it as a string.\n\n```\n(gdb) x /s 0x08048436\n0x8048436 <main+42>:     \"Hello World!  \n\"\n\n```\nSo, we found all the pieces of the program and how it works.\n\n",
+      "votes": "12",
+      "user": "perror",
+      "time": "Apr 15, 2013 at 13:18",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Peter Andersson",
+          "text": "Personally I've never heard the term \"code masking\" nor does Google or Wikipedia turn up any hints. Could you link to some resource where this term is actually used?",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "I don't know how to call this obfuscation. I couldn't find a proper generic name for this. Give some name, I'll change it in the question and in the answer.",
+          "time": null
+        },
+        {
+          "user": "Peter Andersson",
+          "text": "I'm used to it being called naive encryption since I assume you mean the question to cover more than xor? E.g some simple combinations of rotations and xor? Otherwise it's a xor cipher. I actually can't think of a really good name for ciphers that are trivially reversible. Given your explanation the same sort of answer would cover any complex cipher scheme as well. I.e the operations between your entry point and breakpoint could be arbitrarily complex but would still fall to your technique. It doesn't rely on the cipher being trivial.",
+          "time": null
+        },
+        {
+          "user": "Rolf Rolles",
+          "text": "I think we just call this \"self-modification\".",
+          "time": null
+        },
+        {
+          "user": "Ange",
+          "text": "Knowing the algorithm and key don't change the fact that it's a decryption. I wasn't suggesting a new word, I was mentioning the word I'd expect.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "This is also commonly known as an encryption wrapper. I'm sure there are several other similar names used in the industry. \n\nThe actual code isn't as important as the concept. The plaintext code is prepended (in executive order) by a decryption stub responsible for decoding the body of the code. In this way, the main code body (payload in the case of malware) is encrypted, and thus doesn't have constant bytes. The decoder stub itself remains constant in this example, though polymorphism is a later evolution that regenerates the encoder and decoder so that they, too, contain no constant bytes. By lessening the number of constant bytes between copies of the code, detection signature exposure is reduced.\n\nDecoder stubs can offer decompression as well.\n\nThis mechanism got heavy use in the early days of self-replicating PC viruses. These were labeled with the characteristic of being self-encrypting. It is still used in today by some subversive software. \n\nImportantly, native code isn't the only code that can be 'wrapped' in this fashion.\n\n",
+      "votes": "2",
+      "user": "dyasta",
+      "time": "Apr 15, 2013 at 16:16",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

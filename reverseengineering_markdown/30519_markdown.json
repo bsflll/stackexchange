@@ -1,0 +1,52 @@
+{
+  "title": "What kind of compressing/encoding is this?",
+  "link": "https://reverseengineering.stackexchange.com/questions/30519/what-kind-of-compressing-encoding-is-this",
+  "content": "Currently, I am trying to understand .amxd file formats. I firstly tried to open it in VIM to see what this contains. Turns out there is a JSON file and others files also in the file (I can see PNG somewhere after the JSON).\n\nSo I guess it is compressed, but I can't find anywhere what this is compressed with.\n\nHere is the header I got using od -tx1 file.amxd | head\n\n```\n0000000 61 6d 70 66 04 00 00 00 6d 6d 6d 6d 6d 65 74 61\n0000020 04 00 00 00 07 00 00 00 70 74 63 68 c0 26 01 00           \n0000040 6d 78 40 63 00 00 00 10 00 00 00 00 00 01 25 e8           \n0000060 7b 0a 09 22 70 61 74 63 68 65 72 22 20 3a 20 09           \n0000100 7b 0a 09 09 22 66 69 6c 65 76 65 72 73 69 6f 6e           \n0000120 22 20 3a 20 31 2c 0a 09 09 22 61 70 70 76 65 72           \n0000140 73 69 6f 6e 22 20 3a 20 09 09 7b 0a 09 09 09 22           \n0000160 6d 61 6a 6f 72 22 20 3a 20 38 2c 0a 09 09 09 22           \n0000200 6d 69 6e 6f 72 22 20 3a 20 30 2c 0a 09 09 09 22           \n0000220 72 65 76 69 73 69 6f 6e 22 20 3a 20 30 2c 0a 09\n\n```\nI can find the same header in the other files.\n\nWhen using file I get that it contains data, so I guess this doesn't really help me...\n\nIf someone can maybe help me on how to uncompress this, I would be very happy ! Thanks you !\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "175",
+  "tags": [
+    "file-format",
+    "decompress"
+  ],
+  "user": "Vexcited",
+  "time": "Jun 15, 2022 at 15:03",
+  "comments": [
+    {
+      "user": "Robert",
+      "text": "Sorry but how to you conclude by seeing JSON and PNG data in the file that it is compressed? If you can see the full file data of JSON and PNG then this is an indicator that the file is not compressed. Instead the file just integrates multiple files into one. BTW: The common way to check an unknown file besides file is binwalk.",
+      "time": null
+    },
+    {
+      "user": "Vexcited",
+      "text": "Okay, so if the file is not compressed, how can I separate each files from it ? I just tried binwalk and it can extract the PNG files but not the JSON one. Well that's still a big step ! Thanks you~",
+      "time": null
+    },
+    {
+      "user": "Ishan",
+      "text": "Try to run binwalk on the file and see if it works.",
+      "time": null
+    },
+    {
+      "user": "Vexcited",
+      "text": "@Ishan, it works but partially. Some resources aren't extracted like 3/4 of the images sometimes.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The overall structure of the file appears to be that of a RIFF file.  This format consists of a number of separate 'chunks' of data each preceded by a header containing a 4 byte chunk type and a 4 byte (little-endian) length.\n\nYour file begins -\n\n```\n Offset   Type   Length   Data\n======== ====== ========  ========\n0000000: 'ampf' 00000004  'aaaa'\n000000C: 'meta' 00000004  00000007    // probably the version of the AMXD file\n0000028: 'ptch' 000126C0  ...\n....\n\n```\nLooking at a couple of .amxd files online (with meta = 1) these only contain the ampf meta and ptch chunks and the ptch chunk in each case is total in json format.\n\nThis is not the case with your file (with meta = 7).  Interestingly, the data in the ptch chunk seems have it's own header (with values in big-endian format) before the json data.\n\n```\n00000030: `ax@c` 00000010 00000000 000125E8\n\n```\nWith only a single example it's hard to infer much from this other than the last value here is a length.\n\nEdit: Looking at Infinity.amxd in the github repository you linked to sheds more light on the files with meta = 7.\n\nThe top-level structure it that of a RIFF file (with little-endian values)\n\n```\n00000000:   'ampf' 00000004 6D6D6D6D\n0000000C:   'meta' 00000004 00000007\n00000018:   'ptch' 0000D13A ....     // (This chunk contains the whole rest of the file)\n\n```\nDigging further, it appears that the ptch chunk itself contains nested chunks of data in a slightly different format (with big-endian values) -\n\n```\n00000020:   'mx@c' 00000010 000000000000CFFA\n00000030:        ... blob of data ...\n0000D01A:   'dlst' 00000140 \n0000D012:       'dire' 00000068 \n0000D02A:           'type' 0000000C 'JSON'\n0000D036:           'fnam' 00000018 'Infinity.amxd'\n0000D04E:           'sz32' 0000000C 0000CC39\n0000D05A:           'of32' 0000000C 00000010\n0000D066:           'vers' 0000000C 00000000\n0000D072:           'flag' 0000000C 00000011 \n0000D07E:           'mdat' 0000000C D9F0E203\n0000D08A:       'dire' 00000068\n0000D092:           'type' 0000000C 'PNG '\n0000D09E:           'fnam' 00000018 'infinityyy.png'\n0000D0B6:           'sz32' 0000000C 000002B6\n0000D0C2:           'of32' 0000000C 0000CC49 \n0000D0CE:           'vers' 0000000C 00000000\n0000D0DA:           'flag' 0000000C 00000000\n0000D0E6:           'mdat' 0000000C D6E92F11\n0000D0F2:       'dire' 00000068\n0000D0FA:           'type' 0000000C 'PNG '\n0000D106:           'fnam' 00000018 'infinity13.png'\n0000D11E:           'sz32' 0000000C 000000FB\n0000D13A:           'of32' 0000000C 0000CEFF\n0000D136:           'vers' 0000000C 00000000\n0000D142:           'flag' 0000000C 00000000\n0000D14E:           'mdat' 0000000C D6F90E73\n\n```\nThis begins with a blob of data and is followed by a directory listing dlst.\nEach directory entry 'dire' references a file whose data can be found in the blob chunk using offset of32 (relative to the start of the ptch chunk data i.e. 00000020) and size sz32.\n\nIn summary the data in the Infinity.amxd file consists of a json file and 2x png files all of which should now be easy to extract.\n\n",
+      "votes": "0",
+      "user": "Ian Cook",
+      "time": "Jul 19, 2022 at 8:55",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Vexcited",
+          "text": "If you want, the .amxd files I'm trying are from this repository <github.com/mat1jaczyyy/outbreak>. I have looked into RIFF but as I don't really have a lot of knowledge about these things ; I'm quite lost - But thanks you for this answer !",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

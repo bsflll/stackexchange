@@ -1,0 +1,40 @@
+{
+    "title": "IDA Set struct array to use enum values",
+    "link": "https://reverseengineering.stackexchange.com/questions/26323/ida-set-struct-array-to-use-enum-values",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>How can I tell IDA what the indexes of an array in a struct are? I think I need to tell it to use an enum, but I'm not sure how. I'm working on Practical Reverse Engineering and following the x86 Rootkit walkthrough in Chapter 3.</p>\n<p>It walks through reversing the setup of the DriverObject function pointers here:</p>\n<pre><code>01: .text:00010643   mov     ecx, [ebp+DriverObject]\n02: .text:00010646   mov     dword ptr [ecx+38h], offset sub_10300\n03: .text:0001064D   mov     edx, [ebp+DriverObject]\n04: .text:00010650   mov     dword ptr [edx+40h], offset sub_10300\n05: .text:00010657   mov     eax, [ebp+DriverObject]\n06: .text:0001065A   mov     dword ptr [eax+70h], offset sub_10300\n07: .text:00010661   mov     ecx, [ebp+DriverObject]\n08: .text:00010664   mov     dword ptr [ecx+34h], offset sub_10580\n</code></pre>\n<p>Following along, I have a Driver_Object struct defined, and IDA picks up the MajorFunction offset</p>\n<pre><code>.text:00010643 mov     ecx, [ebp+DriverObject]\n.text:00010646 mov     [ecx+_DRIVER_OBJECT.MajorFunction], offset sub_10300\n.text:0001064D mov     edx, [ebp+DriverObject]\n.text:00010650 mov     [edx+(_DRIVER_OBJECT.MajorFunction+8)], offset sub_10300\n.text:00010657 mov     eax, [ebp+DriverObject]\n.text:0001065A mov     [eax+(_DRIVER_OBJECT.MajorFunction+38h)], offset sub_10300\n.text:00010661 mov     ecx, [ebp+DriverObject]\n.text:00010664 mov     [ecx+_DRIVER_OBJECT.DriverUnload], offset driverUnload\n</code></pre>\n<p>MajorFunction is defined as an array, but I'd like to get IDA to display what those offsets represent. wdm.h defines the offsets as follows:</p>\n<pre><code>#define IRP_MJ_CREATE                   0x00\n#define IRP_MJ_CREATE_NAMED_PIPE        0x01\n#define IRP_MJ_CLOSE                    0x02\n...\n</code></pre>\n<p>Basically, I'd like to see something like the following in the disassembly:</p>\n<pre><code>.text:0001064D mov     edx, [ebp+DriverObject]\n.text:00010650 mov     [edx+(_DRIVER_OBJECT.MajorFunction+IRP_MJ_CLOSE)], offset sub_10300\n.text:00010657 mov     eax, [ebp+DriverObject]\n.text:0001065A mov     [eax+(_DRIVER_OBJECT.MajorFunction+IRP_MJ_DEVICE_CONTROL)], offset sub_10300\n</code></pre>\n<p>IDA has the Driver Object defined as follows:</p>\n<pre><code>struct __declspec(align(4)) _DRIVER_OBJECT\n{\n  ...\n  void (__stdcall *DriverUnload)(_DRIVER_OBJECT *);\n  int (__stdcall *MajorFunction[28])(_DEVICE_OBJECT *, _IRP *);\n};\n</code></pre>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "856",
+    "tags": [
+        "ida"
+    ],
+    "user": "gr0k",
+    "time": "Nov 17, 2020 at 19:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I don't think you can do that directly in IDA, although Hex-Rays does it. For example, in the PE header <code>IMAGE_DATA_DIRECTORY DataDirectory[16]</code> array, the names of the individual elements are specified by <code>#define</code> constants such as <code>IMAGE_DIRECTORY_ENTRY_EXPORT</code>. Here we see an access to the element at index <code>0</code>:</p>\n<p><a href=\"https://i.sstatic.net/GmxJ0.png\" rel=\"nofollow noreferrer\"><img alt=\"Access to pe-&gt;DataDirectory 0\" src=\"https://i.sstatic.net/GmxJ0.png\"/></a></p>\n<p>It would be nice to see the symbolic name for the enumeration element <code>0</code>. We can simply place our cursor on the <code>0</code>, press <code>m</code>, and change the constant into an enumeration element the same way we would do in the disassembly listing:</p>\n<p><a href=\"https://i.sstatic.net/Iqlrz.png\" rel=\"nofollow noreferrer\"><img alt=\"Changing the index to an enumeration element\" src=\"https://i.sstatic.net/Iqlrz.png\"/></a></p>\n<p>There is a workaround for your particular example in the disassembly listing. You can declare a new structure type -- say, <code>DRIVER_CALLBACK_FUNCTIONS</code>, like so:</p>\n<pre><code>struct DRIVER_CALLBACK_FUNCTIONS {\n  int (__stdcall *IRP_MJ_CREATE)(_DEVICE_OBJECT *, _IRP *);\n  int (__stdcall *IRP_MJ_CREATE_NAMED_PIPE)(_DEVICE_OBJECT *, _IRP *);\n  int (__stdcall *IRP_MJ_CLOSE)(_DEVICE_OBJECT *, _IRP *);\n  // ... all 28 functions ...\n};\n</code></pre>\n<p>And then modify the definition of <code>_DRIVER_OBJECT</code>: change the definition of the <code>MajorFunction[28]</code> array to <code>DRIVER_CALLBACK_FUNCTIONS</code> instead.</p>\n</div>",
+            "votes": "3",
+            "user": "Rolf Rolles",
+            "time": "Nov 17, 2020 at 21:13",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "gr0k",
+                    "text": "<span class=\"comment-copy\">ahh! that worked like a charm! for us peons without hex-rays, is ghidra capable of doing the same, setting the symbolic constant?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">I don't know; hopefully somebody more informed about Ghidra can chime in here. I would guess not, but again, I'm ignorant on the subject.</span>",
+                    "time": null
+                },
+                {
+                    "user": "John Greene",
+                    "text": "<span class=\"comment-copy\">I get the following error message 'Too long/wide enum. It cannot be used by the decompiler, sorry' in IDA-Pro community version.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

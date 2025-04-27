@@ -1,0 +1,50 @@
+{
+    "title": "how to get per-function memory accesses using PIN tool",
+    "link": "https://reverseengineering.stackexchange.com/questions/20289/how-to-get-per-function-memory-accesses-using-pin-tool",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am modifying PIN's  proccount sample to get the memory access information per function</p>\n<pre><code> VOID Routine(RTN rtn, VOID *v)\n{\n\n    // Allocate a counter for this routine\n    RTN_COUNT * rc = new RTN_COUNT;\n    rc-&gt;_name = RTN_Name(rtn);\n    rc-&gt;_image = StripPath(IMG_Name(SEC_Img(RTN_Sec(rtn))).c_str());\n    rc-&gt;_address = RTN_Address(rtn);\n\n    rc-&gt;_next = RtnList;\n    RtnList = rc;\n\n    RTN_Open(rtn);\nfprintf(trace,\"%s\\n\",rc-&gt;_name.c_str());( writing functio name )\n     RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)docount, IARG_PTR, &amp;(rc-&gt;_rtnCount), IARG_END);\n       // RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)RecordMemRead1, &amp;(rc-&gt;_name),rc-&gt;_address, IARG_END);(this gave an error)\n        // For each instruction of the routine\n        for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins))\n        {\n\n        UINT32 memOperands = INS_MemoryOperandCount(ins);\n    // Iterate over each memory operand of the instruction.\n         for (UINT32 memOp = 0; memOp &lt; memOperands; memOp++)\n    {\n        if (INS_MemoryOperandIsRead(ins, memOp))\n        {\n            INS_InsertPredicatedCall(\n                ins, IPOINT_BEFORE, (AFUNPTR)RecordMemRead,\n                IARG_INST_PTR,\n                IARG_MEMORYOP_EA,memOp,IARG_END); (file trace is modified here)\n\n        }\n    }\n    }\n\n    RTN_Close(rtn);\n}\n</code></pre>\n<p>I am getting output like:</p>\n<pre><code>dl_find_dso_for_object\n__get_cpu_features\n__libc_memalign\nmalloc\ncalloc\nfree\nrealloc\n0   0x7fcecff419dd  :R  0x7fced0165e70\n0   0x7fcecff419e7  :R  0x7fced0166000\n0   0x7fcecff41a57  :R  0x7fced0165e80\n0   0x7fcecff41a57  :R  0x7fced0165e90\n0   0x7fcecff41a57  :R  0x7fced0165ea0\n0   0x7fcecff41a57  :R  0x7fced0165eb0\n0   0x7fcecff41a57  :R  0x7fced0165ec0\n</code></pre>\n<p>I need per-function memory list like:</p>\n<pre><code>dl_find_dso_for_object\n0   0x7fcecff419dd  :R  0x7fced0165e70\n    0   0x7fcecff419e7  :R  0x7fced0166000\n    0   0x7fcecff41a57  :R  0x7fced0165e80\n    0   0x7fcecff41a57  :R  0x7fced0165e90\n;;;\nmalloc\n0x7fcecff41a57  :R  0x7fced0165ea0\n    0   0x7fcecff41a57  :R  0x7fced0165eb0\n    0   0x7fcecff41a57  :R  0x7fced0165ec0\n</code></pre>\n<p>How can I achieve it?</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "pintool"
+    ],
+    "user": "Dileesh Dil",
+    "time": "Jan 5, 2019 at 16:39",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You can pass an additional argument to <code>INS_InsertPredicatedCall</code> with the string name and construct a map with function names with (instruction, addr). Parse that map in <code>PIN_AddFiniFunction</code> added callback. Here's a simple example. Implement your mapping in <code>RecordMemRead</code></p>\n<pre><code>map&lt;string, vector&lt;pair&lt;UINT64, UINT64&gt;&gt;&gt; RtnToRead;\n\nVOID RecordMemRead(ADDRINT address, UINT64 memOp, string rname) {\n    RtnToRead[rname].pb(mp(address, memOp));\n}\n\nVOID Routine(RTN rtn, VOID *v) {\n\n    RTN_Open(rtn);\n\n    string name = RTN_Name(rtn);\n\n    for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins)) {\n\n        UINT32 memOperands = INS_MemoryOperandCount(ins);\n        for (UINT32 memOp = 0; memOp &lt; memOperands; memOp++) {\n            if (INS_MemoryOperandIsRead(ins, memOp)) {\n                INS_InsertPredicatedCall(ins, IPOINT_BEFORE,\n                                         (AFUNPTR)RecordMemRead, IARG_INST_PTR,\n                                         IARG_MEMORYOP_EA, memOp, IARG_PTR,\n                                         new string(name), IARG_END);\n            }\n        }\n    }\n\n    RTN_Close(rtn);\n}\n\nVOID Fini(INT32 code, VOID *v) {\n    for (auto &amp;rtn : RtnToRead) {\n        cout &lt;&lt; rtn.fs &lt;&lt; \" :\" &lt;&lt; endl;\n        for (auto &amp;e : rtn.second) {\n            cout &lt;&lt; \"\\t\" &lt;&lt; hex &lt;&lt; e.fs &lt;&lt; \" : \" &lt;&lt; e.sc &lt;&lt; endl;\n        }\n    }\n}\n</code></pre>\n<p>I have added a simple example <a href=\"https://gist.github.com/sudhackar/b3c355ff7f39c2a30c19c88053b60939\" rel=\"nofollow noreferrer\">here</a></p>\n<p>EDIT : I have copied code from the gist which fits your case perfectly.</p>\n</div>",
+            "votes": "0",
+            "user": "sudhackar",
+            "time": "Jan 7, 2019 at 6:38",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Dileesh Dil",
+                    "text": "<span class=\"comment-copy\">For every instruction it will add the function name  to the ouput line. That is redundant. I need function name and starting address in one line and subsequent lines should  print for each executed instructiojn in that function - the IP address , memory operation and exeffctive address generated by that instruction till the end of that function. If i could add something to mark the  end of each function then it would be more useful to me.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dileesh Dil",
+                    "text": "<span class=\"comment-copy\">// Insert a call at the entry point of a routine to increment the call count    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)docount, IARG_PTR, &amp;(rc-&gt;_rtnCount), IARG_END);    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)RecordMemRead1, IARG_PTR, &amp;(rc-&gt;_name), IARG_END); When i added this line is seems ok</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">Please read my full answer and change implementation of <code>RecordMemRead</code> as I have suggested or look at the gist I added as a link</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dileesh Dil",
+                    "text": "<span class=\"comment-copy\">error: ‘auto’ changes meaning in C++11; please remove it [-Werror=c++0x-compat]      for (auto &amp;rtn : RtnToRead) {           ^ myproccount2.cpp:133:16: error: ISO C++ forbids declaration of ‘rtn’ with no type [-fpermissive]      for (auto &amp;rtn : RtnToRead) .. itried adding \" -std=c++11 \" in the make file dosent helped</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">If auto breaks for you See <a href=\"https://devdocs.io/cpp/container/map/map\" rel=\"nofollow noreferrer\">devdocs for map</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

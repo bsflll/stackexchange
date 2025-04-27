@@ -1,0 +1,32 @@
+{
+    "title": "Frida hook multiple processes",
+    "link": "https://reverseengineering.stackexchange.com/questions/30349/frida-hook-multiple-processes",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There was such a situation. I run the frida hook on the process like this:</p>\n<pre><code>frida -f '..\\hack2\\hackme.exe'  -l .\\start.js\n</code></pre>\n<p>In the script itself I do this</p>\n<pre><code>var moduleData = Process.getModuleByName(\"hackme.exe\");\n</code></pre>\n<p>then comes the code which, as a result of which, I launch a function that launches another process - <code>level2.exe</code>.</p>\n<p>It would be convenient if you could hook this process directly from this script.\ncalling <code>Process.findModuleByName(\"level2.exe\");</code> is always null. The only way I see now is to write a Python script that will monitor the launch of the second process and run the hook in different threads. Perhaps there is a simpler solution without resorting to such extreme measures?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "python",
+        "frida"
+    ],
+    "user": "user123",
+    "time": "Apr 30, 2022 at 12:14",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "<span class=\"comment-copy\">In difference to a common debugger the Frida JavaScript code is running inside the hooked process, this means you can not simply access a different process. BTW: <code>findModuleByName</code> can only find libraries loaded into the current process, therefore it will never find level2.exe unless it is not started/executed but loaded as library into the current process. I don't see a different way than hooking the seconds process using an external Python script.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is called <a href=\"https://frida.re/news/#child-gating\" rel=\"nofollow noreferrer\">child-gating</a> and frida has a very good <a href=\"https://github.com/frida/frida-python/blob/main/examples/child_gating.py\" rel=\"nofollow noreferrer\">example</a></p>\n<p>Here is a demo with a simple application. A simple C program with a <code>fork</code> and we try to hook <code>puts</code> for both child and parent.</p>\n<pre><code>(test3) [frida-example] cat test.c\n#include &lt;stdio.h&gt;\n#include &lt;sys/types.h&gt;\n#include &lt;unistd.h&gt;\nint main() {\n  puts(\"before\");\n  pid_t pid = fork();\n  if (pid) {\n    puts(\"parent\");\n  } else {\n    puts(\"child\");\n  }\n}\n(test3) [frida-example] make test\ncc     test.c   -o test\n</code></pre>\n<p>With the <a href=\"https://github.com/frida/frida-python/blob/main/examples/child_gating.py\" rel=\"nofollow noreferrer\">example</a> - adding changes</p>\n<pre><code>    def _start(self):\n        argv = [\"./test\"]\n        print(\"✔ spawn(argv={})\".format(argv))\n        pid = self._device.spawn(argv, env={}, stdio='pipe')\n        self._instrument(pid)\n</code></pre>\n<p>and</p>\n<pre><code>    def _instrument(self, pid):\n        print(\"✔ attach(pid={})\".format(pid))\n        session = self._device.attach(pid)\n        session.on(\"detached\", lambda reason: self._reactor.schedule(lambda: self._on_detached(pid, session, reason)))\n        print(\"✔ enable_child_gating()\")\n        session.enable_child_gating()\n        print(\"✔ create_script()\")\n        script = session.create_script(\"\"\"\\\nInterceptor.attach(Module.getExportByName(null, 'puts'), {\n  onEnter: function (args) {\n    send({\n      type: 'puts',\n      path: Memory.readUtf8String(args[0])\n    });\n  }\n});\n\"\"\")\n</code></pre>\n<p>then by running</p>\n<pre><code>(test3) [frida-example] python hook.py\n✔ spawn(argv=['./test'])\n✔ attach(pid=1968)\n...\n✔ resume(pid=1968)\n⚡ message: pid=1968, payload={'type': 'puts', 'path': 'before'}\n⚡ message: pid=1968, payload={'type': 'puts', 'path': 'parent'}\n...\n⚡ child_added: Child(pid=1977, parent_pid=1968, origin=fork)\n✔ attach(pid=1977)\n...\n✔ resume(pid=1977)\n⚡ child_removed: Child(pid=1977, parent_pid=1968, origin=fork)\n⚡ message: pid=1977, payload={'type': 'puts', 'path': 'child'}\n...\n⚡ detached: pid=1977, reason='process-terminated'\n</code></pre>\n<p>We hooked both the instances of child and parent</p>\n</div>",
+            "votes": "1",
+            "user": "sudhackar",
+            "time": "Jun 8, 2022 at 9:58",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

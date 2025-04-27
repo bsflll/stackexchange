@@ -1,0 +1,78 @@
+{
+  "title": "IDA SDK - Rename Variable permanently",
+  "link": "https://reverseengineering.stackexchange.com/questions/18063/ida-sdk-rename-variable-permanently",
+  "content": "I'm using ida 6.8 SDK and i have an problem with saving changed variables names,\n\nI used many functions like set_reg_name(C++), setMemberName(in python), \nthey change the name but not permanently, after pressing refresh , or reopening ida, the variables have old names.\n\nWhat function is used when u press \"N\" Rename Iyvar, and were to get info on correct way of saving changed variable names ?\n\n",
+  "votes": "1",
+  "answers": 3,
+  "views": "2k",
+  "tags": [
+    "ida",
+    "idapro-sdk"
+  ],
+  "user": "LighFusion",
+  "time": "Sep 27, 2018 at 7:28",
+  "comments": [
+    {
+      "user": "w s",
+      "text": "As far as I remember there was save_user_lvar_settings for hex rays variables in ida 6.8. I'd suggest to search this function on github - this will probably give you some examples.",
+      "time": null
+    },
+    {
+      "user": "LighFusion",
+      "text": "@ws seems a common problem ? the thing is that when i'm trying to use user_lvar_visitor_t ulv;( instead of old lvar_uservec_t lvinf; ) i get error that can't create example of abstract class . And i can't find any valid source, can u point me to correct sources ?",
+      "time": null
+    },
+    {
+      "user": "w s",
+      "text": "Unfortunately the only source I know about that should work is related to IDA 7.1 and resides here :github.com/IDArlingTeam/IDArling/blob/master/idarling/core/…",
+      "time": null
+    },
+    {
+      "user": "LighFusion",
+      "text": "@ws and that's for python ? i can't make  lvinf = ida_hexrays.lvar_uservec_t() the same in C++ ; Also i have found this function -   bool __fastcall hexapi rename_lvar(lvar_t *v, const char *name, bool is_user_name); in comments it says //This function permanently renames a local variable. , but how to access it ? i get error not found when i try to use it",
+      "time": null
+    },
+    {
+      "user": "LighFusion",
+      "text": "@ws huh finnaly after 2 days of searching, thx to these github.com/REhints/HexRaysCodeXplorer/blob/… guys ! the solutions i to get pointer from pseudo code, and apply vu.rename_lvar(&lvars.at(i), \"var_permaNamed\", true);  Ands thats it! it renames permamently, thanks anyway ,",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Solution is very simple:\n\nlast bool flag in rename_lvar func, operate if renaming is permanent or not .\n\np.s.\nIts kind'a bad solution as it require opening pseudo view, but i didn't find any other way to do it permanently , or similiar, working function that set's flag like in rename_lvar func .\n\n",
+      "votes": "3",
+      "user": "LighFusion",
+      "time": "Apr 26, 2018 at 0:16",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "bravosierra99",
+          "text": "I'm having difficulty getting this to work in Python.  The function \"vuu.rename_lvar\" returns true, and I\"m using lvars from cfunc.lvars or cfunc.get_lvars().  however, if I use the pop up from vuu.ui_rename_lvar it contains the name that I've attempted to rename it to!  so something is happening.",
+          "time": null
+        },
+        {
+          "user": "bravosierra99",
+          "text": "figured it out, if you get your cfunc_t a different way (such as get_func(ea) then it doesn't work!  must get it through the vuu object.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Excellent work @LighFusion and @bravosierra99.  Since I ended up here after looking for the Python solution, I'll paste it for anybody else.\n\n```\nwidget = ida_kernwin.find_widget('Pseudocode-Y') \nvu = ida_hexrays.get_widget_vdui(widget) \nvu.rename_lvar(vu.cfunc.lvars[2], \"pModelInfo\", 1)\n\n```\n@Igor Skochinsky -- I just think it would just be common decency to make source or documentation available regarding how the existing basic [context] menu functionality works, so people have something to build on.  I can't count the number of times I've been unable to fully replicate some basic inbuilt menu option, watching scripts constantly fail when I can manually perform the operation and it works perfectly.\n\nHere's a more complete example:\n\n```\ndef rename_lvar(src, dst, ea):\n    #  if you want to use an existing view:\n    #      widget = ida_kernwin.find_widget('Pseudocode-Y')\n    #      vu = ida_hexrays.get_widget_vdui(widget)\n    func = idaapi.get_func(ea)\n    if func:\n        ea = func.start_ea\n        vu = idaapi.open_pseudocode(ea, 0)\n        lvars = [n for n in vu.cfunc.lvars if n.name == src]\n        if len(lvars) == 1:\n            print(\"renaming {} to {}\".format(lvars[0].name, dst))\n            vu.rename_lvar(lvars[0], dst, 1)\n            # how to close the view without a widget object?\n            #     idautils.close_pseudocode (nope)\n            #     ida_kerwin.close_widget   (nope)\n        else:\n            print(\"couldn't find var {}\".format(src))\n\n```\n",
+      "votes": "0",
+      "user": "Orwellophile",
+      "time": "Dec 25, 2020 at 2:12",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "It's better to do this directly, without using the user-interface class vdui_t. Here's a small function you can call to set the name of a local variable, assuming you already have the lvar_t object you want to rename:\n\n```\ndef SetLvarName(func_ea,lvar,name):\n    lsi = ida_hexrays.lvar_saved_info_t()\n    lsi.ll = lvar\n    lsi.name = name\n    ida_hexrays.modify_user_lvar_info(func_ea, ida_hexrays.MLI_NAME, lsi)\n\n```\nHere's a little harness I wrote to ensure it works. It decompiles some function in my database, finds the lvar_t named \"v35\", and renames it to \"vNewName\".\n\n```\ndef GetCfunc(ea):\n    f = idaapi.get_func(ea)\n    if f is None:\n        return None\n\n    # Decompile the function.\n    cfunc = None\n    try:\n        cfunc = idaapi.decompile(f)\n    finally:\n        return cfunc\n\ncfunc = GetCfunc(0x61FE5DDE)\nif cfunc:\n    mba = cfunc.mba\n    for idx in xrange(mba.vars.size()):\n        var = mba.vars[idx]\n        if var.name == \"v35\":\n            SetLvarName(cfunc.entry_ea,var,\"vNewName\")\n            break\n\n```\n",
+      "votes": "0",
+      "user": "Rolf Rolles",
+      "time": "Dec 25, 2020 at 3:16",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

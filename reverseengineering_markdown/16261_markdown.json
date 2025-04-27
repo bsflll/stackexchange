@@ -1,0 +1,46 @@
+{
+  "title": "Should the Delay Import Directory contain virtual addresses?",
+  "link": "https://reverseengineering.stackexchange.com/questions/16261/should-the-delay-import-directory-contain-virtual-addresses",
+  "content": "The Reko decompiler crashes while trying to load the PE delay import directory of a particular binary I'm looking at. For 32-bit executables, the PE spec states that the directory consists of a sequence of records where offset 4 contains:\n\nWhen I use dumpbin to look at the image, I see that the PE header \n\n```\n      185000 [     2C6] RVA [size] of Delay Import \n\n```\nAnd the .didata section's raw data is:\n\n```\n00585000: 00 00 00 00 90 51 58 00 00 00 00 00 A0 50 58 00  .....QX......PX.\n00585010: B4 50 58 00 C8 50 58 00 DC 50 58 00 00 00 00 00  �PX.�PX.�PX..... \n(etc)\n\n```\nNotice that at 00585004, the szName field has what looks to me a virtual address (00585190) and not a RVA (which would have been 00185190). Still, dumpbin manages to interpret this as:\n\n```\nUSER32.DLL\n          00000000 Characteristics\n          00000000 Address of HMODULE\n          005850A0 Import Address Table\n          005850B4 Import Name Table\n          005850C8 Bound Import Name Table\n          005850DC Unload Import Name Table\n                 0 time date stamp\n\n```\nwhere it follows the 00585190 to find the string USER32.DLL.\n\nSo how should the entries in the Delay Import Directory be interpreted? Should a PE loader first attempt to read the szName field as an RVA, and only when it discovers that it isn't a valid RVA, attempt to read it as VA?\n\nNote that for small EXE files, which get loaded at address 0x0040000, the range of valid RVA's will be [0x00000000..MAX_RVA) while the range of valid virtual addresses will be [0x00400000..MAX_RVA + 0x00400000], so RVA's and VA's could theoretically be distinguished by looking at their numerical values. But once the binary size exceeds 0x00400000 bytes (4194304 bytes) these ranges overlap and you can't tell the difference anymore.\n\nUpdate:\nInterestingly, many PE viewers and editors crash or go off the rails on this binary. Dumpbin, IDA, and -- most significantly -- the Windows loader don't crash. Wonder what algorithm they are using to avoid dying on this binary?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "pe32"
+  ],
+  "user": "John Källén",
+  "time": "Sep 4, 2017 at 22:47",
+  "comments": [
+    {
+      "user": "c00000fd",
+      "text": "I know it's been a while. I found this thru Google. I'm trying to see if my software that deals with PE format can handle a binary file that you described. Can you please upload it to some file sharing service and give us a link? It'd be very helpful. Thanks.",
+      "time": null
+    },
+    {
+      "user": "Willi Ballenthin",
+      "text": "@c00000fd this file has delayed imports with VAs (not RVAs)  virustotal.com/gui/file/…",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Delayed imports are not processed by the system loader, so the programmer can put into it any kind of data, as long as they're prepared to handle it. By convention (mostly because Visual C++ did it), delayed imports are expected to use the same format as \"normal\" imports, but since this is not enforced by the OS it's not a requirement, and a specific program can use its own format or put any garbage into it.\n\nIIRC the issue with szName comes from the first implementation of the delayed imports (VC 6.0) which by mistake used full addresses instead of RVAs. This can be seen in the source code of the delayed import helper shipped with Visual C++ (delayhlp.cpp):\n\n```\n// For our own internal use, we convert to the old\n// format for convenience.\n//\nstruct InternalImgDelayDescr {\n    DWORD           grAttrs;        // attributes\n    LPCSTR          szName;         // pointer to dll name\n    HMODULE *       phmod;          // address of module handle\n    PImgThunkData   pIAT;           // address of the IAT\n    PCImgThunkData  pINT;           // address of the INT\n    PCImgThunkData  pBoundIAT;      // address of the optional bound IAT\n    PCImgThunkData  pUnloadIAT;     // address of optional copy of original IAT\n    DWORD           dwTimeStamp;    // 0 if not bound,\n                                    // O.W. date/time stamp of DLL bound to (Old BIND)\n    };\n\n```\n(note how it says \"old format\" and most field, including szName, are full pointers and not RVAs).\n\nThe issue is also mentioned in the MSDN article Changes in the DLL Delayed Loading Helper Function Since Visual C++ 6.0:\n\nIf you open the above-mentioned header, you can see this definition:\n\n```\nenum DLAttr {                   // Delay Load Attributes\n    dlattrRva = 0x1,                // RVAs are used instead of pointers\n                                    // Having this set indicates a VC7.0\n                                    // and above delay load descriptor.\n    };\n\n```\nThis is how IDA detects the correct format of delayed imports (absolute addresses in your case) and can handle them without crashing.\n\n",
+      "votes": "4",
+      "user": "Igor Skochinsky",
+      "time": "Jan 24, 2020 at 17:03",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "John Källén",
+          "text": "Thanks for the clarifications. It seems my copy of Microsoft's documentation of the delay import directory is incomplete; it makes no mention of the delay load attribute you mention above.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "the whole thing should be documented as \"implementation defined, but here's how Visual C++ does it\". The OS does not care about it.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

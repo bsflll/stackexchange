@@ -1,0 +1,101 @@
+{
+  "title": "Can someone tell me what this memcpy or maybe it's a memset? looks like a memset, rep movsd and rep movsb This is a packet sending function",
+  "link": "https://reverseengineering.stackexchange.com/questions/4189/can-someone-tell-me-what-this-memcpy-or-maybe-its-a-memset-looks-like-a-memset",
+  "content": "Trying to understand a function thats responsible for sending out a packet.\nI don't understand could it be a integer array or something? or some inline function that's not properly getting rendered in Hex-Rays\n\nI understand the else statement sends a 4 byte packet which contains a timestamp of the GetTickCount API.\n\nThe if statement should send the packet that comes in the a2 is the pointer to characters with a3 being the size for all the characters.\n\nUsage is similar to this\n\n```\nchar buffer[448];\nmemset(buffer, 0, sizeof(buffer));\n//blah blah packet stuff here\nstrncpy(&buffer[90], \"blah blah blah\", 250u);\nbuffer[339] = 0;\n//then the call below.\n// 91+250+91 = 432, yet memset is 448, 16 extra probably stack padding.\ntest(*v28, buffer, strlen(&buffer[90]) + 91);\n\n```\n\nHere is the original code decompiled from Hex-Rays.\nvoid __thiscall test(void *this, const void *a2, unsigned int a3)\n{\n  void *v3; // ebx@1\n  char *v4; // eax@3\n  int v5; // [sp-8h] [bp-418h]@3\n  int v6; // [sp-4h] [bp-414h]@3\n  char v7[4]; // [sp+Ch] [bp-404h]@4\n  char buf[1024]; // [sp+10h] [bp-400h]@3\n\n  v3 = this;\n  if ( a2 && (signed int)a3 > 0 )\n  {\n    *(_DWORD *)buf = 0;\n    memcpy(&buf[4], a2, 4 * (a3 >> 2));\n    v6 = 0;\n    v5 = a3 + 4;\n    v4 = buf;\n    memcpy(&buf[4 * (a3 >> 2) + 4], (char *)a2 + 4 * (a3 >> 2), a3 & 3);// Looks like Copy by DWORDs, not by Bytes.\n  }\n  else\n  {\n    v6 = 0;\n    *(_DWORD *)v7 = GetTickCount() / 0xA;\n    v5 = 4;\n    v4 = v7;\n  }\n  send(*(_DWORD *)v3, v4, v5, v6);\n}\n\nHere I fixed it up a little by hand, still don't understand it.\nvoid __thiscall test(void *this, const void *a2, unsigned int a3)\n{\n  void *v3; // ebx@1\n  char *v4; // eax@3\n  int v5; // [sp-8h] [bp-418h]@3\n  int v6; // [sp-4h] [bp-414h]@3\n  char v7[4]; // [sp+Ch] [bp-404h]@4\n  char buf[1024]; // [sp+10h] [bp-400h]@3\n\n  v3 = this;\n  if ( a2 && (signed int)a3 > 0 )\n  {\n    *(_DWORD *)buf = 0;\n    //Might be a swap of the 5th offset DWORD to end of the packet?\n    //Or maybe it fills in the packet offsetted by the first 4 bytes?\n    memcpy(&buf[4], a2, 4 * (a3 / 4)); // Looks like Copy by DWORDs, not by Bytes.\n    v6 = 0;\n    v5 = a3 + 4;\n    v4 = buf;\n    //Might be a swap of the end of the packet to the 5th offset DWORD?\n    //Looks like some kind of footer to above memcpy function like to finish what the first function couldn't do?\n    memcpy(&buf[4 * (a3 / 4) + 4], (char *)a2 + 4 * (a3 / 4), a3 & 3);// Looks like Copy by DWORDs, not by Bytes.\n  }\n  else\n  {\n    v6 = 0;\n    *(_DWORD *)v7 = GetTickCount() / 0xA;\n    v5 = 4;\n    v4 = v7;\n  }\n  send(*(_DWORD *)v3, v4, v5, v6);\n}\n\nOkay I gave it some more time could this be the correct?\nvoid __thiscall test(void *this, const void *a2, unsigned int a3)\n{\n  void *v3; // ebx@1\n  char *v4; // eax@3\n  int v5; // [sp-8h] [bp-418h]@3\n  int v6; // [sp-4h] [bp-414h]@3\n  char v7[4]; // [sp+Ch] [bp-404h]@4\n  char buf[1024]; // [sp+10h] [bp-400h]@3\n\n  v3 = this;\n  if ( a2 && (signed int)a3 > 0 )\n  {\n    *(_DWORD *)buf = 0;\n    memmove(&buf[4],a2,a3 - 4); \n\n    v6 = 0;\n    v5 = a3 + 4;\n    v4 = buf;\n  }\n  else\n  {\n    v6 = 0;\n    *(_DWORD *)v7 = GetTickCount() / 0xA;\n    v5 = 4;\n    v4 = v7;\n  }\n  send(*(_DWORD *)v3, v4, v5, v6);\n}\n\nAssembly below\n.text:00408750 ; =============== S U B R O U T I N E =======================================\n.text:00408750\n.text:00408750\n.text:00408750 ; void __thiscall test(void *this, const void *a2, unsigned int a3)\n.text:00408750 test proc near\n.text:00408750                                         ; CODE XREF: ServerMainLoop+5DDp\n.text:00408750                                         ; ServerMainLoop+64Dp\n.text:00408750\n.text:00408750 var_404         = byte ptr -404h\n.text:00408750 buf             = byte ptr -400h\n.text:00408750 a2              = dword ptr  4\n.text:00408750 a3              = dword ptr  8\n.text:00408750\n.text:00408750                 sub     esp, 404h\n.text:00408756                 push    ebx\n.text:00408757                 push    esi\n.text:00408758                 mov     esi, [esp+40Ch+a2]\n.text:0040875F                 push    edi\n.text:00408760                 test    esi, esi\n.text:00408762                 mov     ebx, ecx\n.text:00408764                 jz      short loc_408799\n.text:00408766                 mov     eax, [esp+410h+a3]\n.text:0040876D                 test    eax, eax\n.text:0040876F                 jle     short loc_408799\n.text:00408771                 mov     ecx, eax\n.text:00408773                 lea     edi, [esp+410h+buf+4]\n.text:00408777                 mov     edx, ecx\n.text:00408779                 mov     dword ptr [esp+410h+buf], 0\n.text:00408781                 shr     ecx, 2\n.text:00408784                 rep movsd\n.text:00408786                 mov     ecx, edx\n.text:00408788                 push    0\n.text:0040878A                 and     ecx, 3\n.text:0040878D                 add     eax, 4\n.text:00408790                 push    eax\n.text:00408791                 lea     eax, [esp+418h+buf]\n.text:00408795                 rep movsb\n.text:00408797                 jmp     short loc_4087B7\n.text:00408799 ; ---------------------------------------------------------------------------\n.text:00408799\n.text:00408799 loc_408799:                             ; CODE XREF: test+14j\n.text:00408799                                         ; test+1Fj\n.text:00408799                 call    ds:GetTickCount\n.text:0040879F                 mov     edx, eax\n.text:004087A1                 mov     eax, 0CCCCCCCDh\n.text:004087A6                 mul     edx\n.text:004087A8                 shr     edx, 3\n.text:004087AB                 push    0               ; flags\n.text:004087AD                 mov     dword ptr [esp+414h+var_404], edx\n.text:004087B1                 push    4               ; len\n.text:004087B3                 lea     eax, [esp+418h+var_404]\n.text:004087B7\n.text:004087B7 loc_4087B7:                             ; CODE XREF: test+47j\n.text:004087B7                 mov     ecx, [ebx]\n.text:004087B9                 push    eax             ; buf\n.text:004087BA                 push    ecx             ; s\n.text:004087BB                 call    send\n.text:004087C0                 pop     edi\n.text:004087C1                 pop     esi\n.text:004087C2                 pop     ebx\n.text:004087C3                 add     esp, 404h\n.text:004087C9                 retn    8\n.text:004087C9 test endp\n.text:004087C9\n.text:004087C9 ; ---------------------------------------------------------------------------\n\n\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "ida",
+    "decompilation"
+  ],
+  "user": "user3435580",
+  "time": "Apr 28, 2014 at 13:35",
+  "comments": [
+    {
+      "user": "DCoder",
+      "text": "Splitting a single buffer copy into two steps, one by DWORDs and one by BYTEs, is a common optimization technique. Hex-Rays is not infallible, it might be tricked by some instructions mixed into the middle of the loop. Since you're not providing the disassembled code, it's hard to tell for sure, but memcpy is more likely than memset.",
+      "time": null
+    },
+    {
+      "user": "user3435580",
+      "text": "Assembly posted in topic too now. I had similar issues where memcpy turned out to be a memset undercover the >> 2 always revealed it, so I think it could be a memset variant. rep movsd and rep movsb must be them.",
+      "time": null
+    },
+    {
+      "user": "DCoder",
+      "text": "With the disassembly, this is easy - rep movs* copies data from one buffer to another, like memcpy. rep stos* writes constant data to a buffer, like memset does.",
+      "time": null
+    },
+    {
+      "user": "user3435580",
+      "text": "So could both be just one function? I don't really understand why I need to do 2 operations for something as simple as moving everything 4 bytes to the right. (I think it does that) I have a buffer with 1024 bytes to use and no other variables. Honestly I don't look at assembly unless I have a big mathematical monster too hard for me and other times I just get lucky.",
+      "time": null
+    },
+    {
+      "user": "user3435580",
+      "text": "It's probably memmove then memset.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This code is easy, it's just a bit messy 'cause it was generated by a decompiler. Here's a much simpler commented version :\n\n```\nvoid __thiscall test(void *this, const void *a2, unsigned int a3)\n {\n    char v7[4]; \n    int  v5 = 4;\n    void *v3 = this;\n    char buf[1024], *v4;\n\n    if (a2 != NULL && (signed int)a3 > 0)\n    {\n      //Setting the 4 first bytes to 0. Certainly the message header !\n      *(_DWORD *)buf = 0;\n\n      /*\n         Same as :\n         memset(buff, 0, 4);\n         buf[0] = buf[1] = buf[2] = buf[3] = 0; \n       */\n\n      /*\n         Copying the first a3 bytes of a2 into buff + 4. \n         The + 4 is to jump the 4 bytes header set to 0 previously. \n       */ \n      memcpy(buf + 4, a2, a3); //There's no point in 4 * a3 / 4;\n\n      //Size has changed to a3 + 4 (4 bytes for the header)\n      v5 += a3;\n\n      //\n      v4 = buf;\n    }\n    else\n    {\n       /* _DWORD is 4 bytes. This line converts v7 into an integer to\n           copy the value of GetTickCount() / 10 byte by byte into it.  \n        */\n      *(_DWORD *)v7 = GetTickCount() / 10;\n\n      //\n      v4 = v7;\n    }\n\n    send(*(_DWORD *)v3, v4, v5, 0);\n }\n\n```\nFrom this I would say that this routine sends a packet with the header set to GetTickCount() / 10 if there's no message (a2 == NULL or a3 <= 0), otherwise it sets the message header to 0, the message itself to a2 and sends the packet.\n\nThe thing about the original version you provided is that it was performing a copy 4 elements by 4 ... That's why the memcpy was split in two. The first one copying the elements 4 * (a3 / 4) (if a3 = 19 then it would've copied 16 elements), the second one copying the remaining a3 % 4 (a3 % 4 <==> a3 & (4 - 1) <==> a3 & 3) elements (if a3 = 19 then it would've copied 3). \n\n",
+      "votes": "5",
+      "user": "yaspr",
+      "time": "Apr 28, 2014 at 13:19",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user3435580",
+          "text": "the message header is part of the first 4 bytes in the packet right? So it's used like either it could be the GetTickCount or otherwise it's filled zero's to indicate a message?",
+          "time": null
+        },
+        {
+          "user": "user3435580",
+          "text": "Thanks for putting the time into refactoring it. Do the  first 4 bytes of the packet get lost though?",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "You're welcome.",
+          "time": null
+        },
+        {
+          "user": "user3435580",
+          "text": "Oh i figured it out no bytes are lost just padded with 4 empty bytes in front.",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "Exactly :D That's just a header. I'm sure that the routine which is supposed to receive the message checks the header to know whether it should, probably, sync or read the message body.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "It's not a memset at all, it's just a memcpy. Copying dword by dword is more efficient than byte by byte, since 32 bits of data bus can be used per copy (at least if the data is word aligned). So what the compiler does is:\n\nWhat adds to the confusion is that the compiler already prepares the arguments for the next function call while still doing the memcpy - the push 0, add eax, 4 and push eax belong to the send call after the jmp.\n\n",
+      "votes": "5",
+      "user": "Guntram Blohm",
+      "time": "Apr 28, 2014 at 13:10",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user3435580",
+          "text": "Good information will come in handy, sorry I couldn't accept both answers as best answer.",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "Well, I do agree on the fact that copying DWORD by DWORD is faster than copying BYTE by BYTE. But, sometimes, if the compiler does its job properly & if the architecture handles it, a vectorized version will be used instead (memcpy_SSE42, ...). That's what usually happens when using GCC (for static & dynamically linked binaries).",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "Agreed, but i wanted to explain why the specific code the OP posted looks like it does ;)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

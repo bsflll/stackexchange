@@ -1,0 +1,50 @@
+{
+    "title": "How does the XADD instruction modify the Zero Flag?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19207/how-does-the-xadd-instruction-modify-the-zero-flag",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I've come across a set of instructions using\n  <code>\n   lock xadd\n  </code>\n  which I'm guessing came from one of the C++ smart pointer templates. (It's been a very long time since I coded C++ so I'm not sure which).\n </p>\n <pre><code>lea ecx,dword ptr ds:[edi+0x4]   ; edi is a class object\nor eax,0xFFFFFFFF\nlock xadd dword ptr ds:[ecx],eax ; add -1 to edi[1]\njne sdk.1000C801\nmov eax,dword ptr ds:[edi]       ; edi's vtable\nmov ecx,edi                      ; prepare thiscall\ncall dword ptr ds:[eax]          ; call edi->vtable[0] ??\n</code></pre>\n <p>\n  I can see a member of edi is decreased, but how does this effect\n  <code>\n   ZF\n  </code>\n  and when would the\n  <code>\n   jne\n  </code>\n  not be taken? This part of the code is never executed since\n  <code>\n   edi\n  </code>\n  is always 0, so I cannot step though.\n </p>\n <p>\n  To me it looks like a smart pointer, and when the value becomes 0 a destructor is called. To add to my confusion, there are two of these, side by side. The first operates on\n  <code>\n   edi[1]\n  </code>\n  the second on\n  <code>\n   edi[2]\n  </code>\n  which calls\n  <code>\n   vtable[1]\n  </code>\n  .\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "891",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "Twifty",
+    "time": "Aug 31, 2018 at 8:26",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I think your general commenting is rather correct (although not sure about the smart pointer). As a hint w/r to the xadd: A good assembler reference is\n  <a href=\"http://faydoc.tripod.com/cpu/xadd.htm\" rel=\"nofollow noreferrer\">\n   tripod\n  </a>\n  , giving a comprehensive description. Being an addition, xadd affects the zero flag. The lock prefix converts it into an atomic instruction. If your \"smart pointer\" interpretation is correct, this lock would be a necessity to keep the reference count clean.\n </p>\n <p>\n  The following slightly enhances your code comments from my interpretation:\n </p>\n <pre><code>lea ecx,dword ptr ds:[edi+0x4]   ; edi is a class object\nor eax,0xFFFFFFFF\nlock xadd dword ptr ds:[ecx],eax ; add -1 to edi[1], eax obtains edi[1]\njne sdk.1000C801                 ; edi[1] != 1 ? yes -> sdk.1000c801\nmov eax,dword ptr ds:[edi]       ; edi's vtable\nmov ecx,edi                      ; prepare thiscall\ncall dword ptr ds:[eax]          ; call edi->vtable[0] \n</code></pre>\n <p>\n  In pseudocode, you could write it like this (the register values prepended with an underscore):\n </p>\n <pre><code>int _eax = _edi[1];\nif (_edi[1]-- != 1)\n    goto sdk.1000c801;      //_eax has _edi[1] value, in case it's needed here\n_edi->vtable[0] ();         //call first entry in vtable\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "josh",
+            "time": "Aug 31, 2018 at 13:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Twifty",
+                    "text": "<span class=\"comment-copy\">So, just to be clear, after the add <code>edi[1]</code> is not compared against anything, but it's value alone determines the state of the zero flag?</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">The addition sets the zero flag if the result was zero (then ZF=1). A possible subsequent compare reads the zero flag and acts accordingly. The jne jumps to its target in case of ZF == 0, i.e. the addition did not result in zero. It is the same as jnz. A compare (cmp) instruction is a substraction of the two operands, without modifying one of the operands. Quote from the referenced website: \"The comparison is performed by subtracting the second operand from the first operand and then setting the status flags in the same manner as the SUB instruction.\"</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The question about the zero flag and the\n  <code>\n   xadd\n  </code>\n  instruction has been sufficiently answered by josh. This answer is meant to add some surrounding information about the smart pointer you see.\n </p>\n <p>\n  What you see is typical code for\n  <code>\n   shared_ptr\n  </code>\n  ,\n  <em>\n   the\n  </em>\n  standard reference counting smart pointer in the C++ standard library. A\n  <code>\n   shared_ptr\n  </code>\n  object (that is the pointer itself, not what it points to!) contains two(!) pointer values. The first pointer points to the pointee, the second pointer points to a management object. The management objects contains the vtable pointer followed by two reference counts, followed by other stuff depending on the specific kind of management object (for example, if the deleter is not stateless, the deleter's state is also included in the management object). The first reference count in the management object contains the number of\n  <em>\n   strong\n  </em>\n  references to the object (i.e. the number of\n  <code>\n   shared_ptr\n  </code>\n  s pointing to that object), whereas the second reference count contains the number of references to the management object. All strong references together count as a single reference to the management object, but every\n  <code>\n   weak_ptr\n  </code>\n  counts as an individual further reference to the management object.\n </p>\n <p>\n  Whenever a (non-null)\n  <code>\n   shared_ptr\n  </code>\n  goes out of scope, the count of strong references is decreased. If the count of strong references reaches zero, the lifetime of\n  <em>\n   pointee\n  </em>\n  ends, and the first vtable function is called to destroy the pointee. This invokes the deleter specified when creating the shared pointer (which (indirectly) defaults to\n  <code>\n   delete\n  </code>\n  (possibly\n  <code>\n   delete[]\n  </code>\n  for arrays) if no deleter was specified). Furthermore, after deletion of the object, the cumulative reference to the management object for all strong references is also decreased. If that reference count reaches zero, the management object can be destroyed, by calling the second vtable function.\n </p>\n <p>\n  When a (non-null)\n  <code>\n   weak_ptr\n  </code>\n  goes out of scope, just the reference count to the management object is decreased (as the\n  <code>\n   weak_ptr\n  </code>\n  does not carry a strong reference). If this reference count reaches zero, there are no strong references (because otherwise the cumulative reference to the management would still exist), and no other\n  <code>\n   weak_ptr\n  </code>\n  s. The pointee has already been destroyed when the last strong reference went out of scope, so just the management object has be destroyed (again, by calling the second vtable entry).\n </p>\n <p>\n  There is an optimization possibility when the pointee and the management object are created at the same time. In that case, the memory for both objects can be allocated in one block. The management object in that case is no bigger than the vtable and the two reference counts and precedes the pointee. The first vfunction just calls the destructor of the pointee, but does not free its memory. The second vfunction destroys the memory block containing the management object and the already destroyed pointee. This optimization is taken when a\n  <code>\n   shared_ptr\n  </code>\n  is created using\n  <code>\n   make_shared\n  </code>\n  . The downside of this optimization is that the memory block for the pointee is freed only when no\n  <em>\n   weak or strong\n  </em>\n  refences exist, instead of already then just the\n  <em>\n   strong\n  </em>\n  references are gone. In most use cases of\n  <code>\n   shared_ptr\n  </code>\n  , there are no\n  <code>\n   weak_ptr\n  </code>\n  s, so the downside usually does not matter.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Michael Karcher",
+            "time": "Aug 31, 2018 at 18:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Twifty",
+                    "text": "<span class=\"comment-copy\">Thanks for the explanation. The memory layout you mention exactly matches what I'm looking at.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

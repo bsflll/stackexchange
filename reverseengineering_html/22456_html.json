@@ -1,0 +1,39 @@
+{
+    "title": "Deciphering an unknown graphics format",
+    "link": "https://reverseengineering.stackexchange.com/questions/22456/deciphering-an-unknown-graphics-format",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  For my own amusement, I dumped the files of an old Nintendo DS video game I have (the company has long since gone bankrupt/closed) and am trying to extract the assets. I have recovered game text, videos, and sound, but one 58-MB file by the name of\n  <code>\n   graph.dat\n  </code>\n  , which contains the game's graphics (probably) is giving me a hard time.\n </p>\n <p>\n  Importantly, the game's text was stored in a custom format which the developers appear to have created for the game, so I strongly suspect\n  <code>\n   graph.dat\n  </code>\n  to contain a custom graphics format as well.\n </p>\n <p>\n  I was able to break the graphics file into segments by reading metadata records left in a separate file,\n  <code>\n   graph.dti\n  </code>\n  . The metadata file contained 1910 records, separated by 44 chunks of intermediate data. Each record listed off a set of contiguous addresses in\n  <code>\n   graph.dat\n  </code>\n  , which yielded three binary data blobs once chunked out of that file.\n </p>\n <p>\n  The first blob in each record, which I've nicknamed 'Huey', might be some sort of header. It's always either 32 bytes or 512 bytes long.\n </p>\n <p>\n  The second blob, 'Dewey', is of variable length, ranging from 704 bytes to 49 KB in size. I suspect it contains the actual image data.\n </p>\n <p>\n  The third blob, 'Louie', is always 1536 bytes in size.\n </p>\n <p>\n  I suspect 'Huey' may be color palette data, and 'Louie' is some sort of color index, but I can't be sure.\n </p>\n <p>\n  <strong>\n   Does anyone have any ideas?\n  </strong>\n  Tossing 'Dewey' into GIMP's raw data import was spectacularly unsuccessful.\n </p>\n <p>\n  <a href=\"https://lioncheese.com/WhatTheDuck.zip\" rel=\"nofollow noreferrer\">\n   Link to a sample of four different images (I'm assuming) from the file.\n  </a>\n  Filenames were provided by my unpacker tool and were not present in the original metadata. I have 1,906 more of these where this came from, so just ask if you need them.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "255",
+    "tags": [
+        "binary-analysis",
+        "file-format",
+        "binary-diagnosis",
+        "graphics"
+    ],
+    "user": "SoItBegins",
+    "time": "Nov 4, 2019 at 12:08",
+    "comments": [
+        {
+            "user": "Overblade",
+            "text": "<html><body><span class=\"comment-copy\">\n You can try rawpixels.net, it often helped me with unknown graphic files (only works for non-indexed images).\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm not sure what the 'louie' files are for, but this python script should help reconstruct the images:\n </p>\n <pre><code>import png\n\n# simple scale from [0,0x1f] to [0,0xff]\ndef scale_up(n):\n  return (n<<3)|n\n\ndef make_pal(n):\n  val = (n[1]<<8)|n[0]\n  return [scale_up((val>>0)&0x1f), scale_up((val>>5)&0x1f), scale_up((val>>10)&0x1f)]\n\nw=256\nh=192\n\nimage_base='img_159_9_0'\n\npixel_data_file=f'{image_base}_dewey.bin'\npalette_file=f'{image_base}_huey.bin'\n\nwith open(palette_file, 'rb') as f:\n  pal_bytes = f.read()\n\nreal_pal=[]\nfor i in range(0,256):\n  m = make_pal(pal_bytes[i*2:i*2+2])\n  real_pal.append(m)\n\n\nwith open(pixel_data_file, 'rb') as f:\n  pixel_bytes = f.read()\n\ntile_w = 8\ntile_h = 8\nimage_tile_h = h/tile_h\nimage_tile_w = w/tile_w\n\n# if any pixel/channel is not written, the png writer will complain about -1\nrows_dat = [[-1 for n in range(w*3)] for m in range(h)]\nfor i in range(w*h):\n  tile_i = int(i / (tile_w*tile_h))\n  tile_x = int(tile_i % image_tile_w)\n  tile_y = int(tile_i / image_tile_w)\n  small_i = int(i % (tile_w*tile_h))\n  small_x = int(small_i % tile_w)\n  small_y = int(small_i / tile_w)\n  rows_dat[tile_y*tile_h + small_y][3*(tile_x*tile_w + small_x)] = real_pal[pixel_bytes[i]][0]\n  rows_dat[tile_y*tile_h + small_y][3*(tile_x*tile_w + small_x)+1] = real_pal[pixel_bytes[i]][1]\n  rows_dat[tile_y*tile_h + small_y][3*(tile_x*tile_w + small_x)+2] = real_pal[pixel_bytes[i]][2]\n\nwith open(f'{image_base}.png', 'wb') as of:\n  writer = png.Writer(width=w, height=h, greyscale=False)\n  writer.write(of, rows_dat)\n</code></pre>\n <p>\n  In your example data, it looks like\n  <code>\n   img_159_9_0_dewey.bin\n  </code>\n  is padded at the start with 64 bytes of\n  <code>\n   0x00\n  </code>\n  's. I'm not sure if this was an error in dumping it, but removing that\n  <a href=\"https://i.sstatic.net/BfmEp.png\" rel=\"nofollow noreferrer\">\n   helps\n  </a>\n  .\n </p>\n <p>\n  All the images you provided seem to be 256x192 (I left them rotated, the tile logic is clearer without unrotating - you can do this after), made up of 8x8 tiles of pixels. The pixel data (stored in\n  <code>\n   dewey\n  </code>\n  ) indexes into a palette of RGB555 values stored as u16le (stored in\n  <code>\n   huey\n  </code>\n  ). You didn't provide any, but I guess the 32 byte\n  <code>\n   huey\n  </code>\n  files are just palettes of 16 colors - the corresponding pixel data may consist of tightly packed 4-bit indexes.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "booto",
+            "time": "Nov 16, 2019 at 9:28",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "SoItBegins",
+                    "text": "<span class=\"comment-copy\">You've been a great help. Thank you.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

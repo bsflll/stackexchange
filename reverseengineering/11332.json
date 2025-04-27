@@ -1,0 +1,45 @@
+{
+    "title": "Automating a Decryption function call in IDA Python",
+    "link": "https://reverseengineering.stackexchange.com/questions/11332/automating-a-decryption-function-call-in-ida-python",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to figure out a way to automatically decrypt certain strings in a binary called by a function several times.</p>\n<p>The function takes three arguments and is a simple xor decryption. However it uses a different key for each unique string it wants to decrypt.</p>\n<pre><code>char* decrypt(char* string_to_decrypt, uint string_len, char xor_byte)\n</code></pre>\n<p>What I'm attempting to do is get a list of the xrefsTo this function (This is as far as I got) and read in the current string it wants to decrypt in the binary, and grab the xor key and length, then patch the binary to display the plaintext strings.</p>\n<p>The function is called like this</p>\n<pre><code>.text:0040168A push    83h\n.text:0040168F push    9\n.text:00401691 mov     eax, esi\n.text:00401693 mov     edx, offset unk_406D58\n.text:00401698 call    decrypt_string\n</code></pre>\n<p>Where EDX, always holds the address of the encrypted string, and the two pushes are the key and length (9 length, 0x83 key)</p>\n<p>The mov eax, esi isn't always present. Is there a way to read the disassembly and get this function and then just dynamically decrypt all the strings in the database? </p>\n<p>For completeness this is where I started.</p>\n<pre><code>import idaapi\nimport idc\n\nea = here()\nprint hex(ea)\n\nxrefs = CodeRefsTo(ea,0)\n    for xref in xrefs:\n    print \"Ref Addr: {}\".format(hex(xref))\n\n# for all xrefs, get string offset, length and key,\n# decrypt that string, and patch or rename it to display decrypted string)\n</code></pre>\n<p>Thank you.</p>\n<p>EDIT:\nw-s response got me in the right direction. Here is what I came up with. It's rough, I know :)</p>\n<pre><code>import idaapi\nimport idc\nimport idautils\n\nea = here()\nxrefs = CodeRefsTo(ea,0)\n\ndata = []\ndecrypted = []\n\nfor xref in xrefs:\n    current_x = xref\n    d = {}\n    d['addr'] = hex(current_x)\n    n_pushes = 0\n    n_movedx = 0\n\n    for i in xrange(6):\n        if n_pushes == 2 and n_movedx == 1:\n            break\n\n        current_x = idc.PrevHead(current_x)\n        instr = idautils.DecodeInstruction(current_x)\n        if instr.itype == idaapi.NN_push:\n\n            if n_pushes &lt; 1:\n                d['len'] = int(GetOperandValue(current_x, 0))\n\n            if n_pushes == 1:\n                d['key'] = int( hex(GetOperandValue(current_x, 0)), 16)\n\n            n_pushes += 1\n\n        if instr.itype == idaapi.NN_mov:\n            if GetOpnd(current_x, 0) == 'edx':\n                d['string_offset'] = GetOperandValue(current_x, 1)\n\n    data.append(d)\n......\n</code></pre>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "gandolf",
+    "time": "Nov 17, 2015 at 1:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When I did something similar I used <code>idc.PrevHead(ea)</code>to iterate back from the call site, so it was something similar to this:</p>\n<pre><code># Not tested, even not runned even once\n# expect errors, use on your own risk \n# probably parsing and analysing disassembly is not best way to do it\n\nimport idc\nimport idautils\n\n\nea = idc.ScreenEA()\n\nxrefs = CodeRefsTo(ea,0)\nfor xref in xrefs:\n    current = xref\n    numOfPushes = 0\n    numOfEdx = 0\n    edxes = []\n    pushes = []\n    for i in range(10): # taking 10 instructions back\n        if numOfEdx == 1 and numOfPushes == 2:\n            break\n        current = idc.PrevHead(current)\n        s = idc.GetDisasm(current)\n        if s.find(\"mov edx\") != -1: #copy-paste exact string here, tabulation expected\n            edxes.append(s)\n            numOfEdx += 1\n        if s.find(\"push\")!= -1: \n            pushes.append(s)\n            numOfPushes += 1\n    if len(edxes) &gt; 0:\n        print \"%08x : EDX instruction \" % xref, edxes[0]\n    else:\n        print \"%08x : EDX mov not found\" % xref\n    if len(pushes) &gt;= 2:\n        print \"%08x : Push[0] \" % xref, pushes[0]\n        print \"%08x : Push[1] \" % xref, pushes[1]\n    else:\n        print \"%08x : can not find appropriate push instructions\" %  xref\n</code></pre>\n<p>When you have your instructions, all the rest should be obvious.\nGood luck.</p>\n</div>",
+            "votes": "4",
+            "user": "w s",
+            "time": "Nov 16, 2015 at 14:27",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "gandolf",
+                    "text": "<span class=\"comment-copy\">Thanks, your answer got me to where I needed to go. I'll append my solution to my question.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You can use Sark to do most of the work. It should be something similar to this:</p>\n<pre><code>import sark\n\ndef get_edx_values_at_calls_to(function):\n    for xref in function.xrefs_to:\n        if not xref.type.is_call:\n            continue\n\n        # start at the function call (`xref.frm`) and go back to the beginning of\n        # the basic-block (`sark.CodeBlock(xref.frm).startEA`).\n        for line in sark.lines(start=sark.CodeBlock(xref.frm).startEA,\n                               end=xref.frm, \n                               reverse=True):\n            if line.insn.mnem == 'mov' and line.insn.operands[0].reg == 'edx':\n                yield line.insn.operands[1].value\n\ndecrypt_function = sark.Function()\nfor value in get_edx_values_at_calls_to(decrypt_function):\n    pass  # decryption code\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "evandrix",
+            "time": "Jul 12, 2017 at 19:41",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "gandolf",
+                    "text": "<span class=\"comment-copy\">Thanks for the response. I bookmarked your project to check it out at a later time, but felt that since I'm still fairly new to the IDAPython API I would go with a native solution.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

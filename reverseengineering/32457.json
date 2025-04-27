@@ -1,0 +1,102 @@
+{
+    "title": "Why did Intel chose 90h machine code for their NOP instruction instead of a 0?",
+    "link": "https://reverseengineering.stackexchange.com/questions/32457/why-did-intel-chose-90h-machine-code-for-their-nop-instruction-instead-of-a-0",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Probably just a historical question, if anyone knows.</p>\n</div>",
+    "votes": "11",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "assembly",
+        "intel",
+        "machine-code"
+    ],
+    "user": "c00000fd",
+    "time": "Oct 31, 2023 at 8:36",
+    "comments": [
+        {
+            "user": "Simon Richter",
+            "text": "<span class=\"comment-copy\">It were, if Intel had made opcode <code>00</code> illegal :/</span>",
+            "time": null
+        },
+        {
+            "user": "c00000fd",
+            "text": "<span class=\"comment-copy\">@SimonRichter although it is not an illegal opcode, but <code>00, 00</code> or <code>add [rax], al</code> in x64 is almost guaranteed to cause an exception for some random binary data.</span>",
+            "time": null
+        },
+        {
+            "user": "qwr",
+            "text": "<span class=\"comment-copy\">IIRC MIPS has 0x00000000 has a NOP because of the use of zero registers.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>From the Intel manual under <code>NOP</code>:</p>\n<blockquote>\n<p>The one-byte NOP instruction is an alias mnemonic for the XCHG (E)AX, (E)AX instruction.</p>\n</blockquote>\n<p>This <code>XCHG</code> mnemonic is encoded as <code>90</code>+reg encoding used as a second parameter in the exchange. <code>(E)AX</code> has an encoding of <code>0</code> (<code>CX - 1</code>, <code>DX - 2</code>, <code>BX - 3</code> ect.) and from that <code>XCHG (E)AX,(E)AX</code> has value of <code>0x90</code> = <code>NOP</code>.</p>\n</div>",
+            "votes": "14",
+            "user": "Paweł Łukasik",
+            "time": "Oct 31, 2023 at 18:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Austin Hemmelgarn",
+                    "text": "<span class=\"comment-copy\">A lot of architectures that have a no-op that isn’t a string of null bytes have similar reasoning to this, it’s almost always a single cycle (or minimal length) instruction that does not change state, and it’s usually cheaper to not implement the extra decoder logic for an additional op-code that will just be decoded to the same instruction.</span>",
+                    "time": null
+                },
+                {
+                    "user": "hobbs",
+                    "text": "<span class=\"comment-copy\">This led to a corner case in x86-64, because XCHG in long mode without a REX prefix still defaults to 32 bits, so 0x90 <i>looks like</i> XCHG EAX, EAX which would <i>not</i> be a no-op (it would clear the top 32 bits of EAX), but it's special-cased to be NOP anyway. If you actually want XCHG EAX, EAX for some reason you have to write 0x87 0xC0, which is a valid but over-long encoding in 32-bit mode.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user71659",
+                    "text": "<span class=\"comment-copy\">@AustinHemmelgarn That was true for simpler processors, with modern processors you want the front end to know what you're doing and toss the NOP, instead of doing the work to schedule and execute on an a ALU. Now you're hoping people are doing NOPs or re-setting registers in very specific ways and checking all of them (idioms). AArch64 has an explicit NOP, it's in the HINT space since it's only going to get as far as the front end.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@user71659: Right, modern ISAs should clearly document a single NOP encoding which will be handled efficiently.  But there's no problem with choosing that encoding to be a special case of the operands for another opcode, like <code>add x0, x0, x0</code> on a CPU like RISC-V where <code>x0</code> is a zero register.  Maybe a tiny bit in terms of the combinatorial logic in the decoders to not have a NOP also match the opcode for something else.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@c00000fd: This design decision dates back to 8086 in the late 70s.  <code>mov ax, ax</code> is a 2-byte instruction (with the same encoding as <code>mov eax, eax</code> in 32-bit mode.)  The only 1-byte 8086 instruction with no architectural effect was <code>xchg ax,ax</code>, part of the exchange-with-accumulator group of opcodes where the other register number is in the low 3 bits. (<a href=\"https://www.felixcloutier.com/x86/xchg\" rel=\"nofollow noreferrer\">felixcloutier.com/x86/xchg</a>) There was no real need to document <code>90h</code> NOP separately, and original 8086 probably <i>didn't</i> run it any faster.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I don't think that was the reason why <code>0x00</code> didn't become a <code>NOP</code>, but from today's security perspective it would totally make sense to not have <code>0x00</code> as a <code>NOP</code>. This is because today's architectures are mostly <em>von Neumann</em> architectures that happily mix data in between code. My guess is that <code>0x00</code> is the most common data value as it is used to initialize newly allocated memory and most default values for integers are also probably zero.</p>\n<p>In code injection exploits you usually inject executable code as data and then trigger a bug to make the CPU execute this injected data.\nIf most data bytes are a <code>NOP</code> when (mis)used as instruction, most of the data becomes a so-called <a href=\"https://en.wikipedia.org/wiki/NOP_slide\" rel=\"nofollow noreferrer\">nop slide</a>.</p>\n<p>A nop slide is very useful for an attacker as he might not be sure at which point exactly his injected code is in memory.\nWhen everything before his injected code are <code>NOPs</code>, he just needs to be lucky and hit somewhere into the nop slide which will then lead the CPU to execute the attacker’s injected code at the end.\nThat's why NOP slides can be used to defeat protections like <a href=\"https://de.wikipedia.org/wiki/Address_Space_Layout_Randomization\" rel=\"nofollow noreferrer\">ASLR</a>, which loads memory at random positions.</p>\n<p>I don't think all these security considerations where made at the point they designed the instruction set, but maybe they had a guess that its not a good idea to make the default value for most data also a <code>NOP</code> when interpreted as instruction.</p>\n</div>",
+            "votes": "3",
+            "user": "Fee",
+            "time": "Nov 1, 2023 at 15:14",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">So they basically lucked out with not making a NOP a <code>00h</code> opcode.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@c00000fd: Yes. 16-bit x86 <code>00 00</code> is <code>add [bx+si], al</code>.  In other modes, it's <code>add [rax], al</code>.  The choice to have the \"mode\" bits of the ModR/M byte use <code>00</code> as a memory addressing mode (rather than register direct) was probably arbitrary, since 8086 doesn't have memory protection so a memory destination isn't going to fault and help you debug a bad jump target.  Only with protected mode did that become an advantage vs. if it had decoded as <code>add al, al</code> which isn't a NOP but won't fault either.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">On some RISCs, <code>00 00 00 00</code> runs without faulting, even if it might not be a NOP.  (Although on ISAs where register number 0 is a zero register that discards writes, it is a NOP.)  So it works as a NOP sled, allowing execution to reach whatever's after the padding as long as it lands somewhere in it.  Modern designs like RISC-V and AArch64 avoid that, with RISC-V I think even guaranteeing that the all-zero encoding will definitely fault, not usable as an extension.  It's good for ease of debugging, too, like if you let execution fall off the end of <code>_start</code>, it'll fault right there.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Fee",
+                    "text": "<span class=\"comment-copy\">Many architectures require memory to be aligned to some offset. The fill bytes are then often choosen to be something that would crash when interpreted as instruction. In case of x86 e.g. <code>0xCC</code> which is bascially a software breakpoint for a debugger. Without a debugger the program would instantly crash. With a debugger you have a nice breakpoint and can debug the root cause more easily. So, nice for debugging and prevents NOP slides.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Joshua",
+                    "text": "<span class=\"comment-copy\">@Fee: And in fact you don't need to fill with them. You just need to place them in front of functions. A long NOP slide into a breakpoint is a slow breakpoint.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

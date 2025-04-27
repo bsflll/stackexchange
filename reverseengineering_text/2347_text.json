@@ -1,0 +1,49 @@
+{
+    "title": "What is the algorithm used in Recursive Traversal disassembly?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2347/what-is-the-algorithm-used-in-recursive-traversal-disassembly",
+    "content": "Disassembling binary code is a quite difficult topic, but for now only two (naive) algorithms seems to be broadly used in the tools.\n\nLinear Sweep: A basic algorithm taking all the section marked as code and disassembling it by reading the instructions one after each other.\nRecursive Traversal: Refine the linear sweep by remembering when (and where) a <pre><code>call</code></pre> has been taken and returning to the last <pre><code>call</code></pre> when encountering a <pre><code>ret</code></pre>.\n\nYet, the description of these algorithms are quite vague. In real-life tools, they have been a bit refined to improve the accuracy of the disassembling. \nFor example, <pre><code>objdump</code></pre> perform a linear sweep but will start from all the symbols (and not only the beginning of the sections marked as <pre><code>code</code></pre>.\nSo, can somebody give a more realistic description of the recursive traversal algorithm (e.g. as it is coded in IDAPro) ?\n",
+    "votes": "13",
+    "answers": 2,
+    "views": "9k",
+    "tags": [
+        "disassemblers"
+    ],
+    "user": "perror",
+    "time": "Jun 26, 2013 at 15:34",
+    "comments": [
+        {
+            "user": "debray",
+            "text": "IIRC in recursive traversal the disassembler tries to follow all control transfer instructions -- i.e., identify and continue disassembly at the various possible control flow targets of the instruction -- not just <pre><code>call</code></pre> instructions.\n",
+            "time": null
+        },
+        {
+            "user": "viv",
+            "text": "Lida which is based on Bastard's libdisasm, diStorm3 and beaengine are some open source disassembly engines that use recursive disassembly.Also a paper:  Obfuscation of executable code to improve resistance to static disassembly by Cullen and Saumya gives a rough algorithm for recursive sweep disassembly.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I have decided to post my answer not to overthrow Igor's answer, but to have an addition to it. I was not comfortable with editing his post either. I am pretty new to the forum and not sure how it is taken by other members. \nThere is a little theory I have recently learned, which I would like to share. Anyways, what I have taken in about IDA Pro from The IDA Pro Book (Part I, Section 1) is that it uses <pre><code>Recursive Descent Disassembly</code></pre>, which is based on the concept of control flow. The key element to this approach is the analysis of each instruction in order to determine if it is referenced from any other location. Each instruction is classified according to how it interacts with EIP. There are several main classifications:\n\nSequential Flow Instuctions. Those are instruction that pass execution to the next instruction to follow such as <pre><code>add</code></pre>, <pre><code>mov</code></pre>, <pre><code>push</code></pre>, <pre><code>pop</code></pre>, etc. Those instructions are disassembled with linear sweep\nConditional Branching Instructions. Those are True/False conditional instructions such as <pre><code>je</code></pre> and such. Conditional instructions only offer 2 possible branches of execution. If condition is False and jump is not taken disassembler proceeds with linear sweep, and adds jump target instruction to a list of deferred code to be disassembled at later time using recursive descent algorithm\nUnconditional Branching Instructions. Those instruction can cause particular problems for recursive descent disassemblers in case the jump target is calculated at runtime. Unconditional branches do not follow linear flow. If possible, disassembler will attempt to add the target of the unconditional jump for further analysis. If target is not determined, there is going to be no disassembly for the particular branch.\nFunction Call Instructions. Call instructions are mostly treated as Unconditional Branching Instructions with expectation that execution would return to the instruction following the call as soon as function completes. The target address address of the call instruction is queued for deferred disassembly, and the instruction following the call is processed as linear sweep. However, it is not always possible to determine target of the call (e.g. <pre><code>call eax</code></pre>). \nReturn Instructions Return instructions do not offer any information to disassembler about what to execute next. Disassemblers cannot pop the return address from the top of the stack. All of that brings disassembler to stop. At this point disassembler turns to the saved list of deferred targets to follow next. That is exactly why it is called recursive.\n\nTo summarize, I would like to quote The IDA Pro Book:\n\nOne of the principle advantages of the recursive descent algorithm is its superior ability to distinguish code from data. As a control flow-based algorithm, it is much less likely to incorrectly disassemble data values as code. The main disadvantage of recursive descent is the inability to follow indirect code paths, such as jumps or calls, which utilize tables of pointers to look up a target address. However, with the addition of some heuristics to identify pointers to code, recursive descent disassemblers can provide very complete code coverage and excellent recognition of code versus data.\n",
+            "votes": "12",
+            "user": "PSS",
+            "time": "Jun 26, 2013 at 20:36",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "Here's a very simplified overview of how IDA does it:\n\nadd to the analysis queue all known entrypoints, or addresses specified by the user\nwhile queue not empty, pop the next address\nask processor module to disassemble the instruction\nask processor module to analyze the instruction\nprocessor module adds code cross-references to all possible targets\nin the simplest case, it's the next instruction\nfor conditional jumps and calls, it's the next instruction and the target\nfor indirect jumps - unknown, unless it's a recognized switch pattern\nput not-yet analyzed targets of all those cross-references into the queue\ngo to step 2\n\nOf course, in reality things are more complex. To start with, there's not a single queue but several. From the SDK's <pre><code>auto.hpp</code></pre>:\n<pre><code>//\n//      This file contains functions that work with the autoanalyzer\n//      queue. The autoanalyzer works when IDA is not busy processing\n//      the user keystrokes.\n//      The autoanalyzer has several queues. Each queue has its priority.\n//      A queue contains addresses or address ranges.\n//      The addresses are kept sorted by their values.\n//      The analyzer will process all addresses from the first queue, then\n//      switch to the second queue and so on.\n//      There are no limitations on the size of the queues.\n//      The analyzer stops when all queues are empty.\n//\n//      Also this file contains functions that deal with the IDA status\n//      indicator and the autoanalysis indicator.\n//      You may use these functions to change the indicator value.\n//\n\n// Names and priorities of the analyzer queues\n\ntypedef int atype_t;\nconst atype_t           // priority,  description\n  AU_NONE = 00,         //    placeholder, not used\n  AU_UNK  = 10,         //  0 convert to unexplored\n  AU_CODE = 20,         //  1 convert to instruction\n  AU_WEAK = 25,         //  2 convert to instruction (ida decision)\n  AU_PROC = 30,         //  3 convert to procedure start\n  AU_TAIL = 35,         //  4 add a procedure tail\n  AU_TRSP = 38,         //  5 trace stack pointer (not used yet)\n  AU_USED = 40,         //  6 reanalyze\n  AU_TYPE = 50,         //  7 apply type information\n  AU_LIBF = 60,         //  8 apply signature to address\n  AU_LBF2 = 70,         //  9 the same, second pass\n  AU_LBF3 = 80,         // 10 the same, third pass\n  AU_CHLB = 90,         // 11 load signature file (file name is kept separately)\n  AU_FINAL=200;         // 12 final pass\n</code></pre>\n",
+            "votes": "12",
+            "user": "Igor Skochinsky",
+            "time": "Jun 26, 2013 at 17:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">Am I wrong if I say that you are using a work-list approach of the algorithm. Like in data-flow analysis ? (It is quite nice indeed)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

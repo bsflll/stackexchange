@@ -1,0 +1,60 @@
+{
+  "title": "What is a non-virtual thunk?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4543/what-is-a-non-virtual-thunk",
+  "content": "In real code I have encountered some \"non-virtual thunk\" functions:\n\n```\n; `non-virtual thunk to'QTextCodecPlugin::create(QString  const&)\n    EXPORT _ZThn8_N16QTextCodecPlugin6createERK7QString\n_ZThn8_N16QTextCodecPlugin6createERK7QString\n   SUB.W   R0, R0, #8\n   B.W     _ZN16QTextCodecPlugin6createERK7QString; QTextCodecPlugin::create(QString  const&)\n\n; End of function `non-virtual thunk to'QTextCodecPlugin::create(QString  const&)\n\n\n; `non-virtual thunk to'QTextCodecPlugin::~QTextCodecPlugin()\n    EXPORT _ZThn8_N16QTextCodecPluginD1Ev\n\n_ZThn8_N16QTextCodecPluginD1Ev\n    SUB.W  R0, R0, #8\n    B.W    _ZN16QTextCodecPluginD2Ev; QTextCodecPlugin::~QTextCodecPlugin()\n\n; End of function `non-virtual thunk to'QTextCodecPlugin::~QTextCodecPlugin()\n\n```\n(GCC, C++, Android NDK, Qt, Necessitas, ARM)\n\nc++filt says:\n\n```\n$ c++filt _ZThn8_N16QTextCodecPlugin6createERK7QString\nnon-virtual thunk to QTextCodecPlugin::create(QString const&)\n$ c++filt _ZThn8_N16QTextCodecPluginD1Ev\nnon-virtual thunk to QTextCodecPlugin::~QTextCodecPlugin()\n\n```\nWhat and why do these \"non-virtual thunks\" do?\n\n",
+  "votes": "12",
+  "answers": 2,
+  "views": "28k",
+  "tags": [
+    "c++",
+    "virtual-functions",
+    "gcc"
+  ],
+  "user": "18446744073709551615",
+  "time": "Jun 5, 2014 at 13:08",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The answer should really state what the difference is between a virtual thunk and a non virtual thunk. They are identical in operation but just have a different name. The thunk for a virtually inherited base class is called a virtual thunk and the base object will be at the end of the object, whereas a thunk for a regularly inherited class whose object is not at the start of the object is called a non virtual thunk.\n\nIf you have C inherits from A and B, then A's virtual pointer will be at the start of the object (with C's vtable pointer for A pasted over it) and therefore doesn't require a pointer offset to the start when calling methods of type C* with an A*, and subobject B (with C's vtable pointer for B pasted over it) will be at an offset in the object. The virtual table for B will have to contain a non-virtual thunk that will offset to the pointer to the start of the object because the method that's being called virtually is one of C that accepts a pointer to a C object and if this virtual table is used then it will be receiving a polymorphically cast pointer to B, hence the need for the call in the table to be a thunk.\n\nIf you have D inherits from B and C, and B and C inherit virtually from A, then this means that B's virtual table pointer will be at the start of the object (with D's vtable for B pasted over it) and C's vtable pointer (with D's vtable pointer for C pasted over it) will be at an offset and requires a non virtual thunk when it is called which will be when the object pointer it is called on is cast to a C* type. A and its vtable pointer (with D's vtable for A pasted over it) will be at the end of the object and will instead require a virtual thunk in the vtable instead of the actual virtual method, and the virtual thunk calls the actual virtual method, and this gets called when the method is called on an object pointer cast to A*.\n\nThe virtual thunk offsets the object address by e.g. - 32 (wherever the virtual base object is) and the non virtual thunk offsets the object address by e.g. - 16 (wherever the 2nd subobject is). Basically, a virtual thunk offsets an object of type of a virtually inherited class to the start of the object when calling a method that is defined in the most derived class. The virtual thunk is for virtually inherited classes, which only have 1 special object within the object rather than multiple. If you didn't virtually inherit, there would be multiple of those objects within the object, and youd use a non virtual thunk to offset them when calling a method in the most derived class\n\n",
+      "votes": "8",
+      "user": "Lewis Kelsey",
+      "time": "Mar 1, 2021 at 13:56",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Orwellophile",
+          "text": "You had me at The virtual thunk offsets the object address by e.g. - 32 and the non virtual thunk offsets the object address by e.g. - 16.  Some C++ code would seal the deal though.",
+          "time": null
+        },
+        {
+          "user": "Lewis Kelsey",
+          "text": "@Orwellophile stackoverflow.com/a/62281777/7194773",
+          "time": null
+        },
+        {
+          "user": "Lewis Kelsey",
+          "text": "The 'virtual' part of virtual thunk refers to virtual base class within virtual inheritance, which appears on its own at the end of the object separate to how regular subobjects and subsubobjects would be positioned. In this case, I refer to 'object' as the main object and 'subobject' as the objects inside the object, one for each inherited class, and 'subsubobjects' as the next layer of inherited classes, so in classic diamond inheritance, the virtual base subsubobject is at the end of the object rather than there being 2 copies of it and having 2 separate non virtual thinks.",
+          "time": null
+        },
+        {
+          "user": "Orwellophile",
+          "text": "Many thanks.  Your example came out beautifully in GCC, in MSVC... not so much.  But I am hoping it will be instructive in more fully understanding the MS RTTI model.  godbolt.org/z/T5GfP4 -- I wonder how well IDAPro's new __vftable ersatz class (struct) definitions can cope with this.",
+          "time": null
+        },
+        {
+          "user": "Lewis Kelsey",
+          "text": "@Orwellophile that's a point I might add about how the RTTI type works vs. regular typeid. Obviously you can see the masm form here but I haven't looked at it",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "These are object virtual table entries used to implement multiple inheritance.\n\nThe short story is, the sub instruction is to do with offsetting the correct derived class object size to the virtual table; but the following (long) article does a much better job of explaining than I could fit here : http://thomas-sanchez.net/computer-sciences/2011/08/15/what-every-c-programmer-should-know-the-hard-part/\n\nUPDATE:\nthe link above does not work anymore, but there's a copy of this page at webarchive.org:\nhttp://web.archive.org/web/20131210001207/http://thomas-sanchez.net/computer-sciences/2011/08/15/what-every-c-programmer-should-know-the-hard-part/\n\n",
+      "votes": "7",
+      "user": "2 revs, 2 users 50%6EQUJ5",
+      "time": "Feb 6, 2015 at 6:56",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

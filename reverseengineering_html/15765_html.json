@@ -1,0 +1,52 @@
+{
+    "title": "What conditions can create the \"Not a Valid Win32 Application\" error message upon load?",
+    "link": "https://reverseengineering.stackexchange.com/questions/15765/what-conditions-can-create-the-not-a-valid-win32-application-error-message-upo",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm doing research on the PE format/Windows Loader and I am unable to locate specifics as to what creates the error \"Not a valid Win32 Application\" followed by a failure to load.\n </p>\n <p>\n  I've tried changing the Major/Minor LinkerVersion in the PE header as per\n  <a href=\"https://github.com/corkami/docs/blob/master/PE/PE.md\" rel=\"nofollow noreferrer\">\n   Corkami's research\n  </a>\n  . I've also tried zeroing out every unnecessary data structure in the header of the PE file. I have a particular file where, for dynamic analysis, it cannot map into memory and Process Monitor shows a \"FILE LOCKED WITH ONLY READERS\" status when Explorer.exe tries to\n  <strong>\n   CreateFileMapping\n  </strong>\n  the file. I suppose this is just superficial reason that EXPLORER.EXE is given by a kernel routine?\n </p>\n <p>\n  I even tried turning\n  <em>\n   loader snaps on in WinDbg\n  </em>\n  and tried to load the file in WinDbg, which also failed claiming it was not a valid Win32 app. OllyDbg fails, X32Dbg also fails. However, IDA Pro is able to parse the file just fine, and when I navigate to it's AddressOfEntryPoint, there appears to be valid code. I would attach this particular subject here but the file is malware so I don't know if that's appropriate. However, the question really is general, as the file won't load at all. I'll attach a couple of shots of its headers:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/7XSme.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/7XSme.png\"/>\n  </a>\n  <a href=\"https://i.sstatic.net/z808S.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/z808S.png\"/>\n  </a>\n  <a href=\"https://i.sstatic.net/e0BuS.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/e0BuS.png\"/>\n  </a>\n </p>\n <p>\n  The file also has a MZ header in the first bytes, a proper link to a PE signature as well in e_lfanew. It seems that there must be some problem in the handoff between Explorer.exe, the caller of the load, before the loader actually initiates. This is the area where I am foggy as I know nothing about that step of the process concerning what happens before the image loader is initiated.\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "malware",
+        "pe"
+    ],
+    "user": "the_endian",
+    "time": "Jul 5, 2017 at 10:14",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n The initial parsing of the headers happens in the kernel so you may have to use a kernel debugger to track it down. BTW try running it on XP, it was much more forgiving than later Windows versions.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "dyasta",
+            "text": "<html><body><span class=\"comment-copy\">\n DId you strip the manifest?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "the_endian",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky do you know how I could set up WinDbg to break when I try to launch the program so that I could examine the memory? Im not sure how to break on program load but I assume that's what I'd have to do\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "peter ferrie",
+            "text": "<html><body><span class=\"comment-copy\">\n there are lots of reasons why it can happen, but the most common reason is that the file has been truncated.  Do you have any environment in which the file loads successfully?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "the_endian",
+            "text": "<html><body><span class=\"comment-copy\">\n @peterferrie no sir. I'm going to attempt to step thru the loading process in WinDbg kernel mode later. I suspect it will take a while as I become familiar with what to expect from the kernel functions. But perhaps I'll see the actual crash which should indicate what's going on. I've tried this thing in Xp, 7, and 10. It appears to be a newer file so I don't suspect it to be win 95 only for example. So the OS will check for proper length of sections and determine truncation?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <ol>\n  <li>\n   <p>\n    Checked if the EXE and all related DLLs are built for the same platform. (Don't mismatch 32-bit and 64-bit)\n   </p>\n  </li>\n  <li>\n   <p>\n    Check the target operating system version has not been exceeded as referenced in the Windows PE header. In your case it seems to be targeted at Windows NT 4.0 (4.0)\n   </p>\n  </li>\n  <li>\n   <p>\n    Check you are not missing any runtimes referenced by the import table with a tool such as\n    <a href=\"https://www.dependencywalker.com/\" rel=\"nofollow noreferrer\">\n     depends\n    </a>\n    Commonly this would be missing .NET frameworks or Visual C/C++ runtimes.\n   </p>\n  </li>\n  <li>\n   <p>\n    Ensure a valid\n    <a href=\"https://docs.microsoft.com/en-us/windows/win32/debug/pe-format\" rel=\"nofollow noreferrer\">\n     Windows Subsystem\n    </a>\n    is targeted, in this case WINDOWS_GUI looks OK.\n   </p>\n  </li>\n  <li>\n   <p>\n    Make sure platform of EXE is supported on your OS i.e. 16-bit won't run on 64-bit Windows, 64-bit won't run on 32-bit Windows.\n   </p>\n  </li>\n </ol>\n <p>\n  I would recommend attaching debugger to the process actually calling CreateProcess, as at least some of these errors are triggered from\n  <strong>\n   kernelbase!CreateInternalProcessW\n  </strong>\n  API, you will see it call\n  <code>\n   RtlSetLastWin32Error(193)\n  </code>\n  when this error occurs.\n </p>\n <p>\n  This particular error seems to be a generic fall back error for any problem during the process creation when there is not a more specific error code.\n </p>\n <p>\n  Similar error messages during error process creation include:\n </p>\n <ul>\n  <li>\n   The %1 application cannot be run in Win32 mode. (error code 129)\n  </li>\n  <li>\n   Cannot run %1 in Win32 mode. (Invalid EXE signature, error code 191)\n  </li>\n  <li>\n   The operating system cannot run %1. (Invalid module type error code 190, EXE marked invalid error code 192, iterated data exceeds 64K error 194, invalid minalloc size error code 195, invalid segment error 198)\n  </li>\n  <li>\n   The operating system cannot run this application program. (error code 196)\n  </li>\n  <li>\n   The operating system is not presently configured to run this application (error code 197)\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "chentiangemalc",
+            "time": "Nov 30, 2020 at 0:29",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

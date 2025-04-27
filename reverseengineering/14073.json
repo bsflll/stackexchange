@@ -1,0 +1,70 @@
+{
+    "title": "When do rep and stos appear in compiled C?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14073/when-do-rep-and-stos-appear-in-compiled-c",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Can you give me some example C code which would be compiled to <code>rep</code> and <code>stos</code>?</p>\n<pre><code>00401059  /$  55            PUSH EBP\n0040105A  |.  8BEC          MOV EBP,ESP\n0040105C  |.  83EC 5C       SUB ESP,5C\n0040105F  |.  57            PUSH EDI\n00401060  |.  66:A1 E068400&gt;MOV AX,WORD PTR DS:[4068E0]\n00401066  |.  66:8945 B0    MOV WORD PTR SS:[EBP-50],AX\n0040106A  |.  B9 13000000   MOV ECX,13\n0040106F  |.  33C0          XOR EAX,EAX\n00401071  |.  8D7D B2       LEA EDI,DWORD PTR SS:[EBP-4E]\n00401074  |.  F3:AB         REP STOS DWORD PTR ES:[EDI]\n00401076  |.  66:AB         STOS WORD PTR ES:[EDI]\n00401078  |.  8D4D B0       LEA ECX,DWORD PTR SS:[EBP-50]\n0040107B  |.  51            PUSH ECX                                 ; /Arg2\n0040107C  |.  8D55 A4       LEA EDX,DWORD PTR SS:[EBP-5C]            ; |\n0040107F  |.  52            PUSH EDX                                 ; |Arg1\n00401080  |.  E8 7BFFFFFF   CALL 00401000                            ;             \n</code></pre>\n<p>This's just my example.</p>\n</div>",
+    "votes": "5",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "disassembly",
+        "c"
+    ],
+    "user": "beginner",
+    "time": "Dec 1, 2016 at 9:55",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Let's start by explaining what each instruction does. REP OPD works as follows :</p>\n<pre><code>          for (; ecx &gt; 0; ecx--) OPD\n</code></pre>\n<p>This instruction will repeat the operand while decrementing <strong>ECX</strong> until it reaches <strong>0</strong>. Notice in your code that <strong>ECX</strong> is set to 13 (address 0040106A).                </p>\n<p><a href=\"http://www.jaist.ac.jp/iscenter-new/mpc/altix/altixdata/opt/intel/vtune/doc/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc304.htm\" rel=\"nofollow noreferrer\">STOS</a> OPD, on the other hand, stores the value of <strong>AL</strong> or <strong>AX</strong>, or <strong>EAX</strong> in the given memory operand. Register size is defined by the memory location size hence the <strong>DWORD</strong> in your code.</p>\n<p>In overall, these two instructions are combined to create a loop that stores data in memory.\nNow to put things in <strong>C</strong> form, if we want to initialize an array of bytes to <strong>0</strong> (e.g. memset) we can do it this way :</p>\n<pre><code>    unsigned char t[MAX_CHAR];\n\n    for (int i = 0; i &lt; MAX_CHAR; i++)\n         t[i] = 0;\n</code></pre>\n<p>This C code can be translated to multiple assembly equivalents. It depends mostly on the compiler and the specified level of optimization.\nOne variant based on REP STOS could be :</p>\n<pre><code>    mov ecx, MAX_CHAR  //Initialize ecx to the number of iterations desired\n    xor eax, eax       //Initialize eax to 0  \n    rep stos [t + ecx] //Store the value of eax in t[i] where i = ecx\n</code></pre>\n<p>Another equivalent assembly variant could be :</p>\n<pre><code>    mov ecx, MAX_CHAR   //Initialize ecx to the number of iterations\n    xor eax, eax        //Initialize eax to 0\n    loop0:              //Define loop label\n    mov [t + ecx], eax  //Copy eax into t[i] where i = ecx \n    dec ecx             //Decrement ecx ==&gt; ecx = ecx - 1\n    jnz loop0           //Jump only if previous result (ecx - 1) isn't 0\n</code></pre>\n<p>These two assembly codes are totally similar. The only difference is that one will cost you more in terms of cycles than the other. In other words, one is faster than the other. How to define which is the best ? If you check <a href=\"http://www.agner.org/optimize/instruction_tables.pdf\" rel=\"nofollow noreferrer\">Agner Fog's instruction tables</a> page 162, you'll notice that <strong>REP STOS</strong> latency is <strong>n</strong> (n being the number of iterations) in the worst case.\nIf you look around in the instruction tables, you'll see that the <strong>XOR REG, SAME</strong> will cost us 0.25 cycles, and that the <strong>MOV R, IMM</strong> will cost us 0.5 cycles. In overall, the performance of the first assembly code can be evaluated to : <strong>latency = n + 0.75</strong> cycles (for a 1000 iterations ~ 1000.75 cycles).\nIf we look at the second assembly code we get the following : </p>\n<pre><code>    mov ecx, MAX_CHAR   //0.50 cycles\n    xor eax, eax        //0.25 cycles\n    loop0:              \n    mov [t + ecx], eax  //1 cycle \n    dec ecx             //2 cycles\n    jnz loop0           //1 cycle\n</code></pre>\n<p>In this case, we get <strong>latency = 4 * n + 0.75</strong>.</p>\n<p>Now, you might think that the first code is faster than the second one 'cause <strong>n &lt; 4n</strong>. Don't forget that the <strong>Intel</strong> architecture is pipelined and there's some other weirdness going on. What I can assure you though, is that the first code is VERY slow compared to the second one. Why? <strong>REP STOS</strong> is microcoded (Fused µOps column). Meaning, it's not a real hardware instruction. It is essentially made by combining multiple circuits (two here) in a way that could've - in the past, with Pentium III &amp; IV - save you time. The problem with this approach is that it doesn't hold great in the pipeline. \nThe second assembly code will be much faster because all instructions are hardcoded. Meaning, there's a special circuit for each one and there's no need to combine other circuits to perform the desired task. Therefore, these instructions can be pipelined easily, thus the computed <strong>4n</strong> overall latency can go down far below <strong>n</strong> (if everything is cached properly). The whole loop iteration will go down to around 0.75 cycles for all three instructions. Plus a bonus when the branch predictor hits it right.</p>\n<p>I have to remind you that these instructions came to life in a time where <strong>CPUs</strong> had a hard time running loop constructs efficiently. Especially for string processing because of too many branches and small caches. With the advent of efficient branch predictors and larger/more intricate cache systems, these instructions became, somehow, obsolete. Rare are the compilers that will generate code based on <strong>REP STOS</strong> or <strong>REP LODS</strong>, unless you're running your code on some pretty old <strong>CPU</strong> or using a pretty old compiler (like <strong>Turbo C</strong> for example).</p>\n<p>I hope that my post helped shed some light on those instructions and how they can be used. Let me know if you need more details or more explanations.</p>\n</div>",
+            "votes": "7",
+            "user": "yaspr",
+            "time": "Dec 2, 2016 at 10:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "beginner",
+                    "text": "<span class=\"comment-copy\">is there any for loop on my assembly_code?</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">Nope! Not explicitly. There are no jumps in your assembly code. But the REP STOS is a loop.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">What is you \"OPD\" an abbreviation of? (Also, please go easy on the <b>bold</b>. Other than that: nice answer, I already upvoted.)</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">OPD ==&gt; operand (in this case STOS. I put OPD 'cause REP can be used with LODS too. The bold was used to show the important elements, nothing more.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Normally during <code>memcpy()</code>, <code>memset()</code>, etc, operations. Something like the code below:</p>\n<pre><code>#define BUF_SIZE 1024\n\nwchar _t foo[BUF_SIZE]  = \"yyyyyyyyy\";\nwchar _t blah[BUF_SIZE] = {0};   \nwchar _t bar[BUF_SIZE];\n\nmemcpy(blah, BUF_SIZE, foo);\nmemset(bar, BUF_SIZE, 0);\n</code></pre>\n<p><strong>UPDATE</strong></p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;string.h&gt;\n#include &lt;stdlib.h&gt;\n#pragma intrinsic (memset , memcpy)\nvoid somefunc() { \n  char *foo = \"yabba dabba choo\";\n  char *blah = (char *)malloc(0x20);\n  if(blah) {\n    memset(blah,0,0x20);  &lt;&lt;-- line no 9\n    memcpy(blah,foo,0x20);\n    printf(\"%s\\n\" , blah);\n  }\n}\nvoid main (void) {\n  somefunc();\n}\n</code></pre>\n<p><strong>compiled with /O1 optimization vc++</strong></p>\n<pre><code>cl /nologo /Zi /W4 /O1 /analyze /EHsc /Ferepstos__opt.exe repstos.cpp  /link /RELEASE\n</code></pre>\n<p><strong>disassembly</strong></p>\n<pre><code>cdb -c \"uf repstos__opt!somefunc;q\" repstos__opt.exe | grep initial -A 40\n\n0:000&gt; cdb: Reading initial command 'uf repstos__opt!somefunc;q'\nrepstos__opt!somefunc:\n010a1261 6a20            push    20h\n010a1263 e8c69a0100      call    repstos__opt!malloc (010bad2e)\n010a1268 8bd0            mov     edx,eax\n010a126a 59              pop     ecx\n010a126b 85d2            test    edx,edx\n010a126d 7426            je      repstos__opt!somefunc+0x34 (010a1295)\n\nrepstos__opt!somefunc+0xe:\n010a126f 56              push    esi\n010a1270 57              push    edi\n010a1271 6a08            push    8\n010a1273 59              pop     ecx\n010a1274 33c0            xor     eax,eax\n010a1276 8bfa            mov     edi,edx\n010a1278 f3ab            rep stos dword ptr es:[edi] &lt;&lt;----\n010a127a 6a08            push    8\n010a127c 59              pop     ecx\n010a127d 8bfa            mov     edi,edx\n010a127f beb0c10d01      mov     esi,offset repstos__opt!`string' (010dc1b0)\n010a1284 52              push    edx\n010a1285 f3a5            rep movs dword ptr es:[edi],dword ptr [esi]\n010a1287 68c4c10d01      push    offset repstos__opt!`string' (010dc1c4)\n010a128c e836000000      call    repstos__opt!printf (010a12c7)\n010a1291 59              pop     ecx\n010a1292 59              pop     ecx\n010a1293 5f              pop     edi\n010a1294 5e              pop     esi\n\nrepstos__opt!somefunc+0x34:\n010a1295 c3              ret\nquit:\n</code></pre>\n<p>Disassembly pertaining to line no 9 </p>\n<pre><code>0:000&gt; lsa .,4,2\n     9:     memset(blah,0,0x20);\n    10:     memcpy(blah,foo,0x20);\n0:000&gt; u `repstos__opt!repstos.cpp:9`\nrepstos__opt!somefunc+0xe [xxxx\\repstos.cpp @ 9]:\n002c126f 56              push    esi\n002c1270 57              push    edi\n002c1271 6a08            push    8\n002c1273 59              pop     ecx\n002c1274 33c0            xor     eax,eax\n002c1276 8bfa            mov     edi,edx\n002c1278 f3ab            rep stos dword ptr es:[edi] &lt;&lt;&lt;---\n002c127a 6a08            push    8\n0:000&gt;\n</code></pre>\n</div>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Nov 30, 2016 at 19:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "beginner",
+                    "text": "<span class=\"comment-copy\">u sure? I dont see any REP  or stos .</span>",
+                    "time": null
+                },
+                {
+                    "user": "beginner",
+                    "text": "<span class=\"comment-copy\">#include &lt;stdio.h&gt; #include &lt;string.h&gt; int main () {     char str1[]=\"Sample string\";     char str2[40];     char str3[40];      memcpy (str2,str1,strlen(str1)+1);     memcpy (str3,\"copy successful\",16);     printf (\"str1: %s\\nstr2: %s\\nstr3: %s\\n\",str1,str2,str3);     return 0; }</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">you need to compile with optimizations on and may be inline the function or use __forceinline  compiler is smart it calculates cost benefit analysis and will make memset a fumction or inline depending on the net gain for example with the edit by perror compiler may decide repstos is not optimal and may call memset as a function  but some one else with the same code as @perror editied but with a buffsize smaller like say 0x20 compiler may not call memset as function but will inline it as repstos  nowadays even repstos is outdated compiler uses movups xmm instruction  and moves multi dwords</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

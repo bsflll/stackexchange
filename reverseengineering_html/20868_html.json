@@ -1,0 +1,60 @@
+{
+    "title": "segmentation fault at `mov byte [esi+7], al`",
+    "link": "https://reverseengineering.stackexchange.com/questions/20868/segmentation-fault-at-mov-byte-esi7-al",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>Section .text\n        global _start\n\n_start:\n        jmp short GoToCall\n\nshellcode:\n        pop             esi\n        xor             eax, eax\n        mov byte        [esi+7], al\n        lea             ebx, [esi]\n        mov long        [esi + 8], ebx\n        mov long        [esi + 12], eax\n        mov byte        al, 0x0b\n        mov             ebx, [esi]\n        lea             ecx, [esi + 8]\n        lea             edx, [esi + 12]\n        int             0x80\n\nGoToCall:\n        Call shellcode\n        db      \"/bin/shJAAAABBBB\"\n</code></pre>\n <p>\n  After compiling the above shellcode I got below disassembly. where at 3rd line I am getting the Segmentaion fault.\n </p>\n <pre><code>(gdb) disassemble shellcode \nDump of assembler code for function shellcode:\n   0x08049002 <+0>: pop    %esi\n   0x08049003 <+1>: xor    %eax,%eax\n=> 0x08049005 <+3>: mov    %al,0x7(%esi)\n   0x08049008 <+6>: lea    (%esi),%ebx\n   0x0804900a <+8>: mov    %ebx,0x8(%esi)\n   0x0804900d <+11>:    mov    %eax,0xc(%esi)\n   0x08049010 <+14>:    mov    $0xb,%al\n   0x08049012 <+16>:    mov    (%esi),%ebx\n   0x08049014 <+18>:    lea    0x8(%esi),%ecx\n   0x08049017 <+21>:    lea    0xc(%esi),%edx\n   0x0804901a <+24>:    int    $0x80\nEnd of assembler dump.\n(gdb) printf \"%s\", $esi\n/bin/shJAAAABBBB(gdb) printf \"%s\", $esi+7\nJAAAABBBB(gdb) si\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x08049005 in shellcode ()\n(gdb) \n</code></pre>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 4,
+    "views": "2k",
+    "tags": [
+        "assembly",
+        "shellcode"
+    ],
+    "user": "Mukesh",
+    "time": "Mar 13, 2019 at 20:18",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The instruction that causes the SIGSEGV is trying to store a\n  <code>\n   '\\0'\n  </code>\n  after the\n  <code>\n   'h'\n  </code>\n  in\n  <code>\n   \"/bin/shJAAAABBBB\"\n  </code>\n  .\n </p>\n <p>\n  All your code/data is in the\n  <code>\n   .text\n  </code>\n  section which is probably read-only.\nRun\n  <code>\n   objdump -h\n  </code>\n  on the resulting binary, and you should see something like the following in the output:\n </p>\n <pre><code>  5 .text         00000031  00001000  00001000  00001000  2**4\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n</code></pre>\n <p>\n  which contains the addresses where the bytes of the string are stored.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "booto",
+            "time": "Mar 13, 2019 at 22:36",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "wisk",
+                    "text": "<span class=\"comment-copy\">Actually for ELF executable, memory protections are set according to the segment and not the section. But anyways, you're right.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mukesh",
+                    "text": "<span class=\"comment-copy\">If I want to write into the <code>\"/bin/shJAAAABBBB\"</code> and execute the shellcode what update I have to make in the assemble?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The memory where you shellcode is located and executed is not writable.\nIt could happen for different reasons, my guess is your shellcode is encoded as a C literal string. Since this memory location is not writable, so you get an exception.\n </p>\n <p>\n  If you just want to try the shellcode, allocate a memory page using\n  <code>\n   mmap(2)\n  </code>\n  with flag\n  <code>\n   PROT_EXEC | PROT_READ | PROT_WRITE\n  </code>\n  , copy your shellcode inside and jump on it.\n </p>\n <p>\n  By the way, your shellcode is null byte free, if you copy it using\n  <code>\n   strcpy(3)\n  </code>\n  function, you can remove both\n  <code>\n   xor eax, eax\n  </code>\n  and\n  <code>\n   mov [esi+7], al\n  </code>\n  because\n  <code>\n   strcpy(3)\n  </code>\n  will write the 0x00 for you. Just make sure to trim \"/bin/shJAAAABBBB\" to \"/bin/sh\".\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "wisk",
+            "time": "Mar 13, 2019 at 22:36",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It's because\n  <code>\n   /bin/sh\n  </code>\n  needs\n  <code>\n   \\0\n  </code>\n  , so replace it\n  <code>\n   \"AAAABBBB\"\n  </code>\n  with\n  <code>\n   \\0\n  </code>\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Febriyanto Nugroho",
+            "time": "Oct 5, 2019 at 12:12",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As the answer of @booto shows,\n  <code>\n   objdump -h\n  </code>\n  prints out\n  <code>\n   .text\n  </code>\n  section is readonly.\n </p>\n <p>\n  You can try to compile like this and don't have to update the original source code:\n </p>\n <pre><code>nasm -f elf32 -o ./Execve.o Execve.nasm\nld -N -o ./Execve ./Execve.o\n</code></pre>\n <p>\n  <code>\n   ld -N\n  </code>\n  :\n </p>\n <blockquote>\n  <p>\n   Set the text and data sections to be readable and writable.\n  </p>\n </blockquote>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "jasonz",
+            "time": "Dec 27, 2019 at 7:25",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

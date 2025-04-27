@@ -1,0 +1,77 @@
+{
+    "title": "Secure RE-ing a PHP script",
+    "link": "https://reverseengineering.stackexchange.com/questions/310/secure-re-ing-a-php-script",
+    "content": "I have a very messy PHP script of which I need to determine the function. I can't quite understand the code, it's really messy. Now I thought that I perhaps could reverse engineer this script.\nWhat I want to do is to run this script (eventually with specific parts commented) to gain a better understanding of what part of the script does what. With that information, I should be able to get a full understanding of the script.\nHowever, I do not want to change anything in the database on the server, I do not want that the script is going to mail things, etc. Basically, the script should be totally separated from the world, but I do want to see what it tries to do. So, for example, when the script runs a <pre><code>mail()</code></pre> function, I want to see that a mail would've been sent if the script wasn't separated from the world.\nI therefore need a copy of the server installation (Ubuntu Server 12.04), which isn't that hard. The hard part is that I need to have a system which acts like it is the outside world, but actually is a logging system in which I can see what's happening. \nAre there any tools that can do this? If not, how should I go in building it myself?\n",
+    "votes": "7",
+    "answers": 4,
+    "views": "427",
+    "tags": [
+        "tools",
+        "php"
+    ],
+    "user": null,
+    "time": "Mar 27, 2013 at 13:43",
+    "comments": [
+        {
+            "user": "asheeshr",
+            "text": "Is the software tag necessary here ? meta.reverseengineering.stackexchange.com/q/3/189\n",
+            "time": null
+        },
+        {
+            "user": "user187",
+            "text": "@AshRj I removed it.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I would recommend using virtual machines to test your sample.  If the sample is going to be interacting with other machines (for example, if it sends mail but the mail server is located at mail.example.com) then you will probably want to emulate a two machine setup. If everything is already configured on the machine where your sample will be running (so mail calls are made locally) then you will probably only need one virtual machine.\nSet up a Virtual Machine Host Only Network\nYou can use VMWare if you have it or you can use the VirtualBox, which is free. If you use a host only network (VMWare or VirtualBox instructions) then you can sniff the network traffic of the VMs from within your host, but the traffic will never leave your host.\nBefore running the sample\nIf you suspect this php script will change the state of your virtual machine (for example it will drop databases or overwrite files) then I suggest you take a snapshot. This way you can always revert any changes that are made when the script runs. VMWare or VirtualBox instructions.\nRunning the Sample\nOnce the virtual network is built, you can run your sample while capturing traffic with a tool like wireshark. This will capture all the network traffic\nGetting outside feedback\nAs you described it, your sample probably won't need to communicate with fake services, but if it does, here are a few applications you can look into.\n\nWindows\n\nFakeNet as mentioned by Mick, this is a good solution if you are running on windows XP SP3.\n\n\nLinux\n\ninetsim - This will simulate responses for application level protocols such as HTTP, TCP or SMTP. It can also reply to DNS requests.\nhoneyd - This is ligheter than inetsim but will also simulate responses for application level protocols such as HTTP, TCP or SMTP. It can also reply to DNS requests.\nfarpd - This utility is very useful if you don't know the IP address that will be request.  This application can be used to redirect IP traffic to your virtual machine.\n",
+            "votes": "10",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "You may be able to use the open-source FakeNet to simulate a real network. \nHowever, FakeNet is designed to be run on an XP SP3 system, so using it would require you to ensure traffic is routed from your Ubuntu system/VM to an XP sp3 system/VM.\nThere are likely some Linux based FakeNet alternatives out there, but I've used FakeNet before when analyzing Windows malware and it works very well.\nFeatures\n\nSupports DNS, HTTP, and SSL\nHTTP server always serves a file and tries to serve a meaningful file; if the malware request a .jpg then a properly formatted .jpg is served, etc.  The files being served are user configurable.\nAbility to redirect all traffic to the localhost, including traffic destined for a hard-coded IP address.\nPython extensions, including a sample extension that implements SMTP and SMTP over SSL.\nBuilt in ability to create a capture file (.pcap) for packets on localhost.\nDummy listener that will listen for traffic on any port, auto-detect and decrypt SSL traffic and display the content to the console.\n",
+            "votes": "5",
+            "user": "Mick",
+            "time": "Mar 27, 2013 at 14:12",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "A more general solution is to use something like runkit, a PHP extension to intercept arbitrary function calls. Rather than trying to simulate a network (the safer option for your situation), if you instead knew the complete set of functions that you wanted to prevent from being called, you could simply <pre><code>runkit_function_redefine</code></pre> each to log a message instead.\n",
+            "votes": "5",
+            "user": "Daniel W. Steinbrook",
+            "time": "Mar 28, 2013 at 2:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "amccormack",
+                    "text": "<span class=\"comment-copy\">The downside to this kind of approach is you have to predefine what you want to catch where you may not know beforehand.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Since you already have the source file, I believe that there is a simpler and easier approach (as compared to rerouting network traffic on low levels would be to intercept the methods being called.)\nFirstly, identify and replace methods in your php file (remember to make a copy!). For example, if you want to intercept <pre><code>mail()</code></pre>, you can find <pre><code>mail(</code></pre> and replace it with <pre><code>shim_mail(</code></pre>. You can also do so for other interesting methods such as <pre><code>mysql_connect()</code></pre>. \nOnce you finish, add <pre><code>include 'shim.php';</code></pre> at the top of your file. The \"shim\" will act as a layer between the php script and the actual method, so you can choose to log it to a text file, allow it to execute, or even point it to a replica database!\nshim.php\n<pre><code>$logfile = 'log.txt';\n\nfunction shim_mysql_connect($server, $username, $password, $new_link = false, $client_flags = 0)\n{\n    file_put_contents($logfile, file_get_contents($logfile) . \"\\r\nmysql_connect() to \" . $server . \" with username \" . $username . \" and password \" . $password);\n\n    // intercept the command and point it to the 'honeypot'\n    return mysql_connect('your_new_server', 'username', 'password');\n}\n\nfunction shim_mail($to, $subject, $message, $additional_headers = '', $additional_parameters = '')\n{\n    file_put_contents($logfile, file_get_contents($logfile) . \"\\r\nmail() to \" . $to . \" with subject \" . $subject . \" and message \" . $message);\n\n    // don't actually send an email\n}\n\n?>\n</code></pre>\nIn this shim file, you can add functions that you are interested to find out about (simply by copying the same method signature as the original file and printing relevant logs). By observing the log, you can probably find out a lot more about the php script!\n(while I was midway composing this, I realized that Daniel W. Steinbrook has also come up with a similar method. My method has a slight advantage that it is simpler without adding new dependencies, but runkit sounds like a more correct way. Either way, you can simply pick one that works!)\n",
+            "votes": "3",
+            "user": "jg0",
+            "time": "Mar 28, 2013 at 8:23",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "amccormack",
+                    "text": "<span class=\"comment-copy\">The simplicity of this technique is worth noting.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Michael Anderson",
+                    "text": "<span class=\"comment-copy\">This technique is NOT sufficient.  <a href=\"http://www.php.net/manual/en/functions.variable-functions.php\" rel=\"nofollow noreferrer\">php.net/manual/en/functions.variable-functions.php</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,63 @@
+{
+    "title": "Wrong RVA values inside IMAGE_IMPORT_DESCRIPTOR",
+    "link": "https://reverseengineering.stackexchange.com/questions/19640/wrong-rva-values-inside-image-import-descriptor",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I load the entire PE into an <code>std::vector&lt;Byte&gt; fileContent</code> using <code>std::fstream</code>.</p>\n<p>Then I obtain the executable's dos header:</p>\n<p><code>IMAGE_DOS_HEADER* imageDosHeader = (IMAGE_DOS_HEADER*)fileContent.data();</code></p>\n<p>After that, I check whether the PE is valid(<code>MZ</code> and <code>PE00</code> signatures).</p>\n<p>If it is, I get its import descriptor:</p>\n<pre><code>IMAGE_IMPORT_DESCRIPTOR* imageImportDescriptor = (IMAGE_IMPORT_DESCRIPTOR*)((DWORD)imageDosHeader + imageNtHeader-&gt;OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);\n\n//Note: the VirtualAddress field equals 0x4FFC, so I assume it's valid\n</code></pre>\n<p>Now, I iterate through the dlls and try to display their names as following:</p>\n<pre><code>for(DWORD i = 0; ; i++)\n{\n    bool isCurrentDllValid = true;\n\n    //if all fields of the current dll are zeros, then this dll is the last one, so break the outer loop\n    for(DWORD j = 0; j &lt; sizeof(IMAGE_IMPORT_DESCRIPTOR); j++)\n    {\n        if((*(DWORD*)((DWORD)&amp;imageImportDescriptor[i] + j)))\n            break;\n        else if(j == sizeof(IMAGE_IMPORT_DESCRIPTOR) - 1)\n            isCurrentDllValid = false;\n    }\n\n    if(!isCurrentDllValid)\n        break;\n\n    char* dllName = (char*)((DWORD)imageDosHeader + imageImportDescriptor[i].Name);\n</code></pre>\n<p>The problem is: an attempt to display the <code>dllName</code> causes crash.</p>\n<p>Also, the <code>Name</code> field is an RVA, but its value is <code>0x6C61766E</code> (the same thing is with the rest of the fields, the smallest one is <code>TimeDateStamp</code> with <code>0x637465</code>, still abnormal one), while size of the PE is less than <code>0x7000</code>.</p>\n<p>In hex editor, RVA of e.g. <code>\"KERNEL32.dll\"</code> is <code>0x46F0</code>.</p>\n<p>Have you any idea why is it so? Am I missing something really simple?</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "binary-analysis",
+        "pe",
+        "binary",
+        "binary-format"
+    ],
+    "user": "anx199",
+    "time": "Oct 16, 2018 at 16:18",
+    "comments": [
+        {
+            "user": "mrexodia",
+            "text": "<span class=\"comment-copy\">You are forgetting that rva is not the same as the offset in the file. Unless you have a dump from memory in your vector you will have to convert the rva to a file offset.</span>",
+            "time": null
+        },
+        {
+            "user": "anx199",
+            "text": "<span class=\"comment-copy\">@mrexodia Thanks for your reply, I realized that yesterday. It's such a silly mistake.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">@mrexodia you should add this as an answer so it’s not hidden in a comment</span>",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "<span class=\"comment-copy\">I usually only use this site from my phone, so it’s always cumbersome to write answers... I wrote one though:)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Unfortunately the real life samples don’t always follow the nice and tidy specification; they only need to work on a specific implementation, not the ideal one described in the documentation. </p>\n<p><a href=\"https://corkamiwiki.github.io/PE#imports\" rel=\"nofollow noreferrer\">Corkami</a> gathers details about <em>practical</em> PE format features, for example:</p>\n<blockquote>\n<p>If the Import Lookup Table is present, then it also determines the length of the Import Address Table, as they are parsed in parallel. In this case, the Import Address Table doesn't have to be null-terminated.</p>\n</blockquote>\n<p>Or maybe this:</p>\n<blockquote>\n<p>If the IAT is linked in the descriptor but empty, then the DLL is not loaded, and the file is loaded even with an invalid dll name - the descriptor is skipped.</p>\n</blockquote>\n<p>So check if you have either situation. </p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Oct 16, 2018 at 22:05",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Unless you are loading a mapped PE file in your vector, you have to convert all RVAs to file offsets.</p>\n<p>The pseodocode looks something like this:</p>\n<pre><code>func rva2offset(pe, rva):\n    for section in pe.sections:\n        if rva &gt;= section.rva and rva &lt; section.rva + section.size:\n            return section.fileoffset + (rva - section.rva)\n    return nil\n</code></pre>\n<p>The code does not account for the actual way the kernel maps the PE file in memory (alignment and other edge cases), so use it with care.</p>\n</div>",
+            "votes": "5",
+            "user": "mrexodia",
+            "time": "Oct 25, 2018 at 7:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "LFMekz",
+                    "text": "<span class=\"comment-copy\">Gotta love MrExodia. You really are a legend out here. Really helped. By the way if youre using Microsoft horribly outdated and jargon heavy PE pages with ambiguous offsets. The more explict form to their crappy struct ref for me SectionHeader.PointerToRawData + RVA  - SectionHeader.VirtualAddress. RVA is what you need to convert (in my case was OffSetToData for resource_data)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

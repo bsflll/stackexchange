@@ -1,0 +1,41 @@
+{
+    "title": "Safecom TA-810 protocol (having trouble with the CRC)",
+    "link": "https://reverseengineering.stackexchange.com/questions/6342/safecom-ta-810-protocol-having-trouble-with-the-crc",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>(i've also posted this question on stackoverflow before i found out there was a specific stackexchange site for reverse engineering. My bad. Original post here: <a href=\"https://stackoverflow.com/questions/26095009/need-help-reverse-engineering-a-crc16\">https://stackoverflow.com/questions/26095009/need-help-reverse-engineering-a-crc16</a>)</p>\n</blockquote>\n<p>I'm trying to connect to the Safecom TA-810 (badge/registration system) to automate the process of calculating how long employee's have worked each day. Currently this is done by:</p>\n<ol>\n<li>Pulling the data into the official application</li>\n<li>Printing a list of all 'registrations'</li>\n<li>Manually entering the values from the printed lists into our HR application</li>\n</ol>\n<p>This is a job that can take multiple hours which we'd like to see automated. So far the official tech support has been disappointing and refused to share any details.</p>\n<p>Using wireshark I have been capturing the UDP transmissions and have pretty much succeeded in understanding how the protocol is built up. I'm only having issues with what i suppose is a CRC field. I don't know how it is calculated (CRC type and parameters) and using which fields ...</p>\n<p>This is how a message header looks like:</p>\n<pre><code>D0 07 71 BC BE 3B 00 00\n\nD0 07 - Message type\n71 BC - This i believe is the CRC\nBE 3B - Some kind of session identifier. Stays the same for every message after the initial message (initial message has '00 00' as value)\n00 00 - Message number. '01 00', '02 00', '03 00'\n</code></pre>\n<p>Some examples:</p>\n<pre><code>Header only examples\nE8 03 17 FC 00 00 00 00 -&gt; initial request (#0, no session nr)\nD0 07 71 BC BE 3B 00 00 -&gt; Initial response (#0, device sends a session nr)\n4C 04 EF BF BE 3B 06 00 -&gt; Message #6, still using the same session # as the initial response\n\nLarger example, which has data\n0B 00 07 E1 BE 3B 01 00 7E 45 78 74 65 6E 64 46 6D 74\n</code></pre>\n<p>I've also been trying to figure this out by reading the disassembled code from the original application. The screenshot below happens before the socket.sendto and seems to be related.</p>\n<p><img alt=\"original application code\" src=\"https://i.sstatic.net/Q8cqg.png\"/></p>\n<p>Any help will be extremely appreciated.</p>\n<p><strong>EDIT</strong>: Made some success with debugging the application using ollydbg. The CRC appears in register (reversed) EDX at the selected line in the following screenshot.</p>\n<p><img alt=\"crc showing up\" src=\"https://i.sstatic.net/u0mTF.png\"/></p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "139",
+    "tags": [
+        "ollydbg",
+        "protocol"
+    ],
+    "user": "MythJuha",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">If your assembler code is related, it looks much more like it's copying the session identifier and the message number, as the [mov esi+04],ax and [mov esi+06],ax hint at those fields. Without access to a running version of the application, or at least many more examples, it's going to be quite hard to calculate the CRC. Have you ever thought of using the text-only printer driver combined with 'print to file' to get an ascii file of your records, then use a {perl,python,awk,VB,whatever scripting language} script to parse that ascii file?</span>",
+            "time": null
+        },
+        {
+            "user": "MythJuha",
+            "text": "<span class=\"comment-copy\">I've already implemented a similar system as the print-to-file using a built-in export function. But it still requires manual interactions to load, export, and start parsing the data. The final goal is to completely automate the process.   Supplying more examples, more assembly or even getting access to a running version could be arranged if someone is willing to look into it.</span>",
+            "time": null
+        },
+        {
+            "user": "MythJuha",
+            "text": "<span class=\"comment-copy\">Been making some good progress debugging the flow. Seems to be much easier than a CRC16. They are just adding all bytes.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've managed to create a php script that does the CRC calculation by debugging the application using OllyDbg.</p>\n<p>The CRC is calculated by Adding up every 2 bytes (every short). if the result is larger than a short, the 'most significant short' is added to the 'least significant short' until the result fits in a short. Finally, the CRC (short) is inverted.</p>\n<p>I'll add my php script for completeness:</p>\n<pre><code>&lt;?php\nfunction CompareHash($telegram)\n{\n  $telegram = str_replace(\" \", \"\", $telegram);\n  $telegram_crc = substr($telegram, 4, 4);\n  $telegram = str_replace($telegram_crc, \"0000\", $telegram);\n\n  echo \"Telegram: \", $telegram, ', Crc: ', $telegram_crc, ' (', hexdec($telegram_crc), ')&lt;br /&gt;';\n\n  $crc = 0; \n  $i = 0;\n\n  while ($i &lt; strlen($telegram)) \n  {\n    $short = substr($telegram, $i, 4);\n\n    if (strlen($short) &lt; 4) $short = $short . '00';\n\n    $crc += hexdec($short);\n    $i += 4;\n  }\n\n  echo \"Crc: \", $crc, ', inverse: ', ~$crc;\n\n  // Region \"truncate CRC to Int16\"\n  while($crc &gt; hexdec('FFFF'))\n  {\n    $short = $crc &amp; hexdec ('FFFF');\n\n    // Region \"unsigned shift right by 16 bits\"\n    $crc = $crc &gt;&gt; 16;\n    $crc = $crc &amp; hexdec ('FFFF');\n    // End region\n\n    $crc =  $short + $crc;\n  }\n  // End region\n\n  // Region \"invert Int16\"\n  $crc = ~$crc;\n  $crc = $crc &amp; hexdec ('FFFF');\n  // End region\n\n  echo ', shifted ', $crc;\n\n  if (hexdec($telegram_crc) == $crc)\n  {\n    echo \"&lt;br /&gt;MATCH!!! &lt;br /&gt;\";\n  }\n  else\n  {\n    echo \"&lt;br /&gt;failed .... &lt;br /&gt;\";\n  }\n}\n\n$s1_full = \"E8 03 17 FC 00 00 00 00\";\n$s2_full = \"D0 07 71 BC BE 3B 00 00\";\n$s3_full = \"D0 07 4E D4 E1 23 00 00\";\n$s4_full = \"D0 07 35 32 BE 3B 07 00   7E 44 65 76 69 63 65  4E    61 6D 65 3D 54 41 38 31 30 00\";\n$s5_full = \"0B 00 39 6C BE 3B 05 00   7E 52 46 43 61 72 64  4F    6E\";\n\nCompareHash($s1_full);\nCompareHash($s2_full);\nCompareHash($s3_full);\nCompareHash($s4_full);\nCompareHash($s5_full);\n?&gt;\n</code></pre>\n<p>Thanks for the feedback!</p>\n</div>",
+            "votes": "0",
+            "user": "MythJuha",
+            "time": "Oct 1, 2014 at 7:20",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

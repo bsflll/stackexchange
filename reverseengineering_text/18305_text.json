@@ -1,0 +1,52 @@
+{
+    "title": "How to specify stack-based return values in IDA Pro (GoLang)",
+    "link": "https://reverseengineering.stackexchange.com/questions/18305/how-to-specify-stack-based-return-values-in-ida-pro-golang",
+    "content": "tl;dr: I am reversing a GoLang 1.10 executable, compiled for Windows. I am trying to make IDA correctly recognize the calling convention.\nDetails: I am looking at an x86 executable where the following (nonstandard) calling convention is used. \n\ncaller creates space on the stack for possibly multiple return values, i.e. subtracts <pre><code>4*return_count</code></pre> from <pre><code>ESP</code></pre>.\ncaller pushes arguments to callee to the stack, calls callee\ncallee creates a stack frame for local variables\ncallee does work\ncallee restores <pre><code>ESP</code></pre> to be the same as before step 3\ncallee stores return values on the stack below its arguments\ncall returns\n\nThe caller now has the return values and the arguments still in the local stack frame, the latter on top of the former, and cleans up. This is a GoLang 1.10 executable, but I am describing the calling convention that I am seeing here, I do not know any reference for this. If something about the GoLang calling convention in Windows compiled executables is known; I would be very interested in that as well.\nMore to the point however, I am looking for a way to make IDA correctly understand this calling convention. As an example, consider the following code:\n<pre><code> test proc near                   ; test receives two arguments\n   sub     esp, 18h               ; create stack frame\n   mov     eax, [esp+1Ch]         ; argument 1 to test:\n   mov     [esp], eax             ;  moved to top of stack frame\n   mov     eax, [esp+20h]         ; argument 2 to test:\n   mov     [esp+4], eax           ;  moved second to top of stack frame\n   call    sub1                   ; call sub1(test_arg_1, test_arg_2)\n   mov     eax, [esp+14h]         ; retrieve return_value_1\n   mov     ecx, [esp+10h]         ; retrieve return_value_2\n   mov     [esp], ecx           \n   mov     [esp+4], eax\n   call    sub2                   ; call sub2(return_value_1, return_value_2)\n   movzx   eax, byte ptr [esp+8]  ; retrieve single return value\n   xor     eax, 1                 ; negate result\n   mov     [esp+24h], al          ; store result below arguments to test\n   add     esp, 18h               ; close stack frame\n   retn                           ; return\n</code></pre>\nI tried to give <pre><code>sub1</code></pre> more parameters:\n<pre><code>int __cdecl sub1(int, int, int, int, int, int)\n</code></pre>\nBut unfortunately, it is not reflected in the decompiled code that the last two \"arguments\" to this function are actually return values which are being passed on to <pre><code>sub2</code></pre>:\n<pre><code>int __cdecl test(int a1, int a2)\n{\n  int v2; // ST10_4\n  int v3; // ST14_4\n  unsigned __int8 v4; // ST08_1\n  int esp_08; // [esp+8h] [ebp-10h]\n  int esp_0C; // [esp+Ch] [ebp-Ch]\n  int esp_10; // [esp+10h] [ebp-8h]\n  int esp_14; // [esp+14h] [ebp-4h]\n  void *retaddr; // [esp+18h] [ebp+0h]\n\n  sub1(a1, a2, esp_08, esp_0C, esp_10, esp_14);\n  sub2(v2, v3);\n  return v4 ^ 1;\n}\n</code></pre>\nIn an attempt to make use of this advanced calling convention syntax, I also created a structure containing two 32 bit integer fields and declared <pre><code>sub1</code></pre> as follows:\n<pre><code>struc_1 __usercall sub1@<0:^8.4,4:^12.4>(int, int)\n</code></pre>\nI tried several variations of this, different offsets, also returning only a native type, but IDA 7.1 always crashed with the following message:\n\nOops! internal error 1004 occurred. Further work is not possible and IDA will close.\n\nIs there any good way or workaround to make IDA recognize this calling convention and accurately reflect it in the decompiled code?\nReproduce MWE\nTo produce the above example, you can use the following <pre><code>test.go</code></pre> source file:\n<pre><code>package main\nimport \"os\"\n\nfunc sub2(x int, y int) bool { return x == y }\nfunc sub1(x int, y int) (int, int) { return y,x }\nfunc test(x int, y int) bool { return ! sub2(sub1(x,y)) }\n\nfunc main() {\n  test(1,2)\n  os.Exit(0)\n}\n</code></pre>\nYou can compile it as follows (disabling optimization is important):\n<pre><code>set GOARCH=386\ngo build -gcflags=-N -gcflags=-l test.go\n</code></pre>\nIn IDA, the test function should be automatically renamed to <pre><code>main_test</code></pre>.\n",
+    "votes": "5",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "x86",
+        "calling-conventions"
+    ],
+    "user": "james",
+    "time": "May 22, 2018 at 10:41",
+    "comments": [
+        {
+            "user": "mrexodia",
+            "text": "Since you appear to have the latest IDA and it crashes, you can probably contact support with this question.\n",
+            "time": null
+        },
+        {
+            "user": "james",
+            "text": "A good idea, thanks. I was somewhat afraid to be using the syntax incorrectly, but I will ask them about it.\n",
+            "time": null
+        },
+        {
+            "user": "Anton Kukoba",
+            "text": "Does it work if you declare it like this? int __cdecl test(int a1, int a2, int * return1, int * return2)\n",
+            "time": null
+        },
+        {
+            "user": "james",
+            "text": "Dear @AntonKukoba, thanks for the idea, sadly it doesn't work. In that case, it just thinks that the arguments are <pre><code>int</code></pre> pointers rather than <pre><code>int</code></pre>s, nothing else changes.\n",
+            "time": null
+        },
+        {
+            "user": "Anton Kukoba",
+            "text": "Can you give me a sample, I'd like to experiment\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I have been in touch with IDA support and unfortunately, right now, there does not seem to be a good way to do this. IDA assumes in many cases that the return value of a function must be stored in a register. This is also the reason for the crash when trying to overrule this inherent assumption with scattered arguments.\n",
+            "votes": "1",
+            "user": "james",
+            "time": "May 24, 2018 at 9:38",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

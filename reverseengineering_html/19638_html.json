@@ -1,0 +1,50 @@
+{
+    "title": "How is PTX compressed in a fatbinary?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19638/how-is-ptx-compressed-in-a-fatbinary",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It is not clear how PTX is compressed in a fatbinary. I'm doing some research and by looking at the binary it seems a sort of LZ77 (or LZSS?).\nI've prepared some tests:\n </p>\n <p>\n  Small PTX. A simple vec_add (poorly implemented):\n  <a href=\"https://pastebin.com/QF95YiAN\" rel=\"nofollow noreferrer\">\n   Input\n  </a>\n  ,\n  <a href=\"https://drive.google.com/file/d/1ouv2sXyYqm6TPg67ZMeN456EP9eFaNd4/view?usp=sharing\" rel=\"nofollow noreferrer\">\n   Output\n  </a>\n  and\n  <a href=\"https://pastebin.com/k4zU09sa\" rel=\"nofollow noreferrer\">\n   CUDA Source\n  </a>\n  .\n </p>\n <p>\n  Larger PTX. lavaMD from Rodinia Benchmarks:\n  <a href=\"https://pastebin.com/BDb9wxdz\" rel=\"nofollow noreferrer\">\n   Input\n  </a>\n  ,\n  <a href=\"https://drive.google.com/file/d/1c7yLuwcFITZKpwLbKQJh-90FdLgPLWkd/view?usp=sharing\" rel=\"nofollow noreferrer\">\n   Output\n  </a>\n  and\n  <a href=\"https://pastebin.com/TasYV3bf\" rel=\"nofollow noreferrer\">\n   CUDA Source\n  </a>\n </p>\n <p>\n  Note: The question is the same of the following thread on\n  <a href=\"https://devtalk.nvidia.com/default/topic/1042870/ptx-compression-method\" rel=\"nofollow noreferrer\">\n   NVIDIA Developers Forum\n  </a>\n  (I am the author of the thread).\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "351",
+    "tags": [
+        "decompress"
+    ],
+    "user": "fusiled",
+    "time": "Oct 16, 2018 at 15:09",
+    "comments": [
+        {
+            "user": "dingo_kinznerhook",
+            "text": "<html><body><span class=\"comment-copy\">\n Is your question, \"How is PTX encoded in a fatbinary?\" It is best to clearly ask your question when posting so that those responding know what to answer.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "fusiled",
+            "text": "<html><body><span class=\"comment-copy\">\n @dingo_kinznerhook Done. Thank you for your suggestion.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<html><body><span class=\"comment-copy\">\n \"I'm doing some research and by looking at the binary it seems a sort of LZ77 compression.\" Which binary are you looking at?\n <code>\n  vec_add.fatbin\n </code>\n is clearly not compressed.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "fusiled",
+            "text": "<html><body><span class=\"comment-copy\">\n @SYS_V The binary is not compressed, but the PTX code inside yes. The PTX code is saved as a string inside the fatbin. You can try to download the second link a open it with a text editor. You can see pieces of strings regarding the PTX, but it is not in a plaintext form.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "fusiled",
+            "text": "<html><body><span class=\"comment-copy\">\n @SYS_V I've updated a larger example. I can try to cook a bigger one. I think that PTX maximum size is 2MB\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I know this question is rather old, but I recently also needed to understand the compression of CUDA fatbinaries. It indeed seems to be a compression somewhat similar to LZ77. I wrote the following code that seems to decompress the actual text sections of compressed fatbinaries.\n </p>\n <pre><code>size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size_t output_size)\n{\n    size_t ipos = 0, opos = 0;  \n    uint16_t next_nclen;  // length of next non-compressed segment\n    uint16_t next_clen;   // length of next compressed segment\n    uint16_t back_offset; // negative offset where redudant data is located, relative to current opos\n\n    while (ipos < input_size) {\n        next_nclen = (input[ipos] & 0xf0) >> 4;\n        next_clen = 4 + (input[ipos] & 0xf);\n        if (next_nclen == 0xf) {\n            next_nclen += input[++ipos];\n        }\n        \n        if (memcpy(output + opos, input + (++ipos), next_nclen) == NULL) {\n            fprintf(stderr, \"Error copying data\");\n            return 0;\n        }\n        ipos += next_nclen;\n        opos += next_nclen;\n        if (ipos >= input_size || opos >= output_size) {\n            break;\n        }\n        back_offset = input[ipos] + (input[ipos + 1] << 8);       \n        ipos += 2;\n        if (next_clen == 0xf+4) {\n            do {\n                next_clen += input[ipos++];\n            } while (input[ipos - 1] == 0xff);\n        }\n        if (next_clen <= back_offset) {\n            if (memcpy(output + opos, output + opos - back_offset, next_clen) == NULL) {\n                fprintf(stderr, \"Error copying data\");\n                return 0;\n            }\n        } else {\n            if (memcpy(output + opos, output + opos - back_offset, back_offset) == NULL) {\n                fprintf(stderr, \"Error copying data\");\n                return 0;\n            }\n            for (size_t i = back_offset; i < next_clen; i++) {\n                output[opos + i] = output[opos + i - back_offset];\n            }\n        }\n        opos += next_clen;\n    }\n    return opos;\n}\n</code></pre>\n <p>\n  I am no compression expert but I think this is a variant of LZ4 compression. There is some more code related to decoding the fatbinary headers here:\n  <a href=\"https://github.com/n-eiling/cuda-fatbin-decompression\" rel=\"nofollow noreferrer\">\n   https://github.com/n-eiling/cuda-fatbin-decompression\n  </a>\n  .\nThe output is bit identical to using nvcc with the\n  <code>\n   --no-compress\n  </code>\n  flag.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "nee",
+            "time": "Apr 27, 2023 at 9:40",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

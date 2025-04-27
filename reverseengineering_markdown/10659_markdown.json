@@ -1,0 +1,41 @@
+{
+  "title": "Offset calculation for branch instruction in ARM",
+  "link": "https://reverseengineering.stackexchange.com/questions/10659/how-to-modify-arm-so",
+  "content": "As the title says, how to calculate offsets for branch instructions?\nFor example i have following assembly code,\n\n```\n0x60ECE    B loc_60EE6\n;\n;\n;\n0x60EE6    LDR.W R2, #0x123\n\n```\nHex code for location 0x60ECE is 0A E0. i want to know how it is calculated. According to https://stackoverflow.com/questions/6744661/understanding-arm-assembler-branch-offset-calculation , offset should be 04 instead of 0A.\n\nI'm working on android binary.\n\n",
+  "votes": "6",
+  "answers": 2,
+  "views": "11k",
+  "tags": [
+    "ida",
+    "android",
+    "arm",
+    "offset"
+  ],
+  "user": "kandi",
+  "time": "May 23, 2017 at 12:37",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The instruction format is in little-endian, so bytes 0A E0 gets parsed as machine code 0xE00A, or 1110000000001010b in binary.\n\nAccording to the documentation for the THUMB Instruction Set, the first 5 bits (11100b) decode to an unconditional branch opcode, and the last 11 bits (00000001010b) decode to Offset11:\n\n\n\nAs per the documentation above, the destination address is calculated as \"PC relative +/- Offset11 << 1\" plus 4 for the prefetch operation.\n\nIf we do the math, we see that everything works out:\n\n```\n   0x60ECE + (00000001010b << 1) + 0x4\n== 0x60ECE +       10100b        + 0x4\n== 0x60ECE +        0x14         + 0x4\n== 0x60EE6\n\n```\n",
+      "votes": "5",
+      "user": "Jason Geffner",
+      "time": "Jun 8, 2015 at 13:52",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "You're missing the fact that you're working in THUMB mode, where you have two bytes per instruction (for most instructions at least), and that link describes ARM mode, where every instruction has 4 bytes.\n\n(How do i know you're in THUMB mode? Apart from your last question, your 0x60ECE B loc_60EE6 isn't 4-byte aligned, so it must be THUMB).\n\nIf you add 4 bytes to the instruction at loc_60ECE, you get 0x60ED2. Subtract this from 60EE6 to get 14, or 20 decimal. Divide by 2 (2 byte instructions in THUMB mode) to get 10 decimal, or 0A hex.\n\nAs calculating offsets can be hard and is error-prone, i let the gnu arm assembler handle it for me.  First write an assembly file, like this (named q.s, choose any name you want):\n\n```\n.thumb\n.arch armv7a\n.syntax unified\n.org 0x60ECE\n    B codecave\noriginal:\n.org 0x60EE6\ncodecave:\nmovw R2, #0x123\nB original\n\n```\nthen assemble it and check the result:\n\n```\narm-linux-gnueabi-as q.s\narm-linux-gnueabi-objdump -s a.out | grep -v \"00000000 00000000 00000000 00000000\"\n\nContents of section .text:\n 60ec0 00000000 00000000 00000000 00000ae0  ................\n 60ee0 00000000 000040f2 2312f1e7           ......@.#...    \n\n```\nYou see your 0ae0 at 60ece, and 40f22312f1e7 at 60ee6. You can patch this in IDA directly, or use the idapatcher plugin to copy/paste the hex. I found this to be much easier than crafting the patched bytes manually.\n\n",
+      "votes": "4",
+      "user": "Guntram Blohm",
+      "time": "Jun 8, 2015 at 13:56",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user2578525",
+          "text": "Thank you sir for pointing out this trick. It made everything a lot easier for me. Finally i was able to create codecave.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

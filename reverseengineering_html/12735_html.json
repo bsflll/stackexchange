@@ -1,0 +1,40 @@
+{
+    "title": "Where can be assembly-csharp.dll decrypted?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12735/where-can-be-assembly-csharp-dll-decrypted",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So I have an android game. Its\n  <code>\n   Assembly-CSharp.dll\n  </code>\n  causes\n  <code>\n   .NET Reflector\n  </code>\n  to show\n </p>\n <blockquote>\n  <p>\n   File is not a portable executable. DOS header does not contain 'MZ'\n  signature\n  </p>\n </blockquote>\n <p>\n  It's encrypted. The app seems to decrypt that assembly at app launch time.\n </p>\n <p>\n  So I used\n  <code>\n   UltraCompare\n  </code>\n  to point out what is changed from previous version(It wasn't encrypted).\n </p>\n <p>\n  <code>\n   classes.dex\n  </code>\n  was identical, so no java code was changed.\n  \n\n  <code>\n   libmain.so\n  </code>\n  and\n  <code>\n   libunity.so\n  </code>\n  was identical, but\n  <code>\n   libmono.so\n  </code>\n  had a big change.\n </p>\n <p>\n  There was some new added symbols which seem to be related with encryption such as\n  <code>\n   TEAEncrypt\n  </code>\n  ,\n  <code>\n   TEADecrypt\n  </code>\n  ,\n  <code>\n   TEAEncryptString\n  </code>\n  ,\n  <code>\n   TEADecryptString\n  </code>\n  , and some\nmono library's C# internal call routine like\n  <code>\n   ves_icall_System_Security_SecureString_EncryptInternal\n  </code>\n  .\n </p>\n <p>\n  If it's the means of the encryption, I wander where are those functions called.\n </p>\n <p>\n  There was some changes to\n  <code>\n   Assembly-CSharp-firstpass.dll\n  </code>\n  ,\n  <code>\n   Assembly-UnityScript.dll\n  </code>\n  ,\n  <code>\n   Assembly-UnityStript-firstpass.dll\n  </code>\n  with\n  <strong>\n   a same change pattern\n  </strong>\n  . I can't figure out what does this means.\n </p>\n <p>\n  So where can be the\n  <strong>\n   Assembly-CSharp.dll\n  </strong>\n  decrypted at runtime?\nOr is there another way without decrypting that at runtime?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "dll"
+    ],
+    "user": "Ris",
+    "time": "May 25, 2016 at 11:26",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Mono is, basically, open source. So anyone can create a Mono implementation that, whenever it reads a chunk of a CIL DLL file, applies encryption to it. Maybe Unity delivers a libmono.so that does encryption with its newest version; maybe the vendor of the game implemented something themselves. You could start checking patch notes of Unity to learn if this is an official new feature; if not, it's likely that the game vendor created their own encrypting libmono.so.\n </p>\n <p>\n  Your TEA functions are, most likely, called within the libmono.so itself. If i had to implement something like that, i'd write wrapper functions\n  <code>\n   TEAopen\n  </code>\n  ,\n  <code>\n   TEAread\n  </code>\n  ,\n  <code>\n   TEAclose\n  </code>\n  for\n  <code>\n   fopen\n  </code>\n  ,\n  <code>\n   fread\n  </code>\n  ,\n  <code>\n   fclose\n  </code>\n  that decrypt on reading the file, then replace the\n  <code>\n   f-*\n  </code>\n  functions in the mono-code that reads a DLL with the\n  <code>\n   TEA-*\n  </code>\n  functions.\n </p>\n <p>\n  TEA encryption works with 8-byte chunks, which may be one of the reasons it was used here; if you want to read just a part of the file, you don't need to read everything before your part, except a few bytes to fill the 8-byte-block. But this also means the same 8 input bytes will always result in the same 8 output bytes, if your original DLL has areas with a lot of '\\0' bytes, they will result in the same 8 bytes repeated over and over in the encrypted DLL.\n </p>\n <p>\n  While\n  <a href=\"http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.40.4708&rep=rep1&type=pdf\" rel=\"nofollow\">\n   TEA has a weakness that turns a 128 bit key into 126 effective bits, there seems to be no known plaintext attack on it\n  </a>\n  . This means, your observed same change pattern won't help you. So you need to extract the key from the mono implementation yourself. Disassemble that file, especially the\n  <code>\n   TEAEncrypt\n  </code>\n  and\n  <code>\n   TEADecrypt\n  </code>\n  functions. They should look somewhat like the code from the\n  <a href=\"https://en.wikipedia.org/wiki/Tiny_Encryption_Algorithm\" rel=\"nofollow\">\n   Wikipedia article\n  </a>\n  . Their second parameter is the key; either try to find out where that key is stored/generated, or do some dynamic analysis, put a breakpoint on those functions, and check what the parameter they get actually is. Also, check if it's really a standard TEA implementation, or maybe XTEA or a different key schedule constant or something. Once you have the key, find a program that takes a file and a TEA key and decrypts it, or roll your own; this shouldn't be too difficult as there are lots of open source TEA implementations in any language of your choice.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "May 25, 2016 at 10:47",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ris",
+                    "text": "<span class=\"comment-copy\">So that same change pattern is not related to encryption. Only Assembly-CSharp.dll was encrypted. Anyway, those functions seems to be almost same with the wikipedia source. I have another question here, what routine is managing the assembly loading?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">What routine is managing the assembly loading? Best check the mono source code (<a href=\"https://github.com/mono\" rel=\"nofollow noreferrer\">github.com/mono</a>). Comparing that source with your libmono.so is probably the fastest way to find out what's different/where the encryption happens.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ris",
+                    "text": "<span class=\"comment-copy\">yep, I found it. I used IDA Proximity Browser. I didn't know the purpose of that browser and I finally got it. I searched TEADecryptString's function calls and found the key.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

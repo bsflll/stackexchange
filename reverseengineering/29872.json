@@ -1,0 +1,46 @@
+{
+    "title": "Program doesn't load a custom .dll from main directory. How can i inject a .dll BEFORE the executable starts?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29872/program-doesnt-load-a-custom-dll-from-main-directory-how-can-i-inject-a-dll",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I want to use DXVK in GTA 5 on Windows 11.\nUsing the needed .dlls (d3d11.dll and dxgi.dll) and launching the game comes with this error</p>\n<p><a href=\"https://i.sstatic.net/YctK6.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/YctK6.png\"/></a></p>\n<p>Using Process Explorer (while the error message is displayed) you can see that only dxgi.dll from the Windows directory is loaded, the one that i copied from DXVK is never loaded\n<a href=\"https://i.sstatic.net/vOYR3.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/vOYR3.png\"/></a></p>\n<p>Using an injector does not work since loaders/injectors relay/defer the \"injection\" part until their DlllMain() has completed execution.</p>\n<p>So how can i inject the custom dxgi.dll before the executable starts?</p>\n</div>",
+    "votes": "3",
+    "answers": 3,
+    "views": "1k",
+    "tags": [
+        "executable"
+    ],
+    "user": "Οδυσσέας Πουμπουρίδης",
+    "time": "Jan 13, 2022 at 18:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Sometimes creating a file <code>file.exe.local</code> next to <code>file.exe</code> is enough to make it load DLLs\n<a href=\"https://docs.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-redirection\" rel=\"nofollow noreferrer\">from the same directory</a>\nbut it may not work if the program applied DLL sideloading mitigations or loads the DLL manually from the system directory using absolute path.</p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Jan 13, 2022 at 23:30",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Two aspects weren't mentioned, so I wanted to add them. Igor's approach would be the least invasive, <em>if</em> it works.</p>\n<ol>\n<li>the first way to get around this would be a launcher. It is possible to create a process with the main thread suspended (<code>CREATE_SUSPENDED</code> in <code>CreateProcess()</code>). This way you can inject shell code before the program gets to start. However, this won't work with static imports (delay loads are yet another thing not subject to the same limitation). One convenient way to create a launcher is by setting the launcher as debugger to a given binary (full path or base name) using <a href=\"https://docs.microsoft.com/en-us/previous-versions/windows/desktop/xperf/image-file-execution-options\" rel=\"nofollow noreferrer\"><code>Image File Execution Options</code></a> (<a href=\"https://github.com/zodiacon/GflagsX\" rel=\"nofollow noreferrer\">GFlagsX</a> has a graphical way of manipulating this stuff). It should be noted that <a href=\"https://blog.malwarebytes.com/101/2015/12/an-introduction-to-image-file-execution-options/\" rel=\"nofollow noreferrer\">this is what Process Explorer does when you tell it to \"replace\" the task manager</a>.</li>\n<li>known DLLs have to be taken into account. Your <code>d3d11.dll</code> and <code>dxgi.dll</code> are not known DLLs (configured via <code>HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs</code>) on a vanilla Windows, but they could have been configured to be preloaded (unlikely though). These DLLs are preloaded by the system and have names in the object directories <code>\\KnownDlls</code> and <code>\\KnownDlls32</code> respectively (use a tool like WinObj or WinDbg to inspect the object manager namespace). The objects therein are section objects (kernel mode lingo for memory mapped files), which take precedence whenever you attempt to load something, e.g. via DLL placement attack. This means even though you can coerce a program to load your placed DLL if it's not a known DLL, this won't work with known DLLs. The workaround is a highly privileged agent (usually a service) which would be able to tamper with the currently preloaded DLLs. This requires NT native APIs, though, because almost all functionality related to the object manager is hidden away from Win32 developers.</li>\n</ol>\n<p>Suppose you have written a launcher, it may still not work, simply on account of the DLLs getting imported statically. The notion of a static import means that the statically imported DLLs get resolved and the imported functions resolved before your application entry point executes. This means you cannot do anything but manipulate the application or attempt a DLL placement attack in such a scenario. The launcher won't work (although it could provide ways to manipulate the running process early on and hook into the facilities used to load the DLL).</p>\n<p>The message box you showed, however, suggests that your import happens at runtime (this is not the usual message box you would get to see when the image loader fails). This <em>could</em> suggest that inside your program someone/something sets the DLL search order. But it could just as well be a hardcoded <em>full</em> DLL path passed to <code>LoadLibrary()</code> et. al. One way of diagnosing this other than with a debugger would be ProcMon from Sysinternals/Microsoft. It has the ability to capture process events such as attempting to load a DLL.</p>\n<p><strong>Edit:</strong> There is one other option I am aware of that requires some agent running in the TCB, e.g. a service, and a kernel driver watching out for events like image loading and thread/process creation. The driver then subscribes to some notification scheme implemented between driver and service and performs the necessary steps from user mode early on before the process or most of its statically imported DLLs get to run any code.</p>\n</div>",
+            "votes": "2",
+            "user": "0xC0000022L",
+            "time": "Jul 22, 2022 at 9:58",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Hook loadlibrary and see what it gets called with, this will pick up ntdll loading as well as anything done manually by the app. If you're using x64dbg you can make the breakpoint log out each call and then just look at the logs after it crashes out</p>\n</div>",
+            "votes": "0",
+            "user": "Sam Russell",
+            "time": "Jan 22, 2022 at 13:25",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">If you're actually hooking <code>LoadLibrary</code> it won't pick up anything in <code>ntdll.dll</code>. Just saying.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

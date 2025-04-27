@@ -1,0 +1,74 @@
+{
+    "title": "Trying to change JE to JNE in x32dbg for instructions that change",
+    "link": "https://reverseengineering.stackexchange.com/questions/18814/trying-to-change-je-to-jne-in-x32dbg-for-instructions-that-change",
+    "content": "I have found two if statements in an application that I want to alter.  I've made the two changes and saved the patch file using x32dgb and the application boots up successfully, however; the change doesn't seem to be taking affect nor is it there when I debug the saved patch .exe file.\nIn short, my patches don't seem to be saved into the new exe!\nWith my breakpoints saved, I looked the two locations that I need to change, and on initial application load I noticed the addresses contain totally different instructions and not all memory addresses are shown in the left most column.\nHere is how x32dgb looked when I successfully loaded the application:\n\nAnd when application loads:\n\nAny ideas why the patches are not working?  Do I need to take a different approach?\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "8k",
+    "tags": [
+        "patching"
+    ],
+    "user": "Noobie3001",
+    "time": "Jul 16, 2018 at 19:49",
+    "comments": [
+        {
+            "user": "Biswapriyo",
+            "text": "It's simple. 1. double click <pre><code>JE</code></pre> 2. edit <pre><code>JE</code></pre> to <pre><code>JNE</code></pre> 3. Press Ctrl+P to pen patch menu 4. Select patch file 5. Enter the new executable name different than the use one 6. press 'Save'.\n",
+            "time": null
+        },
+        {
+            "user": "Noobie3001",
+            "text": "I've done that, but the program I'm trying to change closes when I run directly.  I've also opened up the \"patched\" version in x32dbg and it contains the original je statements, so it looks like the patch didn't apply.\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "Could be a TLS callback/dll that does integrity checks on the code and corrupts it when it finds a difference. Does it look like this if you navigate to the address from the system breakpoint (both for patched and unpatched)?\n",
+            "time": null
+        },
+        {
+            "user": "Noobie3001",
+            "text": "If I open the patched version in the debugger, the addresses show the original instructions, as if it didn't patch it.  It's strange because the exe file's modilfy date updates\n",
+            "time": null
+        },
+        {
+            "user": "Noobie3001",
+            "text": "And I tried an older version of x32dbg with no success\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "At first glance, those two screenshots appear to show completely different instructions within the same memory region, almost as if it's an application that JITs during runtime. (Actually, in the second screen shot, that looks like a region of memory not meant to be disassembled.)\nAnyway, you could attempt to patch via a hex editor like HxD. Since you've found the offsets of those instructions, simply open the .exe in HxD (or whatever other hex editor of choice), head to offsets <pre><code>34EC8</code></pre> and <pre><code>34F02</code></pre>, then change each of those bytes according to the appropriate JNE you need for the opcodes you see:\n\n34EC8: Change <pre><code>84</code></pre> to <pre><code>85</code></pre>\n34F02: Change <pre><code>74</code></pre> to <pre><code>75</code></pre>\n\nIf you don't see your original bytes of <pre><code>84</code></pre> and <pre><code>74</code></pre> when you go to those offsets, then something's amiss. If you did and you changed them, then save your patched version, run the executable, and see what happens. If you have the same behavior, then it seems highly likely that there's an integrity check of some sort going on. That will require more effort on your behalf to then solve.\n",
+            "votes": "1",
+            "user": "dsasmblr",
+            "time": "Jul 20, 2018 at 0:13",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "dsasmblr",
+                    "text": "<span class=\"comment-copy\">I understand that, but I'm thinking this is less about x32dbg and more about the application itself that OP is trying to patch. If he/she has the same behavior happen by attempting to patch via another program, then the issue isn't x32dbg. Finally, from the bottom of OP's post: <code>\"Any ideas why the patches are not working? Do I need to take a different approach?\"</code> Perhaps, with that approach being to try a different program.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Noobie3001",
+                    "text": "<span class=\"comment-copy\">Thanks for the answer.  HxD was far better for editing the values.  The original values at the addresses were untouched by x32dgb.  HxD did edit them correctly, however; the application still closes.  Also, the values at the addresses weren't what I expected (84 and 74).   I'm currently writing a C++ application to boot it on the fly and hopefully bypass.</span>",
+                    "time": null
+                },
+                {
+                    "user": "dsasmblr",
+                    "text": "<span class=\"comment-copy\">Glad you found it useful. Good luck with the bypass app you're coding! Now, to anyone else who happens by, my other comment was in response to someone who criticized me for not making the answer x32dbg-related. They've since deleted the comment, so now my comment appears out of context. I'm leaving mine intact, though.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Good news!  I've built an application in C++ that forces the instruction change until the end of the splash screen.  The code is NOT great, but the application is very stubborn and I had to time the loop just right otherwise the application just closes.\nHere is the code in case it helps anyone else.\n<pre><code>    #include \"stdafx.h\"\n    #include \"iostream\";\n    #include \"atlstr.h\";\n    #include <windows.h>\n    #include <TlHelp32.h>\n    #include <stdio.h>\n    #include <psapi.h>\n    using namespace std;\n\n    #pragma comment(lib, \"Psapi.lib\")\n\n    PROCESS_INFORMATION CreateVProcess();\n    void TryToCrack(PROCESS_INFORMATION processInfo);\n\n    //\n    // 85 c0 0f 84 9e 00 00 00\n    // 85 c0 0f 85 9e 00 00 00\n    // First offset 34EC7, do 34EC8\n    //\n    // second offset 34F03\n    // 74 2E\n    // EB 2E\n\n\n    int main()\n    {\n        cout << \"Launching Application\" << endl;\n        PROCESS_INFORMATION processInfo = CreateVProcess();\n        cout << \"Trying to crack...\" << endl;\n        TryToCrack(processInfo);\n        return 0;\n    }\n\n    PROCESS_INFORMATION CreateVProcess()\n    {\n        LPCTSTR path = L\"NameOfAppHere.exe\";\n\n        // additional information\n        STARTUPINFO si;\n        PROCESS_INFORMATION pi;\n\n        // set the size of the structures\n        ZeroMemory(&si, sizeof(si));\n        si.cb = sizeof(si);\n        ZeroMemory(&pi, sizeof(pi));\n\n        CreateProcess(\n            path,\n            NULL,        // Command line\n            NULL,           // Process handle not inheritable\n            NULL,           // Thread handle not inheritable\n            FALSE,          // Set handle inheritance to FALSE\n            0,              // No creation flags\n            NULL,           // Use parent's environment block\n            NULL,           // Use parent's starting directory \n            &si,            // Pointer to STARTUPINFO structure\n            &pi             // Pointer to PROCESS_INFORMATION structure (removed extra parentheses)\n        );\n        return pi;\n    }\n\n    void TryToCrack(PROCESS_INFORMATION processInfo)\n    {\n        Sleep(500);\n\n        HANDLE targetProcess = OpenProcess(STANDARD_RIGHTS_WRITE, 0, processInfo.dwProcessId);\n        void* hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processInfo.dwProcessId);\n        MODULEENTRY32 mod32;\n        mod32.dwSize = sizeof(MODULEENTRY32);\n        Module32Next(hSnap, &mod32);\n\n        DWORD modHandle = (DWORD)mod32.modBaseAddr;\n\n        unsigned char mem1 = 0x85;\n        unsigned char mem2 = 0x75;\n\n        for (int i = 0; i < 100000; i++)\n        {\n            WriteProcessMemory(processInfo.hProcess, (LPVOID)(modHandle + 0x034EC8), &mem1, 1, NULL);\n            WriteProcessMemory(processInfo.hProcess, (LPVOID)(modHandle + 0x034F02), &mem2, 1, NULL);\n        }   \n    }\n</code></pre>\n",
+            "votes": "1",
+            "user": "Noobie3001",
+            "time": "Jul 21, 2018 at 16:59",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,62 @@
+{
+    "title": "Finding RegisterNatives function calls in JNI_OnLoad's assembly code",
+    "link": "https://reverseengineering.stackexchange.com/questions/19024/finding-registernatives-function-calls-in-jni-onloads-assembly-code",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>My goal is to see what a native method <code>m</code> does. It doesn't have a direct counterpart in the <code>so</code> file, but I've found the <code>JNI_OnLoad</code> function's ARM assembly code. It starts with</p>\n<pre><code>AAAAAAAA &lt;JNI_OnLoad@@Base&gt;:\n</code></pre>\n<p>where <code>AAAAAAAA</code> is some hex number. (Correct me if I'm wrong.) I want to find calls to the <code>RegisterNatives</code> function. I've seen some function calls, like</p>\n<pre><code>bl AAAA &lt;JNI_OnLoad@@Base+0xBB&gt;\n</code></pre>\n<p>where <code>AAAA</code> and <code>BB</code> are hex numbers. (Are these function calls indeed?) I can't determine which, if any, are calls to <code>RegisterNatives</code>. How do I go about finding one, or determine that none exists?</p>\n<p>EDIT</p>\n<p>Oh, it's possible that <code>JNI_OnLoad</code> calls <code>func1</code>, and <code>func1</code> calls <code>func2</code>, and so on, and only at the very end <code>RegisterNatives</code> gets called.</p>\n<p>I have obtained the C code, using the <a href=\"https://www.hopperapp.com/\" rel=\"nofollow noreferrer\">Hopper Disassembler</a>. Is there something distinctive about the <code>RegisterNatives</code> function? I find a tree of functions to explore.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "arm",
+        "functions"
+    ],
+    "user": "Zirui Wang",
+    "time": "Aug 11, 2018 at 6:46",
+    "comments": [
+        {
+            "user": "sudhackar",
+            "text": "<span class=\"comment-copy\">It may be possible that the code is packed/encrypted and gets unpacked/decrypted in <code>JNI_OnLoad</code>. Apt recent blackhat talk : <a href=\"http://i.blackhat.com/us-18/Thu-August-9/us-18-Stone-Unpacking-The-Packed-Unpacker.pdf\" rel=\"nofollow noreferrer\">i.blackhat.com/us-18/Thu-August-9/…</a></span>",
+            "time": null
+        },
+        {
+            "user": "Zirui Wang",
+            "text": "<span class=\"comment-copy\">@sudhackar: Is there anything new in the PPT?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><code>RegisterNatives</code> is not a function that you find in the binary you're analyzing. It is implemented in the system Java runtime and is called indirectly by a pointer. The <code>JNI_OnLoad</code> function has the folliwing prototype (from <code>jni.h</code>):</p>\n<pre><code>JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved);\n</code></pre>\n<p>Where <code>vm</code> is a pointer to a function table:</p>\n<pre><code>/*\n * JNI invocation interface.\n */\nstruct JNIInvokeInterface {\n    void*       reserved0;\n    void*       reserved1;\n    void*       reserved2;\n\n    jint        (*DestroyJavaVM)(JavaVM*);\n    jint        (*AttachCurrentThread)(JavaVM*, JNIEnv**, void*);\n    jint        (*DetachCurrentThread)(JavaVM*);\n    jint        (*GetEnv)(JavaVM*, void**, jint);\n    jint        (*AttachCurrentThreadAsDaemon)(JavaVM*, JNIEnv**, void*);\n};\ntypedef const struct JNIInvokeInterface* JavaVM;\n</code></pre>\n<p>However, <code>RegisterNatives</code> itself is a method in another function table:</p>\n<pre><code>struct JNINativeInterface {\n    void*       reserved0;\n    void*       reserved1;\n    void*       reserved2;\n    void*       reserved3;\n\n    jint        (*GetVersion)(JNIEnv *);\n\n    jclass      (*DefineClass)(JNIEnv*, const char*, jobject, const jbyte*,\n                        jsize);\n    jclass      (*FindClass)(JNIEnv*, const char*);\n\n   /*&lt;skipped&gt; */\n\n    jint        (*RegisterNatives)(JNIEnv*, jclass, const JNINativeMethod*,\n                        jint);\n    jint        (*UnregisterNatives)(JNIEnv*, jclass);\n\n   /*&lt;skipped&gt; */\n};\n</code></pre>\n<p>The typical way of calling <code>RegisterNatives</code> from <code>JNI_OnLoad</code> would be to retrieve a pointer to a <code>JNIEnv</code> by calling <code>vm-&gt;GetEnv()</code>, then calling the <code>RegisterNatives</code> pointer in the <code>JNIEnv</code> struct, e.g.:</p>\n<p>(*vm)-&gt;GetEnv(vm, (void **)&amp;env, 0x10004);\n  class = (*env)-&gt;FindClass(env, \"org/gaeproxy/Exec\");\n  (*env_)-&gt;RegisterNatives(env, class, &amp;methods, 4);</p>\n<p>where <code>methods</code> is an array of <code>JNINativeMethod</code> structs describing names, prototypes, and pointers to native implementations of the methods.</p>\n<pre><code>JNINativeMethod methods[] =\n{\n  {\n    \"createSubprocess\",\n    \"(ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[I)Ljava/io/FileDescriptor;\",\n    (void*)&amp;Exec_createSubprocess\n  },\n  { \"waitFor\", \"(I)I\", (void *)&amp;Exec_waitFor },\n  { \"close\", \"(Ljava/io/FileDescriptor;)V\", (void *)&amp;Exec_close },\n  { \"hangupProcessGroup\", \"(I)V\", (void *)&amp;Exec_hangupProcessGroup }\n};\n</code></pre>\n<p>There is no sure-fire indicator that immediately point out this call in disassembly, but here are some hints for ARM 32-bit:</p>\n<ul>\n<li><p>the call is indirect, i.e. usually a <code>BLX rN</code>, where <code>rN</code> is loaded from a pointer with offset.</p></li>\n<li><p>one of the arguments to the call (third, so loaded in <code>R2</code>) is the method table which may look obvious (pointers to method names and prototypes).Note that especially in malware strings may be obfuscated, so don't expect to always see this in cleartext, but it should be visible at runtime/debug time.</p></li>\n<li><p>offset of the <code>RegisterNatives</code> pointer in the <code>JNIEnv</code> struct is fixed. for ARM EABI it is <code>0x35C</code>, so if you see this constant it's a pretty solid hint. However, once again this constant may be obfuscated and not visible in initial code.</p></li>\n</ul>\n<p>For example, here is the call site of the above snippet:</p>\n<pre><code> LDR     R0, [R5] ; &lt;- dereferencing env from a previous GetEnv call\n LDR     R2, =(methods - 0x15AC)\n MOVS    R3, #0x35C ; &lt;- offset 0x35C\n LDR     R4, [R0,R3] ; load RegisterNatives pointer\n ADD     R2, PC          ; methods\n MOVS    R0, R5 ; env\n MOVS    R3, #4 ; number of methods\n BLX     R4       ;&lt;- call\n CMP     R0, #0 ; check return value\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Aug 13, 2018 at 16:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\">Man, You deserve a beer. This happens when compiling with <code>fvisibility=hidden</code>, right ?  any IDA plugin known to map method+signature to address ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@IddoE visibility has nothing to do with this since the target function is not linked by name. Not sure what you mean by the second question, maybe ask a new one with details.</span>",
+                    "time": null
+                },
+                {
+                    "user": "James W.",
+                    "text": "<span class=\"comment-copy\"><a href=\"https://stackoverflow.com/questions/51811348/find-address-of-native-function-inside-shared-object-build-with-fvisibility-hidd\" title=\"find address of native function inside shared object build with fvisibility hidd\">stackoverflow.com/questions/51811348/…</a> should I open one here ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zirui Wang",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: No, it doesn't have <code>0x35c</code>. That's what I said: \"a tree of functions to explore.\" Plus encryption maybe?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">I do mention possibility of obfuscation in case you did not notice. My answer is for the general case, not your specific sample (which I don’t have)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

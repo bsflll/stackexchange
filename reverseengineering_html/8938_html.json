@@ -1,0 +1,30 @@
+{
+    "title": "Trouble understanding change in number when popped from FPU to CPU Stack",
+    "link": "https://reverseengineering.stackexchange.com/questions/8938/trouble-understanding-change-in-number-when-popped-from-fpu-to-cpu-stack",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So im working on an crackme and came across a couple of FPU loads and pops that confused me.\n </p>\n <p>\n  Address main 0040169E pops 80 bit value of 00000000_FED63690h from the FPU stack (ST0=4275451536.0000000000) to the CPU stack\n </p>\n <p>\n  but when put on the CPU stack its value is changed to\n </p>\n <pre><code>CPU Stack\nLocked    Value      ASCII Comments\n0028FB38  |D2000000     Ò\n0028FB3C  |41EFDAC6  ÆÚïA\n</code></pre>\n <p>\n  Why?\n </p>\n <p>\n  Here is the code with some comments:\n </p>\n <pre><code>main    00401696    PUSH EAX                                EAX=FED63690\nmain    00401697    FILD QWORD PTR SS:[LOCAL.268]           Loads the FED63690 as a 64 bit value so -> 00000000_FED63690\nmain    0040169A    LEA ESP,[LOCAL.266]                     ESP=0028FB20 (loads address of string on stack), ST0=4275451536.0000000000 (which euals above number)\nmain    0040169E    FSTP QWORD PTR SS:[LOCAL.260]           POPS 80 bit value of ST0 onto program stack as 64 bit   \n\n        LOCAL.260 is address 0028FB38\n\n        Stack now looks like:\n\n        CPU Stack\n        Locked    Value      ASCII Comments\n        0028FB38  |D2000000     Ò\n        0028FB3C  |41EFDAC6  ÆÚïA\n\n\nmain    004016A4    FLD QWORD PTR SS:[LOCAL.260]            Loads value onto FPU Stack so -> ST0=4275451536.0000000000 (Same as before)\nmain    004016AA    FSTP QWORD PTR SS:[LOCAL.264]           <%i> = -771751936.       POPS 80 bit value of ST0 onto program stack as 64 bit\n\n        LOCAL.260 is address 0028FB28\n\n        Stack now looks like:\n\n        CPU Stack\n        Locked    Value      ASCII Comments\n        0028FB28  |D2000000     Ò\n        0028FB2C  |41EFDAC6  ÆÚïA\n\n\nmain    004016AE    MOV DWORD PTR SS:[LOCAL.265],00401469   Format => \"%i\"\nmain    004016B6    LEA EAX,[LOCAL.194]             \nmain    004016BC    MOV DWORD PTR SS:[LOCAL.266],EAX        s => OFFSET LOCAL.194\nmain    004016BF    CALL <JMP.&msvcrt.sprintf>          \n\n        Result is:\n\n        s=\"-771751936\"\n</code></pre>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "76",
+    "tags": [
+        "stack-variables"
+    ],
+    "user": "TurtleMan",
+    "time": "May 19, 2015 at 23:00",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <strong>\n   4275451536\n  </strong>\n  is greater than\n  <code>\n   2^31\n  </code>\n  <strong>\n   (2147483648)\n  </strong>\n  but less than\n  <code>\n   2 ^32\n  </code>\n  <strong>\n   (4294967296)\n  </strong>\n  \n\n  so it is represented as\n  <code>\n   2^31  +  ( 2 ^31 *  ((4275451536 - 2 ^31 ) / 2^31)\n  </code>\n  \n\n  ie\n  <code>\n   2^31 * 1.990912266075611114501953125\n  </code>\n </p>\n <p>\n  exponent is always written with bias (1023 for 64 bit precision) added to it  so\n  <strong>\n   1054 = 0x41e\n  </strong>\n </p>\n <p>\n  fractional part can be written as\n  <code>\n   1/2 + 1/4 + 1/8 + 1/16 + 1/32 + 1/64  ..... 1/2 ^n\n  </code>\n </p>\n <pre><code>0.984375     < 0.990912266075611114501953125 < 0.9921875\n\n(1/2+...+1/64) <   -------                     < (1/2+....+ 1/128)\n 111111\n</code></pre>\n <p>\n  mantissa is approximated upto 52 bits explicitly and 1 or 0 is added implicitly\n </p>\n <p>\n  a c src that shows the conversion of your specific decimal is shown below\n </p>\n <pre><code>#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#define BIAS 1023\nint main(void) {\n    char binform[100] = {0};\n    unsigned long a = 4275451536;\n    _ultoa_s(a%2,&binform[0],4,10);\n    a = a/2;\n    int i = 1;\n    while (a>2) {\n        a = a/2;\n        _ultoa_s(a%2,&binform[i++],4,10);\n    }\n    char paddedstr[100] = {0};\n    sprintf_s(paddedstr,100,\"%s0000000000000000000000\",_strrev(binform));\n    printf(\"%x-%I64x\n\",i+BIAS,_strtoui64(&paddedstr[1],0,2));\n}\n</code></pre>\n <p>\n  on execution the results are\n </p>\n <pre><code>>F2H.exe\n41e-fdac6d2000000\n</code></pre>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "blabb",
+            "time": "May 20, 2015 at 12:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">In short: The original number is not <a href=\"http://www.teach-ict.com/as_as_computing/ocr/H447/F453/3_3_4/floating_point/miniweb/pg10.htm\" rel=\"nofollow noreferrer\">normalized</a>. Loading it into the FPU normalizes it, so storing it back changes the bits, but not the value.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

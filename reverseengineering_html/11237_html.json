@@ -1,0 +1,44 @@
+{
+    "title": "Reversing PECompact packed code (How SEH works)",
+    "link": "https://reverseengineering.stackexchange.com/questions/11237/reversing-pecompact-packed-code-how-seh-works",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm currently reversing file that is packed with PECompact packer. I'm interested in actual algorithm how it unpacks itself rather than having unpacked file.\n </p>\n <p>\n  It uses SEH for modifying program flow. So I would like to ask about SEH.\n </p>\n <p>\n  So what I have:\n  <a href=\"https://i.sstatic.net/0Z6fi.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"Step 1\" src=\"https://i.sstatic.net/0Z6fi.png\"/>\n  </a>\n </p>\n <p>\n  So I add breakpoint at\n  <code>\n   0x4517E4\n  </code>\n  after I pass exception into app I go here\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/0B4eP.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/0B4eP.png\"/>\n  </a>\n </p>\n <p>\n  It does some code modifications and returns\n  <code>\n   0\n  </code>\n  (\n  <code>\n   ExceptionContinueExecution\n  </code>\n  from\n  <code>\n   EXCEPTION_DISPOSITION\n  </code>\n  enum). It returns to kernel function, but where should execution be continued from, after it goes back into app? I have tried putting breakpoint at\n  <code>\n   0x401016\n  </code>\n  because it is a point where exception occurred and it stopped there, I would like to ask if this is just a coincidence, or it should work this way?\n </p>\n <p>\n  I believe it is related to\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/aa363082%28v=vs.85%29.aspx\" rel=\"nofollow noreferrer\">\n   EXCEPTION_RECORD\n  </a>\n  structure\n  <code>\n   ExceptionAddress\n  </code>\n  value. Am I right?\n </p>\n <p>\n  So that I really want to know how exception handling determines point, from which program execution should be continued according to different return values from handler function.\n </p>\n <p>\n  <a href=\"http://www.filedropper.com/8b977be6928c30a5fe3886f6906c9e0fd83e85a75643eee5688c32461a96bcd9\" rel=\"nofollow noreferrer\">\n   Also file I'm working on can be downloaded here\n  </a>\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "exception",
+        "seh"
+    ],
+    "user": "ST3",
+    "time": "Nov 3, 2015 at 8:33",
+    "comments": [
+        {
+            "user": "peter ferrie",
+            "text": "<html><body><span class=\"comment-copy\">\n and the reason for doing this according to the author - to prevent anti-malware software from seeing the unpacking code and reporting false positives.  The problem is that we can emulate right through the SEH and still see the unpacker code.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "ST3",
+            "text": "<html><body><span class=\"comment-copy\">\n @peterferrie didn't knew that, and it sound like \"anti anti-malware\". But ye it is very simple to reach unpacking stub.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I think this is a great moment to introduce you to\n  <a href=\"https://www.microsoft.com/msj/0197/exception/exception.aspx\" rel=\"nofollow\">\n   this\n  </a>\n  great article written back in 1997, but which still holds up. I really recommend that you read it because it will explain to you everything about SEH. To answer your question about continuing execution, I will quote one paragraph from the article:\n </p>\n <blockquote>\n  <p>\n   When the operating system sees that\n   <strong>\n    ExceptionContinueExecution\n   </strong>\n   was\n  returned, it interprets this to mean that you've fixed the problem and\n   <strong>\n    the faulting instruction should be restarted\n   </strong>\n   . Since my _except_handler\n  function tweaked the EAX register to point to valid memory, the MOV\n  EAX,1 instruction works the second time and function main continues\n  normally. See, that wasn't so complicated, was it?\n  </p>\n </blockquote>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "ubnix",
+            "time": "Dec 3, 2015 at 14:15",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>MOV     EAX, F0450569\nLEA     ECX, DWORD PTR DS:[EAX+1000129E]   ;  ecx will be 00451807\nMOV     DWORD PTR DS:[ECX+1], EAX          ;  451808 will hold f0450569\nMOV     EDX, DWORD PTR SS:[ESP+4]          ;  ExceptionRecord\nMOV     EDX, DWORD PTR DS:[EDX+C]          ;  ExceptionRecord->ExceptionAddress == 401016\nMOV     BYTE PTR DS:[EDX], 0E9             ;  byte@exceptionAddress to e9 five byte jump\nADD     EDX, 5                             ;  ExceptionAddress+5 ==40101b\nSUB     ECX, EDX                           ;  451807-edx = 507ec\nMOV     DWORD PTR DS:[EDX-4], ECX          ;  assembles jmp 507ec @exception address\nXOR     EAX, EAX                           ;  retn 0 == exception has been handled\nRETN                                       ; 401016 == jmp 507ec instead of mov [eax],ecx\n</code></pre>\n <p>\n  since the exception handler does not modify the eip but changes the opcodes of old eip you will end up executing the same old eip\n  \n\n  pure coincidence\n  \n\n  normally you should check ContextRecord->Eip before exiting from seh    handler this contains the eip that will be executed upon retun from kernel    check [[ESP+C]+0XB8]  on the retn to see the Context->Eip in seh handler\n </p>\n <p>\n  you can also set a breakpoint in ntdll.NtContinue this is the function that    crosses the um->km boundary on seh exit\n  \n\n  when hit you can set a bp on CONTEXT->Eip ( xxx* + 0xb8 on x86 32 bit)\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Nov 3, 2015 at 11:58",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

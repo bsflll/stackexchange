@@ -1,0 +1,40 @@
+{
+    "title": "How to get address or symbol of the usage of a constant located in rodata?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25541/how-to-get-address-or-symbol-of-the-usage-of-a-constant-located-in-rodata",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have an elf executable. I found a string (awesome string) in my\n  <code>\n   .rodata\n  </code>\n  section:\n </p>\n <pre><code>$ mb-readelf -p 10 a.out\n\nString dump of section '.rodata':\n  [     0]  Hello world\n...\n  [  ab12]  awesome string\n...\n</code></pre>\n <p>\n  Here are the sections:\n </p>\n <pre><code>$ readelf -S a.out\nThere are 27 section headers, starting at offset 0x10150:\n\nSection Headers:\n  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n  [ 0]                   NULL            00000000 000000 000000 00      0   0  0\n...\n  [10] .rodata           PROGBITS        00004fc8 00a030 001394 00   A  0   0  4\n...\n</code></pre>\n <p>\n  So the address of awesome string is\n  <code>\n   00004fc8 + ab12 = 14ada\n  </code>\n </p>\n <p>\n  I want to know which functions are using this awesome string. How can I know who references the address 14ada?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "objdump",
+        "address",
+        "section"
+    ],
+    "user": "betontalpfa",
+    "time": "Jul 25, 2020 at 7:54",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<html><body><span class=\"comment-copy\">\n using what ? your code? / a decent disassembler /  how are you looking most decent disassembler will cross reference the string\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h1>\n  It cannot be solved in all cases.\n </h1>\n <p>\n  Some string (start) is not referenced in the whole\n  <code>\n   text\n  </code>\n  at all, even if you turned on all optimizations. Let's see the following example.\n </p>\n <pre><code>#define _FILE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__\n</code></pre>\n <p>\n  <code>\n   _FILE\n  </code>\n  will point the filename instead of the full path, however, the compiled\n  <code>\n   elf\n  </code>\n  will contain the whole\n  <code>\n   __FILE__\n  </code>\n  string (the whole path) (See more details\n  <a href=\"https://stackoverflow.com/q/31050113/2506522\">\n   here\n  </a>\n  .)\n </p>\n <p>\n  In this case,\n  <code>\n   .rodata\n  </code>\n  will be seen like this:\n </p>\n <pre><code>$ readelf -p 10 a.out\n\nString dump of section '.rodata':\n  [     0]  Hello world\n...\n  [  ab12]  /your/build/folder/awesome.c\n...\n</code></pre>\n <p>\n  While the\n  <code>\n   text\n  </code>\n  will\n  <em>\n   not\n  </em>\n  refer the\n  <code>\n   0xab12\n  </code>\n  anywhere, because\n  <code>\n   _FILE\n  </code>\n  points to\n  <code>\n   0xab25\n  </code>\n  (the start of the\n  <code>\n   awesome.c\n  </code>\n  ) and the\n  <code>\n   text\n  </code>\n  will refer to this\n  <code>\n   0xab25\n  </code>\n  adress.\n </p>\n <p>\n  A workaround can be that checking all offsets of a given string.\n </p>\n <hr/>\n <h1>\n  Solution\n </h1>\n <p>\n  The following solution works with MicroBlaze GCC, but the solution approach is general, so it can be applied to all architecture.\n </p>\n <p>\n  Find a known string in\n  <code>\n   rodata\n  </code>\n  . (A string with known usage. For example print a Hello world message at the beginning of the main.) Check out the compiled assembly. MicroBlaze GCC uses the strings in\n  <code>\n   printf\n  </code>\n  as following:\n </p>\n <pre><code>00000100 <main>:\n...\n     1ec:       b0000000        imm     0\n     1f0:       30a09fc8        addik   r5, r0, -24632  // This is the HELLO WORLD\n     1f4:       31000004        addik   r8, r0, 4\n     1f8:       11330000        addk    r9, r19, r0\n     1fc:       b9f45a58        brlid   r15, 23128      // 6954 <printf>\n</code></pre>\n <p>\n  So this compiler refers the addresses as 16 bit signed values.\n </p>\n <p>\n  To get the referring code line, convert the\n  <code>\n   0xfada\n  </code>\n  (the absolute address of the\n  <code>\n   awesome string\n  </code>\n  ) to 16 bit signed integer\n  <code>\n   -1318\n  </code>\n  and search (grep) for this value in the disassembled\n  <code>\n   text\n  </code>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "betontalpfa",
+            "time": "Jul 25, 2020 at 7:52",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As i commented a decent disassembler will already do this for you\n </p>\n <p>\n  here  is sample output for a random awesome string  in a random binary using radare2\n </p>\n <pre><code>radare2 on cdb.exe from windbg in win7 x86 \n\ngrepping  for some awesome string \n[0x00416870]> iz~deb\n006 0x00018280 0x00419080  12  26 (.data) utf16le debugger.chm  <<<< an awesome string \n\nprinting crossrefs\n\n[0x00416870]> axg @0x419080\n- 0x00419080\n  - 0x00413cfe fcn 0x00413c6c fcn.00413c6c\n  - 0x00413c6c fcn 0x00413c6c fcn.00413c6c\n    - 0x00416755 ???\n  - 0x00413d17 fcn 0x00413c6c fcn.00413c6c\n  - 0x00413d2b fcn 0x00413c6c fcn.00413c6c\n  - 0x00413d38 fcn 0x00413c6c fcn.00413c6c\n \n looking at the listed cross refs\n[0x00416870]> pd1@0x413cfe\n|           0x00413cfe      6880904100     push str.debugger.chm       ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]> pd1@0x413d17\n|           0x00413d17      6880904100     push str.debugger.chm       ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]> pd1@0x413d2b\n|           0x00413d2b      66a380904100   mov word str.debugger.chm, ax ; [0x419080:2]=100 ; u\"debugger.chm\"\n[0x00416870]> pd1@0x413d38\n|           0x00413d38      b980904100     mov ecx, str.debugger.chm   ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]>\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Jul 24, 2020 at 17:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

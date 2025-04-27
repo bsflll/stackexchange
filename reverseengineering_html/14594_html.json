@@ -1,0 +1,69 @@
+{
+    "title": "Modifying Windows DLLs",
+    "link": "https://reverseengineering.stackexchange.com/questions/14594/modifying-windows-dlls",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I find myself playing in strange territory lately, venturing far outside my comfort zone to test some theories. At present I want to return\n  <code>\n   True\n  </code>\n  every time a specific program calls\n  <code>\n   IsDebuggerPresent\n  </code>\n  , without actually debugging the program.\n </p>\n <p>\n  Since I'm not a software developer, I'd really rather avoid writing code to do API hooking. My next thought was to use a modified\n  <code>\n   kernel32.dll\n  </code>\n  in the same directory as the program, counting on \"DLL Load Order Hijacking\". So... I modified a copy of the dll, essentially replacing the export for\n  <code>\n   IsDebuggerPresent\n  </code>\n  with\n  <code>\n   mov eax, 1\n  </code>\n </p>\n <p>\n  If I open the DLL in IDA and examine the export, it shows exactly the code I patched in, but if I run the executable, when it makes the call to\n  <code>\n   IsDebuggerPresent\n  </code>\n  the same address I modified instead shows a JMP to the proper\n  <code>\n   IsDebuggerPresent\n  </code>\n  instructions.\n </p>\n <p>\n  Is what I'm trying to do even feasible, or do I have to do API hooking to make it work? I'm Really looking for a simple POC, so again, I'd prefer not to have to figure out a metric buttload of C++ just to test a theory.\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "c++",
+        "dll",
+        "function-hooking"
+    ],
+    "user": "Bjørn Ulfson",
+    "time": "Feb 8, 2017 at 11:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Windows has a concept of trusted libraries to hamper attacks like these:\n </p>\n <p>\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms682586(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   Dynamic-Link Library Search Order\n  </a>\n </p>\n <p>\n  Citing from the search order:\n </p>\n <blockquote>\n  <p>\n   If the DLL is on the list of known DLLs for the version of Windows on which the application is running, the system uses its copy of the known DLL (and the known DLL's dependent DLLs, if any) instead of searching for the DLL. For a list of known DLLs on the current system, see the following registry key: HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs.\n  </p>\n </blockquote>\n <p>\n  So for your case, I would suggest giving API hooking a try ;) It really isn't too hard (Windows to the rescue for all your shady needs).\n </p>\n <p>\n  edit:\n </p>\n <h2>\n  some pointers for hooking\n </h2>\n <p>\n  You may go ahead and use Windows\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms644959(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   Hooking API\n  </a>\n </p>\n <p>\n  However, it is quiet straight forward to do yourself:\n </p>\n <ol>\n  <li>\n   <p>\n    Use GetProcAddress to find GetDebuggerPresent in your address space (Windows does not like ASLR). You can assume it is at the same location in the other process.\n   </p>\n  </li>\n  <li>\n   <p>\n    Backup the first few bytes (ReadProcessMemory), insert any hook (WriteProcessMemory) and you code (VirtualProtectEx).\n   </p>\n  </li>\n </ol>\n <p>\n  side node: you may need to elevate the permissions of your process first (OpenProcessToken, ...).\n </p>\n <p>\n  edit 2:\n </p>\n <p>\n  I found some of my old code. You can find it\n  <a href=\"https://gist.github.com/Nordwald/9d0cd13df6ac039d21df4fbdea36d28f\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  . Please note this code was written for a research project to avoid Sandbox detection and that I was a student at the time (i.e. the code may not be high quallity).\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Nordwald",
+            "time": "Feb 8, 2017 at 8:36",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Bjørn Ulfson",
+                    "text": "<span class=\"comment-copy\">Fair enough.  Any chance you could point me in the direction of a decent tutorial?  When I say that I don't know C++, please understand that on the few occasions I've written anything in C++, I have to disassemble them to understand what they are doing, and if they'll do what I want.  High-level languages have never really made any sense to me.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nordwald",
+                    "text": "<span class=\"comment-copy\">See my second edit ;) Its clean C code.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As mentioned above, just placing the DLL in the same directory won't be enough for certain windows DLLs, as windows searches for those in specific paths as documented about\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms682586(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n   Dynamic-Link Library Search Order\n  </a>\n  .\n </p>\n <p>\n  However, there's some potential trickery with the knownDlls list you can manipulate to succeed in your DLL replacing attempts:\n </p>\n <ol>\n  <li>\n   <p>\n    You could remove specific DLLs from the list, allowing yourself (and others, thus exposing the machine to some potential risk) to load said DLL from the application's location.\n   </p>\n  </li>\n  <li>\n   <p>\n    You could replace the DLL name stored as the value of the key in the same registry path. Instead of a DLL name, simply place a full path and the DLL will be loaded from your specified location for all processes.\n   </p>\n  </li>\n </ol>\n <p>\n  Although this might not be advised as there's a risk of a malicious entity exploiting those changes to hijack DLLs on your machine, it's definitely an easy way to test your endeavors without writing any API hooking code, as requested :)\n </p>\n <p>\n  Another approach would be\n  <a href=\"https://www.google.co.il/search?q=api%20hooking%20code%20examples\" rel=\"nofollow noreferrer\">\n   searching for some pre-made API hooking\n  </a>\n  utilities (\n  <a href=\"https://www.codeproject.com/Articles/2082/API-hooking-revealed\" rel=\"nofollow noreferrer\">\n   there\n  </a>\n  ,\n  <a href=\"https://www.codeproject.com/Articles/30140/API-Hooking-with-MS-Detours\" rel=\"nofollow noreferrer\">\n   are\n  </a>\n  ,\n  <a href=\"https://github.com/EasyHook/EasyHook\" rel=\"nofollow noreferrer\">\n   plenty\n  </a>\n  )\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "NirIzr",
+            "time": "Feb 8, 2017 at 11:21",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">yes, but (1) and (2) are ugly hacks that have system-wide implications, like visiting someone's house and changing their carpet.  The changes should be limited to the current process.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Yes. I mentioned that in my original answer. These approaches answer OPs original request: a easy way that will not require hooking, and I would think is perfectly fine when done in a VM or as part of a one time limited test (as is implied by OPs POC remark).</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Some of those DLLs seem to be hardcoded these days (I suppose into the smss binary or so). Point being that the registry isn't the sole source for the setting of what DLL is a known DLL.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You could attempt the indirect route instead.\n  <code>\n   IsDebuggerPresent()\n  </code>\n  merely checks the respective field in the\n  <a href=\"http://terminus.rewolf.pl/terminus/structures/ntdll/_PEB_combined.html\" rel=\"nofollow noreferrer\">\n   Process Environment Block (PEB)\n  </a>\n  to find out whether a process is being debugged.\n </p>\n <p>\n  So instead of modifying a single function from a particular DLL to return the result, you could manipulate the source used by said function to retrieve its result (yes, there are other functions that consult this very data field).\n </p>\n <p>\n  Looking at a recent version of\n  <code>\n   kernelbase.dll\n  </code>\n  (10.0.19041.804) we find via IDA:\n </p>\n <pre><code>IsDebuggerPresent proc near\n                mov     rax, gs:60h\n                movzx   eax, byte ptr [rax+2]\n                retn\nIsDebuggerPresent endp\n</code></pre>\n <p>\n  ... which in its annotated form would be something like:\n </p>\n <pre><code>IsDebuggerPresent proc near\n                mov     rax, gs:60h     ; address to PEB\n                movzx   eax, [rax+PEB.BeingDebugged]\n                retn\nIsDebuggerPresent endp\n</code></pre>\n <p>\n  ... and as pseudo-code:\n </p>\n <pre><code>BOOL __stdcall IsDebuggerPresent()\n{\n  return NtCurrentPeb()->BeingDebugged;\n}\n</code></pre>\n <p>\n  Simply modifying the \"remote\" PEB would be one way of achieving what you want.\n </p>\n <p>\n  In order to retrieve the \"remote\" PEB you can use\n </p>\n <p>\n  <a href=\"https://github.com/processhacker/phnt/blob/master/ntpsapi.h#L307\" rel=\"nofollow noreferrer\">\n   <code>\n    PROCESS_BASIC_INFORMATION::PebBaseAddress\n   </code>\n  </a>\n  (enum member\n  <code>\n   ProcessBasicInformation\n  </code>\n  ) via\n  <a href=\"https://github.com/processhacker/phnt/blob/master/ntpsapi.h#L1301\" rel=\"nofollow noreferrer\">\n   <code>\n    NtQueryInformationProcess()\n   </code>\n  </a>\n  whose declarations you should also be able to glean from the\n  <code>\n   winternl.h\n  </code>\n  header which is part of modern Windows SDKs. Then the usual\n  <code>\n   WriteProcessMemory()\n  </code>\n  method should work to set this value in the remote process.\n </p>\n <p>\n  You could also try a typical DLL placement attack on\n  <em>\n   some\n  </em>\n  dependency of your target program (e.g.\n  <code>\n   version.dll\n  </code>\n  which isn't a known DLL) and have that loaded DLL do the manipulation of the PEB for you\n  <em>\n   from within the remote process\n  </em>\n  .\n </p>\n <hr/>\n <p>\n  And always keep in mind that in order to do effective reverse engineering, you should first have a firm grasp of\n  <em>\n   forward\n  </em>\n  engineering 😉\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "0xC0000022L",
+            "time": "Jun 13, 2022 at 7:42",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

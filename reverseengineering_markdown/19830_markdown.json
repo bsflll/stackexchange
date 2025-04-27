@@ -1,0 +1,50 @@
+{
+  "title": "What is the purpose of these instructions before the main preamble?",
+  "link": "https://reverseengineering.stackexchange.com/questions/19830/gcc-adds-code-involving-ecx-in-main",
+  "content": "I wrote a small C program below:\n\n```\n#include <stdlib.h>\nint sub(int x, int y){\n  return 2*x+y;\n}\n\nint main(int argc, char ** argv){\n  int a;\n  a = atoi(argv[1]);\n  return sub(argc,a);\n}\n\n```\nCompiled with gcc 5.4.0 and target 32 bit x86. I got the following in disassembly:\n\n```\n0804841b <main>:\n 804841b: 8d 4c 24 04           lea    0x4(%esp),%ecx\n 804841f: 83 e4 f0              and    $0xfffffff0,%esp\n 8048422: ff 71 fc              pushl  -0x4(%ecx)\n 8048425: 55                    push   %ebp\n 8048426: 89 e5                 mov    %esp,%ebp\n 8048428: 53                    push   %ebx\n 8048429: 51                    push   %ecx\n 804842a: 83 ec 10              sub    $0x10,%esp\n 804842d: 89 cb                 mov    %ecx,%ebx\n....\n\n```\nWhat are the first three instructions before push %ebp doing? I haven't seen those in older gcc compiled binaries.\n\n",
+  "votes": "10",
+  "answers": 2,
+  "views": "6k",
+  "tags": [
+    "disassembly",
+    "x86",
+    "gcc"
+  ],
+  "user": "Evan Carroll",
+  "time": "Apr 17, 2017 at 1:08",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Namely,\n\n```\n 804841b: 8d 4c 24 04           lea    0x4(%esp),%ecx      <-  1\n 804841f: 83 e4 f0              and    $0xfffffff0,%esp    <-  2\n 8048422: ff 71 fc              pushl  -0x4(%ecx)          <-  3\n\n```\nThis is easy to see if gdb (or some other debugger) is used to step through the code.\n\nAt this point in the process, the memory address in register $esp is 0xffffd13c, so 4(%esp) = $esp+4 = 0xffffd140:\n\n```\n>>> x/x $esp+4\n0xffffd140: 0x01\n\n```\nThis means that the lea instruction loads the effective address of 0x4(%esp), 0xffffd140, into $ecx.\n\nNext, the value in $esp, 0xffffd13c, is ANDed with 0xfffffff0:\n\n```\n0xffffd13c:            11111111111111111101000100111100\n0xfffffff0:       AND  11111111111111111111111111110000\n                  -------------------------------------\n                       11111111111111111101000100110000\n\n```\nThis results in the value 0xffffd130, which is stored in $esp. This is equivalent to \n\n0xffffd13c - 0x0c = 0xffffd130.\n\nThis has the effect of creating 12 bytes of space on the process runtime stack. On a side note, the value -16 would be represented as 0xfffffff0, so we could think of \n\nand $0xfffffff0,%esp\n\nas\n\nand $-16,%esp\n\nThis is done to keep the stack aligned to a 16-byte boundary, since the next instruction (see 3) decrements the stack pointer by 4 and then saves a value to the stack.\n\nAs a result of lea 0x4(%esp),%ecx from earlier, the value in $ecx is equivalent to what had been $esp+4 (that is, 0xffffd140). As a result,\n\n-0x4(%ecx) = 0xffffd140 - 4 = 0xffffd13c.\n\nThis was the value of $esp at the beginning of main(). This value is now saved on the process runtime stack via a pushl instruction. \n\n\nsummary:\n\n```\n lea    0x4(%esp),%ecx         // load 0xffffd140 into $ecx\n and    $0xfffffff0,%esp       // subtract 0x0c (decimal 12) from $esp\n pushl  -0x4(%ecx)             // decrement $esp by 4, save 0xffffd13c on stack\n\n```\nA clue about the purpose of these instructions is the fact that they are executed prior to the conventional function prologue:\n\n```\n8048425: 55                    push   %ebp\n8048426: 89 e5                 mov    %esp,%ebp\n\n```\nAccording to the System V Application Binary Interface Intel386 Architecture Processor Supplment, Fourth Edition, after the execution of the function prologue $ebp+4 is the location on the runtime stack of the return address. \n\n\n\nThe address saved on the stack at $ebp+4 by the instruction \n\n8048422: ff 71 fc              pushl  -0x4(%ecx)\n\nis 0xffffd13c. This is a pointer to 0xf7e12637, the address of offset 247 in __libc_start_main():\n\n```\n>>> x/x $ecx-4\n0xffffd13c: 0xf7e12637\n>>> x/x 0xf7e12637\n0xf7e12637 <__libc_start_main+247>: 0x8310c483\n\n```\nThis indicates that the return address of main() is in function __libc_start_main(). \n\nAs for $ecx, this register simply holds the value of argc:\n\n```\n>>> x/x $ecx\n0xffffd140: 0x00000001\n\n```\nNote that since variable a is never used, the compiler optimizes out the call to atoi.  \n\nSo to answer the question directly, the instructions in main() prior to the prologue pass an argument to main() (the value of argc) and save the return address of main() on the runtime stack.\n\nNaturally, the next question is \"What is __libc_start_main?\" According to Linux Standard Base PDA Specification 3.0RC1:\n\nSo where does __libc_start_main() come from? The short answer is that it is a function in the shared object /lib/i386-linux-gnu/libc-2.23.so which is dynamically linked into the executable ELF binary:\n\n```\n $ ldd [binary_name]\n    linux-gate.so.1 =>  (0xf7764000)\n    libc.so.6 => /lib/i386-linux-gnu/libc.so.6 (0xf7586000)\n    /lib/ld-linux.so.2 (0x56640000)\n\n```\nIn addition to __libc_start_main(), the function __gmon_start__, also part of process initialization, is dynamically linked to the executable ELF binary as well:\n\n```\n$ readelf --dyn-syms [binary_name]\n\nSymbol table '.dynsym' contains 5 entries:\n   Num:    Value  Size Type    Bind   Vis      Ndx Name\n     0: 00000000     0 NOTYPE  LOCAL  DEFAULT  UND \n     1: 00000000     0 FUNC    GLOBAL DEFAULT  UND __stack_chk_fail@GLIBC_2.4 (2)\n     2: 00000000     0 NOTYPE  WEAK   DEFAULT  UND __gmon_start__\n     3: 00000000     0 FUNC    GLOBAL DEFAULT  UND __libc_start_main@GLIBC_2.0 (3)\n     4: 0804851c     4 OBJECT  GLOBAL DEFAULT   16 _IO_stdin_used\n\n```\nHere is the complete picture, from Linux x86 Program Start Up or - How the heck do we get to main()? by Patrick Horgan:\n\n\n\nOn a final note, if the return address of main() of 0xf7e12637 is examined more closely, we see that this address lies outside of the text segment as well as the runtime stack. This address, located in __libc_start_main(), is actually located in the memory-mapped segment in virtual memory, as shown by this diagram from Gustavo Duarte's article Anatomy of a Program in Memory:\n\n\n\n",
+      "votes": "19",
+      "user": "sudhackar",
+      "time": "Aug 4, 2018 at 8:39",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "These three statements serve to move the stackframe of main, beginning with its return address, to the next 16-byte-aligned address.\n\n```\nlea    0x4(%esp),%ecx    # save address of arguments\nand    $0xfffffff0,%esp  # align stack\npushl  -0x4(%ecx)        # move return address\n...                      # continue normal preamble\n\n```\nAt the same time, the arguments to main (argc and argv) are not moved, so a pointer to them is saved in %ecx.\n\nRecall the layout of the stack upon entering main:\n\n```\n%esp+8:  argv (a pointer to an array of pointers)\n%esp+4:  argc (a 32-bit integer)\n%esp+0:  return address (from call)\n\n```\nThe arguments sit right above the return address, so %esp+4 is saved to %ecx before the stack pointer is adjusted.\nNext, %ecx also serves as our pointer to locate the original return address, -4(%ecx), which we push to our new stack frame.\n\nAfter the rest of the preamble, the stack will look like this:\n\n```\n%ecx+4:  argv pointer\n%ecx+0:  argc\n%ecx-4:  original return address\n         ...\n%esp+4:  copy of return address\n%esp+0:  saved base pointer\n\n```\nIn your code, you can also see that %ecx is pushed onto the stack (i.e. saved as a local variable) after the preamble; it will be restored from there at the end of the function which will look like this:\n\n```\n...\nmov    -0x8(%ebp),%ecx   # load pointer to argc\nleave                    # unwind stack frame, pop %ebp\nlea    -0x4(%ecx),%esp   # restore original stack pointer\nret                      # jump out, using the original return address!\n\n```\nModern processors like data aligned to 16-byte boundaries for various reasons; some operations may take significant performance hits otherwise, others might not work at all.\n\nAdjusting the main stack frame once allows the rest of the code to run without further adjustment as long as care is taken to always allocate stack in multiples of 16 bytes before a call. That is why you will often see something like this:\n\n```\nsub    $0xc,%esp    # pad stack by 12 bytes\npush   %eax         # push 4-byte argument\ncall   puts\n\n```\nNB: The x86-64 ABI makes the 16-byte stack alignment mandatory. Incidentally this means that you will not find a frame adjustment on main in 64-bit code - the stack is already aligned.\n\n",
+      "votes": "7",
+      "user": "pesco",
+      "time": "Aug 3, 2018 at 15:36",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "julian",
+          "text": "Welcome! Based on what you have written so far, I look forward to reading your future posts.",
+          "time": null
+        },
+        {
+          "user": "pesco",
+          "text": "Thanks! I came here to look this up and afterwards felt that, while your answer is quite elaborate, it was missing a few details. Since as a new user I couldn't comment, I took a shot at my own. Hope you don't mind! :)",
+          "time": null
+        },
+        {
+          "user": "Evan Carroll",
+          "text": "I like this better than @SYS_V's answer (no offense to SYS_V). I don't believe SYS_V's answer address \"what is the purpose\". It does a great job of explaining what the instructions do. The answer seems to be very very simple. Above and beyond the obvious alignment-optimization \"At the same time, the arguments to main (argc and argv) are not moved, so a pointer to them is saved in %ecx.\" Beautiful. Thanks a ton.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

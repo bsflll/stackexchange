@@ -1,0 +1,61 @@
+{
+  "title": "Why is this ARM binary throwing an 'Illegal instruction' error and quitting?",
+  "link": "https://reverseengineering.stackexchange.com/questions/18556/why-is-this-arm-binary-throwing-an-illegal-instruction-error-and-quitting",
+  "content": "I'm hoping someone can help me determine why this binary won't execute.\n\nIt is a closed-source, stripped ARM binary. That said, it is freely downloadable on the internet so there is a link to it at the bottom of this post.\n\nThe target is an ARM binary pulled from a firmware image. I have set up an ARM VM, but have also tried running the binary on a Pi with the same result.\n\nHere is what I'm seeing:\n\n```\nroot@debian-armel:/tmp/squashfs-root/usr/bin# ./my_arm_bin \nIllegal instruction\n\n```\nThat \"Illegal instruction\" error is not super helpful... so I dug in a little deeper.\n\nI don't think the problem is my VM. It is a pretty standard ARM VM setup. From: https://people.debian.org/~aurel32/qemu/armel/\n\nUsing debian_squeeze_armel_standard.qcow2, initrd.img-2.6.32-5-versatile, and vmlinuz-2.6.32-5-versatile. It is launched with QEMU with a few ports forwarded (ssh,http,31337 for gdb stuff). I am able to execute other ARM binaries on the system without issue, including other binaries pulled from the same firmware image.\n\nAlso, as mentioned before I've tried dropping the binary onto a Pi with no luck. I tried both as root on the pi, as well as in a chroot'ed environment with the rootfs of the extracted firmware image, same result: Illegal Instruction.\n\nrabin2 -I my_arm_bin:\n\n```\nWarning: Cannot initialize dynamic strings\narch     arm\nbinsz    44831825\nbintype  elf\nbits     32\ncanary   false\nclass    ELF32\ncrypto   false\nendian   little\nhavecode true\nlang     c\nlinenum  false\nlsyms    false\nmachine  ARM\nmaxopsz  16\nminopsz  1\nnx       false\nos       linux\npcalign  0\npic      false\nrelocs   false\nrpath    NONE\nstatic   true\nstripped true\nsubsys   linux\nva       true\n\n```\nSo, time to attach a debugger and see exactly what instruction is actually throwing that error. This was done on a Pi.\n\nAfter starting up and breaking on entry, using ni to single step, I see:\n\n```\ngef> x/20i $pc\n=> 0x796a0: mov r11, #0\n   0x796a4: mov lr, #0\n   0x796a8: pop {r1}        ; (ldr r1, [sp], #4)\n   0x796ac: mov r2, sp\n   0x796b0: push    {r2}        ; (str r2, [sp, #-4]!)\n   0x796b4: push    {r0}        ; (str r0, [sp, #-4]!)\n   0x796b8: ldr r12, [pc, #16]  ; 0x796d0\n   0x796bc: push    {r12}       ; (str r12, [sp, #-4]!)\n   0x796c0: ldr r0, [pc, #12]   ; 0x796d4\n   0x796c4: ldr r3, [pc, #12]   ; 0x796d8\n   0x796c8: bl  0x4021a0\n   0x796cc: bl  0x401fa0\n   0x796d0: andeq   r2, r12, #200, 2    ; 0x32\n   0x796d4: andeq   r10, r1, r12, lsl #11\n   0x796d8: andeq   r2, r12, #40, 2\n   0x796dc: ldr r3, [pc, #20]   ; 0x796f8\n   0x796e0: ldr r2, [pc, #20]   ; 0x796fc\n   0x796e4: add r3, pc, r3\n   0x796e8: ldr r2, [r3, r2]\n   0x796ec: cmp r2, #0\ngef> \n\n```\nIt all looks like valid ARM instructions.\n\nIn case it's relevant - All ldr instructions (0x796b8, 0x796c0, 0x796c4) in gdb are giving this message when executed: Cannot access memory at address 0x0. Some mov instructions throw this too.\n\nAt 0x796c8: bl  0x4021a0:\n\n```\n->   0x796c8                  bl     0x4021a0\n   \\->    0x4021a0                  ldr    pc,  [pc,  #-4]  ; 0x4021a4\n\n```\nAnd eventually we get here:\n\n```\ngef> x/20i $pc\n=> 0x20c1b30:   push    {r4, r5, r6, r7, lr}\n   0x20c1b34:   sub sp, sp, #300    ; 0x12c\n   0x20c1b38:   movw    r12, #0                 \n   0x20c1b3c:   mov r5, r3                          --> Here is our illegal instruction\n   0x20c1b40:   movt    r12, #0\n   0x20c1b44:   str r1, [sp, #4]\n   0x20c1b48:   movw    r1, #65336  ; 0xff38\n   0x20c1b4c:   cmp r12, #0\n   0x20c1b50:   ldr r3, [sp, #4]\n   0x20c1b54:   str r2, [sp, #8]\n   0x20c1b58:   ldrne   r12, [r12]\n   0x20c1b5c:   add r2, r3, #1\n   0x20c1b60:   str r0, [sp, #12]\n   0x20c1b64:   movw    r3, #56376  ; 0xdc38\n   0x20c1b68:   ldr r7, [sp, #8]\n   0x20c1b6c:   movw    r0, #3092   ; 0xc14\n   0x20c1b70:   ldr lr, [sp, #328]  ; 0x148\n   0x20c1b74:   clzne   r12, r12\n   0x20c1b78:   movt    r0, #685    ; 0x2ad\n   0x20c1b7c:   movt    r1, #827    ; 0x33b\n\n```\nAnd of course a copy of the binary can be found here: https://mega.nz/#!CKxBQKaI!T__d9pjpOn_rPtfvPNkkPsFWHTjg7u-vDt5AK6610ug\n\nSo are the registers just not initialized to the right values? How can that be possible?\n\nTo paraphrase from Archer: What am I not getting?... I think the core concept.\n\nI am probably missing a critical idea here. I'm hoping someone can help fill in the blank(s).\n\nUPDATE 1:\n\nAt @0xC0000022L suggestion I looked into making sure the ARM revision of my VM/Pi matches that of the binary. As far as I can tell they do. Just comparing a binary from the VM to my my ARM binary I'm trying to get running their ABIs match (32-bit ARMv5):\n\n```\n$ file my_arm_bin \nmy_arm_bin: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, for GNU/Linux 2.6.16, stripped\n $ file /usr/bin/id\n/usr/bin/id: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, for GNU/Linux 2.6.32, stripped\n\n```\nUPDATE 2:\n\nAt @perror suggestion I tried forcing the binary to execute in thumb mode. For context here is the disassembly when running in \"arm\" (non-thumb) mode:\n\n```\ngef> x/10i $pc\n=> 0x20c1b38:   movw    r12, #0\n   0x20c1b3c:   mov r5, r3\n   0x20c1b40:   movt    r12, #0\n   0x20c1b44:   str r1, [sp, #4]\n   0x20c1b48:   movw    r1, #65336  ; 0xff38\n   0x20c1b4c:   cmp r12, #0\n   0x20c1b50:   ldr r3, [sp, #4]\n   0x20c1b54:   str r2, [sp, #8]\n   0x20c1b58:   ldrne   r12, [r12]\n   0x20c1b5c:   add r2, r3, #1\n\n```\nForcing thumb mode, I now see:\n\n```\ngef> set arm force-mode thumb\ngef> x/10i $pc\n=> 0x20c1b38:   stmia   r0!, {}\n   0x20c1b3a:   b.n 0x20c213e\n   0x20c1b3c:   str r3, [r0, r0]\n   0x20c1b3e:   b.n 0x20c1e82\n   0x20c1b40:   stmia   r0!, {}\n   0x20c1b42:   b.n 0x20c21c6\n   0x20c1b44:   asrs    r4, r0, #32\n   0x20c1b46:   b.n 0x20c1664\n   0x20c1b48:   subs    r0, r7, #4\n   0x20c1b4a:   b.n 0x20c216c\n\n```\nForcing thumb mode prior to execution, the program exits immediately with the following error:\n\n```\n[!] Cannot disassemble from $PC\n[!] Cannot access memory at address 0x6ac\n\n```\nStarting the executable up, breaking and switching modes exits with an Illegal instruction error.\n\n",
+  "votes": "11",
+  "answers": 1,
+  "views": "13k",
+  "tags": [
+    "arm"
+  ],
+  "user": "gatorface",
+  "time": "Jun 19, 2018 at 15:18",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Just some random though I had while reading your post. Have you tried to check if you were in thumb mode ? Your disassembly is done in 32-bit mode, which is most likely assumed by gdb. But, what if the CPU was executing in thumb mode ? To check, you might also simply execute the program through si (stepi) commands until crash. It might give you a more insightful error message.",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "Another thing that comes to mind is the fact that your CPU may be of a different revision than the ARM code you're attempting to execute. Think ARMv5 vs. ARMv7 ...",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "Your description of what you're doing is unclear. Where does the error show? On what assembly line? What commands exactly do you execute to get from one snippet to the next?",
+      "time": null
+    },
+    {
+      "user": "gatorface",
+      "text": "@NirIzr The error I'm seeing is what is shown right after \"Here is what I'm seeing:\". In the part where I'm debugging with gdb, I'm using ni to step through instructions.  Thank you @perror and  @0xC0000022L - Your insight is much appreciated. I'm going to dig into thumb mode and ARM revision later today and will post and update. I was using ni to skip function calls and keep it simple, but si may give me some more context.",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "Would you mind including that as part of the question?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "From a preliminary analysis the binary looks to be of atleast ARMv7. It runs under qemu-user without problems.\n\n```\n$ qemu-arm --version\nqemu-arm version 2.11.0\nCopyright (c) 2003-2017 Fabrice Bellard and the QEMU Project developers\n\n$ qemu-arm ./my_arm_bin \n+++++++++++++++++++++++++++++++++\nName:storage\nVersion:1.05.3\nBuild date:Apr 24 2018 13:16:31\nDesc:DriverManager release\n+++++++++++++++++++++++++++++++++\n+++++++++++++++++++++++++++++++++\nName:manager\nVersion:1.03.1\nBuild date:Apr 24 2018 13:16:31\nDesc:\n+++++++++++++++++++++++++++++++++\n+++++++++++++++++++++++++++++++++\nName:manager\nVersion:1.03.1\nBuild date:Apr 24 2018 13:16:31\nDesc:\n+++++++++++++++++++++++++++++++++\n+++++++++++++++++++++++++++++++++\nName:guictrls\nVersion:1.05.5\nBuild date:Apr 24 2018 13:16:31\nDesc:GUI ctrls Relese\n+++++++++++++++++++++++++++++++++\n+++++++++++++++++++++++++++++++++\nName:OS\nVersion:1.00.1\nBuild date:Apr 24 2018 13:16:31\nDesc:OS Relese\n------snip-------------------\n\n```\nHowever, running under a ARMv6 QEMU VM it crashes with an Illegal instruction, similar to yours. Digging deep there're indeed some instructions which are invalid under ARMv5.\n\n```\n─────────────────────────────────────────────────────────────────────────────────────────────────────────[ code:arm ]────\n    0x20c1b2c                  bl     0x20d434c\n    0x20c1b30                  push   {r4,  r5,  r6,  r7,  lr}\n    0x20c1b34                  sub    sp,  sp,  #300    ; 0x12c\n →  0x20c1b38                  movw   r12,  #0\n    0x20c1b3c                  mov    r5,  r3\n    0x20c1b40                  movt   r12,  #0\n    0x20c1b44                  str    r1,  [sp,  #4]\n    0x20c1b48                  movw   r1,  #65336   ; 0xff38\n    0x20c1b4c                  cmp    r12,  #0\n──────────────────────────────────────────────────────────────────────────────────────────────────────────[ threads ]────\n[#0] Id 1, Name: \"my_arm.bin\", stopped, reason: SIGILL\n────────────────────────────────────────────────────────────────────────────────────────────────────────────[ trace ]────\n[#0] 0x20c1b38 → movw r12,  #0\n[#1] 0x796cc → bl 0x401fa0\n\n```\nAbove it crashed on the movw   r12,  #0 at 0x20c1b38. Now the movw was introduced in ARMv7 and unavailable in ARMv5. Similarly the movt instruction is also invalid under v5.\n\n\n\nImage Source\n\nThis explains why ARM v5/v6 qemu is crashing. So to run the binary you would atleast need an ARMv7 QEMU vm or the Raspberry Pi 2 which sports an ARMv7 processor.\n\n",
+      "votes": "5",
+      "user": "0xec",
+      "time": "Jun 19, 2018 at 18:55",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "gatorface",
+          "text": "You sir are my hero. I was using file to tell me which version of ARM the file uses, which is incorrect. For anyone that runs across this in the future: use readelf -A my_arm_bin instead, specifically check the Tag_CPU_arch flag output. In this case it is v7.",
+          "time": null
+        },
+        {
+          "user": "i336_",
+          "text": "Thankyou so much, I was in exactly the same situation as you - I even downloaded the same versatilepb image. Tag_CPU_name: \"CORTEX-A8\" Tag_CPU_arch: v7 - time to go find a v7 QEMU image.....",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

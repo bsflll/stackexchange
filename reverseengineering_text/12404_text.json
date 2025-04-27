@@ -1,0 +1,54 @@
+{
+    "title": "Intel PIN: How to access the INS object from inside an analysis function?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12404/intel-pin-how-to-access-the-ins-object-from-inside-an-analysis-function",
+    "content": "A typical PIN code snippet looks like this (taken from the official manual):\n<pre><code>// This function is called before every instruction is executed\n// and prints the IP\nVOID printip(VOID *ip) { fprintf(trace, \"%p\n\", ip); }\n\n// Pin calls this function every time a new instruction is encountered\nVOID Instruction(INS ins, VOID *v)\n{\n    // Insert a call to printip before every instruction, and pass it the IP\n    INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)printip, IARG_INST_PTR, IARG_END);\n}\n</code></pre>\nI just can't figure out how to access the <pre><code>ins</code></pre> object from within <pre><code>printip(VOID *p)</code></pre>. The other way round seems easy, i.e. getting the IP from from the <pre><code>ins</code></pre> object:\n<pre><code>INS_Address (INS ins)</code></pre>(see here)\nI tried passing a <pre><code>INS *ins</code></pre> pointer to <pre><code>printip(VOID *ip, INS *ins)</code></pre> ins via <pre><code>IARG_PTR, &ins</code></pre> but this ended in either casting errors or Segmentation faults.\nHow can I access the <pre><code>ins</code></pre> object (type <pre><code>INS</code></pre>) from inside an analysis function?\nSide note: I got to this problem when trying to call <pre><code>INS_Disassemble (INS ins)</code></pre> for every executed instruction.\n",
+    "votes": "6",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "c++",
+        "pintool"
+    ],
+    "user": "langlauf.io",
+    "time": "Apr 12, 2016 at 17:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "You may note that <pre><code>printip</code></pre> is a function pointer, it is lazily called internally by <pre><code>Pin</code></pre>; moreover <pre><code>ins</code></pre> is an automatic variable (it is passed into <pre><code>Instruction</code></pre> from the stack). Consequently, passing <pre><code>&ins</code></pre> into <pre><code>printip</code></pre> (through <pre><code>IARG_PTR</code></pre>), then using it will lead to segmentation faults.\n<pre><code>Pin</code></pre> declares <pre><code>INS</code></pre> by specializing the class template <pre><code>INDEX</code></pre>, as you can observe the following declaration in <pre><code>type_core.TLH</code></pre>:\n<pre><code>/*! @ingroup INS_BASIC_API\nHandle for INS */  \ntypedef class INDEX<6> INS;\n</code></pre>\nwhere constructors and assignment operators of class template <pre><code>INDEX</code></pre> are both default. So, in principle^^, we can always declare a persistent variable to share an object of <pre><code>INS</code></pre> between instrumentation and analysis functions, for example:\n<pre><code>static INS per_ins;\n...\nVOID Instruction(INS ins, VOID *v)\n{\n  per_ins = ins;\n  ...\n}\n...\nVOID printip(VOID *ip)\n{\n  INS_Disassemble(per_ins);\n}\n</code></pre>\nThis method does not work, unfortunately, this is an example for \"well-typed program still can go wrong\" in <pre><code>C/C++</code></pre>^^. Since <pre><code>Pin</code></pre> does not guarantee that internal variables, accessed by an object of type <pre><code>INS</code></pre>, are persistent in analysis time, the result of calling <pre><code>INS_Disassemble(per_ins)</code></pre> in an analysis function can be meaningless.\nFor your case, you may not want to call <pre><code>INS_Disassemble(ins)</code></pre> each time <pre><code>ins</code></pre> executes. We don't need that, for example, if <pre><code>ins</code></pre> is in a loop then this function will be called multiple times (with the same <pre><code>ins</code></pre>) to get the same result.\nAll static information of an instruction (e.g. the disassembled form of <pre><code>ins</code></pre> in this case) should be obtained in instrumentation time. Particularly, <pre><code>INS_Disassemble</code></pre> should be called single time only in some instrumentation function. One way to obtain the same effect as you want is:\n<pre><code>static std::unordered_map<ADDRINT, std::string> str_of_ins_at;\n\nVOID Instruction(INS ins, VOID *v)\n{\n  str_of_ins_at[INS_Address(ins)] = INS_Disassemble(ins);\n  ...\n}\n\nVOID printip(VOID *ip, ADDRINT addr) \n{\n  std::string ins_str = str_of_ins_at[addr];\n  ...\n}\n</code></pre>\n",
+            "votes": "5",
+            "user": "Ta Thanh Dinh",
+            "time": "Apr 13, 2016 at 9:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Thank you for the detailed answer. I wanted to place the <code>INS_Disassemble(ins)</code> into the analysis function to check (manually by looking at it) if the analysis function works as intended. If I place the <code>INS_Disassemble(ins)</code> into the Instrumentation function, the output of <code>INS_Disassemble(ins)</code> is separated from the output of the analysis function. In other words: I wanted the output of the analysis function be entitled with the instruction to easily check if it is correct.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">You are correct, we can always obtain opcode of an instruction using <code>PIN_SafeCopy</code> and <code>INS_Size</code>, then use whatever disassemble tool e.g. Capstone, or even Xed of Intel.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Oh sorry, I deleted my comment regarding this approach because your idea to store the strings looked more elegant to me.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">But anyway, great explanation of what is going on with this <code>ins</code> object.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "typedef class INDEX<6> INS; is defined in types_core.TLH (types not type). The following code works for me to disassamble at analysis time. \n<pre><code>void disasmIns(ADDRINT tid, ADDRINT insarg)\n{\n  INS ins;\n  ins.q_set(insarg);\n  std::cout << \"Disassembly: \" << INS_Disassemble(ins) << std::endl;\n}\n\nVOID Instruction(INS ins, VOID *v) {\n  INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)disasmIns, \n  IARG_FAST_ANALYSIS_CALL, IARG_ADDRINT, ins.q(), IARG_END);\n}\n</code></pre>\n",
+            "votes": "1",
+            "user": "Heiner Litz",
+            "time": "Jul 19, 2017 at 19:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

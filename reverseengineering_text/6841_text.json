@@ -1,0 +1,49 @@
+{
+    "title": "Protect a key from being recovered by decompilation",
+    "link": "https://reverseengineering.stackexchange.com/questions/6841/protect-a-key-from-being-recovered-by-decompilation",
+    "content": "I work in a game editor that develop an online game. In our endless struggle against bots (that have negative impacts on server performances, game economy, game experience, ...), one of ours weapons to detect bots is to send an signed As3 bytecode to the client (coded in As3 too) and ask him to execute it. The bytecode will :\n\nEmbed an AES key (K)\nK is split into different parts of the bytecode\nCheck environment\nCrypt though AES a game session information with K and send it to the server\n\nThe bytecode and K change every 2 hours\nThe bytecode is obfuscate with a commercial program.\nThis method worked well for months but since a few weeks bots are back. I have found they decompile automatically our bytecode in order to extract K.\nNotes :\n\nK is a byte array \nI don't care if the key can be manually recovered (in a reasonable time) if it's not possible to do it automatically.\n\nWhich approach would you recommend to protect K from being recovered by decompilation ?\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "908",
+    "tags": [
+        "decompilation",
+        "deobfuscation",
+        "cryptography",
+        "byte-code"
+    ],
+    "user": "Kriss",
+    "time": "Dec 17, 2014 at 15:55",
+    "comments": [
+        {
+            "user": "joxeankoret",
+            "text": "I'm afraid that as long as they can execute the code with an AS3 emulator, they can get the key no matter what you do.\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "What you look for is called 'whitebox crypto'. It is about making the cipher program and the key so entangled that you cannot extract the key without a lot of efforts. Unfortunately, no one has really succeeded in doing such a cryptosystem. All the attempts have been broken so far... Yet, it can complexify quite a lot the process of key recovery.\n",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "Whitebox crypto wouldn't help with his end goal, since all whitebox crypto systems used in the real world are subverted by just copying the whitebox code into one's keygen (or similar) and treating it like a blackbox by supplying input and reading the output.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Here are some thoughts on the fundamental problem and a possible solution; even if the full system goes way beyond your dev budget, some key ideas might still be useful for fashioning your own solution.\nCrypto is of little use if you don't have the leverage that makes the crypto algorithm itself the weakest link in the system, just like a ten-inch steel door won't offer security if it is installed in a tent or in a knee-high fence. If the AES implementation is external to your bytecode blob then its entry point is easy to hook, serving the key up on a silver platter.\nThere are several factors working against you here. \n(1) Modularisation greatly aids analysis. Once a body of code has been recognised as serving a certain function - perhaps even a well-known algorithm like CRC32, MD5 or AES - the purpose of its invocations is clear.\n(2) Optimising compilers greatly aid analysis, by reducing redundancy. Unless they're overly fond of inlining.\n(3) All external interactions of your code (OS calls, library calls) give the attacker a clue as to what's going on. \nHere's how you can win anyway: you need to institute a massive shell game to render those clues worthless, you need to break modularisation by interleaving a great number of computations; further, you need to make the state to be verified part of the key, and you need to bind the whole shebang to a particular game session, client process and machine.\nOne way of doing this is to write a kind of byte code interpreter that implements the fundamental operations you need for the verification: xor two cells, add two others, hash a string, checksum a memory range, retrieve the process id and so on. Essentially a tiny general script similar to IDC or NWScript, with a couple of special 'macro' ops thrown in. Elementary operations take operands from an array of cells (registers) and deliver their results to some cell in the array. Every cycle (operation) also involves cycling a set of simple RNGs (xorshift, KISS, whatever) and a shuffle step of the function table and cell array based on those RNGs. The critical point is that the elements of the state to be verified must be reducible to numeric values that can be used to perturb the RNG state as well.\nAs soon as a single step of the verification returns the wrong result, all subsequent instructions will be decoded erroneously, meaning the code cannot even be analysed in an environment that fails verification. This protects everything that's computed after the end of the verification code proper, like a session key for example.\nAll that remains is binding every bytecode blob to a particular client session, that is, to generate a blob specifically for it. Another client session gets a different blob, so there's no info that can be ripped from a legit client session and then used to unlock a bot session.\nThe verification needs to be broken down into a series of small steps; i.e. instead of checksumming one big memory range in a single go, do dozens of smaller checksum operations.\nYou'll be writing the verification code in your simple script language as usual; a special program analyses the dependency graph of the resulting object code and determines which bytecode can be executed when, effectively inlining everything into one huge monster function. That's the preprocessing step, done once. Then follows a code generation step where schedulable bytecodes are chosen in a pseudo-random fashion (based on a session key) and compiled into a blob. As each bytecode is chosen, it must also be executed in an environment that passes muster, for proper updating of the interpreter state (RNG state, shuffle state of function table and cell array). There can be hundreds of separate computation strands that can be schedulable at a given point, at least early on.\nIn addition to controlling bytecode scheduling, the session key can also control the verification operations that you compile into a particular session blob (perhaps choosing from a pool, and parametrising the elementary checksum ranges). This way, analysing a legit client's blob gives the attacker only a fraction of the verification operations that they have to fool/emulate in order to succeed. In extremis you can get away with checksumming only a tiny fraction of the process image while your attackers need to present (or virtualise) the whole image in a pristine fashion, because they don't know which particular areas will be checksummed.\nImplementing the bytecode system on top of another bytecode system may constrain things a bit, mostly in terms of performance (achievable complexity) and achievable obscurity (recognisable function call to retrieve the process id instead of plain, unnamed machine instructions peeking <pre><code>gs:[30h]</code></pre> and going from there). But the principle holds, even if you have to use a giant switch statement instead of a function table. For some strange reason, it seems to be somewhat customary to implement crypto operations (RNGs like Marsaglia's KISS, hashes, ciphers) on top of the bytecode system... Probably because it's so easy to write and so hard to analyse.\nLeverage - the way this integrates into the overall system - is just as important here as with crypto. You don't want your ten-inch steel door to be bypassed.\nAlso, systems like this are not resilient at all, they are very brittle. If one single verification op is too eager/constraining then you'll have thousands of legitimate clients howling in outrage... \nThe problem here is that things like anti-malware systems, graphics drivers and so on like to f*ck things up and inject DLLs into running processes, which can make white-listing loaded modules a bit tricky. For example, an attacker may inject a DLL with the NVIDIA name into a game running on an ATI card. Detouring is quite common as well.\nBackground information:\n\nManufacturing Cheap, Resilient, and Stealthy Opaque Constructs (Collberg)\nGeneral Method of Program Code Obfuscation (Wroblewski)\nA Taxonomy of Obfuscating Transformations (Collberg)\n\nNote: canned solutions like automatic obfuscators tend to fall to canned hacks. Whether that's a problem or not depends more on accident (presence of skilled reversers among your audience, and the amount of time they're willing to invest) than anything else. For example, there don't seem to be any generic unpackers for the EA/Denuvo sh*te out there even though their schemes are about a decade behind the state of the art. I guess there was no one who had both the skill and a thirst for fame...\n",
+            "votes": "4",
+            "user": "DarthGizka",
+            "time": "Jan 2, 2015 at 7:42",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "nneonneo",
+                    "text": "<span class=\"comment-copy\">Also worth noting: in an ideal world, you'd increase your security substantially (by implementing as many of these suggestions as possible) in the space of a single patch. This way, the attackers have to break everything in order to get back in, instead of attacking each new feature as it is introduced in a separate patch. (The big downside of this is that it makes QA a lot harder, and could delay the big patch).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

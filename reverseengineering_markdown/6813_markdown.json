@@ -1,0 +1,61 @@
+{
+  "title": "Get the PE section address",
+  "link": "https://reverseengineering.stackexchange.com/questions/6813/get-the-pe-section-address",
+  "content": "I study an analysis paper about a trojan and there are the following assembly lines:\n\n```\n.text:004010D0 Get_PE_section_address proc near        \n.text:004010D0\n.text:004010D0 arg_0           = dword ptr  4\n.text:004010D0\n.text:004010D0                 mov     ecx, [esp+arg_0]\n.text:004010D4                 mov     eax, [ecx+3Ch]\n.text:004010D7                 movzx   edx, word ptr [eax+ecx+14h]\n.text:004010DC                 add     eax, ecx\n.text:004010DE                 movzx   ecx, word ptr [eax+6]\n.text:004010E2                 push    ebx\n.text:004010E3                 add     edx, eax\n.text:004010E5                 push    esi\n.text:004010E6                 lea     esi, [ecx+ecx*4]\n.text:004010E9                 lea     eax, [edx+esi*8-38h]\n.text:004010ED                 xor     edx, edx\n.text:004010EF                 test    ecx, ecx\n.text:004010F1                 jbe     short loc_401102\n.text:004010F3\n\n.text:004010F3 loc_4010F3:                            \n.text:004010F3                 mov     bl, [eax+5]\n.text:004010F6                 test    bl, bl\n.text:004010F8                 jz      short loc_401104\n.text:004010FA                 inc     edx\n.text:004010FB                 sub     eax, 28h\n.text:004010FE                 cmp     edx, ecx\n.text:00401100                 jb      short loc_4010F3\n.text:00401102\n\n.text:00401102 loc_401102:                             \n.text:00401102                 xor     eax, eax\n.text:00401104\n\n.text:00401104 loc_401104:                             \n.text:00401104                 pop     esi\n.text:00401105                 pop     ebx\n.text:00401106                 retn\n\n.text:00401106 Get_PE_section_address endp\n\n```\nAs you can see, the owner of the paper renamed the function as Get_PE_section_address.\nI spent a lot of time to understand why he/she calls in that way because I could not understand why this piece of code retrieves the the PE section address.\n\nSo, my question would be if there is anyone who can tell me which lines tells us that this is something about PE section address. \n\nPS: I tried to work with the offsets but with a low success rate. The only thing I can say is that ebx = pointer to the malicious executable and arg_0 = 0\nAfter searching a while PE file format papers, i have found out that the second line \n\n```\n   mov     eax, [ecx+3Ch]\n\n```\ngives me the file address of the exe header. \n\nbest regards, \n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "assembly",
+    "pe",
+    "section",
+    "address"
+  ],
+  "user": "user3097712",
+  "time": "Dec 13, 2014 at 2:36",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Calling this function Get_PE_section_address is rather misleading since it doesn't generically get \"the address of a PE section\", but rather is used to get the virtual address of the Section Table entry for the first section with a 0x00 as the 5th byte of its section name, iterating through sections backwards starting from the second-to-last section.\n\nSo for example, if the section names were:\n\nwhere 0 is a null-byte, then this function would return the virtual address for the Section Table entry for sec30, since it's the first section that meets the null-byte requirement when iterating backwards through the sections, starting with the second-to-last section.\n\nI've commented the disassembly for you:\n\n```\n.text:004010D0 Get_PE_section_address proc near        \n.text:004010D0\n.text:004010D0 arg_0           = dword ptr  4\n.text:004010D0\n.text:004010D0                 mov     ecx, [esp+arg_0]             ; ecx = arg_0 = beginning of PE file mapped into memory\n.text:004010D4                 mov     eax, [ecx+3Ch]               ; eax = ((IMAGE_DOS_HEADER*)ecx)->e_lfanew\n.text:004010D7                 movzx   edx, word ptr [eax+ecx+14h]  ; edx = ((IMAGE_NT_HEADERS*)(eax+ecx))->FileHeader.SizeOfOptionalHeader\n.text:004010DC                 add     eax, ecx                     ; eax = (IMAGE_NT_HEADERS*)(eax+ecx)\n.text:004010DE                 movzx   ecx, word ptr [eax+6]        ; ecx = ((IMAGE_NT_HEADERS*)eax)->FileHeader.NumberOfSections\n.text:004010E2                 push    ebx                          ; save ebx on stack\n.text:004010E3                 add     edx, eax                     ; edx = (pointer to PE header) + SizeOfOptionalHeader\n.text:004010E5                 push    esi                          ; save esi on stack\n.text:004010E6                 lea     esi, [ecx+ecx*4]             ; esi = NumberOfSections * 5\n.text:004010E9                 lea     eax, [edx+esi*8-38h]         ; eax = (pointer to PE header) + SizeOfOptionalHeader + NumberOfSections * 0x28 - 0x38 =\n                                                                    ;       &(((IMAGE_SECTION_HEADERS*)(edx + 0x18))[NumberOfSections - 2])\n.text:004010ED                 xor     edx, edx                     ; edx = section counter = 0\n.text:004010EF                 test    ecx, ecx                     ; if NumberOfSections <= 0\n.text:004010F1                 jbe     short loc_401102             ; then goto loc_401102\n.text:004010F3\n\n.text:004010F3 loc_4010F3:                            \n.text:004010F3                 mov     bl, [eax+5]                  ; bl = ((IMAGE_SECTION_HEADERS*)eax)->Name[5]\n.text:004010F6                 test    bl, bl                       ; if ((IMAGE_SECTION_HEADERS*)eax)->Name[5] == 0\n.text:004010F8                 jz      short loc_401104             ; then goto loc_401104\n.text:004010FA                 inc     edx                          ; edx = (section counter)++\n.text:004010FB                 sub     eax, 28h                     ; ((IMAGE_SECTION_HEADERS*)eax)-- \n.text:004010FE                 cmp     edx, ecx                     ; if section counter < NumberOfSections\n.text:00401100                 jb      short loc_4010F3             ; then goto loc_4010F3\n.text:00401102\n\n.text:00401102 loc_401102:                             \n.text:00401102                 xor     eax, eax                     ; eax = 0\n.text:00401104\n\n.text:00401104 loc_401104:                             \n.text:00401104                 pop     esi                          ; restore esi\n.text:00401105                 pop     ebx                          ; restore ebx\n.text:00401106                 retn                                 ; return eax = IMAGE_SECTION_HEADERS* with a 0x00 at Name[5]\n\n.text:00401106 Get_PE_section_address endp\n\n```\nNote that there's a bug in the assembly code: it iterates backwards through NumberOfSections Section Table entries, but since it starts with the second-to-last section, it may end up reading past the beginning of the first section's section table entry.\n\nTypically you would know the input argument to the function (in this case, the beginning of the PE module in memory), which would help you step through the assembly code. But even if you were given this code with little-to-no context (as we were here) a good hint that it's handling PE sections is the following line:\n\n```\n.text:004010DE                 movzx   ecx, word ptr [eax+6]        ; ecx = ((IMAGE_NT_HEADERS*)eax)->FileHeader.NumberOfSections\n\n```\nWhenever you see movzx ..., word ptr [...+6], it strongly suggests that the number of sections is being read, since there aren't other common word-sized values beginning 6 bytes into a structure.\n\n",
+      "votes": "4",
+      "user": "Jason Geffner",
+      "time": "Dec 14, 2014 at 21:59",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user3097712",
+          "text": "hello, thx for the great comments. I was reading \"PORTABLE EXECUTABLE FILE FORMAT – A REVERSE ENGINEER VIEW\" to understand the PE File format concept better. For that reason, it takes a while for my comment.  But I have one question. So, your commented line: &(((IMAGE_SECTION_HEADERS*)(edx + 0x18))[NumberOfSections - 1]) . So, the edx=SizeOfOptionalHeaders, the 0x18 = 24 bytes(since Signature is 4 bytes & FileHeader is 20 bytes) and now, when we add size of optional header we would point to beginning of the section table,right?If yes,then why you have written [NumberOfSections -1]?best regards",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "NumberOfSections * 0x28 - 0x38 = NumberOfSections * 0x28 - 0x28 - 0x28 + 0x18 = sizeof(IMAGE_SECTION_HEADER) * (NumberOfSections - 2) + 0x18, so it should have been ... [NumberOfSections - 2] in my original comments above (which would correspond with my original \"second-to-last\" description) -- I've replaced the [NumberOfSections - 1] with [NumberOfSections - 2] in my answer above.",
+          "time": null
+        },
+        {
+          "user": "user3097712",
+          "text": "another question: why is 0x38 = 0x28-0x28+0x18 ?",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "It doesn't. See my comment above: - 0x38 = - 0x28 - 0x28 + 0x18.",
+          "time": null
+        },
+        {
+          "user": "user3097712",
+          "text": "aaah, ok. Thx. I ve forgotten the \"-\" sign. Ok, now is everything clear.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "looks like some homemade untested code for retrieving section address retrieves address of second section if the section name[5] is null terminator \\x0\n\n```\nMOV     ECX, DWORD PTR SS:[ESP+4]          ; ecx = 1000000 base of image\nMOV     EAX, DWORD PTR DS:[ECX+3C]         ; eax = 0xe8 ptrtopeheader\nMOVZX   EDX, WORD PTR DS:[EAX+ECX+14]      ; edx = e0 = sizeofoptional header\nADD     EAX, ECX                           ; eax = peheader\nMOVZX   ECX, WORD PTR DS:[EAX+6]           ; ecx - no of sections\nPUSH    EBX\nADD     EDX, EAX                           ; edx = 10001c8 ?\nPUSH    ESI\nLEA     ESI, DWORD PTR DS:[ECX+ECX*4]      ; esi = 14 ?\nLEA     EAX, DWORD PTR DS:[EDX+ESI*8-38]   ; ? esi * 8 - 38 + edx ; 1000230\nXOR     EDX, EDX\nTEST    ECX, ECX\nJBE     SHORT 01063F5E                     ; jmp ot if no sections\nMOV     BL, BYTE PTR DS:[EAX+5]            ; checks for 0 in section name ?\nTEST    BL, BL                             ; some kind of homemade crap\nJE      SHORT 01063F6C                     ; jmps out of proc with address of second section if section name was sya .rsrc\nINC     EDX                                ; loop checking section 1\nSUB     EAX, 28                            ;  size of section header\nCMP     EDX, ECX                           ; counting no of sections\nJB      SHORT 01063F05                     ; <loop>\n\n```\n",
+      "votes": "0",
+      "user": "blabb",
+      "time": "Dec 13, 2014 at 6:44",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

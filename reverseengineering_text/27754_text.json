@@ -1,0 +1,35 @@
+{
+    "title": "Breaking on string access from StringTable (resource)",
+    "link": "https://reverseengineering.stackexchange.com/questions/27754/breaking-on-string-access-from-stringtable-resource",
+    "content": "If I have a resource like this:\n<pre><code>STRINGTABLE\nLANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US\n{\n100,    \"OK\"\n101,    \"Warning\"\n102,    \"Error\"\n103,    \"Name\"\n104,    \"Size\"\n}\n</code></pre>\n1- How can I place a BP (conditional) to break when the string <pre><code>102</code></pre> is accessed (x64. I do not know which function is used to load the string)?\n2- How could I detect this code in a disassembler such as Ghidra/IDA?\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "ghidra",
+        "x64dbg",
+        "pe-resources"
+    ],
+    "user": "user1156544",
+    "time": "May 31, 2021 at 0:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "you don't ... there's a slim chance to use a hardware breakpoint to trigger when the (mapped) resource string gets accessed, though.\nyou need to stake out what APIs get used which could be used to read the string(s). The first one to go to here would be <pre><code>LoadString</code></pre> for obvious reasons. But it's possible that your target uses <pre><code>FindResource</code></pre> (or the corresponding <pre><code>*Ex</code></pre>-function), followed by <pre><code>LoadResource</code></pre>, <pre><code>LockResource</code></pre> etc.\n\nSo if I were you I'd look at the import table first. Check if either <pre><code>LoadStringA</code></pre> or <pre><code>LoadStringW</code></pre> exists and check all instances. The ID parameter for the resource ID should be pretty obvious.\nFailing that I'd look for <pre><code>GetProcAddress</code></pre> and friends and whether that is used to get the function <pre><code>LoadString</code></pre> and call it.\nFailing that I'd look for the other functions I mentioned above.\nFailing that I'd investigate which internal functions inside <pre><code>ntdll.dll</code></pre> are used to implement resource handling and break on those, then investigate the call stack.\nIf all of the above fails I'd set a hardware breakpoint on the resource string itself in an attempt to catch the program accessing the string.\nNB: in multilingual applications the resource ID would still matter and typically be identical across languages, but there's a chance the string you're after is in another (resource-only) DLL altogether. Such DLLs have no entry point or code and are purely mapped as data. This could be relevant if you come up empty-handed in all but the last approach ... because for the last approach you'll have to set the breakpoint on the right data.\n",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "Jun 1, 2021 at 7:26",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "1- How can I place a BP (conditional) to break when the string 102 is\naccessed (x64. I do not know which function is used to load the\nstring)?\n\nFirst, it is necessary to find the right method used to load the string. The standard one is <pre><code>LoadString</code></pre> but, as @0xC0000022L mentioned, there are other options. Check the imports from the <pre><code>PE</code></pre> file and determine which one can be.\nIn my case, I found out it was <pre><code>LoadStringW</code></pre>, from <pre><code>user32.dll</code></pre>.\nIn <pre><code>x86</code></pre>, you will normally place a BP with a condition on some stack value. In <pre><code>x64</code></pre> this normally works differently (x64 calling convention):\n\nBy default, the x64 calling convention passes the first four arguments\nto a function in registers. The registers used for these arguments\ndepend on the position and type of the argument. Remaining arguments\nget pushed on the stack in right-to-left order. Integer valued\narguments in the leftmost four positions are passed in left-to-right\norder in RCX, RDX, R8, and R9, respectively...\n\nAccording to the documentation LoadStringW function:\n<pre><code>int LoadStringW(\n  HINSTANCE hInstance,\n  UINT      uID,           // --> The identifier of the string to be loaded.\n  LPWSTR    lpBuffer,\n  int       cchBufferMax\n);\n</code></pre>\nTherefore, <pre><code>uID</code></pre> will be loaded in <pre><code>EDX</code></pre>. The right breakpoint for x64dbg is:\n<pre><code>bp user32:LoadStringW;bpcnd user32:LoadStringW,EDX==66\n</code></pre>\nNote: 102 is 66h\n\n\n2- How could I detect this code in a disassembler such as Ghidra/IDA?\n\nIn Ghidra this is automatically managed. By looking into the <pre><code>Defined Strings</code></pre> you can find the strings in the resources:\n<pre><code>                     pu_Error_140312196                              XREF[12]:\nFUN_1400... (*) ,FUN_140...\n   140312196 05004500...      p_unicode  u\"Error\"    Rsrc String ID 102\n</code></pre>\nFrom here it is trivial to go to the references.\n",
+            "votes": "0",
+            "user": "user1156544",
+            "time": "Jun 1, 2021 at 13:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

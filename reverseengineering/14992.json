@@ -1,0 +1,46 @@
+{
+    "title": "What are the Vectored Continue Handlers",
+    "link": "https://reverseengineering.stackexchange.com/questions/14992/what-are-the-vectored-continue-handlers",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Practically everyone knows what <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms681420(v=vs.85).aspx\" rel=\"noreferrer\">Vectored Exception Handlers</a> are, but I couldn't find a lot of information about the similar \"Vectored Continue Handlers\" and related functions I encountered today, such as <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms679273(v=vs.85).aspx\" rel=\"noreferrer\">AddVectoredContinueHandler</a> and <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms680567(v=vs.85).aspx\" rel=\"noreferrer\">RemoveVectoredContinueHandler</a>.</p>\n<p>The prototype of <code>AddVectoredContinueHandler</code> is very similar to <code>AddVectoredExceptionHandler</code>'s prototype:</p>\n<pre><code>PVOID WINAPI AddVectoredContinueHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n</code></pre>\n<p>And to make things more confusing it accepts a <code>PVECTORED_EXCEPTION_HANDLER</code>, just as <code>AddVectoredExceptionHandler</code> does.</p>\n<p>What is the purpose of Vectored <strong>Continue</strong> Handlers and how are they used?</p>\n</div>",
+    "votes": "19",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "windows",
+        "exception"
+    ],
+    "user": "NirIzr",
+    "time": "Jun 25, 2017 at 14:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Unfortunately MSDN and windows API documentation is really scarce here, and I had difficulties finding anything other than the minimal description in MSDN.</p>\n<p>It turns out the Vectored <em>Continue</em> Handlers are maintained in a Linked list very similar to the one used for Vectored <em>Exception</em> Handlers. They are so similar, that the function's prototypes are practically identical.</p>\n<p>Take a look at:</p>\n<pre><code>PVOID WINAPI AddVectoredExceptionHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n</code></pre>\n<p>Compared to:</p>\n<pre><code>PVOID WINAPI AddVectoredContinueHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n</code></pre>\n<p>Luckily, Vectored <em>Exception</em> Handlers are more commonly used and documented. For example, MSDN has a <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms681420(v=vs.85).aspx\" rel=\"noreferrer\">page</a> about VEHs, containing the following paragraph:</p>\n<blockquote>\n<p>Vectored exception handlers are an extension to structured exception handling. An application can register a function to watch or handle all exceptions for the application. Vectored handlers are not frame-based, therefore, you can add a handler that will be called regardless of where you are in a call frame. Vectored handlers are called in the order that they were added, after the debugger gets a first chance notification, but before the system begins unwinding the stack.</p>\n</blockquote>\n<p>The same page has only a laconic reference to the Add and Remove VCH APIs.</p>\n<p>After some research and reverse engineering of ntdll, I realized VCHs and VEHs are quite similar in implementation. For example, see how <code>AddVectoredExceptionHandler</code> and <code>AddVectoredContinueHandler</code> are identical except for the <code>VectoredListIndex</code>, specifying they should be added to the second <code>VectorHandlerList</code> in the case of VCH:</p>\n<p><a href=\"https://i.sstatic.net/NcS2S.png\" rel=\"noreferrer\"><img alt=\"AddVectoredExceptionHandler VS AddVectoredContinueHandler\" src=\"https://i.sstatic.net/NcS2S.png\"/></a></p>\n<p>Similarly, <code>RemoveVectoredExceptionHandler</code> and <code>RemoveVectoredContinueHandler</code> are identical except for the vectored handlers list index.</p>\n<p>Inside <code>RtlpAddVectoredHandler</code>, the <code>VectoredListIndex</code> is used as an index in  <code>_LdrpVectorHandlerList</code>, which is an array of size two of a linked list structure.</p>\n<p>In the following picture we can see how <code>VectoredListIndex</code> is multiplied by the size of the list anchor object, and then added to <code>_LdrpVectorHandlerList</code>, which is the base offset of the array.</p>\n<p><a href=\"https://i.sstatic.net/WukZJ.png\" rel=\"noreferrer\"><img alt=\"VectoredListIndex used as an array index\" src=\"https://i.sstatic.net/WukZJ.png\"/></a></p>\n<p>And now we're getting to the interesting part - where are VEH and VCH different?</p>\n<p>If we walk up the cross references to <code>_LdrpVectorHandlerList</code>, we'll notice the two flows leading up to the add/remove functions are practically identical. Aside from those four APIs, we're left with only one other function, called <code>RtlpCallVectoredHandlers</code> which is undocumented.</p>\n<p>It's pretty obvious from the name, but <code>RtlpCallVectoredHandlers</code> iterates over the vector (vector is selected according to the index) and calls all Handlers in a sequence. Once a Vectored Handler returns <code>EXCEPTION_CONTINUE_EXECUTION</code> the iteration is interrupted by prematurely returning from <code>RtlpCallVectoredHandlers</code> and execution resumes.</p>\n<p>The sole function calling <code>RtlpCallVectoredHandlers</code> is <code>RtlDispatchException</code>, which is the main function dispatching exception handlers.</p>\n<p>First, it executes all exception handlers, starting with the first Vectored Exception Handler to the last, and then going through all Structured Exception Handlers unfolding them through the stack. The first exception handler to return <code>EXCEPTION_CONTINUE_EXECUTION</code> (be it of type VEH or SEH) will stop the entire exception handlers execution process.</p>\n<p>Like VEHs, when VCHs are called, they are called one by one until one of them returns <code>EXCEPTION_CONTINUE_EXECUTION</code> (just as when VEHs are called), which signals <code>RtlpCallVectoredHandlers</code> to <code>break</code> the Vectored Handlers calling loop. This is interesting because it means installing a Vectored Continue Handler as first lets you hide exceptions from subsequent VCHs.</p>\n<p>Vectored Continue Handlers are called under the following circumstances:</p>\n<ol>\n<li>If an exception handler (either VEH or SEH) was called and returned <code>EXCEPTION_CONTINUE_EXECUTION</code></li>\n<li>If for some reason SEH validation failed (See SafeSEH and related mechanisms), VCHs will also be called, but the execution will not continue afterwards.\nThis can be seen in the many flows that lead to the second <code>RtlpCallVectoredHandlers</code> call without setting <code>bl</code> to <code>1</code> and leaving it equal to zero before moving it to <code>al</code> and returning <code>false</code>. The calling function, <code>KiUserExceptionDispatcher</code> will then call <code>ZwRaiseException</code> if the value returned by <code>KiUserExceptionDispatcher</code> is <code>false</code>.\n<a href=\"https://i.sstatic.net/5Xss7.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/5Xss7.png\"/></a></li>\n</ol>\n</div>",
+            "votes": "17",
+            "user": "NirIzr",
+            "time": "Mar 19, 2018 at 16:02",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Kentzo",
+                    "text": "<span class=\"comment-copy\">You say \"If an exception handler (either VEH or SEH) was called and returned EXCEPTION_CONTINUE_EXECUTION\". Did you <code>EXCEPTION_CONTINUE_SEARCH</code>? It does not make sense to call another handler after exception is handled.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@Kentzo that's precisely the point of vectored <i>continue</i> handlers.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kentzo",
+                    "text": "<span class=\"comment-copy\">The information I found on <a href=\"https://blogs.msdn.microsoft.com/zhanli/2010/06/24/c-tips-addvectoredexceptionhandler-addvectoredcontinuehandler-and-setunhandledexceptionfilter\" rel=\"nofollow noreferrer\">msdn</a> (see a comment by MS employee) contradicts with that.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kentzo",
+                    "text": "<span class=\"comment-copy\">Nevermind: I think I misunderstood the comment. It's indeed only called as you state.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

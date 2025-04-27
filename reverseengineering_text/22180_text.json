@@ -1,0 +1,62 @@
+{
+    "title": "How to help IDA to auto complete libc functions?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22180/how-to-help-ida-to-auto-complete-libc-functions",
+    "content": "I have a x86_64 ELF binary which is statically compiled. With some digging,\nI have found the C library is musl. In IDA Pro 7.0, the decompiled pseudo code\nshows sycalls as inline assembly code. But in latest IDA Pro 7.3.x it is shown\nas an incomplete function. Take <pre><code>fork()</code></pre> as an example:\n\nIn assembly:\n\n<pre><code>mov eax, 57\nsyscall\n</code></pre>\n\nIn IDA Pro 7.0:\n\n<pre><code>__asm { syscall; LINUX - sys_fork }\n</code></pre>\n\nIn IDA Pro 7.3.x:\n\n<pre><code>sys_fork()\n</code></pre>\nSo, there is some improvement :)\nI want IDA to automatically resolve the function parameters and return values.\nIn Windows world, I did something similar by creating type libraries.\nIs there any way to import the whole C library (musl or glibc) in IDA without\nmanually editing every libc functions?\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "hexrays",
+        "libc"
+    ],
+    "user": "Biswapriyo",
+    "time": "Sep 24, 2019 at 9:38",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Inline syscalls are rarely used on their own even in minimal libraries like musl. Usually there are wrapper functions around the syscall which is what actually ends up in the binary. So what you can do is use the FLAIR toolkit to generate a FLIRT signature from the musl’s static library and then apply the signature to your binary. This way you should get all the wrapper functions recognized which, coupled with one of the standard type libraries, should give you names and arguments for the C library functions.\n",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Sep 27, 2019 at 21:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Compiled musl from git repo. Ran <code>./pelf libc.a</code>. Got this error <code>(__init_tls.lo): Unknown relocation type 42 (offset in section=0x41)</code>. Though it generated <code>libc.pat</code> file, <code>./sigmake libc.pat libc.sig</code> shows this error <code>./lib/libc.pat (1): FATAL: can't find eof marker (---)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">IIRC you can handle unsupported relocations with -r switch</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">It’s a switch for pelf, not sigmake</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">I have to find the compiler. Now flirt works, IDA can shows 90% of the syscall/libc function names.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Here are the required steps using Igor Skochinsky's answer:\n\nClone musl git repository:\n\n<pre><code>git clone --depth=1 git://git.musl-libc.org/musl\n</code></pre>\n\nCompile the code:\n\n<pre><code>cd musl; ./configure; make -s -j2\n</code></pre>\n\nExtract Flair tool from IDA SDK. Run <pre><code>pelf</code></pre> (ELF parser) with the musl static\nlibrary which is compiled in above step:\n\n<pre><code>cd ./lib\n~/flair/bin/linux/pelf libc.a\n</code></pre>\nThe output will be something like below:\n<pre><code>Fatal [/mnt/c/MyFiles/libc.a] (__init_tls.lo): Unknown relocation type 42 (offset in section=0x3a).\n</code></pre>\n\nTo fix the unsupported relocation error, run <pre><code>pelf</code></pre> with <pre><code>-r</code></pre> option:\n\n<pre><code>./flair/bin/linux/pelf -r42:58:0 libc.a musl.pat\n</code></pre>\nThe <pre><code>-r</code></pre> option is specified as <pre><code>-rN:O:L</code></pre> where N is relocation type, mark as\nvariable L bytes at offset O from the relocation address. This creates a PAT file.\n\nNow run <pre><code>sigmake</code></pre> to create the Flair signature file:\n\n<pre><code>./flair/bin/linux/sigmake -n musl musl.pat musl.sig\n</code></pre>\nIf the output does not show any warning then the SIG file is OK. But if there\nany collisions with the function signature the output will be something like below:\n<pre><code>libc.sig: modules/leaves: 1550/1775, COLLISIONS: 41\n</code></pre>\nTo mitigate the error, remove comments from <pre><code>musl.exc</code></pre> collision file. Then run\nthe above <pre><code>sigmake</code></pre> command again. There will be a <pre><code>musl.sig</code></pre> file which can be\nimported in IDA Pro from File > Load File > FLIRT signature file.\nFLIRT signature depends on the C/C++ compiler. For my case it is clang. I found\nit in the exception handling function. There will be a static string like <pre><code>CLNGC++\\0</code></pre>.\nThe string can not be found in IDA's String Window. So, one has to find the\nexception handling function first. The trick is that the function is called whenever\na error value returns.\n",
+            "votes": "3",
+            "user": "Biswapriyo",
+            "time": "Nov 19, 2019 at 15:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Much appreciated!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

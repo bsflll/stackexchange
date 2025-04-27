@@ -1,0 +1,57 @@
+{
+    "title": "Is it possible to (heuristic) identify the begin addr of main function in a stripped ELF?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4349/is-it-possible-to-heuristic-identify-the-begin-addr-of-main-function-in-a-stri",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So basically I am working on some tripped\n  <em>\n   dynamic linked\n  </em>\n  ELF binaries (32 bit Linux x86), using\n  <code>\n   objdump\n  </code>\n  to disassemble them, modifying and trying to reassemble them.\n </p>\n <p>\n  In the unstripped binary, we can get the beginning address of main function based on the symbol table, however, on the stripped binary, we just don't know where the main function is.\n </p>\n <p>\n  Of course I can just adjust the whole\n  <em>\n   text\n  </em>\n  section, and starting from the original entry point of the ELF.\n </p>\n <p>\n  But the problems are:\n </p>\n <ol>\n  <li>\n   <p>\n    There is some control transfer from the prologue/epilog of this ELF (such as\n    <code>\n     _start\n    </code>\n    ;\n    <code>\n     __do_global_dtors_aux\n    </code>\n    ;\n    <code>\n     __libc_csu_fini\n    </code>\n    ;\n    <code>\n     __i686.get_pc_thunk.bx\n    </code>\n    ;\n    <code>\n     __do_global_ctors_aux\n    </code>\n    ) into the\n    <code>\n     .dtors\n    </code>\n    ,\n    <code>\n     .ctors\n    </code>\n    section, which means I have to also disassemble this section.\n   </p>\n  </li>\n  <li>\n   <p>\n    I am afraid that if I start from entry point in the re-assembled ELF, then I would probably\n    <strong>\n     double-init\n    </strong>\n    some stuff, because in my re-assembled asm code, I have the code of\n    <code>\n     _start\n    </code>\n    ;\n    <code>\n     __do_global_dtors_aux\n    </code>\n    ;\n    <code>\n     __libc_csu_fini\n    </code>\n    while linker will also attach these functions in the new ELF.\n   </p>\n  </li>\n </ol>\n <p>\n  So I would like to use some way to identify the\n  <code>\n   main\n  </code>\n  function in a stripped ELF (heuristically)...\n </p>\n <p>\n  Right now I don't have some strategies on this issue, Could anyone give me some help?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 4,
+    "views": "1k",
+    "tags": [
+        "disassembly",
+        "x86",
+        "elf",
+        "reassembly"
+    ],
+    "user": "lllllllllllll",
+    "time": "May 17, 2014 at 8:09",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The catch is to determine whether the image in question uses a \"standard\" C runtime library of sorts (glibc, musl, uclibc) or not. If it does, then you can grab the entry point address and match the code at that address against your collection of startup routines from those libraries and pinpoint the main() location as you'd know which\n  <code>\n   call\n  </code>\n  is the one transferring control to\n  <code>\n   main()\n  </code>\n  .\n </p>\n <p>\n  Then, the image might not be linked against any well-known C runtime, say, if it's a code piece that directly invokes kernel syscalls or if it managed to whip its own CRT library.\n </p>\n <p>\n  Another good point would be if the program wasn't written in C at all and uses some other fancy language, but that seems to be outside the scope of the question as\n  <code>\n   main()\n  </code>\n  won't be relevant for those, I guess.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Dmitry Janushkevich",
+            "time": "Jun 26, 2014 at 11:59",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I started to answer to this in «\n  <a href=\"https://reverseengineering.stackexchange.com/questions/3815/reversing-elf-64-bit-lsb-executable-x86-64-gdb/3816#3816\">\n   Reversing ELF 64-bit LSB executable, x86-64 ,gdb\n  </a>\n  », but this was focused only to AMD64.\n </p>\n <p>\n  Indeed, the key is really to locate the\n  <code>\n   __libc_start_main\n  </code>\n  function and take its first argument as a pointer to the entry of the\n  <code>\n   main\n  </code>\n  function. The full description of this function is the following (from its manual page):\n </p>\n <blockquote>\n  <p>\n   <code>\n    __libc_start_main\n   </code>\n  </p>\n  <h2>\n   Name\n  </h2>\n  <p>\n   <code>\n    __libc_start_main\n   </code>\n   - initialization routine\n  </p>\n  <h2>\n   Synopsis\n  </h2>\n  <pre><code>int __libc_start_main(int (*main) (int, char**, char**), int argc, char** ubp_av,\n                      void (*init) (void), void (*fini) (void), \n                      void (*rtld_fini) (void), void (* stack_end));\n</code></pre>\n  <h2>\n   Description\n  </h2>\n  <p>\n   The\n   <code>\n    __libc_start_main()\n   </code>\n   function shall perform any necessary initialization of the execution environment, call the main function with appropriate arguments, and handle the return from\n   <code>\n    main()\n   </code>\n   . If the\n   <code>\n    main()\n   </code>\n   function returns, the return value shall be passed to the\n   <code>\n    exit()\n   </code>\n   function.\n  </p>\n  <p>\n   <strong>\n    Note\n   </strong>\n   : While this specification is intended to be implementation independent, process and library initialization may include:\n  </p>\n  <ul>\n   <li>\n    Performing any necessary security checks if the effective user ID is not the same as the real user ID.\n   </li>\n   <li>\n    Initialize the threading subsystem.\n   </li>\n   <li>\n    Registering the\n    <code>\n     rtld_fini\n    </code>\n    to release resources when this dynamic shared object exits (or is unloaded).\n   </li>\n   <li>\n    Registering the\n    <code>\n     fini\n    </code>\n    handler to run at program exit.\n   </li>\n   <li>\n    Calling the initializer function\n    <code>\n     (*init)()\n    </code>\n    .\n   </li>\n   <li>\n    Calling\n    <code>\n     main()\n    </code>\n    with appropriate arguments.\n   </li>\n   <li>\n    Calling\n    <code>\n     exit()\n    </code>\n    with the return value from\n    <code>\n     main()\n    </code>\n    .\n   </li>\n  </ul>\n  <p>\n   This list is an example only.\n  </p>\n  <p>\n   <code>\n    __libc_start_main()\n   </code>\n   is not in the source standard; it is only in the binary standard.\n  </p>\n  <h2>\n   See Also\n  </h2>\n  <p>\n   The section on\n   <em>\n    Process Initialization\n   </em>\n   in each of the architecture specific parts of ISO/IEC 23360.\n  </p>\n </blockquote>\n <p>\n  So, the\n  <code>\n   __libc_start_main\n  </code>\n  gives you not only the address of the\n  <code>\n   main()\n  </code>\n  procedure but also access to\n  <code>\n   int argc\n  </code>\n  ,\n  <code>\n   char** argv\n  </code>\n  and\n  <code>\n   char** envp\n  </code>\n  .\n </p>\n <p>\n  The point will then be to extract each of these arguments from the assembly code which may vary depending on the ABI (Application Binary Interface) you are using (function arguments may be pushed on the stack or in specific registers).\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>objdump -f exe_name\n\nexe_name:     file format elf32-little\narchitecture: UNKNOWN!, flags 0x00000112:\nEXEC_P, HAS_SYMS, D_PAGED\nstart address 0x00306990\n</code></pre>\n <p>\n  The start address mentioned above is the main entry point in the executable. You can also verify this using gdb\n </p>\n <pre><code>(gdb) break *0x00306990\n</code></pre>\n <p>\n  Normally, the start address is mapped to symbol\n  <code>\n   _start\n  </code>\n  , so you can also do\n </p>\n <pre><code>(gdb) break _start\n</code></pre>\n <p>\n  If I recall correctly,\n  <code>\n   _start\n  </code>\n  calls\n  <code>\n   __libc_start_main\n  </code>\n  which in turn calls\n  <code>\n   __libc_csu_init\n  </code>\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "manav m-n",
+            "time": "Jun 26, 2014 at 15:43",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So I am thinking that, in the asm code disassembled from\n  <code>\n   objdump\n  </code>\n  , we should always find this :\n </p>\n <pre><code>push addr\ncall __libc_start_main\n</code></pre>\n <p>\n  and in a heuristical perspective, we can just consider the\n  <code>\n   addr\n  </code>\n  in the above code is the beginning addr of\n  <code>\n   main\n  </code>\n  function.\n </p>\n <p>\n  Am I right? Is there any exception?\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "lllllllllllll",
+            "time": "May 16, 2014 at 17:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">In fact, it depends on the ABI you are using. For example, in SystemV AMD64, you will find the first argument in the register <code>%rdi</code>.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

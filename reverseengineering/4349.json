@@ -1,0 +1,57 @@
+{
+    "title": "Is it possible to (heuristic) identify the begin addr of main function in a stripped ELF?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4349/is-it-possible-to-heuristic-identify-the-begin-addr-of-main-function-in-a-stri",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So basically I am working on some tripped <em>dynamic linked</em> ELF binaries (32 bit Linux x86), using <code>objdump</code> to disassemble them, modifying and trying to reassemble them.</p>\n<p>In the unstripped binary, we can get the beginning address of main function based on the symbol table, however, on the stripped binary, we just don't know where the main function is.</p>\n<p>Of course I can just adjust the whole <em>text</em> section, and starting from the original entry point of the ELF.</p>\n<p>But the problems are:</p>\n<ol>\n<li><p>There is some control transfer from the prologue/epilog of this ELF (such as <code>_start</code>; <code>__do_global_dtors_aux</code>; <code>__libc_csu_fini</code>; <code>__i686.get_pc_thunk.bx</code>; <code>__do_global_ctors_aux</code>) into the <code>.dtors</code>,<code>.ctors</code>section, which means I have to also disassemble this section.</p></li>\n<li><p>I am afraid that if I start from entry point in the re-assembled ELF, then I would probably <strong>double-init</strong> some stuff, because in my re-assembled asm code, I have the code of <code>_start</code>; <code>__do_global_dtors_aux</code>; <code>__libc_csu_fini</code> while linker will also attach these functions in the new ELF.</p></li>\n</ol>\n<p>So I would like to use some way to identify the <code>main</code> function in a stripped ELF (heuristically)...</p>\n<p>Right now I don't have some strategies on this issue, Could anyone give me some help?</p>\n</div>",
+    "votes": "4",
+    "answers": 4,
+    "views": "1k",
+    "tags": [
+        "disassembly",
+        "x86",
+        "elf",
+        "reassembly"
+    ],
+    "user": "lllllllllllll",
+    "time": "May 17, 2014 at 8:09",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The catch is to determine whether the image in question uses a \"standard\" C runtime library of sorts (glibc, musl, uclibc) or not. If it does, then you can grab the entry point address and match the code at that address against your collection of startup routines from those libraries and pinpoint the main() location as you'd know which <code>call</code> is the one transferring control to <code>main()</code>.</p>\n<p>Then, the image might not be linked against any well-known C runtime, say, if it's a code piece that directly invokes kernel syscalls or if it managed to whip its own CRT library.</p>\n<p>Another good point would be if the program wasn't written in C at all and uses some other fancy language, but that seems to be outside the scope of the question as <code>main()</code> won't be relevant for those, I guess.</p>\n</div>",
+            "votes": "3",
+            "user": "Dmitry Janushkevich",
+            "time": "Jun 26, 2014 at 11:59",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I started to answer to this in « <a href=\"https://reverseengineering.stackexchange.com/questions/3815/reversing-elf-64-bit-lsb-executable-x86-64-gdb/3816#3816\">Reversing ELF 64-bit LSB executable, x86-64 ,gdb</a> », but this was focused only to AMD64.</p>\n<p>Indeed, the key is really to locate the <code>__libc_start_main</code> function and take its first argument as a pointer to the entry of the <code>main</code> function. The full description of this function is the following (from its manual page):</p>\n<blockquote>\n<p><code>__libc_start_main</code></p>\n<h2>Name</h2>\n<p><code>__libc_start_main</code> - initialization routine</p>\n<h2>Synopsis</h2>\n<pre><code>int __libc_start_main(int (*main) (int, char**, char**), int argc, char** ubp_av,\n                      void (*init) (void), void (*fini) (void), \n                      void (*rtld_fini) (void), void (* stack_end));\n</code></pre>\n<h2>Description</h2>\n<p>The <code>__libc_start_main()</code> function shall perform any necessary initialization of the execution environment, call the main function with appropriate arguments, and handle the return from <code>main()</code>. If the <code>main()</code> function returns, the return value shall be passed to the <code>exit()</code> function.</p>\n<p><strong>Note</strong>: While this specification is intended to be implementation independent, process and library initialization may include:</p>\n<ul>\n<li>Performing any necessary security checks if the effective user ID is not the same as the real user ID.</li>\n<li>Initialize the threading subsystem.</li>\n<li>Registering the <code>rtld_fini</code> to release resources when this dynamic shared object exits (or is unloaded).</li>\n<li>Registering the <code>fini</code> handler to run at program exit.</li>\n<li>Calling the initializer function <code>(*init)()</code>.</li>\n<li>Calling <code>main()</code> with appropriate arguments.</li>\n<li>Calling <code>exit()</code> with the return value from <code>main()</code>.</li>\n</ul>\n<p>This list is an example only.</p>\n<p><code>__libc_start_main()</code> is not in the source standard; it is only in the binary standard.</p>\n<h2>See Also</h2>\n<p>The section on <em>Process Initialization</em> in each of the architecture specific parts of ISO/IEC 23360.</p>\n</blockquote>\n<p>So, the <code>__libc_start_main</code> gives you not only the address of the <code>main()</code> procedure but also access to <code>int argc</code>, <code>char** argv</code> and <code>char** envp</code>.</p>\n<p>The point will then be to extract each of these arguments from the assembly code which may vary depending on the ABI (Application Binary Interface) you are using (function arguments may be pushed on the stack or in specific registers).</p>\n</div>",
+            "votes": "3",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<pre><code>objdump -f exe_name\n\nexe_name:     file format elf32-little\narchitecture: UNKNOWN!, flags 0x00000112:\nEXEC_P, HAS_SYMS, D_PAGED\nstart address 0x00306990\n</code></pre>\n<p>The start address mentioned above is the main entry point in the executable. You can also verify this using gdb</p>\n<pre><code>(gdb) break *0x00306990\n</code></pre>\n<p>Normally, the start address is mapped to symbol <code>_start</code>, so you can also do</p>\n<pre><code>(gdb) break _start\n</code></pre>\n<p>If I recall correctly, <code>_start</code> calls <code>__libc_start_main</code> which in turn calls <code>__libc_csu_init</code></p>\n</div>",
+            "votes": "3",
+            "user": "manav m-n",
+            "time": "Jun 26, 2014 at 15:43",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So I am thinking that, in the asm code disassembled from <code>objdump</code>, we should always find this :</p>\n<pre><code>push addr\ncall __libc_start_main\n</code></pre>\n<p>and in a heuristical perspective, we can just consider the <code>addr</code> in the above code is the beginning addr of <code>main</code> function.</p>\n<p>Am I right? Is there any exception?</p>\n</div>",
+            "votes": "2",
+            "user": "lllllllllllll",
+            "time": "May 16, 2014 at 17:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">In fact, it depends on the ABI you are using. For example, in SystemV AMD64, you will find the first argument in the register <code>%rdi</code>.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

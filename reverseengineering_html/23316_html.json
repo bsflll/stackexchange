@@ -1,0 +1,56 @@
+{
+    "title": "Seeking for explanation about “ in_FS_OFFSET ” and “ __stack_chk_fail() ”",
+    "link": "https://reverseengineering.stackexchange.com/questions/23316/seeking-for-explanation-about-in-fs-offset-and-stack-chk-fail",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is the part of the picoCTF 2019 problem \"Investigative Reversing 0\". I've encountered the following code when using Ghidra:\n </p>\n <pre><code>  if (lVar1 != *(long *)(in_FS_OFFSET + 0x28)) {\n                    /* WARNING: Subroutine does not return */\n    __stack_chk_fail();\n  }\n</code></pre>\n <p>\n  Although I've completed the challenge using this as a guide:\n  <a href=\"https://github.com/Dvd848/CTFs/blob/master/2019_picoCTF/Investigative_Reversing_0.md\" rel=\"noreferrer\">\n   https://github.com/Dvd848/CTFs/blob/master/2019_picoCTF/Investigative_Reversing_0.md\n  </a>\n </p>\n <p>\n  I still don't understand this part of the code and what it does.After a few more detailed search I found two datatype assigned to the code:\n </p>\n <pre><code>long in_FS_OFFSET;\nlong lVar1;\n</code></pre>\n <p>\n  I did research combining the code with ‘in_FS_OFFSET’ and ‘__stack_chk_fail()’ and most of them turned up as solution writeups on various CTF problems.Only a minority of them are something else.Such as this:\n  <a href=\"https://hackaday.io/project/164346-andxor-dc27-badge/log/164366-reverse-engineering-with-ghidra-simtaco-floppy-challenge\" rel=\"noreferrer\">\n   https://hackaday.io/project/164346-andxor-dc27-badge/log/164366-reverse-engineering-with-ghidra-simtaco-floppy-challenge\n  </a>\n </p>\n <p>\n  The site have very similar de-compiled results, so I'm thinking this part of the code had something to do in protecting the program from stack-overflow.I looked at the source code of the program in the bottom of the site and searched all the c library included, but I found no useful hints.\nI returned to Ghidra and found this undefined function:\n </p>\n <pre><code>void UndefinedFunction_00101036(void)\n\n{\n                    /* WARNING: Treating indirect jump as call */\n  (*(code *)(undefined *)0x0)();\n  return;\n}\n</code></pre>\n <p>\n  Does this undefined function have anything to do with my question? If so, what might be the original code be? Thanks in advance for any answers.\n </p>\n <p>\n  Edit:\ndisassembly part of the code\n </p>\n <pre><code>00101380  64 48 33        XOR        sVar2,qword ptr FS:[0x28]\n          04 25 28 \n          00 00 00\n00101389  74 05           JZ         LAB_00101390\n0010138b  e8 d0 fc        CALL       __stack_chk_fail       undefined __stack_chk_fail()\n          ff ff\n                             -- Flow Override: CALL_RETURN (CALL_TERMINATOR)\n\n</code></pre>\n <p>\n  and the function:\n </p>\n <pre><code>                        //\n                        // .plt \n                        // SHT_PROGBITS  [0x1020 - 0x109f]\n                        // ram: 00101020-0010109f\n                        //\n                        LAB_00101020            XREF[9]:     0010103b(j), 0010104b(j), \n                                                0010105b(j), 0010106b(j), \n                                                0010107b(j), 0010108b(j), \n                                                0010109b(j), 001020b4, \n                                                _elfSectionHeaders::00000310(*)  \n        00101020 ff 35 6a        PUSH       qword ptr [PTR_00103f90]            = 00000000\n                 2f 00 00\n        00101026 ff 25 6c        JMP        qword ptr [PTR_00103f98]\n                 2f 00 00\n\n</code></pre>\n</div>\n</body></html>",
+    "votes": "7",
+    "answers": 1,
+    "views": "10k",
+    "tags": [
+        "decompilation"
+    ],
+    "user": "charlie",
+    "time": "Feb 22, 2020 at 1:27",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n Look at the assembly too\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "charlie",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky thanks for reminding, edited\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<html><body><span class=\"comment-copy\">\n see also:\n <a href=\"https://security.stackexchange.com/questions/158609/how-is-the-stack-protection-enforced-in-a-binary/158616#158616\">\n  How is the stack protection enforced in a binary?\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  fs:0x28 is stack_cookie or stack_canary\n </p>\n <p>\n  _stk_check_fail() is function that aborts execution\n </p>\n <p>\n  the compiler places a cookie in the  stack and after returning from a function that manipulates stack it checks and compares.\n </p>\n <p>\n  if the cookie is corrupted then instead of proceding further the execution is simply terminated\n </p>\n <p>\n  this is a hardening technique against buffer overflows especially stack smashing\n </p>\n <p>\n  go to\n  <a href=\"https://godbolt.org/\" rel=\"noreferrer\">\n   compiler explorer\n  </a>\n </p>\n <p>\n  paste this code select language as c\n  \n\n  leave the compiler version as latest\n  \n\n  add -fstack-protector to compiler options\n  \n\n  and look at the disassembly produced to\nsee how stack_canary @ fs:0x28  is used\n </p>\n <pre><code>#include <stdio.h>\n#include <string.h>\nvoid foo (char *str) {\n    char buff[16];\n    strcpy(buff,str);\n}\nint main(void){\n    printf(\"test for __stack_chk_fail\n\");\n    foo(\"small str\");\n    printf(\"success\n\");\n    foo(\"A Big String is Copied to a Small Buffer\");\n    printf(\"i wont reach here if stack_chk_fail worked \");\n}\n</code></pre>\n <p>\n  disassembly of above code\n </p>\n <pre><code>foo:\n        push    rbp\n        mov     rbp, rsp\n        sub     rsp, 48\n        mov     QWORD PTR [rbp-40], rdi\n        mov     rax, QWORD PTR fs:40\n        mov     QWORD PTR [rbp-8], rax\n        xor     eax, eax\n        mov     rdx, QWORD PTR [rbp-40]\n        lea     rax, [rbp-32]\n        mov     rsi, rdx\n        mov     rdi, rax\n        call    strcpy\n        nop\n        mov     rax, QWORD PTR [rbp-8]\n        xor     rax, QWORD PTR fs:40   <<<<(40=0x28)\n        je      .L2\n        call    __stack_chk_fail\n.L2:\n        leave\n        ret\n</code></pre>\n <h1>\n  a screenshot showing what is said above to address the comment\n </h1>\n <p>\n  <a href=\"https://i.sstatic.net/sImY1.jpg\" rel=\"noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/sImY1.jpg\"/>\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "blabb",
+            "time": "Feb 22, 2020 at 18:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "charlie",
+                    "text": "<span class=\"comment-copy\">But I can't add -fstack-protecter to compiler options, they simply failed to compile</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">added a screenshot</span>",
+                    "time": null
+                },
+                {
+                    "user": "charlie",
+                    "text": "<span class=\"comment-copy\">I see, I set option as -fstack-protecter instead of -fstack-protector, my bad</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

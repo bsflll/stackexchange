@@ -1,0 +1,50 @@
+{
+  "title": "Determining an application's library call behaviour",
+  "link": "https://reverseengineering.stackexchange.com/questions/15407/determining-an-applications-library-call-behaviour",
+  "content": "I have a closed source Linux library libfoo that makes calls into another closed source library libbar for additional (mostly unneeded) features. However, I can't use libbar for ethical reasons, so I am trying to make a dummy library libfakebar that \"implements\" as little as possible of libbar while still being able to be used as a drop-in replacement (i.e., as close as possible to a collection of stubs).\n\nI initially tried to simply extract the defined symbols from libbar via nm -D --defined-only libbar.so and only create stubs for those symbols, referencing the available public documentation for the appropriate function signatures.  However, this fails when libfoo attempts to make calls that are not based on symbols.  Specifically, it calls BarInstance() in libbar to get a pointer to a C++ class instance, adds a seemingly arbitrary value to that pointer, then uses the value found at the new address as a pointer to the next function it calls.  Here is an example demonstrating this:\n\n```\ncallq  0x7fff97158300 <BarInstance@plt>\nmov    (%rax),%r8\nlea    0x96c165(%rip),%rcx        # 0x7fff97b50e65\nmov    %ebp,%edx\nmov    %r12d,%esi\nmov    %rax,%rdi\ncallq  *0x28(%r8)\n\n```\nI can't understand how this is supposed to make sense or be \"legal\" code.  Remarkably, if I make BarInstance() return a collection of pointers to stub functions instead of a class instance, libfoo runs without complaints and everything \"works\".  Unfortunately, it's not quite good enough to meet my minimum functionality requirements as there is at least one feature I need that doesn't work with said stubs, and the strange calling behaviour of libfoo doesn't lend itself towards helping me understand what more may need to be added where.\n\nI'm not sure what impact this may make, but it appears as though libbar was built using GCC's -fvisibility=hidden.  I have not been able to figure out exactly what to make of the above calling behaviour and as such what I need to do in libfakebar in order to properly replicate whatever is necessary for libfoo's code to work as expected - what's going on here?\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "205",
+  "tags": [
+    "disassembly",
+    "x86",
+    "linux",
+    "c++",
+    "libraries"
+  ],
+  "user": "Hiko Haieto",
+  "time": "May 23, 2017 at 8:34",
+  "comments": [
+    {
+      "user": "Ian Cook",
+      "text": "It looks like it's calling a virtual function.  r8 is the pointer to the virtual function table and the call is through the function pointer at offset 0x28 in the table.",
+      "time": null
+    },
+    {
+      "user": "Hiko Haieto",
+      "text": "Shouldn't it still be referenced by symbol, though?  What if the number or order of virtual functions changes from one library version to another (how would the application and library know they agree)?  I also have to wonder how I'd have known which virtual functions to add without documentation being available - I had originally changed them to non-virtual only because I didn't realise it made a difference.  Nonetheless, reverting member functions to virtual made it work!  If you could provide your comment as an answer (and address the concerns in this comment if you can), I can accept it.",
+      "time": null
+    },
+    {
+      "user": "Ian Cook",
+      "text": "I will post an answer (addressing your concerns) later today.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This appears to be fairly typical virtual function call where the pointer to the virtual function table is stored in the object at offset 0000 and the call is to the function pointed to at offset 0028 in the table.\n\nThe object's virtual function table pointer (at offset 0000) is initialized in the class constructor.  Since the constructor will be in the library, there does not need to be any direct reference to the virtual function table in the calling code.\nSimilarly, a normal call to virtual function is via the virtual function table and there is no need for any direct reference to it in the calling code either.\n\nFor consistency between the application and library, it is important that both \n\nFor more information about this you might want to read about binary compatibility. \n\nOne of the things specified by an ABI is the order of the functions in the virtual function table.  For example, the Itanium C++ ABI (used by GCC) says \n\nHence, if the declaration order were to change between building the library and building the application there will no longer be binary compatibility.\n\n",
+      "votes": "3",
+      "user": "Ian Cook",
+      "time": "May 27, 2017 at 6:24",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Hiko Haieto",
+          "text": "Apparently to some extent the \"which virtual functions to add\" part of the problem was indeed due to the \"-fvisibility=hidden\" build strategy - without that, the respective symbols show up in the resulting sofile.  The number/order problem still seems like a big one to me though.  It reminds me of the same C/C++ problem with the order of struct members, only worse as classes are both arguably more common and their functions more tempting to reorder (as well as the resulting consequences being less obvious).  But this deserves its own question.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

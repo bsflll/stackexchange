@@ -1,0 +1,38 @@
+{
+  "title": "VMProtect Anti-debugging method (without WiNAPI)",
+  "link": "https://reverseengineering.stackexchange.com/questions/30682/vmprotect-anti-debugging-method-without-winapi",
+  "content": "First, sorry for my bad english.\n\nI'm trying to make VMProtect unpacker with unicorn emulator, but one of my sample shows me like this anti-debugging message:\n\n```\nWTSSendMessageW: \"A debugger has been found running in your systeam. Please, unload it from memory and restart your program\"\n\n```\nMy sample is x86 pe dll and i don't know exact VMProtect version (but above 3.0 is definitely)\nIn unpack process, WinAPI calling sequence looks like below:\n\n```\nIsWow64Process\nIsDebuggerPresent (make return 0)\nCheckRemoteDebuggerPresent (make pbDebuggerPresent as 0)\nNtQueryInformationProcess (make ProcessInformation as 0, return STATUS_PROT_NOT_SET)\nNtSetInformationThread \nNtQuerySystemInformation (3 times, maybe this is kernel anti-debugging routines)\nGetModuleFileNameW \nNtOpenFile (for file corruption check?)\nNtCreateSection\nNtMapViewOfSection\nNtUnmapViewOfSection\nNtClose\nNtProtectVirtualMemory\n// I think below code is detection routine\nGetModuleFileNameW\nGetProcessWindowStation\nGetUserObjectInformation\nLoadLibraryA (wtsapi32.dll)\nWTSSendMessageW (Anti-debugging detection message)\n\n```\nI think every detection routine has called before NtProtectVirtualMemory, and the rest of code is unpack their's code to text section with several NtProtectVirtualMemory functions.\nBut, after the first NtProtectVirtualMemory has called, and samples shows detection routine without any suspicious WinAPI calling.\n\nI have issue with unicorn emulator hook code, so i cannot logged all unpacking code, and when i running this sample with x86dbg, i cannot make same situation that i face on.\n\nSo, I wonder is there any anti-debugging technique which is not based on WinAPI?\n(single-step exception not occured yet, when detection timing)\n\nI hope for your guide.\nthank you.\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "unpacking",
+    "anti-debugging",
+    "vmprotect"
+  ],
+  "user": "schnabel",
+  "time": "Jul 22, 2022 at 7:29",
+  "comments": [
+    {
+      "user": "omgkaka",
+      "text": "Is the problem solved? I encountered the same problem. According to my current research, it should not be caused by the RDTSC instruction, because I am sure that the RDTSC instruction is not executed during the simulation execution.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Yes, you are correct, there is a very common anti-emulation detection technique that is based on the rdtsc instruction, here are 2 variations of it (taken from al-khaser):\n\n```\nBOOL rdtsc_diff_locky()\n{\n    ULONGLONG tsc1;\n    ULONGLONG tsc2;\n    ULONGLONG tsc3;\n    DWORD i = 0;\n\n    // Try this 10 times in case of small fluctuations\n    for (i = 0; i < 10; i++)\n    {\n        tsc1 = __rdtsc();\n\n        // Waste some cycles - should be faster than CloseHandle on bare metal\n        GetProcessHeap();\n\n        tsc2 = __rdtsc();\n\n        // Waste some cycles - slightly longer than GetProcessHeap() on bare metal\n        CloseHandle(0);\n\n        tsc3 = __rdtsc();\n\n        // Did it take at least 10 times more CPU cycles to perform CloseHandle than it took to perform GetProcessHeap()?\n        if ((LODWORD(tsc3) - LODWORD(tsc2)) / (LODWORD(tsc2) - LODWORD(tsc1)) >= 10)\n            return FALSE;\n    }\n\n    // We consistently saw a small ratio of difference between GetProcessHeap and CloseHandle execution times\n    // so we're probably in a VM!\n    return TRUE;\n}\n\n\n/*\nCPUID is an instruction which cauz a VM Exit to the VMM, \nthis little overhead can show the presence of a hypervisor\n*/\n\nBOOL rdtsc_diff_vmexit()\n{\n    ULONGLONG tsc1 = 0;\n    ULONGLONG tsc2 = 0;\n    ULONGLONG avg = 0;\n    INT cpuInfo[4] = {};\n\n    // Try this 10 times in case of small fluctuations\n    for (INT i = 0; i < 10; i++)\n    {\n        tsc1 = __rdtsc();\n        __cpuid(cpuInfo, 0);\n        tsc2 = __rdtsc();\n\n        // Get the delta of the two RDTSC\n        avg += (tsc2 - tsc1);\n    }\n\n    // We repeated the process 10 times so we make sure our check is as much reliable as we can\n    avg = avg / 10;\n    return (avg < 1000 && avg > 0) ? FALSE : TRUE;\n}\n\n```\nhope this helps.\n\n",
+      "votes": "1",
+      "user": "rotem.salinas",
+      "time": "Jul 22, 2022 at 14:22",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "schnabel",
+          "text": "Thanks for your help!  Unicorn emulator does not support RDTSC hook, so I'm gonna try to make it.  If this work, I will comment later.  Thanks again.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

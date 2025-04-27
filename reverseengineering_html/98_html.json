@@ -1,0 +1,153 @@
+{
+    "title": "How can I analyse an executable with no read permission?",
+    "link": "https://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a binary on a Linux (Kernel 2.6) which I can execute, but can't read (chmod 0711). Therefore no static analysis is possible.\n </p>\n <pre><code>user1: $ ls -l bin \n-r-s--x--- user2 user1 bin\nuser1: $ file bin\nsetuid executable, regular file, no read permission\n</code></pre>\n <p>\n  I'm looking for different dynamic techniques to gather as much information as possible.\n </p>\n <p>\n  For example\n  <code>\n   strace\n  </code>\n  works with this executable.\n </p>\n <hr/>\n <p>\n  UPDATE : I was able to resolve the issue.\n  <a href=\"https://reverseengineering.stackexchange.com/a/110\">\n   See answer.\n  </a>\n </p>\n <p>\n  Thank you all <3 this new reverseengineering community rocks!\n </p>\n</div>\n</body></html>",
+    "votes": "37",
+    "answers": 5,
+    "views": "11k",
+    "tags": [
+        "linux",
+        "dynamic-analysis"
+    ],
+    "user": "samuirai",
+    "time": "Apr 13, 2017 at 12:49",
+    "comments": [
+        {
+            "user": "JMcAfreak",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you looking only for a dynamic analysis technique, or are you looking for a solution in general?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "samuirai",
+            "text": "<html><body><span class=\"comment-copy\">\n I guess only dynamical analysis techniques work here. But I am open to anything that can help to understand what the executable does. I have no \"physical\" access to filesystem and so forth.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n If\n <code>\n  strace\n </code>\n works, try attaching with GDB and dumping memory (see\n <a href=\"http://serverfault.com/a/174027\">\n  here\n </a>\n )\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "George V. Williams",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky, I just tried it on my machine, no luck. GDB refuses to attach with:\n <code>\n  Could not attach to process. ... try again as the root user.\n </code>\n It depends on\n <code>\n  ptrace\n </code>\n (which gives the same error) so\n <code>\n  ltrace\n </code>\n doesn't work either.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Gilles 'SO- stop being evil'",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky If you run\n <code>\n  strace ./bin\n </code>\n , it runs the program with no extra privileges. If you start the program normally, it runs with elevated privileges, and you then can't ptrace it without having elevated privileges yourself.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I initially thought you wouldn't be able to dump the program, but it turns out that you can — see the second section of this answer.\n </p>\n <h2>\n  Running the program\n </h2>\n <p>\n  Most of the usual methods won't work because the executable is setuid. If you start the program normally, it runs with elevated privileges (euid ≠ ruid), and most debugging facilities are reserved to root. For example, anything that relies on attaching to the program with\n  <code>\n   ptrace\n  </code>\n  is reserved to root. This includes just about anything you could do in a debugger. Linux lets you dump the memory of a running process (with\n  <code>\n   ptrace\n  </code>\n  or through\n  <a href=\"https://unix.stackexchange.com/questions/6301/how-do-i-read-from-proc-pid-mem-under-linux\">\n   <code>\n    /proc/$pid/maps\n   </code>\n   and\n   <code>\n    /proc/$pid/mem\n   </code>\n  </a>\n  ), but that too is disabled for a setuid executable.\n </p>\n <p>\n  You can run\n  <code>\n   strace ./bin\n  </code>\n  , and see what system calls the program makes. However, this runs the program without any extra privileges. It may well stop early and complain that it can't read a file, or that it isn't running as the right user.\n </p>\n <p>\n  You can see statistics like CPU usage, IO usage, network usage, memory usage, etc. in\n  <code>\n   /proc/$pid\n  </code>\n  : files like\n  <code>\n   status\n  </code>\n  ,\n  <code>\n   sched\n  </code>\n  and\n  <code>\n   net/netstat\n  </code>\n  are world-readable (whether the program is actually started with extra privileges or not, the setuid restrictions apply). The one interesting thing I see is the program's network connections. The really juicy stuff, like memory contents (\n  <code>\n   mem\n  </code>\n  ) and even open files (\n  <code>\n   fd\n  </code>\n  ) is disabled either way. Preloading a library with\n  <code>\n   LD_PRELOAD\n  </code>\n  or running the program with a different\n  <code>\n   LD_LIBRARY_PATH\n  </code>\n  is also disabled either way. Nor will you get a core dump.\n </p>\n <p>\n  So what works? You can see open network connections, maybe one of them will give you a clue or will be spoofable. You can try to figure out what files the program accesses by modifying them when you can, or by running the program from another directory (try making a symbolic link).\n </p>\n <p>\n  If you have access to a chroot jail on the machine, try running the program from there. If you can run a virtual machine which implements shared folders (e.g. VMware or VirtualBox), see if you can access the program from there. This is all about subverting the security of the system: the permissions are designed to hinder you in your task.\n </p>\n <p>\n  An advanced technique is to observe the program under heavy load and try to deduce what it does from the time it takes. Pollute the disk caches and see what files become quickly accessible. See how the swap usage varies depending on what the program does (so you get an idea of how many different pages are in its working set, not just how much total memory it's using). A lot of trial and error will be required. When you know the code and are trying to obtain the data, this is a well-known side channel attack. When you don't know the code, I expect it to be very difficult to obtain useful information this way.\n </p>\n <h2>\n  Dumping the memory contents\n </h2>\n <p>\n  I initially thought you couldn't dump the memory of the program because of the setuid bit (which usually wouldn't be a problem because you'd just copy the executable, but here this isn't possible because the executable is not readable). This turns out to be wrong. If you attach to the program with\n  <code>\n   ptrace\n  </code>\n  before calling\n  <code>\n   execve\n  </code>\n  (like running\n  <code>\n   strace ./bin\n  </code>\n  does), you do have access to\n  <code>\n   ptrace\n  </code>\n  in all its glory, including\n  <code>\n   PTRACE_PEEKDATA\n  </code>\n  and\n  <code>\n   PTRACE_PEEKEXEC\n  </code>\n  . That doesn't run the program setuid, so it may behave differently, but the code and static data loaded into memory are the same either way.\n </p>\n <p>\n  Kudos to\n  <a href=\"https://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission/110#110\">\n   samuirai\n  </a>\n  for pointing this out.\n </p>\n <p>\n  Here's an overview of how you can dump the program's memory:\n </p>\n <ul>\n  <li>\n   Fork, and call\n   <code>\n    ptrace(PTRACE_TRACEME, ...)\n   </code>\n   in the child then execute the program (\n   <code>\n    execl(\"./bin\", \"./bin\", NULL)\n   </code>\n   ).\n  </li>\n  <li>\n   In the parent, call\n   <code>\n    waitpid\n   </code>\n   to wait for the child to return from\n   <code>\n    execve\n   </code>\n   .\n  </li>\n  <li>\n   Figure out the address at which the code is loaded. The value of the IP register (obtained through\n   <code>\n    PTRACE_GETREGS\n   </code>\n   ) should give a clue, and you can look for file format headers.\n  </li>\n  <li>\n   Read the child's memory word by word (\n   <code>\n    PTRACE_PEEKTEXT\n   </code>\n   ,\n   <code>\n    PTRACE_PEEKDATA\n   </code>\n   ).\n  </li>\n  <li>\n   Reconstruct the file format (e.g. make an ELF binary from text and data sections) if needed. Dump out the data into a file.\n  </li>\n  <li>\n   Kill the child — it won't even get to execute anything.\n  </li>\n </ul>\n <p>\n  <a href=\"https://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission/150#150\">\n   Dougall pointed out a working proof-of-concept tool\n  </a>\n  for ELF executables:\n  <a href=\"http://reverse.lostrealm.com/tools/xocopy.html\" rel=\"nofollow noreferrer\">\n   xocopy\n  </a>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "28",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">Actually I think I can use <code>ptrace</code> not as root. gdb works fine with other executables. The problem is that the executable is not readable, and therefore gdb won't load the file. I thought because I can execute it, I could run it under my privileges and debug it that way (and accept that privileges required running with setuid wont work). But again. gdb won't work because it's not readable.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@samuirai: you can't attach to the process once it's running?</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: I tried it, but I am too slow. The executable finishes very fast.</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">Working PoC <a href=\"https://gist.github.com/Samuirai/5217680\" rel=\"nofollow noreferrer\">gist.github.com/Samuirai/5217680</a> and a small update in my question</span>",
+                    "time": null
+                },
+                {
+                    "user": "Gilles 'SO- stop being evil'",
+                    "text": "<span class=\"comment-copy\">@samuirai Good idea deducing interesting addresses from registers. I'll try to upgrade my code to something that works this week-end.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I found a small tool which uses ptrace to single step instructions from a forked child which executed another program:\n </p>\n <p>\n  <a href=\"http://pastebin.com/yHbkc0Je\" rel=\"noreferrer\">\n   http://pastebin.com/yHbkc0Je\n  </a>\n </p>\n <p>\n  This worked perfectly. I got a dump of all the instructions used. I know that it didn't run with the setuid privileges, but it will probably help me anyway. Now I only need something to disassemble the instruction trace.\n </p>\n <hr/>\n <p>\n  PoC (\n  <a href=\"https://gist.github.com/Samuirai/5217680\" rel=\"noreferrer\">\n   https://gist.github.com/Samuirai/5217680\n  </a>\n  ) based on this.\n </p>\n <pre><code>/*\nThis tool was developed through the awesome community effort on reverseengineering.stackexchange.com\n\nThe Thread: http://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission\n\nSpecial thanks to:\n + igor-skochinsky who pointed at this Phrack article and gave the initial idea: http://www.phrack.com/issues.html?issue=63&id=12&mode=txt\n + gilles for his engagement and enthisiasm about this question and his code attempt\n + and all others who were involved\n\nThis new stackexchange reverseengineering community is F**KING AWESOME!!! <3\n\n*/\n#include <stdio.h>\n#include <sys/ptrace.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <sys/user.h>\n#include <sys/syscall.h>\n\nint main()\n{\n    pid_t pid;\n\n    pid = fork();\n    if(pid == 0) {\n        ptrace(PTRACE_TRACEME, 0, NULL, NULL);\n        execl(\"./bin\", \"./bin\", NULL);\n    }\n    else {\n        int status;\n        struct user_regs_struct regs;\n\n        // single stepping until it reached the real code segment\n        while(1) {\n\n            wait(&status);\n            if(WIFEXITED(status))\n                break;\n\n            // get registers for the instruction pointer\n            ptrace(PTRACE_GETREGS, pid, NULL, &regs);\n\n            // strace ./bin\n            // brk(0) = 0x804a000\n            if(regs.eip>0x804a000)\n            {\n                printf(\"in code section at EIP=%lx\n\",regs.eip);\n                unsigned int i;\n\n                // Dump code\n                for(i=0; i<0x1000; i+=4) {\n                    long data = ptrace(PTRACE_PEEKTEXT, pid, regs.eip+i, 0);\n                    printf(\"%lx\",data);\n                }\n            }\n\n            // single step in child process\n            ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL);\n        }\n    }\n    return 0;\n}\n</code></pre>\n <p>\n  As Gilles pointed out, you can't read\n  <code>\n   /proc/<pid>/maps\n  </code>\n  to get the adresses of the code area, but I recognized that\n  <code>\n   strace\n  </code>\n  has this nice single line\n  <code>\n   brk(0) = 0x804a000\n  </code>\n  .\n </p>\n <p>\n  I single step through the child process, until EIP is around this value; then, I dump 0x1000 bytes.\n </p>\n</div>\n</body></html>",
+            "votes": "11",
+            "user": "asheeshr",
+            "time": "Jun 20, 2013 at 16:32",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Why not just modify it to dump memory instead of tracing? There is already a read using <code>PTRACE_PEEKTEXT</code>, you just need to modify it to read all process memory. See some sample code <a href=\"http://unix.stackexchange.com/a/9068\">here</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "user187",
+                    "text": "<span class=\"comment-copy\">On SE, we usually like to see (not too long) codes just in the answer, not behind a link. This is because pastebin doesn't guarantee to store the codes. Could you add the code to your answer please?</span>",
+                    "time": null
+                },
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">It's the same code from my question update. I will add the reference</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Using ptrace-based dynamic analysis tools on suid binaries makes them run without privileges. Because of this, a copy of the file running as your user is probably sufficient for analysis purposes.\n </p>\n <p>\n  When I have had to do this, I used the\n  <a href=\"http://reverse.lostrealm.com/tools/xocopy.html\">\n   xocopy tool\n  </a>\n  , which uses\n  <code>\n   ptrace\n  </code>\n  to reconstruct ELF files when the header is mapped into memory (most compilers do this, possibly for use by the dynamic linker). I haven't tested the tool with ASLR, but you may be able to combine it with some of the techniques covered in other answers. Once the file has been dumped, it can be analysed statically, or run with any dynamic analysis tool.\n </p>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Dougall",
+            "time": "Mar 22, 2013 at 8:36",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Skylion",
+                    "text": "<span class=\"comment-copy\">Is there a 64bit version of this tool? It doesn't seem to work on 64 bit elf files. :/</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Here are some tools that might or might not work:\n </p>\n <ul>\n  <li>\n   <p>\n    <a href=\"https://www.wekk.net/code/projects/skpd/repository/revisions/e61bb652197c39b500ab912eebae105048b1deb4/entry/trunk/src/skpd.c\">\n     skpd\n    </a>\n    , apparently based on a\n    <a href=\"http://www.phrack.com/issues.html?issue=63&id=12&mode=txt\">\n     Phrack article\n    </a>\n    .\n   </p>\n  </li>\n  <li>\n   <p>\n    <a href=\"http://www.opensource.apple.com/source/emacs/emacs-41/emacs/src/unexec.c?txt\">\n     unexec\n    </a>\n   </p>\n  </li>\n  <li>\n   <p>\n    <a href=\"http://code.google.com/p/undump/\">\n     undump\n    </a>\n   </p>\n  </li>\n  <li>\n   <p>\n    <a href=\"http://manpages.ubuntu.com/manpages/gutsy/man1/pcat.1.html\">\n     pcat\n    </a>\n   </p>\n  </li>\n  <li>\n   <p>\n    just read\n    <code>\n     /proc/<pid>/maps\n    </code>\n    and then\n    <code>\n     dd\n    </code>\n    <code>\n     /proc/<pid>/mem\n    </code>\n   </p>\n  </li>\n </ul>\n <p>\n  I'll be interested to hear if you had any success with any of them.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Igor Skochinsky",
+            "time": "Mar 20, 2013 at 21:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Gilles 'SO- stop being evil'",
+                    "text": "<span class=\"comment-copy\">None of these will work on a setuid executable.</span>",
+                    "time": null
+                },
+                {
+                    "user": "cb88",
+                    "text": "<span class=\"comment-copy\">@Guiles it isn't setuid nor did he ever say it was.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@cb88 to be fair the quoted permissions do show the <code>s</code> flag. Though I guess it should have been mentioned explicitly.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <ol>\n  <li>\n   Gain root read the file\n  </li>\n  <li>\n   Copy the filesystem to a different sytem and read it if you have permissions to do so (copy the fs to a system where you have root access).\n  </li>\n  <li>\n   examine the memory of the process as it executes. won't work if it is setuid and you aren't that user.\n  </li>\n  <li>\n   I'm just being silly but you could execute it over and over untill it fills up swap and then copy it from there :P Or create a swap file in your home folder with priority higher than system swap. And then do the above... and when the system swap starts filling up copy your swapfile to save it. I would suggest doing that in a script otherwise your system might end up locked up. You could monitor swap useage with free I believe or failing that parse the useage out of /proc. Of course kill all the created tasks after you copy your swapfile.\n  </li>\n </ol>\n <p>\n  Chances are you don't have permission to do any of that :P. that said you probably need to provide more specifics about what you can/can't do on this system.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "cb88",
+            "time": "Mar 20, 2013 at 21:47",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">That's right. I am just a normal user and can't access /proc. Though <code>strace</code> works and I thought that there exist other stuff I don't know about.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

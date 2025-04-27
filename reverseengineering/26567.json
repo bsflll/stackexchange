@@ -1,0 +1,53 @@
+{
+    "title": "Statically recovering thunks in Windows x86_64 DLL",
+    "link": "https://reverseengineering.stackexchange.com/questions/26567/statically-recovering-thunks-in-windows-x86-64-dll",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I just started working my way to reversing Windows binaries and I stumbled upon the Import Address Table. When reversing a particular DLL I encountered many thunk-functions which all supposedly referenced the IAT.\nFrom my experience on Linux I guessed that this is somewhat similar to the procedure linkage table (or rather the global offset table I suppose).\nBased on that I would assume that the linking process is similar, though I cannot seem to find detailed information on that. Any help would be appreciated.</p>\n<p>Furthermore I was wondering whether you could resolve these thunks without ever running the binary. In particular because it is in fact a DLL that I am analyzing the information to resolve these should be available already?\nThough I cannot really make sense out of the information available.</p>\n<p>Just to be sure I am not completely off, here is an example of what I am talking about:</p>\n<pre><code>void THUNK_FUN_18002d97a(void)\n\n{\n  (*_DAT_18005ba68)();\n  return;\n}\n</code></pre>\n<p>Memory at the address (in section <code>.data</code>):</p>\n<pre><code>0x18005ba68: 94 00 00 06 00 00 00 00\n</code></pre>\n<p>Edit:\nThanks for the input. I now feel like I misunderstood the purpose of the IAT. So consider the following scenario:\nWe have a PE executable A which imports symbols from a DLL B.</p>\n<ol>\n<li>The <a href=\"https://docs.microsoft.com/en-us/windows/win32/debug/pe-format#import-directory-table\" rel=\"nofollow noreferrer\">import directory table</a> is used in A, whereas in B a corresponding entry has to be found in the <a href=\"https://docs.microsoft.com/en-us/windows/win32/debug/pe-format#export-directory-table\" rel=\"nofollow noreferrer\">export directory table</a>. Is that correct?</li>\n<li>In the DLL (B) I am investigating the thunks mentioned are neither imported nor exported symbols. So what may I be witnessing?</li>\n<li>The overall process must be looking something like this:\n<ol>\n<li>A is executed. All needed DLLs are searched and linked (this is called binding in this context?)</li>\n<li>This causes B to be actually loaded at some address. Now symbols from B in A can be resolved (using the import directory table). Is B necessarily position independent? I read about preferred base addresses and conditional re-location of the whole binary if it cannot be matched. Is this still correct?</li>\n<li>I still do not see a point why the second layer jump table I encountered is needed.</li>\n</ol>\n</li>\n</ol>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "293",
+    "tags": [
+        "windows",
+        "dll",
+        "iat"
+    ],
+    "user": "milck",
+    "time": "Dec 17, 2020 at 20:11",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">is the binary available anywhere? is it x86 or x64 code?</span>",
+            "time": null
+        },
+        {
+            "user": "milck",
+            "text": "<span class=\"comment-copy\">it is not publicly available. It is x64. I tried re-creating similar patterns but I failed. Apparently it is some kind of C++/.NET stuff, though I am not sure how it could have been created. The DLL implements a GUI which is definitely C#/.NET though it also seems to contain some \"normal\" C++ code. I just discovered that the C# part is perfectly decompilable using dotPeek</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">oh if it's C++/CLI that explains some things. I'll investigate and update</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h2>PART 1</h2>\n<p>The PE import thunks do not work the same way as ELF PLT. There is no dynamic resolver invoked on the first call but all import pointers are resolved at the process startup ahead of time (similar to <code>LD_BIND_NOW</code>). The pointers are grouped in a GOT-like Import Address Table (IAT) and the metadata with the details about the DLLs and symbols imported is stored in the Import Directory which is referred to by the PE header.</p>\n<p>To recover the symbols you need to parse the import directory. The details can be found in the official <a href=\"https://docs.microsoft.com/en-us/windows/win32/debug/pe-format\" rel=\"nofollow noreferrer\">PE format specification.</a></p>\n<h2>PART2</h2>\n<p>After your edit, it seems you're dealing with a <strong>native to managed code thunk</strong>.</p>\n<p>I've done the following experiment to produce a <a href=\"https://docs.microsoft.com/en-us/cpp/dotnet/mixed-native-and-managed-assemblies\" rel=\"nofollow noreferrer\">mixed executable</a>:</p>\n<p><code>m.cpp</code> (Managed code):</p>\n<pre><code>using namespace System;\n\nvoid hello()\n{\n    String^ str = \"Hello World\";\n    Console::WriteLine(str);\n}\n</code></pre>\n<p><code>n.cpp</code> (Native code):</p>\n<pre><code>void hello();\n\nvoid main()\n{\n  hello();\n}\n</code></pre>\n<p>Compile and link:</p>\n<pre><code>cl /c /clr /Zi m.cpp\ncl /c /Zi n.cpp\nlink /debug /out:mixed.exe m.obj n.obj\n</code></pre>\n<p>After disassembling the native part (and getting symbols thanks to the PDB), I could observe the following:</p>\n<pre><code>.text:00007FF798E81090 main proc near     \n.text:00007FF798E81090 sub     rsp, 28h\n.text:00007FF798E81094 call    ?hello@@YAXXZ ; hello(void)\n.text:00007FF798E81099 xor     eax, eax\n.text:00007FF798E8109B add     rsp, 28h\n.text:00007FF798E8109F retn\n.text:00007FF798E8109F main endp\n</code></pre>\n<p>Following the call:</p>\n<pre><code>.nep:00007FF798ECC000 ?hello@@YAXXZ proc near\n.nep:00007FF798ECC000 jmp     short loc_7FF798ECC00A\n.nep:00007FF798ECC002 ud2\n.nep:00007FF798ECC004 jmp     cs:__m2mep@?hello@@$$FYAXXZ\n.nep:00007FF798ECC00A loc_7FF798ECC00A:\n.nep:00007FF798ECC00A jmp     cs:__mep@?hello@@$$FYAXXZ\n.nep:00007FF798ECC00A ?hello@@YAXXZ endp\n</code></pre>\n<p>And finally, following the <code>jmp</code>:</p>\n<pre><code>.data:00007FF798EE7000 __m2mep@?hello@@$$FYAXXZ dq 6000001h\n.data:00007FF798EE7008 __mep@?hello@@$$FYAXXZ dq 6000001h\n</code></pre>\n<p>The value 6000001 is a <a href=\"https://iobservable.net/blog/2013/05/12/introduction-to-clr-metadata/\" rel=\"nofollow noreferrer\"><em>CLR Token</em></a>. The high byte byte is the token kind, or the metadata table index, in this case 0x6 meaning <em>Method</em>. Looking it up in a .NET viewer such as ILDASM or dnSpy we can see that it refers to the managed method \"hello\" with the RVA <code>000010a0</code>. Going to that address we see:</p>\n<pre><code>.text:00007FF798E810A0 ?hello@@$$FYAXXZ:\n.text:00007FF798E810A0 add     esi, [rax]\n.text:00007FF798E810A2 add     [rax], eax\n.text:00007FF798E810A4 sldt    word ptr [rax]\n.text:00007FF798E810A7 add     [rdx], al\n.text:00007FF798E810A9 db 2 dup(0), 11h\n.text:00007FF798E810AC hello:\n.text:00007FF798E810AC adc     al, 0Ah\n.text:00007FF798E810AE jb      short loc_7FF798E810B1\n.text:00007FF798E810B0 db 0\n.text:00007FF798E810B1 loc_7FF798E810B1:\n.text:00007FF798E810B1 add     [rax+0Ah], dh\n.text:00007FF798E810B4 dd 22806h\n.text:00007FF798E810B8 db 0, 0Ah, 2Ah, 0CCh\n</code></pre>\n<p>It does not make any sense as x64 code so this is obviously CLI bytecode and should be checked with a .net decompiler. Strangely, none of those I tried seems to show the function but I managed to get the IL disassembly from ILDASM:</p>\n<pre><code>.method /*06000001*/ assembly static void modopt([mscorlib/*23000001*/]System.Runtime.CompilerServices.CallConvCdecl/*01000001*/) \n        hello() cil managed\n{\n  .vtentry 1 : 1\n  // Code size       15 (0xf)\n  .maxstack  1\n  .locals /*11000002*/ ([0] string str)\n  IL_0000:  ldnull\n  IL_0001:  stloc.0\n  IL_0002:  ldstr      \"Hello World\" /* 70000001 */\n  IL_0007:  stloc.0\n  IL_0008:  ldloc.0\n  IL_0009:  call       void [mscorlib/*23000001*/]System.Console/*01000003*/::WriteLine(string) /* 0A000002 */\n  IL_000e:  ret\n} // end of global method hello\n</code></pre>\n<p>You can probably follow a similar approach and look up the token 0x06000094 in the metadata tables or IL disassembly to figure out the destination of the jump in managed code.</p>\n<p>Random observations:</p>\n<p>The segment <code>.nep</code> seems to mean \"native entrypoint\"</p>\n<p>The prefix <code>__mep</code> in the token name <em>probably</em> means \"managed entrypoint\".</p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Dec 19, 2020 at 1:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "milck",
+                    "text": "<span class=\"comment-copy\">thanks, though I feel a little more confused now. Take a look at my edits if you would</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@milck see part2</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

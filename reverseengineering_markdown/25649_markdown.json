@@ -1,0 +1,45 @@
+{
+  "title": "Is it possible to find a running process's arguments to main from an attached GDB?",
+  "link": "https://reverseengineering.stackexchange.com/questions/25649/is-it-possible-to-find-a-running-processs-arguments-to-main-from-an-attached-gd",
+  "content": "Given a very basic program,\n\n```\nperl -e'$|=1; print $$; sleep 500;' HELLO WORLD\n\n```\nHow can I find HELLO WORLD using GDB? I thought bt -full but when I attach and run, I get\n\n```\n#0  __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=req@entry=0x7ffe3b266bb0, rem=rem@entry=0x7ffe3b266bb0)\n    at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:79\n        r = -516\n#1  0x00007f99fe824403 in __GI___nanosleep (requested_time=requested_time@entry=0x7ffe3b266bb0, remaining=remaining@entry=0x7ffe3b266bb0) at nanosleep.c:27\n        ret = <optimized out>\n#2  0x00007f99fe82433a in __sleep (seconds=0) at ../sysdeps/posix/sleep.c:55\n        save_errno = 0\n        ts = {tv_sec = 474, tv_nsec = 980286586}\n#3  0x000055d533c98518 in Perl_pp_sleep ()\nNo symbol table info available.\n#4  0x000055d533c38d06 in Perl_runops_standard ()\nNo symbol table info available.\n#5  0x000055d533baca7c in perl_run ()\nNo symbol table info available.\n#6  0x000055d533b82472 in main ()\nNo symbol table info available.\n\n```\nI would expect something to be able to parse the arguments to main.\n\nNote: I'm not looking for /proc/$$/cmdline. That can be changed. I want the actual arguments to main\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "663",
+  "tags": [
+    "gdb"
+  ],
+  "user": "Evan Carroll",
+  "time": "Aug 10, 2020 at 21:35",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "What you want is not possible in any generic fashion in absence of the debug symbols and persistently stored addresses for those function arguments (argc, argv). Only debug symbols will give you a generic way of accessing the argc and argv symbols from the frame that represents main. Theoretically. Example from x86-64:\n\n```\n(gdb) bt\n#0  __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=req@entry=0x7fffffffdd30, rem=rem@entry=0x7fffffffdd30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:79\n#1  0x00007ffff7d25eb7 in __GI___nanosleep (requested_time=requested_time@entry=0x7fffffffdd30, remaining=remaining@entry=0x7fffffffdd30) at nanosleep.c:27\n#2  0x00007ffff7d25dee in __sleep (seconds=0) at ../sysdeps/posix/sleep.c:55\n#3  0x00005555556b38ec in Perl_pp_sleep ()\n#4  0x0000555555653a56 in Perl_runops_standard ()\n#5  0x00005555555c78dc in perl_run ()\n#6  0x000055555559d432 in main ()\n(gdb) f 6\n#6  0x000055555559d432 in main ()\n(gdb) info frame\nStack level 6, frame at 0x7fffffffdf30:\n rip = 0x55555559d432 in main; saved rip = 0x7ffff7c670b3\n caller of frame at 0x7fffffffdee0\n Arglist at 0x7fffffffded8, args: \n Locals at 0x7fffffffded8, Previous frame's sp is 0x7fffffffdf30\n Saved registers:\n  rbx at 0x7fffffffdf08, rbp at 0x7fffffffdf10, r12 at 0x7fffffffdf18, r13 at 0x7fffffffdf20, rip at 0x7fffffffdf28\n(gdb) p (char*)rdi\nNo symbol \"rdi\" in current context.\n(gdb) p argc\nNo symbol \"argc\" in current context.\n(gdb) p argv\nNo symbol \"argv\" in current context.\n\n```\nAs you can see, the registers preserved are hardly sufficient to guide you to the proper location of argc and argv in memory. The first few to be used for argument passing would be RDI, RSI, RDX, RCX ... and those are volatile across stack frames.\n\nSo whatever values were passed to main() are no longer available from any location that we know about for certain.\n\nIt's possible that with knowledge about the target you may find the pointers saved in local stack variables, but the register values will no longer exist. Possible locations (if you fancy depending on a particular C runtime implementation) would be looking at __libc_start_main and friends. Also, info args (basically the arguments you can set with set args ... which is also one long string) might give you something, but again usually not without symbols available.\n\nYou can dig around your stack from frame 6 (main) yourself after switching to it and issuing x/16xg $sp ... you can then attempt to look at all those addresses, e.g. by printing them as char* with p (char*)0x7fffffffded8 and similar ...\n\nOriginal answer below.\n\nHow about this?:\n\n```\n(gdb) info proc cmdline \nprocess 27856\ncmdline = '/usr/bin/perl -e$|=1; print $$; sleep 500; HELLO WORLD'\n\n```\nShould be equivalent to querying /proc/$$/cmdline ...\n\n",
+      "votes": "1",
+      "user": "0xC0000022L",
+      "time": "Aug 10, 2020 at 22:04",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Evan Carroll",
+          "text": "Right, not what I'm looking for though. I want the arguments supplied to main on the stack. For example that can be changed with $0=\"foo bar\" in the above.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@EvanCarroll Hmm you should be a little more specific then in your question. But without knowledge of either the symbols or the exact architecture, I doubt that merely switching to the respective frame will yield anything meaningful. Because you need to know how argv and argc would be located on the stack in absence of their symbolic names or have symbols to reference them ... as a sidenote: what I wrote will work. Even when you modify $0.",
+          "time": null
+        },
+        {
+          "user": "Evan Carroll",
+          "text": "Sorry, the title explicitly said the \"arguments to main\". ;) I figured GDB should have some mechanism to dump this.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "The mechanism I am showing is exactly the one you'd use in absence of symbols. I'll be curiously looking at whatever clever tricks others are able to conjure up for this. But given the volatile nature of registers, I doubt you have a chance of recovering that information - basically anywhere beyond the first few instructions of main() ... I don't find \"arguments to main\" as unambiguous as you seem to find it, though. Although the loophole with changing the contents of the command line exists. Which goes to show, however, that the command line is passed to the program as one long string.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+    "title": "Is there an easy way to detect if the SSDT has been patched from a memory dump?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1461/is-there-an-easy-way-to-detect-if-the-ssdt-has-been-patched-from-a-memory-dump",
+    "content": "The SSDT is a dispatch table inside the Windows NT kernel, and it is used for handling calls to various internal kernel APIs. Often malware will change addresses in the SSDT in order to hook certain kernel functions. Spotting this kind of thing in a memory dump would be awesome, because it would allow me to identify potential rootkits. Is there a way to reliably detect them? What kind of memory dump is required?\n",
+    "votes": "10",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "malware"
+    ],
+    "user": "Polynomial",
+    "time": "Apr 1, 2013 at 21:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "No absolutely reliable way, no.\nEither way you'll need a full dump, but the problem is that malware could even hook the responsible functions inside the kernel and modify what gets dumped. There are several things that have to be considered here.\nYou can detect it if the malware used a trivial method for hooking in the first place. Let's assume the address was replaced by one to a trampoline or to inside another loaded image (or even outside one just in nonpaged pool), then you can easily detect it. You can simply enumerate all the modules and attempt to find the one inside which the address from inside the SSDT points. In case of a trampoline you'll have to disassemble the instructions there to see where it jumps/calls. There are plenty of libraries out there for the purpose, such as <pre><code>udis86</code></pre>.\nHowever, if a malware is sneaky, it could use the natural gaps inside an executable (such as the kernel) when loaded into memory. As you probably know, the way a PE file (such as <pre><code>ntoskrnl.exe</code></pre> and friends) is represented differently on disk and in memory. The on-disk file format is more terse. Loaded into memory, the sections are aligned in a particular way described in the PE header. This way gaps will likely exist between the real size of a section (end) and the properly aligned section size (\"padding\"). This leaves place to hide something like a trampoline or even more shell code than a simple trampoline. So a naive check such as the above - i.e. enumerating modules and checking whether the SSDT functions point inside the kernel image - will not work. It would get bypassed by malware sophisticated enough to do what I just described.\nAs you can imagine, this means that things - as all things malware/anti-malware - quickly becomes an arms race. What I would strongly suggest is that you attach a kernel debugger (<pre><code>WinDbg</code></pre> via Firewire comes to mind) and keep the infected (or allegedly infected) machine in limbo while you investigate. While you are connected and broke into the debugger, the debuggee can't do anything. This can be used to debug a system live and - assuming the malware wasn't sneaky enough to also manipulate <pre><code>kdcom</code></pre> - to gain valuable metrics - it can also be used to create a crashdump directly (see WinDbg help). If you have conclusive evidence that a machine is infected, due to symptoms it exhibits, odds are the malware isn't all too sophisticated and you will not have to care about the special case I outlined. However, keep in mind that this special case can only be considered one out of many conceivable cases used to hide. So long story short: there is no absolutely reliable way to do what you want.\nIt has sometimes been said - and it's true - that the attacker just needs to find one out of an infinite number of attack vectors, whereas the defender can only defend a finite number of known attack vectors. The lesson from this should be that we - as anti-malware industry (in which I work) - can always claim that we didn't find anything on the system, but that it is wrong to claim that the system is clean.\n\nHow to deliberately cause a BSOD\nThe keyboard driver(s) can be told to cause a BSOD:\n<pre><code>HKLM\\CurrentControlSet\\Services\\kbdhid\\Parameters\n</code></pre>\nor (for older PS/2 keyboards)\n<pre><code>HKLM\\SYSTEM\\CurrentControlSet\\Services\\i8042prt\\Parameters\n</code></pre>\nAnd there set a <pre><code>REG_DWORD</code></pre> named <pre><code>CrashOnCtrlScroll</code></pre> to <pre><code>1</code></pre>.\nAfter the next reboot you can force the blue screen by Ctrl+ScrollLk+ScrollLk. The bug check code will in this case be <pre><code>0xE2</code></pre> (<pre><code>MANUALLY_INITIATED_CRASH</code></pre>).\n\nSide-note: I have also read, but never seen it in a kernel debugging session myself or in any kind of FLOSS implementation, that some method tries to re-load the kernel from the image on disk and run it through the early initialization steps, thereby creating a \"shadow\" SSDT. This one would then be pristine and could be used to \"unhook\" everything in one fell swoop from the original SSDT. Again, haven't seen this implemented, but from my knowledge of the internals it seems a possibility. Of course this plays more with the idea of detecting/unhooking a rootkit's functions than it does with your original intention of getting a memory dump of an infected system.\n",
+            "votes": "9",
+            "user": "0xC0000022L",
+            "time": "Apr 2, 2013 at 0:45",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "Volatility can detect such hooks based on a memory image in any of its supported formats.\nIn particular, the threads plugin will tag any thread with SSDT hooks as <pre><code>HookedSSDT</code></pre>, and the ssdt plugin will dump out all functions in the SSDT and give the name of the kernel module that contains each function.\nAnother method, which may detect more subtle kinds of corruption, would be to use WinDbg (either on a live system or on a crash dump), and use the <pre><code>chkimg</code></pre> command to audit each kernel module, e.g.:\n<pre><code>chkimg -d nt\n</code></pre>\nThis downloads a pristine copy of the kernel from the MS Symbol server and reports any differences from the in-memory version. Note that this probably wouldn't detect any hooks placed in a per-thread SSDT.\n",
+            "votes": "6",
+            "user": "Brendan Dolan-Gavitt",
+            "time": "Apr 2, 2013 at 1:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Brendan Dolan-Gavitt",
+                    "text": "<span class=\"comment-copy\">Whoops, thanks for the catch @0xC0000022L. Fixed.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

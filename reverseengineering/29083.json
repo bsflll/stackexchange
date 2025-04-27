@@ -1,0 +1,28 @@
+{
+    "title": "Proxy dll doesn't load the original dll",
+    "link": "https://reverseengineering.stackexchange.com/questions/29083/proxy-dll-doesnt-load-the-original-dll",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have relatively simple code here for the proxy <code>DllMain()</code> function:</p>\n<pre><code>BOOL APIENTRY DllMain(HMODULE hDll, DWORD reason, LPVOID reserved)\n{\n\n\nif (reason != DLL_PROCESS_ATTACH) {\n    return TRUE;\n}\n\nlibrary = LoadLibrary(\"vcruntime140_.dll\");\nif (!library) {\n    MessageBox(NULL, \"Failed to load vcruntime140_.dll\", \"vcruntime140.dll proxy\", MB_OK);\n    return FALSE;\n}\n\nif (reason == DLL_PROCESS_DETACH) {\n    FreeLibrary(library);\n    return TRUE;\n}\n\nsetupVftableHooks();\nreturn setupHooks();\n}\n</code></pre>\n<p>For some reason, it doesn't load the original DLL, i.e. <code>vcruntime140_.dll</code>. It loads the proxy one, aka <code>vcruntime140.dll</code>. It tries to load it several times, in fact:</p>\n<pre><code>Loaded   Binaries\\Windows-x86_64\\vcruntime140.dll'. Symbols loaded.\nLoaded   Binaries\\Windows-x86_64\\vcruntime140.dll'. Symbols loaded.\nUnloaded Binaries\\Windows-x86_64\\vcruntime140.dll'\nLoaded   Binaries\\Windows-x86_64\\vcruntime140.dll'. Symbols loaded.\nUnloaded Binaries\\Windows-x86_64\\vcruntime140.dll'\n</code></pre>\n<p>But</p>\n<ul>\n<li><p>a) never once it actually tries to load <code>vcruntime140_.dll</code>, which is the original DLL,</p>\n</li>\n<li><p>b) it is suspicious that last record in the debugger is Unloaded. Although it must've been loaded at the end, as the program doesn't crash (not on DLL loading anyway),</p>\n</li>\n<li><p>c) when the program tries to execute, it complains about</p>\n<blockquote>\n<p>0xC0000139: Entry Point Not Found for different functions in the original DLL.</p>\n</blockquote>\n<p>I suspect it is because the original DLL simply was not loaded (as I've checked the Dependency Walker and Entry Points look fine for all of the original functions).</p>\n</li>\n</ul>\n<p>Update 06.08.21: Created a x86 version of the DLL. It loads and the program starts.\nThe difference with the above x64 version is that the program doesn't complain about Entry points for the functions. It loads the DLL from it's location within the game folder, but it also loads the equivalent dll from System32, i.e.:</p>\n<pre><code>Binaries\\Windows-x86_64\\vcruntime140.dll'.      \nBinaries\\Windows-x86_64\\vcruntime140.dll'       \nBinaries\\Windows-x86_64\\vcruntime140.dll'.      \nBinaries\\Windows-x86_64\\vcruntime140.dll'       \n(Win32): Loaded 'C:\\Windows\\System32\\vcruntime140.dll'\n(Win32): Loaded 'C:\\Windows\\System32\\vcruntime140.dll'\n(Win32): Unloaded 'C:\\Windows\\System32\\vcruntime140.dll'    \n</code></pre>\n<p>What is confusing about this is that it doesn't load the actual DLL from the game folder, i.e. vcruntime140_.dll. Will continue trying to debug, but since it doesn't stop at breakpoints in <code>DllMain()</code> function, I don't know what's the best way to do it.</p>\n<p>Note that the program runs in the mixed environment, as you can see from the name of the folder, from which it actually starts: Windows-x86_64</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "424",
+    "tags": [
+        "windows",
+        "c++",
+        "dll",
+        "dll-injection",
+        "proxy"
+    ],
+    "user": "Irbis77",
+    "time": "Aug 6, 2021 at 10:01",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Fixed this in several steps:</p>\n<ol>\n<li><p>Confirmed with Dependency Walker that the DLL is x64 (it wasn't\napparent as the environment was mixed as I've mentioned above)</p>\n</li>\n<li><p>Added .def as Module Definition File on Linker (on some architectures I forgot to do it as I was experimenting with different options)</p>\n</li>\n<li><p>Main thing is, the code as it was in .def file is not working:</p>\n<blockquote>\n<p>swr_alloc@1=swresample-3_.swr_alloc@1</p>\n</blockquote>\n<blockquote>\n<p>swr_alloc_set_opts@2=swresample-3_.swr_alloc_set_opts@2</p>\n</blockquote>\n</li>\n</ol>\n<p>It had to be replaced with this in the .def file:</p>\n<pre><code>  swr_alloc=PROXY__swr_alloc @1\n</code></pre>\n<p>And change in the mainDLL():</p>\n<pre><code>case DLL_PROCESS_ATTACH:\n{\n\n    hLThis = hInst;\n    hL = LoadLibrary(\".\\\\swresample-3_.dll\");\n    if (!hL) {\n        MessageBox(NULL, \"Failed to load swresample-3_.dll\", \"swresample-3.dll proxy\", MB_OK);\n        return FALSE;\n    }\n\n    p[0] = GetProcAddress(hL, \"swr_alloc\");\n    p[1] = GetProcAddress(hL, \"swr_alloc_set_opts\");   \n</code></pre>\n<p>.....</p>\n<pre><code>extern \"C\"\n{\nFARPROC PA = NULL;\nint RunASM();\n\nvoid PROXY__swr_alloc() {\n    PA = p[0];\n    RunASM();\n}\nvoid PROXY__swr_alloc_set_opts() {\n    PA = p[1];\n    RunASM();\n}\n</code></pre>\n<p>With .asm file:</p>\n<pre><code>.data\nextern PA : qword\n.code\nRunASM proc\njmp qword ptr [PA]\nRunASM endp\nend\n</code></pre>\n<p>This is a more \"standard\" approach to proxy dll creation. But I still don't understand why the original dll setup, i.e. the layout of the .def file didn't work. I saw that working on some other projects.</p>\n</div>",
+            "votes": "0",
+            "user": "Irbis77",
+            "time": "Aug 8, 2021 at 8:56",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,85 @@
+{
+    "title": "Is there a method for \"guessing\" the addresses for unknown areas in bare metal firmware binaries?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16612/is-there-a-method-for-guessing-the-addresses-for-unknown-areas-in-bare-metal-f",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <strong>\n   Imagine this:\n  </strong>\n </p>\n <p>\n  You have a binary for a piece of ARM firmware. You are nearly 100% it is ARM, and that it runs on the bare metal. You obtained this firmware from a manufacturers update page.\n </p>\n <p>\n  However, you are uncertain of the exact model of chip the binary is intended for. You are unable to find the developer's guide or spec sheet for the chip.\n </p>\n <p>\n  The binary has no known headers, and research suggests that it is not compressed or encrypted. The large section of strings at the bottom of the binary suggests it is a single flat binary file, and not several records compressed together. There are no indications of a file system.\n </p>\n <p>\n  You should reasonably be able to disassemble the code but a few factors are missing to prevent you from retrieving control-flow, and creating a sensical disassembly.\n </p>\n <p>\n  1) You do not know where the initial entry point is. \n2) You do not know if there is a ram section, and what address it might start and end at. \n3) You do not know if there is a rom section, and what address it might start and end at.\n </p>\n <p>\n  Given these, or similar circumstances, how might a reverse engineer deduce the initial entry point, and location/size of areas like ROM?\n </p>\n <p>\n  I imagine detecting reads and writes from a memory mapped chip of some sort would be possible to infer from a valid disassembly, just by highlighting common memory regions which are frequently referenced, and classifying them into sections. I am hoping someone has come up with an automated method for this sort of analysis.\n </p>\n <p>\n  <strong>\n   E.G\n  </strong>\n </p>\n <p>\n  \"The range 0x7-0x9 is frequently referenced. It may be ROM. The highest address is 0x7998, the area appears to occupy 8 Mbs.\"\n </p>\n <p>\n  The other area, identifying the entry point, has stumped me so far. Without the documentation for the chip is it possible to infer the initial entry point of the code? This is especially frustrating on chips where the bootloader appears to be stored in ROM separate from the main firmware.\n </p>\n <p>\n  Can the structure of such a firmware image be implied without developer documentation?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "disassembly",
+        "firmware"
+    ],
+    "user": "MrSynAckSter",
+    "time": "Oct 24, 2017 at 5:08",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  What I usually do:\n </p>\n <ul>\n  <li>\n   Load the binary at a not too small base address, like\n   <code>\n    0x10000000\n   </code>\n   .\n  </li>\n  <li>\n   Identify as many functions and strings as possible.\n   <ul>\n    <li>\n     you may get lucky starting with only the strings, that is usually less work.\n    </li>\n   </ul>\n  </li>\n  <li>\n   create a list of all constant values, immediates, and dword (assuming a 32 bit binary) values.\n  </li>\n  <li>\n   now sort the list of function and string addresses, and calculate the differences between each consecutive address.\n  </li>\n  <li>\n   do the same for the list of constant values.\n  </li>\n </ul>\n <p>\n  Now you have two lists of address differences, if you find a sequence of consecutive differences which is in both lists, you have found your base address.\n </p>\n <p>\n  This works most of the time, but you can run in to the problem that both lists may be incomplete. For instance the address list will not have absolute pointers for each function, or maybe you disassembled some functions incorrectly. Maybe you will have better luck focussing on the string addresses.\n </p>\n <p>\n  I usually do this list matching by hand, in\n  <code>\n   vim\n  </code>\n  using regex searches. On some occasions I have written small scripts to help finding a match. ... but i can't find those right now, i will update my post if i find them again.\n </p>\n <hr/>\n <h2>\n  summary of the\n  <a href=\"https://chat.stackexchange.com/rooms/67646/discussion-between-willem-hengeveld-and-baordog\">\n   chat\n  </a>\n </h2>\n <p>\n  The firmware file being discussed:\n  <a href=\"http://dvdo.com/wp-content/uploads/2015/10/Matrix6_Version_01.zip\" rel=\"noreferrer\">\n   DVDO Matrix6 Firmware 01.01\n  </a>\n  from\n  <a href=\"http://dvdo.com/product/dvdo-matrix6\" rel=\"noreferrer\">\n   dvdo\n  </a>\n  .\n </p>\n <p>\n  I took a look at other binaries from the same site, and found references to the\n  <code>\n   LPC1758\n  </code>\n  - an ARM based chip.\n </p>\n <p>\n  Indeed IDA does not immediately recognize the binary. The reason is that this binary has only Thumb instructions. IDA expects arm binaries to start with ARM32 code.\nThumb code can be recognised from a hex dump by the presence of byte sequences like\n  <code>\n   70 47\n  </code>\n  (BX LR),\n  <code>\n   00 bf\n  </code>\n  (NOP),\n  <code>\n   *0 b5\n  </code>\n  (PUSH {...}\n </p>\n <p>\n  So after changing the segment type\n  <code>\n   T\n  </code>\n  to\n  <code>\n   1\n  </code>\n  using\n  <code>\n   Alt-G\n  </code>\n  . I could disassemble the file.\n </p>\n <p>\n  Finding the offset:\n </p>\n <p>\n  These two commands will generate a list of dwords occurring in the file, and a list of strings occurring in the file:\n </p>\n <pre><code>od -Ax -t x4 Matrix6_Version_01/M6FW0101.BIN | perl -pe 's/^\\w+\\s+//' | tr \" \" \"\n\" | sort|uniq  > dwordlist.txt\nstrings -10 -o -t x \"Matrix6_Version_01/M6FW0101.BIN\" > stringlist.txt\n</code></pre>\n <p>\n  Now look at the first real text in the stringlist:\n </p>\n <pre><code>28eaa pGSAC Initiation task finished\n28eca SAC Audio Format Discovery task finished\n28ef4 SAC volume has changed\n28f0c Audio System Logical Address not assigned\n28f37 CBUS MUTE received\n28f4b CBUS UN-MUTE received\n28f62 CBUS VOL UP received\n28f78 CBUS VOL DOWN received\n</code></pre>\n <p>\n  You may notice that the first 2 characters of the first string,\n  <code>\n   pG\n  </code>\n  is actually a\n  <code>\n   70 47\n  </code>\n  or\n  <code>\n   BX LR\n  </code>\n  instruction.\n </p>\n <p>\n  Now i would load both files in\n  <code>\n   Vim\n  </code>\n  , and in both run this vim-perl script:\n </p>\n <pre><code>:perldo s/^\\w+/($x,$p)=(hex($&),$x); sprintf(\"%s(%8x)\", $&, $x-$p)/e\n</code></pre>\n <p>\n  This will lead to a string list looking partially like this:\n </p>\n <pre><code>28eaa(    25dd) pGSAC Initiation task finished\n28eca(      20) SAC Audio Format Discovery task finished\n28ef4(      2a) SAC volume has changed\n28f0c(      18) Audio System Logical Address not assigned\n28f37(      2b) CBUS MUTE received\n28f4b(      14) CBUS UN-MUTE received\n28f62(      17) CBUS VOL UP received\n28f78(      16) CBUS VOL DOWN received\n</code></pre>\n <p>\n  now, skipping the first two, because of the incorrect\n  <code>\n   pG\n  </code>\n  start, I search in\n  <code>\n   dwordlist.txt\n  </code>\n  , for consecutive lines with respectively\n  <em>\n   2a\n  </em>\n  ,\n  <em>\n   18\n  </em>\n  and\n  <em>\n   2b\n  </em>\n  , using this regex search:\n </p>\n <pre><code>/ 2a)\n.* 18)\n.* 2b)\n</code></pre>\n <p>\n  This leads me to the following lines matching in both files:\n </p>\n <pre><code>0002ebc3(      80)\n0002eeac(     2e9)       28eaa(    25dd) pGSAC Initiation task finished\n0002eeca(      1e)       28eca(      20) SAC Audio Format Discovery task finished\n0002eef4(      2a)       28ef4(      2a) SAC volume has changed\n0002ef0c(      18)       28f0c(      18) Audio System Logical Address not assigned\n0002ef37(      2b)       28f37(      2b) CBUS MUTE received\n0002ef4b(      14)       28f4b(      14) CBUS UN-MUTE received\n0002ef62(      17)       28f62(      17) CBUS VOL UP received\n0002ef78(      16)       28f78(      16) CBUS VOL DOWN received\n0002ef8c(      14)\n</code></pre>\n <p>\n  Subtracting 0x28eaa from 0x2eeac leads me to an offset of\n  <code>\n   0x6000\n  </code>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Willem Hengeveld",
+            "time": "Oct 25, 2017 at 19:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "MrSynAckSter",
+                    "text": "<span class=\"comment-copy\">I assume you were working off a linear dissassembler like objdump for the initial disassembly? My worry is discerning a legitimate disassembly from one that is somehow corrupt.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Willem Hengeveld",
+                    "text": "<span class=\"comment-copy\">I would use IDA for both the initial and final disassembly.  since that automates much of the function finding. Maybe aided with some idapython scripts to coerce IDA to explore more  unreached code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "MrSynAckSter",
+                    "text": "<span class=\"comment-copy\">Hmm yes but in a lot of these situations IDA doesn't find the functions in the first place. Hence all the worry about finding the right addresses for the import. In a typical binary like this (for me) IDA will find 2-5 functions and they will be wrong.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Willem Hengeveld",
+                    "text": "<span class=\"comment-copy\">Maybe you are looking at an encrypted firmware image? can you post a sample?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Willem Hengeveld",
+                    "text": "<span class=\"comment-copy\">I think this method would work for any CPU which stores absolute offsets to strings in a binary.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I cover some of this in my\n  <a href=\"http://www.hexblog.com/?p=130\" rel=\"nofollow noreferrer\">\n   Recon 2010 presentation\n  </a>\n  (starting around page 48).\n </p>\n <p>\n  To summarize the approaches:\n </p>\n <ul>\n  <li>\n   <p>\n    self-relocating code which copies itself to expected location\n   </p>\n  </li>\n  <li>\n   <p>\n    initialization code which contains references to expected run-time addresses\n   </p>\n  </li>\n  <li>\n   <p>\n    jump tables with absolute addresses\n   </p>\n  </li>\n  <li>\n   <p>\n    string tables (tables of addresses) matched against actual strings in the binary.\n   </p>\n  </li>\n  <li>\n   <p>\n    symbol tables (if you're lucky)\n   </p>\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Oct 24, 2017 at 7:46",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "MrSynAckSter",
+                    "text": "<span class=\"comment-copy\">I don't suppose any automation exists in this direction? It sounds like not.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">I'm not reversing hundreds of binaries each day so I've been doing it mostly manually so far....</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">would maddie stone's IDAPython Embedded Toolkit be useful for this kind of task?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@SYS_VL I think her scripts mostly deal with already correctly loaded code, but maybe she has something for this too, I'm not sure... FWIW string table (or function table) search could certainly be automated</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">Thanks, good to know. That doesn't really sound like \"life-changing magic\" but I haven't tried using it yet</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

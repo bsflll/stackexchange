@@ -1,0 +1,54 @@
+{
+    "title": "Intel PIN: How to access the INS object from inside an analysis function?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12404/intel-pin-how-to-access-the-ins-object-from-inside-an-analysis-function",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A typical PIN code snippet looks like this (taken from the <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/76991/Pin/html/index.html#IAddressTrace\" rel=\"nofollow\">official manual</a>):</p>\n<pre><code>// This function is called before every instruction is executed\n// and prints the IP\nVOID printip(VOID *ip) { fprintf(trace, \"%p\\n\", ip); }\n\n// Pin calls this function every time a new instruction is encountered\nVOID Instruction(INS ins, VOID *v)\n{\n    // Insert a call to printip before every instruction, and pass it the IP\n    INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)printip, IARG_INST_PTR, IARG_END);\n}\n</code></pre>\n<p>I just can't figure out how to access the <code>ins</code> object from within <code>printip(VOID *p)</code>. The other way round seems easy, i.e. getting the IP from from the <code>ins</code> object:</p>\n<p><code>INS_Address (INS ins)</code>(see <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/76991/Pin/html/group__INS__BASIC__API__GEN__IA32.html#gd3b5f975c84b126531b38930b94b5544\" rel=\"nofollow\">here</a>)</p>\n<p>I tried passing a <code>INS *ins</code> pointer to <code>printip(VOID *ip, INS *ins)</code> ins via <code>IARG_PTR, &amp;ins</code> but this ended in either casting errors or Segmentation faults.</p>\n<p>How can I access the <code>ins</code> object (type <code>INS</code>) from inside an analysis function?</p>\n<p><strong>Side note:</strong> I got to this problem when trying to call <code>INS_Disassemble (INS ins)</code> for every executed instruction.</p>\n</div>",
+    "votes": "6",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "c++",
+        "pintool"
+    ],
+    "user": "langlauf.io",
+    "time": "Apr 12, 2016 at 17:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You may note that <code>printip</code> is a function pointer, it is lazily called internally by <code>Pin</code>; moreover <code>ins</code> is an <em>automatic variable</em> (it is passed into <code>Instruction</code> from the stack). Consequently, passing <code>&amp;ins</code> into <code>printip</code> (through <code>IARG_PTR</code>), then using it will lead to segmentation faults.</p>\n<p><code>Pin</code> declares <code>INS</code> by specializing the class template <code>INDEX</code>, as you can observe the following declaration in <code>type_core.TLH</code>:</p>\n<pre><code>/*! @ingroup INS_BASIC_API\nHandle for INS */  \ntypedef class INDEX&lt;6&gt; INS;\n</code></pre>\n<p>where <em>constructors and assignment operators</em> of class template <code>INDEX</code> are both default. So, <em>in principle</em>^^, we can always declare a persistent variable to share an object of <code>INS</code> between instrumentation and analysis functions, for example:</p>\n<pre><code>static INS per_ins;\n...\nVOID Instruction(INS ins, VOID *v)\n{\n  per_ins = ins;\n  ...\n}\n...\nVOID printip(VOID *ip)\n{\n  INS_Disassemble(per_ins);\n}\n</code></pre>\n<p>This method does not work, unfortunately, this is an example for \"well-typed program still can go wrong\" in <code>C/C++</code>^^. Since <code>Pin</code> does not guarantee that internal variables, accessed by an object of type <code>INS</code>, are persistent in <em>analysis time</em>, the result of calling <code>INS_Disassemble(per_ins)</code> in an <em>analysis function</em> can be meaningless.</p>\n<p>For your case, you may not want to call <code>INS_Disassemble(ins)</code> each time <code>ins</code> executes. We don't need that, for example, if <code>ins</code> is in a loop then this function will be called multiple times (with the same <code>ins</code>) to get the same result.</p>\n<p>All <strong>static information</strong> of an instruction (e.g. the disassembled form of <code>ins</code> in this case) should be obtained in <em>instrumentation time</em>. Particularly, <code>INS_Disassemble</code> should be called single time only in some instrumentation function. One way to obtain the same effect as you want is:</p>\n<pre><code>static std::unordered_map&lt;ADDRINT, std::string&gt; str_of_ins_at;\n\nVOID Instruction(INS ins, VOID *v)\n{\n  str_of_ins_at[INS_Address(ins)] = INS_Disassemble(ins);\n  ...\n}\n\nVOID printip(VOID *ip, ADDRINT addr) \n{\n  std::string ins_str = str_of_ins_at[addr];\n  ...\n}\n</code></pre>\n</div>",
+            "votes": "5",
+            "user": "Ta Thanh Dinh",
+            "time": "Apr 13, 2016 at 9:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Thank you for the detailed answer. I wanted to place the <code>INS_Disassemble(ins)</code> into the analysis function to check (manually by looking at it) if the analysis function works as intended. If I place the <code>INS_Disassemble(ins)</code> into the Instrumentation function, the output of <code>INS_Disassemble(ins)</code> is separated from the output of the analysis function. In other words: I wanted the output of the analysis function be entitled with the instruction to easily check if it is correct.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">You are correct, we can always obtain opcode of an instruction using <code>PIN_SafeCopy</code> and <code>INS_Size</code>, then use whatever disassemble tool e.g. Capstone, or even Xed of Intel.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Oh sorry, I deleted my comment regarding this approach because your idea to store the strings looked more elegant to me.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">But anyway, great explanation of what is going on with this <code>ins</code> object.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>typedef class INDEX&lt;6&gt; INS; is defined in types_core.TLH (types not type). The following code works for me to disassamble at analysis time. </p>\n<pre><code>void disasmIns(ADDRINT tid, ADDRINT insarg)\n{\n  INS ins;\n  ins.q_set(insarg);\n  std::cout &lt;&lt; \"Disassembly: \" &lt;&lt; INS_Disassemble(ins) &lt;&lt; std::endl;\n}\n\nVOID Instruction(INS ins, VOID *v) {\n  INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)disasmIns, \n  IARG_FAST_ANALYSIS_CALL, IARG_ADDRINT, ins.q(), IARG_END);\n}\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "Heiner Litz",
+            "time": "Jul 19, 2017 at 19:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

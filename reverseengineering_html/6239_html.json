@@ -1,0 +1,46 @@
+{
+    "title": "What is the difference between F9 and Ctrl-F9 in OllyDbg",
+    "link": "https://reverseengineering.stackexchange.com/questions/6239/what-is-the-difference-between-f9-and-ctrl-f9-in-ollydbg",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  What is the difference between\n  <kbd>\n   Ctrl\n  </kbd>\n  -\n  <kbd>\n   F9\n  </kbd>\n  and\n  <kbd>\n   F9\n  </kbd>\n  in OllyDbg except the fact that the first command will stop the program execution on the next\n  <code>\n   RET\n  </code>\n  instruction while the second command will stop the program execution on the next breakpoint/program termination ?\n </p>\n <p>\n  I just noticed that the debugging application give the different results in these cases (different register values after function call, etc) while executing the following code:\n </p>\n <pre><code>; ...\nCALL module_name.some_address\nTEST EAX, EAX\n; ...\n</code></pre>\n <p>\n  I've set breakpoints on each of these instructions and noticed that the behavior is different when I just press\n  <kbd>\n   F9\n  </kbd>\n  after first breakpoint or press\n  <kbd>\n   F7\n  </kbd>\n  and\n  <kbd>\n   Ctrl\n  </kbd>\n  -\n  <kbd>\n   F9\n  </kbd>\n  .\n </p>\n <p>\n  Why ?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ollydbg"
+    ],
+    "user": "FrozenHeart",
+    "time": "Sep 15, 2014 at 20:04",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<html><body><span class=\"comment-copy\">\n f9 executes the program ctrl+f9 traces (recursively steps over ) through the program if your binary has some antidebugging measures tracing can trigger them there isnt enough information to provide an answer apart from quoting ollydbg.hlp about these Global Shortcut Behaviours\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "FrozenHeart",
+            "text": "<html><body><span class=\"comment-copy\">\n @blabb Ok, even if this function have some debugger detection why did it work in Ctrl-F9 and didn't work in case of F9? Both of them are handled from the debugger. What is the difference?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't know exactly how this feature is implemented in Ollydbg, but we can have a look at how it is implemented in x64_dbg as it is open-source.\n </p>\n <p>\n  The\n  <kbd>\n   Ctrl\n  </kbd>\n  -\n  <kbd>\n   F9\n  </kbd>\n  (execute till return) functionality is implemented by\n  <code>\n   cbDebugRtr\n  </code>\n  in\n  <code>\n   x64_dbg_dbg/debugger_commands.cpp\n  </code>\n  . We can see that it calls\n  <code>\n   StepOver\n  </code>\n  which is a method provided by TitanEngine.\n </p>\n <pre><code>CMDRESULT cbDebugRtr(int argc, char* argv[])\n{\n    StepOver((void*)cbRtrStep);\n    cbDebugRun(argc, argv);\n    return STATUS_CONTINUE;\n}\n</code></pre>\n <p>\n  In the TitanEngine document the description of StepOver is described as follows :\n </p>\n <blockquote>\n  <p>\n   StepOver function\n  </p>\n  <p>\n   The StepOver traces code by single-stepping over calls. This tracing\n  function sets an INT3 breakpoint after the call, which is used to call\n  your callback. There is no guarantee that code execution will return\n  from that call, and thus no guarantee that your callback will ever be\n  called. The breakpoint is run only once, and is removed once your\n  callback has finished.\n  </p>\n </blockquote>\n <p>\n  TitanEngine is also open-source, here is the implementation of\n  <code>\n   StepOver\n  </code>\n  in\n  <code>\n   TitanEngine / TitanEngine.Debugger.Control.cpp\n  </code>\n </p>\n <pre><code>__declspec(dllexport) void TITCALL StepOver(LPVOID StepCallBack)\n{\n    ULONG_PTR ueCurrentPosition = GetContextData(UE_CIP);\n    unsigned char instr[16];\n    MemoryReadSafe(dbgProcessInformation.hProcess, (void*)ueCurrentPosition, instr, sizeof(instr), 0);\n    char* DisassembledString = (char*)StaticDisassembleEx(ueCurrentPosition, (LPVOID)instr);\n    if(strstr(DisassembledString, \"CALL\") || strstr(DisassembledString, \"REP\") || strstr(DisassembledString, \"PUSHF\"))\n    {\n        ueCurrentPosition += StaticLengthDisassemble((void*)instr);\n        SetBPX(ueCurrentPosition, UE_BREAKPOINT_TYPE_INT3 + UE_SINGLESHOOT, StepCallBack);\n    }\n    else\n        StepInto(StepCallBack);\n}\n</code></pre>\n <p>\n  After each step the callback function\n  <code>\n   cbRtrStep\n  </code>\n  is called which checks if the current instruction is a\n  <code>\n   RET\n  </code>\n  and if so the debugger is stopped. (\n  <code>\n   x64_dbg_dbg/debugger.cpp\n  </code>\n  )\n </p>\n <pre><code>void cbRtrStep()\n{\n    unsigned int cipch = getCIPch();\n    if(cipch == 0xC3 or cipch == 0xC2)\n        cbRtrFinalStep();\n    else\n        StepOver((void*)cbRtrStep);\n}\n</code></pre>\n <p>\n  So, to sum up,\n  <kbd>\n   Ctrl\n  </kbd>\n  -\n  <kbd>\n   F9\n  </kbd>\n  is doing step-over until it encounters a\n  <code>\n   RET\n  </code>\n  instruction. If you press\n  <kbd>\n   F7\n  </kbd>\n  and\n  <kbd>\n   Ctrl\n  </kbd>\n  -\n  <kbd>\n   F9\n  </kbd>\n  the debugger will single-step the instructions of the function; the function you are calling might be doing debugger detection that is not triggered when setting a breakpoint after this function.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "ekse",
+            "time": "Sep 17, 2014 at 1:45",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "FrozenHeart",
+                    "text": "<span class=\"comment-copy\">Ok, even if this function have some debugger detection why did it work in Ctrl-F9 and didn't work in case of F9? Both of them are handled from the debugger. What is the difference?</span>",
+                    "time": null
+                },
+                {
+                    "user": "ekse",
+                    "text": "<span class=\"comment-copy\">I can't tell without seeing the code. The debugger detection method could for example by looking for INT3 opcodes in the function code.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

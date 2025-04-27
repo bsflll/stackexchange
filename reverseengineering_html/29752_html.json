@@ -1,0 +1,45 @@
+{
+    "title": "One class with different sizes",
+    "link": "https://reverseengineering.stackexchange.com/questions/29752/one-class-with-different-sizes",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  After looking at some basic examples of how C++ classes are compiled by MSVC, I tried to apply the knowledge to a DLL I'm working on. While searching for a class to start with, I came across\n  <code>\n   CRefCountable\n  </code>\n  . Its constructors are straightforward and it appears to be a base class that almost every other class extends from.\n </p>\n <p>\n  Looking at one of the ctors, it seems like a\n  <code>\n   CRefCountable\n  </code>\n  is 8 bytes long, containing the\n  <code>\n   vftable\n  </code>\n  and a\n  <code>\n   DWORD\n  </code>\n  . I then got the impression that there are some \"hidden\" fields not initialized, as it is called with a pointer to 16 bytes of memory. Scrolling through the references to this ctor, I was surprised to see that it is also called with a pointer to 572, 500 and/or 20 bytes of memory, never with 8 bytes as I suspected.\n </p>\n <p>\n  How can the size of this class be variable and bigger than the ctor implies? Or could this be a compiler optimization, where memory for a child class or something else is allocated together with the memory for the object, saving a call to\n  <code>\n   malloc\n  </code>\n  /\n  <code>\n   new\n  </code>\n  ?\n </p>\n <p>\n  I've decided not to include the decompilation or disassembly of the code in question, as it's either trivial or included in a way bigger function of a child class I haven't touched yet. If needed, I can provide some examples though.\n </p>\n <h3>\n  EDIT\n </h3>\n <p>\n  I completely forgot that the term \"base class\" was a thing, sorry about that. I'm very sure that this is a base class from the name and from looking around.\n </p>\n <p>\n  This is the constructor that I mentioned above.\n </p>\n <pre><code>// mangled name: ??0CRefCountable@@QAE@XZ\n// demangled name: public: __thiscall CRefCountable::CRefCountable(void)\n\nmov     eax, ecx\nmov     dword ptr [eax], offset ??_7CRefCountable@@6B@ ; const CRefCountable::`vftable'\nmov     dword ptr [eax+4], 0\nretn\n</code></pre>\n <p>\n  The values for the size of the object are in constructs such as this:\n </p>\n <pre><code>...\npush    10h\ncall    new_or_malloc\nmov     esi, eax\nadd     esp, 4\nmov     [esp+18h+var_10], esi\ntest    esi, esi\nmov     [esp+18h+var_4], 0\njz      short loc_1002C12E\nmov     ecx, esi        ; this\ncall    ??0CRefCountable@@QAE@XZ ; CRefCountable::CRefCountable(void)\nmov     dword ptr [esi], offset off_100443DC\nmov     eax, [edi+8]\nmov     [esi+8], eax\nmov     [esi+0Ch], edi\njmp     short loc_1002C130\nloc_1002C12E:\nxor     esi, esi\nloc_1002C130:\n...\n</code></pre>\n <p>\n  Ghidra's decompiler turns that into constructs like this (which I used to find these more quickly, as it's more concise).\n </p>\n <pre><code>  crc = (CRefCountable *)new_or_malloc(0x10);\n  local_4 = 0;\n  if (crc == (CRefCountable *)0x0) {\n    crc = (CRefCountable *)0x0;\n  }\n  else {\n    CRefCountable::CRefCountable(crc );\n    crc ->vftable = &PTR_AddReference_100443dc;\n    crc[1].vftable = *(undefined ***)(param_1 + 8);\n    crc[1].field_0x04 = param_1;\n  }\n</code></pre>\n <p>\n  The value I suppose is the size of the object is the arg to\n  <code>\n   new_or_malloc\n  </code>\n  . This function wasn't recognized by IDA Free or ghidra, but it made sense in the context and the function does call\n  <code>\n   HeapAlloc\n  </code>\n  in the end.\n </p>\n <p>\n  Something that I overlooked yesterday evening was that\n  <code>\n   param_1\n  </code>\n  (or\n  <code>\n   edi\n  </code>\n  in the disassembly) sometimes is the\n  <code>\n   this\n  </code>\n  pointer to a object. In this particular case it's a plugin manager class that doesn't seem to extend\n  <code>\n   CRefCountable.\n  </code>\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "68",
+    "tags": [
+        "windows",
+        "x86",
+        "c++",
+        "msvc",
+        "class-reconstruction"
+    ],
+    "user": "mindoverflow",
+    "time": "Dec 21, 2021 at 13:06",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n I think you better post some fragments, e.g. how exactly you determined the size of memory passed to the constructor.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "malikcjm",
+            "text": "<html><body><span class=\"comment-copy\">\n Name of that class sounds like name of base class. In case of inheritance instance of the derived class will contain members of the base class. Memory will be allocated before call to constructor to derived class, then from the inside of derived class constructor, call to base class constructor will be made. That's probably why you observed different sizes.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It looks like\n  <code>\n   CRefCountable\n  </code>\n  is either a base class or the first member of the bigger class/structure being initialized. By itself, it is indeed only 8 bytes (vtable pointer and a data member, most likely the reference count).\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Dec 21, 2021 at 16:02",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "mindoverflow",
+                    "text": "<span class=\"comment-copy\">Thank you for confirming what I have so far! This got me on track. After analyzing a test program, it seems like my initial assumption (malloc for entire child class, call base class constructor) was correct, as this produced a structure much like the one I saw in the DLL.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

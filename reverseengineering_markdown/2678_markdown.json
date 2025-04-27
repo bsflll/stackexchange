@@ -1,0 +1,68 @@
+{
+  "title": "GAS/x86 disassembled a bare gs register as an instruction, is it a bug?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2678/gas-x86-disassembled-a-bare-gs-register-as-an-instruction-is-it-a-bug",
+  "content": "I encountered a strange x86-32 instruction (opcode 0x65) decoded by objdump as gs (not %gs but gs). I found it while a full linear sweep of a binary (objdump -D), so the decoding was surely incorrect. But, still, objdump didn't decode it as a (bad) instruction, so it means that it can be encountered and I would like to know what does it means.\n\nHere is an example of this instruction:\n\n```\n080484fc <_IO_stdin_used>:\n 80484fc:       01 00                   add    %eax,(%eax)\n 80484fe:       02 00                   add    (%eax),%al\n 8048500:       48                      dec    %eax\n 8048501:       65                      gs     <======================= Here!!!\n 8048502:       6c                      insb   (%dx),%es:(%edi)\n 8048503:       6c                      insb   (%dx),%es:(%edi)\n 8048504:       6f                      outsl  %ds:(%esi),(%dx)\n 8048505:       20 57 6f                and    %dl,0x6f(%edi)\n 8048508:       72 6c                   jb     8048576 <_IO_stdin_used+0x7a>\n 804850a:       64 21 0a                and    %ecx,%fs:(%edx)\n 804850d:       00 44 6f 64             add    %al,0x64(%edi,%ebp,2)\n 8048511:       67 65 20 54 68          and    %dl,%gs:0x68(%si)\n 8048516:       69                      .byte 0x69\n 8048517:       73 21                   jae    804853a <_IO_stdin_used+0x3e>\n\n```\nNote that searching for this instruction on the Web is quite difficult because of the %gs register which mask all other possible hit.\n\nSo, is it a real \"instruction\" or is it glitch produced by gas ?\n\n",
+  "votes": "8",
+  "answers": 1,
+  "views": "948",
+  "tags": [
+    "disassembly",
+    "x86",
+    "objdump"
+  ],
+  "user": "perror",
+  "time": "Aug 23, 2013 at 17:04",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Hmm, it seems to be bug from the GNU binutils... The opcode 0x65 correspond in fact to a prefix corresponding to %gs:(mem_ref).  But, here, the libopcodes parser seems to wrongly interpret it and forget to interpret what follow as a memory reference... (I may be wrong, but I will try to answer when I will know more about all this).",
+      "time": null
+    },
+    {
+      "user": "DCoder",
+      "text": "According to Intel's manuals, the ins* instructions ignore segment override prefixes and always use %es.",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "So, it means that this is because you have the opcodes 0x65 followed by an ins instruction that the decoder is wrong... I see, it is interesting. Thanks.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "A bit late, but: the decoder gets it \"wrong\" because you are disassembling a zero-terminated text string. You cannot make decisions on \"good\" or \"bad\" disassembly while feeding it with bad input. (Funny: this string is so well-known that I got it after ment'ly decoding the first three characters.)",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Strictly speaking it's not an instruction. It's the segment override prefix (prefixes are considered to be part of the instruction).\n\nMost memory accesses use DS segment selector by default except those involving ESP or EBP register (they default to SS) and some \"string\" instructions (movs, scas etc). Segment override prefixes allow you to use another segment selector to access your data. E.g. in DOS times the CS override was commonly used to access data stored in the code segment (such as jump tables):\n\n```\nseg001:00EA shl bx, 1 ; SWITCH\nseg001:00EC jmp cs:off_13158[bx] ; switch jump\n...\nseg001:0588 off_13158  dw offset loc_12DD7 ; DATA XREF: _main+E6r\nseg001:0588            dw offset loc_12DE5 ; jump table for switch statement\nseg001:0588            dw offset loc_12DE5\nseg001:0588            dw offset loc_12DE5\n\n```\nThe 80386 added two extra segment registers (GS and FS) and the corresponding prefixes.\n\nSince the GS prefix does not actually affect the following instruction (insb) in the code snipped above, GAS opted out for printing it on a separate line.\n\nIn some of the following instructions you can see how it affects the disassembly:\n\n```\n64 21 0a       ->  and %ecx, %fs:(%edx)\n^^                           ^^^\n67 65 20 54 68 -> and %dl, %gs:0x68(%si)\n   ^^                      ^^^\n\n```\nBTW, 67 is another prefix, this time the address size override. It is why the instruction uses the 16-bit SI register and not the full ESI.\n\n",
+      "votes": "6",
+      "user": "Igor Skochinsky",
+      "time": "Aug 23, 2013 at 16:49",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "This is pretty neat and clear (as ever, Igor!). But, would you consider this as an unwanted behavior (bug) of gas ?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "Well, I don't know. You could argue it both ways. It's not like GAS is hardened against nonsense/obfuscated code, you should be glad it did not crash at least :)",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "P.S. sometimes it does make sense to put prefix in a separate pseudo-instruction, see e.g. this snippet from some old libc.",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "If I understand well your example, the symbol is placed after the prefix of the instruction ??? It does mean that depending if we are coming from the block before or if we are jumping to it through the symbol, the semantics is not quite exactly the same (one is atomic and the other is not). I definitely hate x86, it gives me headaches ! :-)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

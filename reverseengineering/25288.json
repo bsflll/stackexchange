@@ -1,0 +1,25 @@
+{
+    "title": "What numeric properties are used in this Unsigned Integer (64bit) -> Floating Vector (128bit) conversion?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25288/what-numeric-properties-are-used-in-this-unsigned-integer-64bit-floating-ve",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Recently I came across the following set of vector instructions:</p>\n<pre><code>movq      xmm0, rcx\npunpckldq xmm0, 0x4530000043300000\nsubpd     xmm0, 0x4330000000000000\nhaddpd    xmm0, xmm0\n</code></pre>\n<p>The only sensible information I found based on the constants is a routine called <a href=\"https://github.com/MerryMage/dynarmic/blob/4aa4885ba707ac5e8d88a146336458a8bbe1304c/src/backend_x64/emit_x64_vector_floating_point.cpp#L413-L468\" rel=\"nofollow noreferrer\"><code>EmitFPVectorU64ToDouble</code></a>. Runtime behavior seemed to confirm that these instructions indeed convert an <em>unsigned integer</em> onto <em>scalar double-precision float</em>.</p>\n<p>What I'm looking for is an explanation of why these instructions achieve the result, theory behind it.</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "144",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "Kentzo",
+    "time": "Jun 13, 2020 at 10:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was wondering the same thing. The idea behind these instructions is to split QWORD in two DWORDs, then to make two floating point numbers corresponding to each and add them up. Here's how this seems to work:</p>\n<p>Operands in the snippet look incomplete, let's add missing higher QWORDs to operands:</p>\n<pre><code>movq      xmm0, rcx\npunpckldq xmm0, 0x00000000000000004530000043300000 \nsubpd     xmm0, 0x45300000000000004330000000000000\nhaddpd    xmm0, xmm0\n</code></pre>\n<p>First <em>MOVQ</em> copies QWORD from RCX to lower half of XMM0. Then, <em>PUNPCKLDQ</em> instruction is used to construct two double precision floats in XMM0. It interleaves two DWORDs from source and destination. In pseudocode this can look like this:</p>\n<pre><code>xmm0 = ((0x43300000&lt;&lt;32)|xmm0[0:31]) | (((45300000&lt;&lt;32)|xmm0[32:63])&lt;&lt;64)\n</code></pre>\n<p>As a result each of the doubles is made of two parts: some magic constant + 32 bits of integer data. In order to understand what these magics do, we need to look at memory layout of a double.\n<a href=\"https://i.sstatic.net/gMsHY.png\" rel=\"nofollow noreferrer\"><img alt=\"double precision memory layout\" src=\"https://i.sstatic.net/gMsHY.png\"/></a></p>\n<p>So, the magic sets <em>sign</em>, <em>exponent</em> and 20 higher bits of <em>fraction</em>. For the first double (the one with 0x43300000 magic) the <em>exponent</em> is set to 1075 which makes contribution of least significant bit in <em>fraction</em> to be exactly 1. This trick allows to substitute fraction bits with any unsigned integer input without conversion.</p>\n<pre><code>LSB_contribution: 2^(1075-1023)*2^(-52) = 2^52*2^(-52) = 1\n</code></pre>\n<p>The second magic sets <em>exponent</em> to 1107 to make contribution of LSB equal to 2^32 instead of 1 to match magnitudes of bits in higher DWORD.</p>\n<p>Since floating point representation has implicit 1 bit added to fraction the resulting values has constant offset, which is removed by <em>SUBPD</em> instruction. It subtracts\ndouble values with same magic constants and all <em>fraction</em> bits set to 0.</p>\n<p>At this point XMM0 contains two double values that correspond to DWORDS of input that can be summed with <em>HADDPD</em> to obtain the final result in lower half of XMM0 (so this is 64 bit unsigned integer to 64 bit floating point conversion).</p>\n</div>",
+            "votes": "2",
+            "user": "Pavel Tumanov",
+            "time": "Nov 16, 2020 at 23:32",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

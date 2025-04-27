@@ -1,0 +1,69 @@
+{
+    "title": "Global C++ classes/variables, strange initialisation",
+    "link": "https://reverseengineering.stackexchange.com/questions/11411/global-c-classes-variables-strange-initialisation",
+    "content": "I apologise for the length of this post, though I have taken the time to make it as readable as I can and included my ideas and thinking where possible so this post might be useful to other readers later down the track.\nFor context, I've started trying to learn some reverse engineering. After reading as much as I could find on the subject of reversing C++ and playing around with some trivial examples (that I wrote and compiled myself), I thought I would try my hand at a program I'm familiar with but don't have the source code for.\nLoading that Win32 C++ program (compiled with Visual Studio if that helps) into IDA Pro I see it has the following WinMain function:\n<pre><code>; int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)\n__stdcall WinMain(x, x, x, x) proc near\n\nsub     esp, 0BCh\nmov     eax, off_7CA000                           ; A pointer to some other string\npush    ebx                                       ; char (IDA generated comment)\nlea     ecx, [esp+0C0h+var_B4]\npush    ecx                                       ; int (IDA generated comment)\nmov     ecx, offset unk_8C16C0                    ; size_t (IDA generated comment)\n\n...     ; local variable init starts, including:\n\nmov     [esp+0C4h+var_B4], offset aSomeString     ; \"Some String\"\nmov     [esp+0C4h+var_AC], eax\n\n...     ; local variable init finishes\n\ncall    sub_407530\nmov     dword_8C16C4, offset off_8C16BC\nmov     dword_8C16C8, offset sub_242CE0\ncall    sub_4AF9C0\n...                                               ; rest of WinMain(..)\n</code></pre>\nAlthough the order of the ops is a little strange compared to what I have seen (local vars are initialised in between pushing a pointer onto the stack and ECX being initialised for use in a later sub routine call), I guess I have the following:\n\n<pre><code>var_B4</code></pre> is pushed onto the stack\n<pre><code>offset unk_8C16C0</code></pre> is placed into ECX\nLocal vars are initialised (where we find out <pre><code>var_B4</code></pre> is a <pre><code>char*</code></pre>)\nThe sub routine <pre><code>sub_407530</code></pre> is called\n\nSo perhaps <pre><code>offset unk_8C16C0</code></pre> is a <pre><code>this</code></pre> pointer for some global class (global because we're so early on in WinMain) and <pre><code>sub_407530</code></pre> is a <pre><code>__thiscall</code></pre> to a member function of the class pointed to by <pre><code>offset unk_8C16C0</code></pre> that takes a single <pre><code>char*</code></pre> parameter.\nChecking the cross references to <pre><code>offset unk_8C16C0</code></pre> I see two, so perhaps one is a constructor and the other a destructor. One of them is:\n<pre><code>sub_687C30      proc near                        ; DATA XREF: .rdata:006BF608\n\nvar_C   = dword ptr -0Ch\nvar_4   = dword ptr -4\n\nmov     eax, large fs:0\npush    0FFFFFFFFh\npush    offset SEH_687C30\npush    eax\nmov     large fs:0, esp\nmov     ecx, offset unk_8C16C0                   ; this\nmov     [esp+0Ch+var_4], 0\ncall    Concurrency::details::_ReaderWriterLock::_ReaderWriterLock(void)\npush    offset sub_6BA2B0                        ; void (__cdecl *)()\ncall    _atexit\nmov     ecx, [esp+10h+var_C]\nmov     large fs:0, ecx\nadd     esp, 10h\nretn\nendp\n</code></pre>\nGreat, my suspicions seem validated, <pre><code>offset unk_8C16C0</code></pre> seems to point to a global reader_writer_lock object, the above block initialises it and registers <pre><code>sub_6BA2B0</code></pre> (the only other reference to <pre><code>offset unk_8C16C0</code></pre>) to run on <pre><code>exit</code></pre> via a call to <pre><code>_atexit</code></pre>, so that is likely our destructor.\nBut it's at this point I start to have some doubts about my suspicions ... the above block is referring to a <pre><code>details</code></pre> namespace, which upon a little more research seems to be more related to the internals of reader_writer_lock. I'm also not sure why this initialisation block is so complicated. And finally, the only reference to this block is in the executables read only data section which itself has no references, so I feel like I'm at a bit of a dead end here.\nNevertheless, moving forward to the call to <pre><code>sub_407530</code></pre> in WinMain, I see:\n<pre><code>; int __thiscall sub_407530(size_t, int)\nsub_407530      proc near        ; CODE XREF: WinMain(x,x,x,x)\n\narg_0   = dword ptr  8\n\npush    ebp\nmov     ebp, esp\npush    esi\npush    37628                    ; size_t\nmov     esi, ecx\ncall    operator new(uint)\nadd     esp, 4\ntest    eax, eax\njz      short loc_407550\nmov     ecx, eax\ncall    sub_406B30\njmp     short loc_407552\n\nloc_407550:                      ; CODE XREF: sub_407530+15\nxor     eax, eax\n\nloc_407552:                      ; CODE XREF: sub_407530+1E\nmov     [esi], eax\nmov     dword_DC32B8, eax\nmov     eax, [ebp+arg_0]\nmov     ecx, [esi]\npush    eax                      ; int\npush    esi                      ; size_t\ncall    sub_407360\npop     esi\npop     ebp\nretn    4\nsub_407530      endp\n</code></pre>\nThe first half seems straight forward enough, 37628 bytes are allocated for a new object and <pre><code>sub_406B30</code></pre> is a constructor for that object:\n<pre><code>sub_406B30      proc near                       ; CODE XREF: sub_407530+19\nxor     eax, eax\npush    esi\nmov     esi, ecx\nmov     dword ptr [esi], offset const Blah1::Blah2::`vftable'\nmov     [esi+10h], eax\nmov     [esi+8], eax\nmov     [esi+0Ch], eax\nmov     dword ptr [esi+4], offset const    Something::List<Blah1::Blah2::Blah3,-1>::`vftable'\nmov     [esi+24h], eax\n...\n</code></pre>\nBack to <pre><code>sub_407530(size_t, int)</code></pre>, from <pre><code>loc_407552</code></pre> down it's not clear to me what's happening:\n\nThe newly created object seems to be replacing the _ReaderWriterLock object (whose reference was moved to ESI earlier in the sub-routine), which doesn't make sense to me. It certainly doesn't seem like this would be a member function as I suspected.\nThe new object (as a <pre><code>this</code></pre> pointer via ECX), an explicit pointer to the new object, and the <pre><code>char*</code></pre> from WinMain are being passed to a new sub routine. I don't understand why two pointers to the same object would be passed, although not incredibly important on its own it adds to my doubts.\n\nI'm sure I'm interpreting this incorrectly, so this brings me to my question:\nBroadly speaking, is my thinking on track? Are there any obvious errors in my analysis so far?\nMore specifically, what is happening with <pre><code>offset unk_8C16C0</code></pre> / <pre><code>sub_687C30</code></pre> at the start, and how is <pre><code>loc_407552</code></pre> in <pre><code>sub_407530(size_t, int)</code></pre> related and interacting with it? Thanks for taking the time to read.\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "windows",
+        "decompilation",
+        "c++"
+    ],
+    "user": "Benjamin Tillman",
+    "time": "Nov 26, 2015 at 19:29",
+    "comments": [
+        {
+            "user": "user2823000",
+            "text": "It's pretty hard to answer without knowing both what the executable is about and what is your objective. Are you trying to understand in-deep the mechanisms of global objects for this version of your compiler, or trying to understand what the program is doing?\n",
+            "time": null
+        },
+        {
+            "user": "Benjamin Tillman",
+            "text": "I think an in depth knowledge of the mechanisms of global objects is going to serve me better. I basically know what the program is doing at this point, so I'm not worried about that, I am just struggling to \"decompile\" ... piecing together these pieces to understand how it does it.\n",
+            "time": null
+        },
+        {
+            "user": "Benjamin Tillman",
+            "text": "Oh, and the executable is an old game executable.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "In that case, _ReaderWriterLock constructor is likely a false positive, since it only appeared in VS2010 or so. So you may want to inspect its code too.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "call 407530 tries to allocates memory\nif memory allocation succeeded 406b30 is called\nthis call initializes  unk_804xxxx with stuff\nif memory allocation failed  unk_804xxxx is intialised with 0    \n<pre><code>    test    eax, eax\n |<--jz      short loc_407550\n |   mov     ecx, eax  <----------- address of newly allocated memory\n |   call    sub_406B30 \n |\n |-->407550: xor     eax, eax <--------- else 0 \n</code></pre>\nboth paths success and failure of memory allocation are lead to 407552\n  if failure eax holds 0\n  if success it holds the return from 406b30 (possibly the return from new();\n<pre><code> 407552:mov     [esi], eax   \n</code></pre>\n<pre><code>esi holds the offset_unk_80xxx</code></pre> here as well as inside the call\n so ultimately offset_unk_80xxx is initialised with either 0\n or address of memory allocation\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Nov 27, 2015 at 12:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Benjamin Tillman",
+                    "text": "<span class=\"comment-copy\">Thanks for the reply Blabb. It's clear to me that some memory is being allocated and an object (a C++ class) is being initialised by 406B30 as you said. What isn't clear to me is that, if I'm reading things correctly, offset unk_8C16C0 has already been initialised by 687C30 and then loc_407552 seems to replace unk_8C16C0 with the mov [esi], eax.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i don't see the connection why does 687xxx come into picture in the flow you post ?  winmain has 2 calls 407350,4af9c0  407350 has 3 calls  new, 406b30,407360  406b30 doesnt have any calls so what is the connection to that 687xxx none apparently decipherable from your post</span>",
+                    "time": null
+                },
+                {
+                    "user": "Benjamin Tillman",
+                    "text": "<span class=\"comment-copy\">offset unk_8C16C0 is referenced in three places, in WinMain, and also by sub_687C30 (posted in the question) and sub_6BA2B0 (which you can see being called by sub_687C30). I assumed that offset unk_8C16C0 was pointing to a global object (constructed by sub_687C30 and destructed by sub_6BA2B0) based on the code in those two sub routines. I did try to explain this in my question so I apologise if that wasn't clear.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">406b30 pushes esi ( the unk_) so it is likely to pop it back  the call also xors eax,eax so it likely has a mov eax, some result   so on returning from that function  unk_xx is initialised with eax  or 0</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

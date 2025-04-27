@@ -1,0 +1,62 @@
+{
+    "title": "How does the processor distinguishes processes wrt HW bps?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14648/how-does-the-processor-distinguishes-processes-wrt-hw-bps",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  When setting a hardware breakpoint (\n  <code>\n   DR0\n  </code>\n  ...), this stores an address (as far as I can see, it looks like a virtual address). Because addresses are shared between processes (at least in 32 bits this can be the case), how does the processor know which process is affected in order to raise the exception? Does this have any implications in a multiprocessor environment?\n </p>\n <p>\n  I know\n  <code>\n   DR7\n  </code>\n  flags if the bp has global (all tasks) or local (current task only) relevance, but I cannot see how the processor knows when to raise the exception since I can set a hw bp at\n  <code>\n   410123\n  </code>\n  for my current pid (task), and other pids might use the same address too.\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "397",
+    "tags": [
+        "debugging",
+        "breakpoint"
+    ],
+    "user": "user1156544",
+    "time": "Feb 13, 2017 at 16:06",
+    "comments": [
+        {
+            "user": "josh poley",
+            "text": "<html><body><span class=\"comment-copy\">\n Register contexts are associated with a process. Setting a register in process A has no impact to process B.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Gilles 'SO- stop being evil'",
+            "text": "<html><body><span class=\"comment-copy\">\n What processor and what operating system are you talking about?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "user1156544",
+            "text": "<html><body><span class=\"comment-copy\">\n Platforms x86 and x64 (not sure DRx exists in other processors) and OS that can run on them (Windows, Linux...) @josh poley so the processor always fires and it is the responsibility of, e.g. Windows to clear the registers in any processor context switch? If so, then what about multiprocessor environments?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The various bits in the\n  <a href=\"https://en.wikipedia.org/wiki/X86_debug_register#DR7_-_Debug_control\" rel=\"nofollow noreferrer\">\n   <code>\n    DR7\n   </code>\n  </a>\n  (debug control) register determines the applicability of the hardware breakpoint in question. Such breakpoints can be local or global.\n </p>\n <p>\n  Global breakpoint, as its name suggests affects all tasks. Local breakpoint are specific to the currently executing task. For the Intel Architecture,\n  <em>\n   local breakpoint enable flag\n  </em>\n  bits in the DR7 are cleared on every task switch. Global breakpoint are preserved on task switches.\n </p>\n <p>\n  In Windows, you can only set local hardware breakpoints from user mode.\n </p>\n <p>\n  Now, as per intel documentation local hardware breakpoints are cleared on task switch. So how does local hardware breakpoints work ?\n </p>\n <p>\n  Hardware breakpoints work and fire on the correct process because Windows does not use the\n  <a href=\"https://en.wikipedia.org/wiki/Context_switch#Hardware_vs._software\" rel=\"nofollow noreferrer\">\n   hardware task state switching\n  </a>\n  machinery available in the processor. Windows has its own mechanism for context switch. During a context switch, the kernel creates a special structure called the\n  <a href=\"http://www.geoffchappell.com/studies/windows/km/ntoskrnl/structs/ktrap_frame.htm\" rel=\"nofollow noreferrer\">\n   <code>\n    TRAP_FRAME\n   </code>\n  </a>\n  to store information about the debug registers along with other things. The\n  <code>\n   TRAP_FRAME\n  </code>\n  is a part of the thread's complete context.\n </p>\n <p>\n  When the thread is re-scheduled for execution, Windows restores the saved context and with this hardware breakpoints are restored too.\n </p>\n <p>\n  Hence, the processor can never distinguish between a local hardware breakpoint in Process A and Process B. All it sees is a single task executing on each processor. The responsibility of restoring local hardware breakpoints across various processes lies with Windows.\n </p>\n <hr/>\n <p>\n  <strong>\n   Replies to the comments\n  </strong>\n </p>\n <p>\n  (1) On Windows, hardware breakpoints are thread specific. This means if you set a hwbp on an address from a particular thread, the breakpoint will only be triggered when the thread executes/reads/writes that particular address.\n  <strong>\n   HWBP are never process wide\n  </strong>\n  . Hence, thread2 will never break for a hwbp set from thread1.\n </p>\n <p>\n  (2) The situation is same for Linux. However, it is most likely different for iOS as it runs on a different architecture i.e ARM and not x86.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "0xec",
+            "time": "Feb 14, 2017 at 15:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user1156544",
+                    "text": "<span class=\"comment-copy\">Well explained. I'm missing a couple of things, though (i) It is still a bit confusing to picture how DRx are resolved by Windows, ie, if the process1 has 2 threads, each one running in a different processor, and a BP is set from thread1, how does Windows know that thread2 also has to break at that BP? (ii) Do you know if this works in the same way for Linux/iOs?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@user1156544 See update</span>",
+                    "time": null
+                },
+                {
+                    "user": "user1156544",
+                    "text": "<span class=\"comment-copy\">Thanks. I accepted the answer. I suppose that considering (1) a debugger will keep a track on hwbps for the whole process... Otherwise I cannot explain how a user could press a button that creates a new thread to do a task, uses a debugger to set a hwbp in the middle of the task, the thread finishes and then when the user presses the same button (creating a new thread to go through the same instructions as before) the hwbp fires.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@user1156544 A debugger typically listens for <code>CREATE_THREAD_DEBUG_EVENT</code> and uses <code>SetThreadContext</code> to set hwbp on a newly created thread. This behaviour is consistent with Olly v2. However Olly1 does not seem to track hwbp across multiple threads.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

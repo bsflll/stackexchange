@@ -1,0 +1,69 @@
+{
+    "title": "Why would a program contain a call instruction targetting the address immediately following that instruction?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1654/why-would-a-program-contain-a-call-instruction-targetting-the-address-immediatel",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>While reversing a 32bit Mach-O binary with Hopper, I noticed this peculiar method. The instruction on 0x0000e506 seems to be calling an address right below the instruction.</p>\n<p>What would be the reason for this? Is it some kind of register cleaning trickery?</p>\n<p><a href=\"https://i.sstatic.net/OBxX3.png\" rel=\"nofollow noreferrer\"><img alt=\"Disassembly listing containing an instruction call 0xe50b at address 0xe506, immediately followed by pop eax at address 0xe50b\" src=\"https://i.sstatic.net/OBxX3.png\"/></a></p>\n</div>",
+    "votes": "37",
+    "answers": 5,
+    "views": "8k",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "Daniel Sloof",
+    "time": "Feb 19, 2024 at 21:41",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is for position independent code. The <code>call 0xe50b</code> instruction pushes the address of the next instruction, and then jumps. It jumps to the immediately following instruction, which has no effect. The next instruction, <code>pop eax</code>, loads its own address into <code>eax</code> (as it was the value pushed by <code>call</code>).</p>\n<p>Further down it uses an offset from eax:</p>\n<pre><code>mov eax, dword [ds:eax-0xe50b+objc_msg_close]\n</code></pre>\n<p>The value being subtracted, <code>0xe50b</code>, is the address that we moved into <code>eax</code>. If the code hasn't been moved anywhere, <code>eax-0xe50b</code> will be zero, but if the code has been moved to a different location, it will be the offset. We then add the address <code>objc_msg_close</code>, so we'll be able to reference it, even if the code has been moved in memory.</p>\n<p>Hopper is actually being quite clever about it, because the instruction just says (from ndisasm):</p>\n<pre><code>mov eax,[eax+0x45fe75]\n</code></pre>\n<p>but Hopper knows that <code>eax</code> contains the value of the instruction pointer at <code>0xe50b</code>, so uses that offset to find the symbol for you.</p>\n</div>",
+            "votes": "47",
+            "user": "Dougall",
+            "time": "May 17, 2013 at 7:47",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is a frequently used \"trick\" to determine the address of the instruction following the <code>call</code>, i.e. the call instruction pushes the return address on the stack, which in this case corresponds to <code>0xe50b</code>. After the pop instruction, eax contains that address.\nFor instance, this idiom is used for position independent code (pic), but is also quite commonly seen in obfuscated code.</p>\n<p>Other disassemblers often display this code sequence as <code>call $+5</code> (e.g. IDA).</p>\n</div>",
+            "votes": "17",
+            "user": "newgre",
+            "time": "Apr 8, 2013 at 12:50",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Now I cannot possibly know what the exact reason is here, but there is another very good reason, not mentioned so far, for using this kind of method: throwing off a disassembler during static analysis.</p>\n<p>The mechanics of <code>call $+5</code> have been discussed, so I'll assume they are known by now - otherwise refer to the other answers. Basically like with any <code>call</code> on IA-32, the return address (the address of the instruction following the <code>call</code>) gets <code>push</code>ed to the stack and the <code>ret</code> instruction inside that called function will presumably return to that address, assuming the stack hasn't been smashed meanwhile.</p>\n<h1>Fooling static analysis tools</h1>\n<p>What will even a sophisticated disassembler such as IDA do when it sees a <code>ret</code> opcode? Well, it'll assume that the function boundary has been reached. Here's an example:</p>\n<p><img alt=\"IDA trips over this trick\" src=\"https://i.sstatic.net/OTQrm.png\"/></p>\n<p>Now this not being the first time I've seen such a thing, I went on and deleted the function, so IDA stops assuming it's a function boundary. If I then tell it to disassemble the very next byte (<code>0Fh</code>) I get this:</p>\n<p><img alt=\"IDA trips over this trick #2\" src=\"https://i.sstatic.net/7FVsB.png\"/></p>\n<p>What the disassembler cannot realize and what is the reason why interactive disassemblers like Hopper and IDA rock so much, is that something special is going on here. Let's look at the instructions:</p>\n<pre><code>51                                      push    rcx\n53                                      push    rbx\n52                                      push    rdx\nE8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F 5A 5B 59                             cvtps2pd xmm3, qword ptr [rbx+59h]\n89 DF                                   mov     edi, ebx\n52                                      push    rdx\n48 31 D2                                xor     rdx, rdx\n</code></pre>\n<p>The leading bytes are the actual bytes in the binary, followed by their mnemonic representation. But pay special attention to this part:</p>\n<pre><code>call    $+5\npop     rdx ; &lt;- = ADDR\nadd     rdx, 8\npush    rdx\nretn\n</code></pre>\n<p>We get the address <code>ADDR</code> in <code>rdx</code> after the <code>pop</code> instruction was executed. We know this much from the description of the mechanism in the other answers. But then it gets odd:</p>\n<pre><code>add     rdx, 8\n</code></pre>\n<p>we add ... uhm eight bytes to that address (<code>ADDR+8</code>) and then we <code>push</code> it to the stack and call <code>ret</code>:</p>\n<pre><code>push    rdx\nretn\n</code></pre>\n<p>If you remember how a <code>call</code> works then you'll remember that it pushes the return address to the stack, then passes execution to the called function and that function later calls <code>ret</code> in order to return to the address found on the stack. This knowledge is being exploited here. It manipulates the \"return address\" before \"returning\" to it. But looking back at our disassembly we find to our surprise (or not ;)):</p>\n<pre><code>E8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F 5A 5B 59                             cvtps2pd xmm3, qword ptr [rbx+59h]\n</code></pre>\n<p>Let's count the opcode bytes (in your tool you can also do the math via the offsets, if you're so inclined):</p>\n<ol>\n<li><code>5A</code></li>\n<li><code>48</code></li>\n<li><code>83</code></li>\n<li><code>C2</code></li>\n<li><code>08</code></li>\n<li><code>52</code></li>\n<li><code>C3</code></li>\n<li><code>0F</code></li>\n</ol>\n<p>But wait a minute, that means we're literally passing execution to the middle of this peculiar <code>cvtps2pd xmm3, qword ptr [rbx+59h]</code>? That's right. Because <code>0Fh</code> is one of the prefixes used when encoding instructions on IA-32. So the programmer has tricked our disassembler, but he won't trick us. Undefining that code and then skipping the <code>0Fh</code> prefix we get:</p>\n<pre><code>51                                      push    rcx\n53                                      push    rbx\n52                                      push    rdx\nE8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F                                      db  0Fh\n5A                                      pop     rdx\n5B                                      pop     rbx\n59                                      pop     rcx\n89 DF                                   mov     edi, ebx\n52                                      push    rdx\n48 31 D2                                xor     rdx, rdx\n</code></pre>\n<p>or:</p>\n<p><img alt=\"No longer tricked thanks to reverse engineer intervening\" src=\"https://i.sstatic.net/rYLrB.png\"/></p>\n<p>The apparent single four-byte instruction <code>0F 5A 5B 59</code> is now revealed to be bogus and instead we have to ignore the <code>0F</code> and then resume at <code>5A</code>, which decodes as <code>pop rdx</code>.</p>\n<p>Check out <a href=\"http://code.google.com/p/corkami/wiki/OpcodesTables\" rel=\"noreferrer\">Ange's excellent opcode tables here</a> to find out more about how instructions get encoded on IA-32.</p>\n</div>",
+            "votes": "14",
+            "user": "0xC0000022L",
+            "time": "Apr 27, 2013 at 17:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "ajs410",
+                    "text": "<span class=\"comment-copy\">I have seen some applications (specifically, an anti-hacking protection known as MetaFortress) which use this technique as a way to embed data into the .text area of an application.  Use the call to jump over your embedded data, and then use the return address from the call as the pointer to the embedded data.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A <code>CALL</code> instruction has the effect of pushing a return address onto the stack, before performing the control transfer to the call target. </p>\n<p>In your example above, the <code>CALL</code> instruction will push the value 0x0000E50B onto the stack, before transferring control to 0x0000E50B. The <code>POP</code> instruction at 0x0000E50B will then pop the last value off of the top of the stack, into EAX. This value will be the <code>POP</code> instructions own address, due to the <code>CALL</code> instruction pushing the return value.</p>\n<p>This is a simple technique to get an instructions location in memory at run time.</p>\n<p>An instructions location can't always be computed by the linker at compile time as a binary may be relocated in memory due to Address Space Layout Randomization (ASLR).</p>\n</div>",
+            "votes": "11",
+            "user": "QAZ",
+            "time": "Apr 8, 2013 at 12:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "dyasta",
+                    "text": "<span class=\"comment-copy\">The answer from Dougall is superior. Linkers handle ASLR via entries in relocation/fixup tables. This mechanism isn't so much to determine the location as it is to determine the relative offset <i>difference</i> between the address the compiled code is expecting and the actual address at runtime.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As others have said, this is for getting current instruction's address. But it's not recommended as it'll hurt performance because it won't return anywhere, causing disagreement of return addresses in data stack and in the CPU's internal calling stack</p>\n<p>The recommended way is</p>\n<pre><code>GetCurrentAddress:\n    mov eax, [esp]\n    ret\n...\n    call GetCurrentAddress\n    mov [currentInstruction], eax\n</code></pre>\n<blockquote>\n<p>The reason is the \"hidden variables\" inside the processor. All modern processors contain much more state than you can see from the instruction sequence. There are TLBs, L1 and L2 caches, all sorts of stuff that you can't see. The hidden variable that is important here is the return address predictor.</p>\n<p><strong>The more recent Pentium (and I believe also Athlon) processors maintain an internal stack that is updated by each CALL and RET instruction</strong>. When a CALL is executed, the return address is pushed both onto the <em>real stack</em> (the one that the ESP register points to) as well as to the <em>internal return address predictor stack</em>; a RET instruction pops the top address of the return address predictor stack as well as the real stack.</p>\n<p>The return address predictor stack is used when the processor decodes a RET instruction. It looks at the top of the return address predictor stack and says, <em>\"I bet that RET instruction is going to return to that address.\"</em> It then speculatively executes the instructions at that address. Since programs rarely fiddle with return addresses on the stack, these predictions tend to be highly accurate.</p>\n<p><a href=\"https://devblogs.microsoft.com/oldnewthing/20041216-00/?p=36973\" rel=\"nofollow noreferrer\">https://devblogs.microsoft.com/oldnewthing/20041216-00/?p=36973</a></p>\n</blockquote>\n</div>",
+            "votes": "6",
+            "user": "phuclv",
+            "time": "Sep 7, 2020 at 3:28",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

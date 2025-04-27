@@ -1,0 +1,24 @@
+{
+  "title": "Obfuscating dump files",
+  "link": "https://reverseengineering.stackexchange.com/questions/3875/obfuscating-dump-files",
+  "content": "Like in my previous question, I want to make some dump files available for learning dump analysis and reverse engineering.\n\nTo organize my example programs from which I create the dumps, I give them meaningful names. However, that usually means that I can type | in WinDbg to find out what it demonstrates. I want to remove that workaround.\n\nI am looking for\n\nI am not looking for\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "876",
+  "tags": [
+    "windbg"
+  ],
+  "user": "Thomas Weller",
+  "time": "Jun 17, 2020 at 9:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "if you are fine with hexediting the stream is documented in dbghelp.inc that comes with windbg sdk\n\nuse dumpchk on the dmp file and find the rva of the ModuleList stream \n\nif it is say 0x294 \n\nyou will see the _MINIDUMP_MODULE_LIST located there ignoring the first dword which is Number of modules _MINIDUMP_MODULE follows  use sizeof (_MINIDUMP_MODULE) to navigate to the next module \none of the field in each module struct is an rva to the module name \n\nthe format of module name is \n\n```\nulong32 size of string\nwstr  name  \n\n```\nyou can hexedit the name there \n\n```\nC:\\>dumpchk foo.dmp | grep ModuleListStream\nLoading dump file foo.dmp\nStream 1: type ModuleListStream (4), size 000004A8, RVA 00000294\n\n\nC:\\>xxd -s 0x294 -l 0x70 -g 4 foo.dmp\n0000294: 0b000000 00000001 00000000 00f00100  ................\n00002a4: fcd70100 10847d3b 660a0000 bd04effe  ......};f.......\n00002b4: 00000100 01000500 0000280a 01000500  ..........(.....\n00002c4: 0000280a 3f000000 00000000 04000400  ..(.?...........\n00002d4: 01000000 00000000 00000000 00000000  ................\n00002e4: 19000000 22110000 00000000 00000000  ....\"...........\n00002f4: 00000000 00000000 00000000 00000000  ................\n\nC:\\>xxd -s 0xa66 -l 0x20 -g 1 foo.dmp\n0000a66: 10 00 00 00 63 00 61 00 6c 00 63 00 2e 00 65 00  ....c.a.l.c...e.\n0000a76: 78 00 65 00 00 00 12 00 00 00 6e 00 74 00 64 00  x.e.......n.t.d.\n\nC:\\>echo pathched with hxd\npathched with hxd\n\nC:\\>xxd -s 0xa66 -l 0x20 -g 1 foo.dmp\n0000a66: 10 00 00 00 64 00 61 00 6c 00 63 00 2e 00 65 00  ....d.a.l.c...e.\n0000a76: 78 00 65 00 00 00 12 00 00 00 6e 00 74 00 64 00  x.e.......n.t.d.\n\nC:\\>cdb -z foo.dmp\n\n0:000> |\n.  0    id: 548 examine name: dalc.exe\n0:000>\n\n```\nhere is how to delete peb from the dump file created with .dump /marR\n\n```\nC:\\>cdb -c \".dump /marR /u c:\\foo.dmp;q\" calc\n\n0:000> cdb: Reading initial command '.dump /marR /u c:\\foo.dmp;q'\nCreating c:\\foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp - mini user dump\nDump successfully written\nquit:\n\n\nC:\\>ls -lh foo*\n-rw-rw-rw-  1 Admin 0 14M 2014-03-22 13:38 foo_0fa4_2014-03-22_13-38-25-062_00a0\n.dmp\n\nC:\\>cdb  -c \"!peb;q\" -z foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\n0:000> cdb: Reading initial command '!peb;q'\nPEB at 7ffde000\n    InheritedAddressSpace:    No\n    ReadImageFileExecOptions: No\n    BeingDebugged:            Yes\n    ImageBaseAddress:         01000000\n    Ldr                       001a1ea0\n\n\nC:\\>dumpchk foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp | grep -i peb\nLoading dump file foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\nPEB at 7ffde000\n\nC:\\>dumpchk foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp | grep -i 7ffde000\nLoading dump file foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\n      62 00DA7ACE    7ffde000   00001000\nPEB at 7ffde000\n\nC:\\>xxd -s 0xda7ace -l 0x10 -g 1 foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\n0da7ace: 00 00 01 00 ff ff ff ff 00 00 00 01 a0 1e 1a 00  ................\n\nC:\\> filled 0x1000 bytes with 0 with hxd (selct block -> fill)\n\nC:\\>xxd -s 0xda7ace -l 0x10 -g 1 foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\n0da7ace: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n\n\nC:\\>cdb  -c \"!peb;q\" -z foo_0fa4_2014-03-22_13-38-25-062_00a0.dmp\n\n\n0:000> cdb: Reading initial command '!peb;q'\nPEB at 7ffde000\n    InheritedAddressSpace:    No\n    ReadImageFileExecOptions: No\n    BeingDebugged:            No\n    ImageBaseAddress:         00000000\n    Ldr                       00000000\n    *** unable to read Ldr table at 00000000\n    SubSystemData:     00000000\n    ProcessHeap:       00000000\n    ProcessParameters: 00000000\n    *** unable to read process parameters\nquit:\n\n```\n",
+      "votes": "2",
+      "user": "blabb",
+      "time": "Mar 22, 2014 at 9:07",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

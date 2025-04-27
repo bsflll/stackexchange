@@ -1,0 +1,37 @@
+{
+    "title": "recovering a process dump from a memory dump with WinDbg",
+    "link": "https://reverseengineering.stackexchange.com/questions/30010/recovering-a-process-dump-from-a-memory-dump-with-windbg",
+    "content": "I have a crash dump (memory.dmp), and I want to extract process (calc.exe) from it.\nI tried:\n<pre><code>!process 0 0 calc.exe\nPROCESS ffffb501f8c23580 <-- this is the address\n    SessionId: 0  Cid: 035c    Peb: 481e33000  ParentCid: 02c4\n    DirBase: 00f10002  ObjectTable: ffff938242cfc680  HandleCount: 1132.\n    Image: calc.exe\n\n.process /r /p <address>\nProcess ffffb501`f8c23580 has invalid page directories\n</code></pre>\nSo I tried to extract the process memory dump myself.\n<pre><code>!process 0 17 calc.exe\nPROCESS ffffb501f8c23580\n    SessionId: 0  Cid: 035c    Peb: 481e33000  ParentCid: 02c4\n    DirBase: 00f10002  ObjectTable: ffff938242cfc680  HandleCount: 1132.\n    Image: calc.exe\n    VadRoot ffffb501f8c23490 Vads 143 Clone 0 Private 1372. Modified 441. Locked 6.\n    DeviceMap ffff938242818d50\n    Token                             ffff93824b238360\n    ElapsedTime                       01:09:04.412\n    UserTime                          00:00:00.343\n    KernelTime                        00:00:00.234\n    QuotaPoolUsage[PagedPool]         148080\n    QuotaPoolUsage[NonPagedPool]      24344\n    Working Set Sizes (now,min,max)  (3997, 50, 345) (15988KB, 200KB, 1380KB)\n    PeakWorkingSetSize                3945\n    VirtualSize                       2097247 Mb <--- is this normal?\n    PeakVirtualSize                   2097249 Mb\n    PageFaultCount                    6322\n    MemoryPriority                    BACKGROUND\n    BasePriority                      9\n    CommitCharge                      1532\n</code></pre>\nWhat I intended to do is to just dump the memory at the address <pre><code>ffffb501f8c23580</code></pre> for the size of the process.\nHowever I notice that I get a virtual size of 2gb? Is there another way to extract this process dump from the crash dump? If so what's the the correct process to do this?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "514",
+    "tags": [
+        "windbg",
+        "kernel-mode",
+        "memory-dump"
+    ],
+    "user": "AK_",
+    "time": "Jul 11, 2022 at 7:36",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "PROCESS ffffb501f8c23580 <-- this is the address NO............that is the start of the structure_EPROCESS  ....... it is kernel address not start of process address your process virtual address will be in Virtual Address Descriptor you need to brush up some basics\n",
+            "time": null
+        },
+        {
+            "user": "AK_",
+            "text": "@blabb I'm not a reverse engineer so help me understand how do I do the above? Where is the start of the process then? and how do I calculate its size?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "As I Commented the Address You are pointing to is not the start of process\nit is the address of EPROCESS block for the process\n<pre><code>kd> ? @$proc\nEvaluate expression: -2063161104 = 8506a8f0\n\nkd> !process 0 0 calc.exe\nPROCESS 8506a8f0  SessionId: 1  Cid: 0ba4    Peb: 7ffdf000  ParentCid: 079c\n    DirBase: 7e5b96a0  ObjectTable: bf8038b8  HandleCount:  75.\n    Image: calc.exe\n\nkd> .shell -ci \"?? @$proc\" head -n4\nstruct _EPROCESS * 0x8506a8f0\n   +0x000 Pcb              : _KPROCESS\n   +0x098 ProcessLock      : _EX_PUSH_LOCK\n   +0x0a0 CreateTime       : _LARGE_INTEGER 0x01d81de1`f57a8fda\n.shell: Process exited\nkd>\n</code></pre>\nthe process module is mapped into the virtual address space of the process these spaces are available in the VAD or Virtual Address Descriptor\nthe memory of such space may or may not be available in the dump\nmost modules have init sections that are discarded once the loader has done its job\nthose memory spaces may not be available in the dump\nin an x86 (32 bit process ) the user  mode va normally ranged from 0 to 0x7fffffff (2gb)\nin x64 it is 2 TB see link\nfrom your query I think you want to dump a module and not process\nprocess is a collection of threads\nmodule is a file that is mapped in a certain area in the virtual address space of the process with appropriate read , write or execute permissions.\nthe running threads then read & write data  or execute  code as the case may be from those mapped spaces\nif you need to know where a module (file calc.exe ) is loaded in the virtual address space of process (process calc.exe) you can use lm (loaded module command) or !vad (address as expression ) commands then use dd . dq db to view and .writemem to write to a file\nthe demo below is from a live system you may encounter page does not exist if you try to write not existent pages from dump\n<pre><code>0: kd> ? @$proc\nEvaluate expression: -53307480042816 = ffffcf84`629692c0\n\n0: kd> ? calculator\nEvaluate expression: 140698911440896 = 00007ff7`04a30000\n\n0: kd> lm m calculator\nstart             end                 module name\n00007ff7`04a30000 00007ff7`04e1f000   Calculator   (deferred)\n\n\n0: kd> db 00007ff7`04a30000 l20\n00007ff7`04a30000  4d 5a 90 00 03 00 00 00-04 00 00 00 ff ff 00 00  MZ..............\n00007ff7`04a30010  b8 00 00 00 00 00 00 00-40 00 00 00 00 00 00 00  ........@.......\n\n\n0: kd> !dh 00007ff7`04a30000\n\nFile Type: EXECUTABLE IMAGE\n\nSECTION HEADER #1\n   .text name\n  211CDB virtual size\n    1000 virtual address\n  211E00 size of raw data  and so on output truncated for brevitey \n \n 0: kd> .writemem c:\\foo.bin 00007ff7`04a30000  l40\nWriting 40 bytes.\n0: kd> .shell -ci \"$$\" xxd c:\\foo.bin\n<.shell waiting 10 second(s) for process>\n00000000: 4d5a 9000 0300 0000 0400 0000 ffff 0000  MZ..............\n00000010: b800 0000 0000 0000 4000 0000 0000 0000  ........@.......\n00000020: 0000 0000 0000 0000 0000 0000 0000 0000  ................\n00000030: 0000 0000 0000 0000 0000 0000 f800 0000  ................\n.shell: Process exited\n0: kd>\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Feb 10, 2022 at 18:55",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,33 @@
+{
+  "title": "Where is the ESP after call instruction?",
+  "link": "https://reverseengineering.stackexchange.com/questions/22280/where-is-the-esp-after-call-instruction",
+  "content": "I've started learning the Reverse Engineering and when I read the Stack Operations and function invocation, there are an issue that I'm confused.\n-What is the address of ESP after \"pop ebp\" and \"retn\" instruction??\n\n```\nint __cdecl addme(short a, short b)\n{\n     return a+b;\n}\n\n```\n```\n01: push ebp\n02: mov ebp , esp\n03:...\n04:movsx eax ,word ptr [ebp+8]\n05:movsx ecx ,word ptr [ebp+0Ch]\n06:add eax ,ecx\n07:...\n08:mov esp , ebp\n09:pop ebp\n10:retn\n\n```\nAs I though , esp is set to ebp in step 08 so the ESP address is right after the the first address comes inside the stack.But the step 09 makes it wrong. Help me understand this.\n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "disassembly",
+    "x86"
+  ],
+  "user": "Thành Công",
+  "time": "Jun 17, 2020 at 9:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "To further expand on perrors answer, you're looking at a function that preserves the stack frame, which is a nice little trick to simplify walking backwards through the call stack. When you initially push EBP in the prologue, it subtracts pointer size (which is of course 0x4 in x86) before writing the old EBP to the stack, as seen below in equivalent code.\n\n```\nSUB ESP, 0x4 ; Result from PUSH  \nMOV [ESP], EBP ; Save old EBP  \nMOV EBP, ESP ; Set new EBP  \n\n```\nNow once it reaches the epilogue and restores the stack pointer (ESP) from the frame pointer (EBP) it's still 4 bytes below the original stack when entering the function. What's at the current stack pointer? It holds the previous frame pointer from before invoking the current function. By popping EBP you are both restoring the frame pointer to what it was and fixing the stack at the same time, as shown below.\n\n```\nMOV ESP, EBP ; Restore ESP from prologue  \nMOV EBP, [ESP] ; Restore saved EBP  \nADD ESP, 0x4 ; Result from POP  \n\n```\nThe return following this can be interpreted as a POP EIP instruction, as shown below.\n\n```\nMOV EIP, [ESP] ; Redirect execution to return address  \nADD ESP, 0x4 ; Result from pop  \n\n```\nI should also add that CALL can be simplified as a push/jump, as shown below.  \n\n```\nSUB ESP, 0x4 ; Result from PUSH  \nMOV [ESP], ReturnAddress ; Save next instruction as return address  \nJMP CallAddress ; Redirect execution to call address  \n\n```\nAs you can probably see, this allows you to simply work backwards to get both the frame pointer and return address from previous function calls that led to the current function. Hopefully that explains both the purpose and logic behind the frame pointer preservation your question is based on.  \n\nNote: In terms of the post by perror, I also wanted to point out a couple things. First the constant 0x4 should be sizeof(uintptr_t). I know your code is x86 so he's not wrong, it's just good to know. Second is that push can be thought of as subtracting the stack before setting the value, while pop can be thought of as the exact opposite, getting the value first before adding the stack.\n\n",
+      "votes": "1",
+      "user": "perror",
+      "time": "Oct 11, 2019 at 18:24",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "The esp is updated when a push or a pop is called. Remember that the esp is used to point to the current last item on the stack. So, each push or pop operation move it up or down.\n\nTo be more explicit, we can decompose in smaller instructions (only mov) the pop and the push as follow:\n\n```\npop ebp == (mov ebp, [esp] ; mov esp, esp + 4)\n\n```\n```\npush ebp == (mov [esp], ebp ; mov esp, esp - 4)\n\n```\nI hope this is just clearer now.\n\n",
+      "votes": "1",
+      "user": "perror",
+      "time": "Oct 10, 2019 at 7:39",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

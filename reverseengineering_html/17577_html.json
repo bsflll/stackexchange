@@ -1,0 +1,50 @@
+{
+    "title": "Magic number in resource loading routine",
+    "link": "https://reverseengineering.stackexchange.com/questions/17577/magic-number-in-resource-loading-routine",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm practicing windows disassembly on x64 notepad.exe\n </p>\n <p>\n  I've managed to find buffer allocation and string resources load.\nBut after that follows code, which I can't fully understand:\n  \n\n  rbx = 0, rdx = 0 before this part\n </p>\n <pre><code>            mov     r9, cs:str_res_guid_18 ;  dq 12h\n            lea     rcx, some_data         ;  some address\n            mov     edx, 28h\n            sub     r9, rcx        \n            mov     r8, rdx\n\nloc_100003150: \n            lea     rax, [r8+7FFFFFD6h]    ; what is this number?\n            cmp     rax, rbp\n            jz      short loc_100003173\n            movzx   eax, word ptr [rcx+r9] ; str_res_guid_18\n            cmp     ax, bp\n            jz      short loc_100003173\n            mov     [rcx], ax\n            add     rcx, 2\n            sub     r8, 1\n            jnz     short loc_100003150\n\nloc_100003173: \n            cmp     r8, rbp\n            jz      loc_1000058A0\n</code></pre>\n <p>\n  What does 7FFFFFD6h stands for? And why is it compared against null?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "97",
+    "tags": [
+        "windows",
+        "x86-64",
+        "winapi"
+    ],
+    "user": "Vlad Fedyaev",
+    "time": "Mar 2, 2018 at 13:05",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This seems to be an optimized wchar_t string copy. The compiler took advantage of the fact that there is a fixed offset between source and destination. Ignoring the  lea  check, the assembly could be represented by this pseudocode:\n </p>\n <pre><code>wchar_t *dst = &some_data; //rcx\nwchar_t *src = ?; //r9\ndelta = src-dst; //r9 =r9-dst\nmaxc = 0x28; //r8\n\nloop:\n wchar_t ch = dst[delta]; (dst+(src-dst) = src, so ch=src[i];)\n if ( ch==0 ) break;\n *dst = ch;\n dst++;\n maxc--;\n if ( maxc!=0 ) goto loop;\n</code></pre>\n <p>\n  Now let's look at the mysterious\n  <code>\n   lea\n  </code>\n  . First thing you need to remember that it's basically just a fancy\n  <code>\n   mov\n  </code>\n  , and the operands are not necessarily addresses.\n </p>\n <p>\n  so let's take\n  <code>\n   lea     rax, [r8+7FFFFFD6h]\n  </code>\n  and do some math:\n </p>\n <pre><code>rax = r8+0x7FFFFFD6\n</code></pre>\n <p>\n  multiply both sides by 2:\n </p>\n <pre><code>2*rax = 2*r8+0xFFFFFFAC\n</code></pre>\n <p>\n  treat number as signed:\n </p>\n <pre><code>2*rax = 2*r8-0x54\n</code></pre>\n <p>\n  now divide:\n </p>\n <pre><code>rax = r8 - 0x2a\n</code></pre>\n <p>\n  so testing rax==0 is the same as r8==0x2a. Possibly the code is checking that number of characters to copy is not greater than the buffer size.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Mar 2, 2018 at 19:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Vlad Fedyaev",
+                    "text": "<span class=\"comment-copy\">Thanks Igor, that seems to be the case and it all fits. However, can you clarify, why is there a multiplication in lea.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@VladFedyaev there is no multiplication, it’s been factored out by the compiler. basically, 0x7FFFFFD6 is 0xFFFFFFAC divided by two without sign extension. I multiplied the equation so it’s easier to see where 0x2A is coming from.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">see also a similar trick here: <a href=\"https://reverseengineering.stackexchange.com/a/6272\">reverseengineering.stackexchange.com/a/6272</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  ignore the first part: 7FF..FF is a sequence of 1's\nThe interesting part is the D6 which equals 1101 0110, or 214 in decimal.\nSo it check's whether a couple of bytes after the addrress in R8 is a Zero\n </p>\n <p>\n  Also, have a look at section OPERATING SYSTEMS here:\n  <a href=\"https://software.intel.com/en-us/articles/introduction-to-x64-assembly\" rel=\"nofollow noreferrer\">\n   https://software.intel.com/en-us/articles/introduction-to-x64-assembly\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "dns43",
+            "time": "Mar 2, 2018 at 14:45",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

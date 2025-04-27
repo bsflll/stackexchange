@@ -1,0 +1,54 @@
+{
+  "title": "Intel PIN: How to access the INS object from inside an analysis function?",
+  "link": "https://reverseengineering.stackexchange.com/questions/12404/intel-pin-how-to-access-the-ins-object-from-inside-an-analysis-function",
+  "content": "A typical PIN code snippet looks like this (taken from the official manual):\n\n```\n// This function is called before every instruction is executed\n// and prints the IP\nVOID printip(VOID *ip) { fprintf(trace, \"%p  \n\", ip); }\n\n// Pin calls this function every time a new instruction is encountered\nVOID Instruction(INS ins, VOID *v)\n{\n    // Insert a call to printip before every instruction, and pass it the IP\n    INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)printip, IARG_INST_PTR, IARG_END);\n}\n\n```\nI just can't figure out how to access the ins object from within printip(VOID *p). The other way round seems easy, i.e. getting the IP from from the ins object:\n\nINS_Address (INS ins)(see here)\n\nI tried passing a INS *ins pointer to printip(VOID *ip, INS *ins) ins via IARG_PTR, &ins but this ended in either casting errors or Segmentation faults.\n\nHow can I access the ins object (type INS) from inside an analysis function?\n\nSide note: I got to this problem when trying to call INS_Disassemble (INS ins) for every executed instruction.\n\n",
+  "votes": "6",
+  "answers": 2,
+  "views": "4k",
+  "tags": [
+    "c++",
+    "pintool"
+  ],
+  "user": "langlauf.io",
+  "time": "Apr 12, 2016 at 17:45",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "You may note that printip is a function pointer, it is lazily called internally by Pin; moreover ins is an automatic variable (it is passed into Instruction from the stack). Consequently, passing &ins into printip (through IARG_PTR), then using it will lead to segmentation faults.\n\nPin declares INS by specializing the class template INDEX, as you can observe the following declaration in type_core.TLH:\n\n```\n/*! @ingroup INS_BASIC_API\nHandle for INS */  \ntypedef class INDEX<6> INS;\n\n```\nwhere constructors and assignment operators of class template INDEX are both default. So, in principle^^, we can always declare a persistent variable to share an object of INS between instrumentation and analysis functions, for example:\n\n```\nstatic INS per_ins;\n...\nVOID Instruction(INS ins, VOID *v)\n{\n  per_ins = ins;\n  ...\n}\n...\nVOID printip(VOID *ip)\n{\n  INS_Disassemble(per_ins);\n}\n\n```\nThis method does not work, unfortunately, this is an example for \"well-typed program still can go wrong\" in C/C++^^. Since Pin does not guarantee that internal variables, accessed by an object of type INS, are persistent in analysis time, the result of calling INS_Disassemble(per_ins) in an analysis function can be meaningless.\n\nFor your case, you may not want to call INS_Disassemble(ins) each time ins executes. We don't need that, for example, if ins is in a loop then this function will be called multiple times (with the same ins) to get the same result.\n\nAll static information of an instruction (e.g. the disassembled form of ins in this case) should be obtained in instrumentation time. Particularly, INS_Disassemble should be called single time only in some instrumentation function. One way to obtain the same effect as you want is:\n\n```\nstatic std::unordered_map<ADDRINT, std::string> str_of_ins_at;\n\nVOID Instruction(INS ins, VOID *v)\n{\n  str_of_ins_at[INS_Address(ins)] = INS_Disassemble(ins);\n  ...\n}\n\nVOID printip(VOID *ip, ADDRINT addr) \n{\n  std::string ins_str = str_of_ins_at[addr];\n  ...\n}\n\n```\n",
+      "votes": "5",
+      "user": "Ta Thanh Dinh",
+      "time": "Apr 13, 2016 at 9:57",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "langlauf.io",
+          "text": "Thank you for the detailed answer. I wanted to place the INS_Disassemble(ins) into the analysis function to check (manually by looking at it) if the analysis function works as intended. If I place the INS_Disassemble(ins) into the Instrumentation function, the output of INS_Disassemble(ins) is separated from the output of the analysis function. In other words: I wanted the output of the analysis function be entitled with the instruction to easily check if it is correct.",
+          "time": null
+        },
+        {
+          "user": "Ta Thanh Dinh",
+          "text": "You are correct, we can always obtain opcode of an instruction using PIN_SafeCopy and INS_Size, then use whatever disassemble tool e.g. Capstone, or even Xed of Intel.",
+          "time": null
+        },
+        {
+          "user": "langlauf.io",
+          "text": "Oh sorry, I deleted my comment regarding this approach because your idea to store the strings looked more elegant to me.",
+          "time": null
+        },
+        {
+          "user": "langlauf.io",
+          "text": "But anyway, great explanation of what is going on with this ins object.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "typedef class INDEX<6> INS; is defined in types_core.TLH (types not type). The following code works for me to disassamble at analysis time. \n\n```\nvoid disasmIns(ADDRINT tid, ADDRINT insarg)\n{\n  INS ins;\n  ins.q_set(insarg);\n  std::cout << \"Disassembly: \" << INS_Disassemble(ins) << std::endl;\n}\n\nVOID Instruction(INS ins, VOID *v) {\n  INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)disasmIns, \n  IARG_FAST_ANALYSIS_CALL, IARG_ADDRINT, ins.q(), IARG_END);\n}\n\n```\n",
+      "votes": "1",
+      "user": "Heiner Litz",
+      "time": "Jul 19, 2017 at 19:12",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

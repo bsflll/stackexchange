@@ -1,0 +1,38 @@
+{
+  "title": "Angr - Solve for function return value",
+  "link": "https://reverseengineering.stackexchange.com/questions/20570/angr-solve-for-function-return-value",
+  "content": "I'm trying to create an angr script to solve this test program:\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main(int argc, char *argv[])\n{\n    int value = atoi(argv[1]);\n    char* foo = \"foobar\";\n    int sum = 0;\n    for (int i = 0; i < strlen(foo); ++i)\n    {\n        sum += foo[i];\n    }\n    return (sum == value);\n}\n\n```\nI'm trying to find out what value needs to be passed to the program in order for it to return True. This is turning out to be less trivial than anticipated.\n\nThe return value is set in the basic block:\n\n\n\nAs you can see, al is set if the values used in the cmp are equal. \n\nMost angr solutions I have seen are based on a path that is taken if a certain condition is met. Given the address of that path, it is possible to solve the constraints required to get to the address of that path. This will not work in my case.\n\nI have been scouring the angr examples for a way to solve a symbolic variable for a function return value, but this doesn't seem to be possible.\n\nI'm currently trying to use run or execute with the find or until args to say: execute until rip == <end of function> and eax == 1.\n\nCurrently I have this:\n\n```\nimport angr\nimport claripy\n\ndef bv_to_int(bv):\n    return claripy.backends.concrete.convert(bv).value\n\ndef main():\n    p = angr.Project('angr_test')\n    arg = claripy.BVS('arg', 4*8)\n\n    st = p.factory.entry_state(args=[p.filename, arg])\n    sm = p.factory.simulation_manager(st)\n\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) >= 0x400708 and bv_to_int(_s.regs.al) == 1)\n\n    print(sm.found[0].solver.eval(arg, cast_to=bytes))\n\nif __name__ == \"__main__\":\n    main()\n\n```\nWhich is currently throwing:\n\n```\nTraceback (most recent call last):\n  File \"angr_test.py\", line 19, in <module>\n    main()\n  File \"angr_test.py\", line 14, in main\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) >= 0x400708 and bv_to_int(_s.regs.al) == 1)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 237, in explore\n    self.run(stash=stash, n=n, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 259, in run\n    self.step(stash=stash, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 75, in __call__\n    result = current_hook(self.func.__self__, *args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 96, in step\n    return simgr.step(stash=stash, extra_stop_points=base_extra_stop_points | self._extra_stop_points, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 80, in __call__\n    return self.func(*args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 330, in step\n    goto = self.filter(state, filter_func=filter_func)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 75, in __call__\n    result = current_hook(self.func.__self__, *args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 113, in filter\n    stash = self._filter_inner(state)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 124, in _filter_inner\n    findable = self.find(state)\n  File \"angr_test.py\", line 14, in <lambda>\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) >= 0x400708 and bv_to_int(_s.regs.al) == 1)\n  File \"angr_test.py\", line 5, in bv_to_int\n    return claripy.backends.concrete.convert(bv).value\n  File \"/home/ben/.local/lib/python3.6/site-packages/claripy/backends/__init__.py\", line 160, in convert\n    \"conversion on a child node\" % (self, ast.op, ast.__class__.__name__))\nclaripy.errors.BackendError: <claripy.backends.backend_concrete.BackendConcrete object at 0x7f47a92c05f8> can't handle operation Extract (BV) due to a failed conversion on a child node\n\n```\nAny help would be greatly appreciated.\n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "angr"
+  ],
+  "user": "ben_re",
+  "time": "Feb 7, 2019 at 14:04",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Ok, I've figured it out. \n\nFirst of all, the run command should be used. This will run for all paths. \n\nAfter the run the value of eax will actually contain two possible values (one for eax == 0, and another for eax == 1. The solver needs to be told to solve arg where eax == 1.\n\nThis script will give the correct output:\n\n```\nimport angr\nimport claripy\n\ndef main():\n    p = angr.Project('angr_test')\n    arg = claripy.BVS('arg', 3*8)\n\n    st = p.factory.entry_state(args=[p.filename, arg])\n    sm = p.factory.simulation_manager(st)\n\n    sm.run()\n\n    sm.deadended[0].solver.add(sm.deadended[0].regs.eax == 1)\n\n    print(sm.deadended[0].solver.eval(arg, cast_to=bytes))\n\nif __name__ == \"__main__\":\n    main()\n\n```\n",
+      "votes": "4",
+      "user": "ben_re",
+      "time": "Feb 8, 2019 at 12:59",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Right from the documentation:\n\n```\n> explore(stash='active', n=None, find=None, avoid=None,\n> find_stash='found', avoid_stash='avoid', cfg=None, num_find=1, **kwargs)\n\n```\nBasically, you will have to implement a function accepting a state to decide whether you are in the desired state. You can also just implement a function for the failed state if you'd like.\n\nMaybe something easy can help you, such as\n\nfind=lambda x: x.regs.eax == 1 && x.regs.rip >= 0x708\n\n",
+      "votes": "2",
+      "user": "Nordwald",
+      "time": "Feb 7, 2019 at 11:56",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ben_re",
+          "text": "I have actually tried using explore, and run(until=<stuff>). I'll my current script to the question to illustrate.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

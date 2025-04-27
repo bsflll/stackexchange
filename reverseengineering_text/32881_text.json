@@ -1,0 +1,44 @@
+{
+    "title": "Reverse engineering AES128 Key Derrivation from MAC Address",
+    "link": "https://reverseengineering.stackexchange.com/questions/32881/reverse-engineering-aes128-key-derrivation-from-mac-address",
+    "content": "Using Ghidra I have acquired the following Psuedo-code decompilation output from an ELF 32-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, not stripped.\nFrom this decompilation I can see the key generation is based on a SHA1 of a MAC address\n<pre><code>n = 12; // Not sure where 12 comes from, perhaps 2 * number of bytes in a MAC address?\nSHA1_Init(&sha1_ctx);\nSHA1_Update(&sha1_ctx,macAddr,6);\nSHA1_Final((uchar *)&messageDigest,&sha1_ctx);\nmemset(&key,0,n);\nj = 0;\n// Why \nfor (i = 0; (j < 20 && (i < (int)(n - 2))); i = i + 2) {\n    sprintf((char *)((int)&key + i),\"%02X\",(ulonglong)*(byte *)((int)&messageDigest + j));\n    j = j + 1;\n}\nmemcpy(iv,&key,17);\naes_set_key(aesCtx,&key,128,0);\nmemcpy(buffer, encryptedBuffer, 116);\naesOut = buffer + 4; // Skip first 4 magic bytes\nAES_cbc_encrypt(aesCtx,aesOut,aesOut,112,iv,0);\n</code></pre>\nUsing this decompilation I am trying create my own implementation of a decryption algorithm with the Tiny AES Encyption library in C.\n<pre><code>uint8_t messageDigest[SHA_DIGEST_LENGTH];\nuint8_t key[SHA_DIGEST_LENGTH * 2];\nuint8_t iv[24];\n\nmemset(key, 0x0, 12); // Why memset 12 bytes? Is this key a 12 byte character string or is it 11 bytes with an extra byte zero'ed for the null terminator? \n\nSHA1((uint8_t *)  ethhdr->h_source, ETH_ALEN, messageDigest);\n\nint i;\nint j = 0;\nfor (i = 0; (j < SHA_DIGEST_LENGTH && i < 10); i += 2) {\n    sprintf((char *) &key[i], \"%02X\", messageDigest[j]);\n    j++;\n}\n\nmemcpy(iv, key, 17); // Why 17? Only 12 bytes of key has been set\nprintf(\"%s\n\", iv);\nprintf(\"%s\n\", key);\n\nuint8_t *data = encryptedBuffer;\nmemcpy(dsBuffer, data, 112);\n\nstruct AES_ctx aesCtx;\nAES_init_ctx_iv(&aesCtx, key, iv);\n// Skip first 4 bytes (magic bytes)\nAES_CBC_decrypt_buffer(&aesCtx, (uint8_t *) dsBuffer + 4, 112);\n</code></pre>\nThis code appears correct as a line for line rewrite but appears logically flawed to me. In particular <pre><code>memcpy(iv, key, 17);</code></pre>\nfrom the decompilation it only appears 10 bytes are set in the <pre><code>key</code></pre> - how can we copy 17 bytes into the IV? Even more so why would we initialise 12 bytes to 0's with the first call to memset?\nI searched standard for using SHA1 as key & IV for AES128 but couldn't find anything that matched.\nThanks in advance.\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "100",
+    "tags": [
+        "decompilation",
+        "ghidra",
+        "arm",
+        "decryption"
+    ],
+    "user": "Seb",
+    "time": "Apr 8, 2024 at 17:26",
+    "comments": [
+        {
+            "user": "Seb",
+            "text": "The key and IV were getting initialised to 0's. When I looked into the assembly in detail I could see         stp        xzr,xzr,[x7]=>key[0]  which zero'ed all the bytes in the key and the IV. Lesson learnt, assembly is king in decompilation\n",
+            "time": null
+        },
+        {
+            "user": "Seb",
+            "text": "With this info in mind it was clear that the key was the first 10 characters of the SHA1 of the MAC Address and the other 6 bytes were just 0's   Now confident it was only creating a 10 character key I was then decrypt using this.  Thanks again for the help.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "ELF 32-bit LSB executable, ARM aarch64, version 1 (SYSV)\n\nI guess you meant 64-bit ELF, but it's not important.\n\nn = 12; // Not sure where 12 comes from, perhaps 2 * number of bytes in a MAC address?\n// Why\nfor (i = 0; (j < 20 && (i < (int)(n - 2))); i = i + 2) {\nsprintf((char )((int)&key + i),\"%02X\",(ulonglong)(byte *)((int)&messageDigest + > j));\nj = j + 1;\n}\n\nThe MAC address is 6 byte long, as you mentioned 12 is double this size, if you look to the iteration of the loop: <pre><code>sprintf(key + i, \"%02X\", messageDigest + j);</code></pre> it's actually \"hexlify\" the MAC address, meaning it will convert the raw MAC address into a hexdecimal uppercase format, i.e. <pre><code>\"\\xaa\\xbb\\xcc\\xdd\\xee\\xff\"</code></pre> will be <pre><code>\"AABBCCDDEEFF\"</code></pre>.\n\nmemcpy(iv, key, 17); // Why 17? Only 12 bytes of key has been set\n\nYou pointed out a good question, and from the decompiled code, I think there's something wrong. At first the algorithm seems to:\n\nPerform a SHA-1 for the 6 byte long MAC address\n<pre><code>key</code></pre> is memset with the size of 12, double the size of the MAC address, so theoretically to store the MAC address in the hexlify form\nthe loop uses 20, the size of the SHA-1 digest, you didn't share the size of the key buffer, but the memset seems useless, and <pre><code>(i < (int)(n - 2)))</code></pre> is a big redflag, this condition will break the for loop earlier\n<pre><code>key</code></pre> is duplicated to the <pre><code>iv</code></pre> buffer, 17 could be 128-bit + null char, but it doesn't make sense, because the key and iv have a fixed size, they don't have to be null terminated, maybe it's related to the hexlify and string operations, but the loop never null terminate the buffer anyway\n<pre><code>aes_set_key(aesCtx,&key,128,0);</code></pre>, I wonder what's the last parameter 0, same with <pre><code>AES_cbc_encrypt(aesCtx,aesOut,aesOut,112,iv,0);</code></pre>\n\nI also think a <pre><code>strcpy</code></pre> with fixed sizes could be optimized into a <pre><code>memcpy</code></pre> with string length + 1.\nOverall, I think your analysis and the decompiled code is accurate, but the original code is really sketchy.\nThere's a chance the IV is actually based on uninitialized data, but one of the 0 parameter tells the IV size is 0, and thus ignored.\nIf you can share more details or a use case, like inputs and expected output, it will help to figure out what happened.\nBTW, did you identify the AES library used for this code?\n",
+            "votes": "1",
+            "user": "wisk",
+            "time": "Apr 9, 2024 at 5:56",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Seb",
+                    "text": "<span class=\"comment-copy\">I just send the output of <code>file mybinary.bin</code> and it showed the above output so to me it seems like a 32-bit binary (32 bit pointers) compiled for aarch64 platform. Perhaps was an ARM32 and they've ported it half-cooked to aarch64? The binary itself has been extracted from a router.  This appears to be the AES implementation being used. These are the C Bindings for the ARM hardware encyption <a href=\"https://elixir.bootlin.com/linux/latest/source/arch/arm64/crypto/aes-glue.c\" rel=\"nofollow noreferrer\">elixir.bootlin.com/linux/latest/source/arch/arm64/crypto/…</a>  I will see what I can share in terms of input/output. Would prefer not to share the MAC address if possible.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

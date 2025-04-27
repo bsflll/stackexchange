@@ -1,0 +1,35 @@
+{
+    "title": "`af` does not seem to find all functions in Radare2",
+    "link": "https://reverseengineering.stackexchange.com/questions/27422/af-does-not-seem-to-find-all-functions-in-radare2",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The disassembly at the entry point looks like this:</p>\n<pre><code> :   ;-- entry0:\n        :   ;-- _mainCRTStartup:\n        :   ;-- eip:\n        :   0x004014e0      83ec0c         sub esp, 0xc\n        :   0x004014e3      c70598534000.  mov dword [0x405398], 0     ; [0x405398:4]=0\n        :   0x004014ed      e86e020000     call sym.___security_init_cookie\n        :   0x004014f2      83c40c         add esp, 0xc\n        `=&lt; 0x004014f5      e986fcffff     jmp sym.___tmainCRTStartup\n            0x004014fa      90             nop\n            0x004014fb      90             nop\n            0x004014fc      90             nop\n            0x004014fd      90             nop\n            0x004014fe      90             nop\n            0x004014ff      90             nop\n            ;-- ___gcc_register_frame:\n            0x00401500      a130304000     mov eax, dword [0x403030]   ; [0x403030:4]=0\n            0x00401505      85c0           test eax, eax\n        ,=&lt; 0x00401507      7443           je 0x40154c\n        |   0x00401509      55             push ebp\n        |   0x0040150a      89e5           mov ebp, esp\n        |   0x0040150c      83ec18         sub esp, 0x18\n        |   0x0040150f      c70424004040.  mov dword [esp], str.libgcj_13.dll ; section..rdata\n        |                                                              ; [0x404000:4]=0x6762696c ; \"libgcj-13.dll\"\n        |   0x00401516      ff151c614000   call dword [sym.imp.KERNEL32.dll_GetModuleHandleA] ; 0x40611c ; \"Lb\" ; HMODULE GetModuleHandleA(LPCSTR lpModuleName)\n...\n\n</code></pre>\n<p>When I do an <code>af</code> it only finds function at <code>entry0</code>. Why is it not able to find the other functions that follow? For example, the functions at <code>0x004014ed</code>, <code>0x00401516</code>.</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "402",
+    "tags": [
+        "radare2"
+    ],
+    "user": "user1720897",
+    "time": "Apr 8, 2021 at 13:57",
+    "comments": [
+        {
+            "user": "bart1e",
+            "text": "<span class=\"comment-copy\">I think you are looking for <code>aaf</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "user1720897",
+            "text": "<span class=\"comment-copy\">I want to know the logic that <code>af</code> applies to find functions. If I do <code>af @ main</code> it seems to find a lot more. So why not at the entry point.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>I want to know the logic that <code>af</code> applies to find functions.</p>\n</blockquote>\n<p>Well... you can <em>read</em> exactly that logic. Radare2 is <a href=\"https://github.com/radareorg/radare2/blob/5.2.1/libr/core/cmd_anal.c#L4219\" rel=\"nofollow noreferrer\">open source</a>.</p>\n<p>In particular, the <code>r_core_anal_fcn</code> called on line 4243 is the \"core\" workhorse which goes looking at the actual instructions, creating and crosslinking basic blocks, reconstructing local variables and function arguments signature, etc. Where does it start looking from? The <code>addr</code> argument. What gets passed in there? Line 4225, <code>ut64 addr = core-&gt;offset;</code>. The <code>af</code> logic starts from the <em>current address</em>, the one you change by seeking with the <code>s</code> command (which is the same when set via temporary seek <code>af @ 0x1234</code>).</p>\n<p>See, you can find out a lot from just 1 page of C code. Locating that page can be hard, if you're not strong at navigating big C codebases, but here you go I found it for you.</p>\n<blockquote>\n<p>Why is it not able to find the other functions that follow?</p>\n</blockquote>\n<p><code>af</code> doesn't \"find\" functions, it starts exactly where you tell it to (see above). Well, except with <code>e anal.calls=1</code> — then it analyses recursively. Or with <code>e anal.hasnext=1</code>, then it assumes that the just-analysed function will be followed by another one.</p>\n<blockquote>\n<p>If I do <code>af @ main</code> it seems to find a lot more.</p>\n</blockquote>\n<p>Let's look at the <a href=\"https://stackoverflow.com/a/15919493/531179\">entrypoint-main</a> relation.</p>\n<p>First of all, <code>main</code> is written by your program's author. Far not always: people will use all kinds of stubs, and frameworks, and languages — but let me assume the simplest case for a moment.</p>\n<p>The entrypoint code is never written by your program's author. I'm oversimplifying again; rather extreme counterexamples would be programs coded in manual assembly, or <a href=\"https://book.rada.re/tools/ragg2/ragg2.html\" rel=\"nofollow noreferrer\">r2 eggs</a>. But <em>virtually always</em>, the code at entrypoint is placed there by a compiler — thus, written by a totally different person than your program's author. For that reason, it's marginally less interesting than main. Further, it's usually very generic, contains nothing specific to your program, and therefore boring &amp; useless. Better start analysis at main or higher.</p>\n<p>Relatedly, entrypoint logic doesn't reference <code>main</code> directly, for reasons of having to be generic. There'll be indirections. Simple/naive analysis (i.e. skipping <code>call rax</code>) won't traverse those indirections — so, <code>af @ entry0</code> won't reach <code>main</code>.</p>\n<blockquote>\n<p>Why is it not able to find the other functions that follow? For example, the functions at 0x004014ed, 0x00401516.</p>\n</blockquote>\n<p>As suggested in comments and explained above, <code>aaf</code> is more suited to <em>analyze all functions</em>. <code>afr</code> will deal with <a href=\"https://reverseengineering.stackexchange.com/questions/27322/af-vs-afr-in-radare2\">recursive functions</a>. You can also seek around and define them manually one-by-one (that's quite a bit faster in the visual mode: switch with <code>V</code>, cycle to disasm view with <code>p</code>, and then <code>df</code> to <em>define function</em>).</p>\n<p>Make sure to explore the built-in help <code>af?</code>, <code>a?</code>, <code>aa?</code> etc. Also see <a href=\"https://book.rada.re\" rel=\"nofollow noreferrer\">https://book.rada.re</a>. Reading the source can ultimately provide every possible answer.</p>\n</div>",
+            "votes": "4",
+            "user": "ulidtko",
+            "time": "Apr 26, 2021 at 10:59",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

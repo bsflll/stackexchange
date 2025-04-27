@@ -1,0 +1,62 @@
+{
+    "title": "gdb on FreeBSD and follow-fork-mode child",
+    "link": "https://reverseengineering.stackexchange.com/questions/2241/gdb-on-freebsd-and-follow-fork-mode-child",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Long time ago I noticed that using</p>\n<blockquote>\n<p>set follow-fork-mode child</p>\n</blockquote>\n<p>in GDB on FreeBSD doesn't really work.\nThis problem occurs very often with some challenges on various Capture The Flag contests.\nFor example, a server will spawn a child which would handle the connection.\nThe child code has a vulnerability which I would like to debug, but gdb just never follows\nthe childs execution and I can't really observe the vulnerability being triggered.</p>\n<p>So far, I've solved this problem in two ways:</p>\n<ol>\n<li><p>Making a connection, waiting for a child to spawn and than attaching GDB to it.</p>\n<p>This works since the spawned child has it's own PID to which I can attach, but is rather painful since first I have to make a connection from one session, attach with GDB in another, and then send the payload/continue the connection in the first.</p>\n</li>\n<li><p>Patching the binary after the fork call to continue the execution in the parent process instead of the child.</p>\n<p>This is also painful since then I have to restart the whole parent process to create another debugging session.</p>\n</li>\n</ol>\n<p>There are some other tricks that can be employed, but these are enough to illustrate my point.</p>\n<p>Now I know there have been some limitations on FreeBSD in the past regarding this but has anything improved?</p>\n<p>Is there any way to patch GDB to add this functionality? Any suggestions for an easier way of overcoming this?</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "gdb",
+        "exploit",
+        "debugging",
+        "multi-process"
+    ],
+    "user": "0xea",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "dna",
+            "text": "<span class=\"comment-copy\">On my Linux box I have to <code>set follow-fork-mode child</code> but also <code>catch fork</code> inorder to make GDB stop on the fork call and follow the child.</span>",
+            "time": null
+        },
+        {
+            "user": "0xea",
+            "text": "<span class=\"comment-copy\">on linux it's fine, bsd has the problem with follow-fork-mode... and it seems it's still there...</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Try to set a catchpoint on fork if you are want to both the parent and the child.</p>\n<pre><code>set-follow-fork-mode ask \ncatch fork \n</code></pre>\n<p>Concerning your second point, I have this macro in my <code>.gdbinit</code> (I believe ultimately originating from Tavis Ormandy). It is imminently useful in many cases, your own included.</p>\n<pre><code>define assemble\n # dont enter routine again if user hits enter\n dont-repeat\n if ($argc)\n  if (*$arg0 = *$arg0)\n    # check if we have a valid address by dereferencing it,\n    # if we havnt, this will cause the routine to exit.\n  end\n  printf \"Instructions will be written to %#x.\\n\", $arg0\n else\n  printf \"Instructions will be written to stdout.\\n\"\n end\n printf \"Type instructions, one per line.\\n\"\n printf \"End with a line saying just \\\"end\\\".\\n\"\n if ($argc)\n  # argument specified, assemble instructions into memory\n  # at address specified.\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    &lt;&lt;&lt; \"$( echo \"BITS 32\"; while read -ep '&gt;' r &amp;&amp; test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | hexdump -ve \\\n        '1/1 \"set *((unsigned char *) $arg0 + %#2_ax) = %#02x\\n\"' \\\n            &gt; ~/.gdbassemble\n  # load the file containing set instructions\n  source ~/.gdbassemble\n  # all done.\n  shell rm -f ~/.gdbassemble\n else\n  # no argument, assemble instructions to stdout\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    &lt;&lt;&lt; \"$( echo \"BITS 32\"; while read -ep '&gt;' r &amp;&amp; test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | ndisasm -i -b32 /dev/stdin\n end\nend\ndocument assemble\nAssemble instructions using nasm.\nType a line containing \"end\" to indicate the end.\nIf an address is specified, insert instructions at that address.\nIf no address is specified, assembled instructions are printed to stdout.\nUse the pseudo instruction \"org ADDR\" to set the base address.\nend\n</code></pre>\n</div>",
+            "votes": "5",
+            "user": "zetavolt",
+            "time": "Jun 15, 2013 at 3:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">Nice macro, I definitely gonna use it! Huh it's zsh unfriendly :p</span>",
+                    "time": null
+                },
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">For zsh <code>read -ep '&gt;' r</code> should be replaced by <code>read r</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xea",
+                    "text": "<span class=\"comment-copy\">accepted the answer because of that nice macro and it helps a lot:) especially since there is no real solution (at least i haven't found one yet, see my answer), the problem is that follow-fork-mode doesn't work on bsd, and that hasn't been fixed yet...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was digging a bit into this, and found <a href=\"https://stackoverflow.com/questions/1515661/gdb-not-hitting-breakpoints\">this question</a> on SO by mrduclaw (link in the original article is dead, but <a href=\"http://web.archive.org/web/20090611150423/http://sourceware.org/gdb/current/onlinedocs/gdb_5.html#SEC29\" rel=\"nofollow noreferrer\">web archive has it</a>). He has the exact same problem like I do, and exactly the same motivation for finding a solution.</p>\n<p>So I was digging around some more and it turns out freebsd until recently didn't have support for forks in it's ptrace. There was a <a href=\"http://lists.freebsd.org/pipermail/freebsd-toolchain/2012-April/000370.html\" rel=\"nofollow noreferrer\">patch submitted</a> but I can't really figure out if it's applied. Will try to apply it myself and see if it will start working then. </p>\n</div>",
+            "votes": "0",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

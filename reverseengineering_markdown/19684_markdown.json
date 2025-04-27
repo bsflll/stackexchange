@@ -1,0 +1,71 @@
+{
+  "title": "Reverse-engineering a weird 24-bit possibly not CRC checksum",
+  "link": "https://reverseengineering.stackexchange.com/questions/19684/reverse-engineering-a-weird-24-bit-possibly-not-crc-checksum",
+  "content": "Yes, it's one of these!\n\nI have a 199mumble Brother integrated word processor, with a very weird non-PC floppy format. I've built a floppy controller and have successfully read the flux off the disk, decoded both kinds of GCR, and reassembled the result into a disk image. But I need to be able to check the checksums in the sectors to know whether I've done it right. (Eyeballing it looks good.)\n\nEach sector is 256 bytes and is followed by three bytes which vary depending on the contents of the sector --- identical sectors produce identical values, so I'm assuming it's a checksum. Interestingly, the all-zero sector produces an all-zero checksum, so I suspect it's not a regular CRC.\n\nI have 100 different examples but there may be some incorrect results in there (due to misread sectors); the full list is at https://pastebin.com/0HZrUVPR but here are a few selected examples, in what's hopefully reveng format so the checksum is in the last three bytes:\n\n```\n00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005750314120464c4f505059080000000000000000000000000000000000000000616161616161616120202020000000000000000000000000000002000a5d000064656d6f20202020a4ca1a\n414141414141414141410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008b38af\n414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141de6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394141414141414141414141414141414141414141414141414141414141de4141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141de4141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141415a6ea1\n41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141de4141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141de6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435363738394141414141414141414141414141414141414141414141414141414141de41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141413362ac\n\n```\nNote that the last two contain the same data, rotated right a whole number of bytes.\n\nSo, I'm stumped. There are some 24 bit CRCs but they appear to be quite rare. reveng had nothing, but I'm not entirely sure I'm driving it correctly --- it appeared to execute more quickly than anything which does a brute force search ought to. I've tried some trivial summing methods but the easy ones didn't work and there are too many variations just to guess.\n\nHow would I go about figuring this out?\n\n",
+  "votes": "6",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "crc"
+  ],
+  "user": "David Given",
+  "time": "Oct 22, 2018 at 13:14",
+  "comments": [
+    {
+      "user": "user202729",
+      "text": "Wait a minute, I don't understand the background. What's on the floppy disk - the word processor or the document editable by the word processor? What is supposed to reads the floppy disk? Besides, what's GCR? This?",
+      "time": null
+    },
+    {
+      "user": "David Given",
+      "text": "Ah, right, context. This dates back from the days when word processors were things, not programs --- it's an electric typewriter with a screen and a floppy drive. Pictures are annoying hard to find but gizmodo.com/… is a slightly later model than mine. The floppy format used to save files was very very not PC, with 256-byte sectors, GCR rather than MFM (your link is correct), a different low level disk format, etc. I have some custom hardware to read these with a modern PC floppy drive. But that stuff's all figured out.",
+      "time": null
+    },
+    {
+      "user": "user202729",
+      "text": "Try producing some sectors with low Hamming distance (number of different bits)? That way it may be possible to determine how individual bits affect the checksum, just in case the checksum algorithm is linear (or close to linear enough).",
+      "time": null
+    },
+    {
+      "user": "David Given",
+      "text": "I'll give that a try, but right now the machine is 9000km away, so it'll have to wait until next week. If I can figure this out from just my disk image that'd be awesome.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The answer turns out to be very simple, once you understand what CRC is.\n\nIt's similar to a CRC -- the checksum is the remainder when dividing the input by the polynomial with truncated representation 0x000201.\n\nI wrote a quick Python script to validate checksum:\n\n```\ndef crc(data, poly):\n    # width = 24 bit\n    # data len = 2048 bit\n    assert poly<(1<<24)\n    for i in range(2048-1,24-1,-1):\n        if data>>i&1:\n            data^=1<<i\n            data^=poly<<(i-24)\n    assert i==24\n    assert data<(1<<24)\n    return data\n\nimport sys\nfor line in sys.stdin.read().splitlines():\n    line = int(line,16)\n    print(crc(line>>24,0x000201) == line&~(-1<<24))\n\n```\nTry it online!\n\nThe crc function may be used to generate missing checksum values.\n\nFirst, I assumed that the checksum function satisfies the property: for all x and y, we have checksum(x) xor checksum(y) == checksum(x xor y).\n\nUsing Gaussian elimination on the provided data, I can deduce that the hash of 000000...000000bb0301 is bb0301. Looks pretty reasonable.\n\nThen, I read about existing hash functions and see what method they uses. I note that CRC uses polynomial remainder mod 2, so I guess that the hash is the input as a polynomial modulo some polynomial with degree 25 (because the output has 24 bits).\n\nWith simple brute force, I conclude that the polynomial is 000201. Testing reveals that it's correct.\n\nIt's because there are only 2width possible polynomials. reveng only takes small time to try each polynomial. In this case width = 24, so there are only 1048576 polynomials, which is not very large for a computer.\n\nCRC appends width (in this case - 24) bits to the input before computing polynomial remainder, this algorithm doesn't.\n\n",
+      "votes": "5",
+      "user": "user202729",
+      "time": "Oct 24, 2018 at 5:22",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "David Given",
+          "text": "Wow --- thank you so much! I was expecting to have to pick away at it myself once I got back to the machine and could generate source data. Yes, this works fine (I have a C implementation and the results match). I'm a bit surprised reveng didn't detect this; it seems like a fairly standard variation to the standard algorithm.",
+          "time": null
+        },
+        {
+          "user": "David Given",
+          "text": "Also, would you like a credit in my code, and if so, how?",
+          "time": null
+        },
+        {
+          "user": "Silicomancer",
+          "text": "Does reveng always/completely use brute force to find a CRC polynomial? For a CRC32 it needs about 10 minutes. Imagine how long it would take for a CRC64. Are there no methods to reduce the computation effort in a non-brute-force manner?",
+          "time": null
+        },
+        {
+          "user": "user202729",
+          "text": "@Silicomancer I think so. / I think cosc.canterbury.ac.nz/greg.ewing/essays/… may have a method.",
+          "time": null
+        },
+        {
+          "user": "Silicomancer",
+          "text": "@user202729: It seems the author uses a very special method to calculate the polynomial. I think in most cases this will not work since it requires very specific modification of the payload data (namely repeated changing the data by a single, walking bit). Do you have an idea if there is a non-brute-force method that uses random payload/checksum pairs to reconstruct the polynomial?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

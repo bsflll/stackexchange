@@ -1,0 +1,46 @@
+{
+    "title": "Angr never finishes",
+    "link": "https://reverseengineering.stackexchange.com/questions/19867/angr-never-finishes",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I create the following c program as a proof of concept. When I try to analyze it with anger it never finishes.\n </p>\n <pre><code>#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n\nchar *secret = \"password\";\n\nint compare(char *string)\n{\n    int i, c=0;\n    for (i=0; i< strlen(secret); i++)\n    {\n        if (string[i] == secret[i])\n            c++;\n    }\n    if (c == 8)\n        printf(\"You won\");\n    return 0;\n}\nint main(int argc, char **argv)\n{\n    char input[50];\n    scanf(\"%s\", input);\n    compare(input);\n    return EXIT_SUCCESS;\n}\n</code></pre>\n <p>\n  The script is the following:\n </p>\n <pre><code>#!/usr/bin/env python\n\nimport angr\nimport sys\nimport logging\nimport claripy\n\nFIND = 0x00000000000011dd\nLEN = 8 \n\ndef basic_symbolic_execution():\n    p = angr.Project('test', load_options={'auto_load_libs':False})\n\n    flag = claripy.BVS('flag', LEN * 8)\n\n    st = p.factory.entry_state(\n        stdin=flag,\n    )\n\n    sm = p.factory.simulation_manager(st)\n    sm.explore(find=FIND, num_find=1)\n\n    print(\"Found solution\")\n    out = b''\n\n    for pp in sm.deadended:\n        out = pp.posix.dumps(1)\n        print(out)\n\n    import IPython; IPython.embed()\n\ndef test():\n    r = basic_symbolic_execution()\n\nif __name__ == '__main__':\n    sys.stdout.buffer.write(basic_symbolic_execution())\n</code></pre>\n <p>\n  I have also tried to use explore on the address of c++ 8 times and then checking the stdin and it finishes but the result is all zeros. I was wondering if any of you have faced something similar and what your solutions were.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "954",
+    "tags": [
+        "angr"
+    ],
+    "user": "letFunny",
+    "time": "Nov 10, 2018 at 22:36",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n Hi, while this is fully on topic, you may want to consider\n <a href=\"https://github.com/angr/angr/issues\" rel=\"nofollow noreferrer\">\n  filing a ticket here\n </a>\n as that's more likely to catch the attention of the Angr developers. Also,\n <b>\n  your question isn't really a question\n </b>\n , it's more of a statement. You may want to edit it to clarify what you expect members of this site to contribute to your RCE effort.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  By your FIND address it seems like your binary was compiled with PIE. Please verify this. Angr will load PIE enabled elf at a base address of 0x400000, add this to your FIND address so that angr is able to resolve this.\n </p>\n <p>\n  I have made a couple of changes to your script to make it detect the \"password\".\n </p>\n <pre><code>import angr\nimport sys\nimport logging\nimport claripy\n\nFIND = 0x00400672\nLEN = 8\n\ndef basic_symbolic_execution():\n    p = angr.Project('x', load_options={'auto_load_libs':False})\n\n    flag = claripy.BVS('flag', LEN * 8)\n\n    st = p.factory.entry_state(\n        stdin=flag,\n    )\n\n    sm = p.factory.simulation_manager(st)\n    sm.explore(find=FIND, num_find=1)\n\n    print(\"Found solution\")\n    out = b''\n\n    for pp in sm.found:\n        out = pp.posix.dumps(0)\n        print(out)\n        print(pp.solver.eval(flag, cast_to=str))\n\n    import IPython; IPython.embed()\n\ndef test():\n    r = basic_symbolic_execution()\n\nif __name__ == '__main__':\n    basic_symbolic_execution()\n</code></pre>\n <p>\n  To look for states which actually reached your FIND addresses you need to iterate over\n  <code>\n   found\n  </code>\n  of a\n  <code>\n   simulation_manager\n  </code>\n  .\n </p>\n <p>\n  According to\n  <code>\n   man stdin\n  </code>\n </p>\n <blockquote>\n  <p>\n   On  program  startup, the integer file descriptors associated with the streams stdin,\n         stdout, and  stderr  are  0,  1,  and  2,  respectively.\n  </p>\n </blockquote>\n <p>\n  So to get input you need to use\n  <code>\n   pp.posix.dumps(0)\n  </code>\n </p>\n <p>\n  I have also added on how to use\n  <code>\n   solver\n  </code>\n  of a found state to solve for constraints that you set like the\n  <code>\n   flag\n  </code>\n  .\n </p>\n <p>\n  Also offset for the printf in the binary for me.\n </p>\n <pre><code>$ gcc -no-pie -fno-pic x.c -o x\n$ r2 -AA x -qc \"pdf @ sym.compare ~won\"    \n│       │   0x00400672      bf7d074000     mov edi, str.You_won        ; 0x40077d ; \"You won\"\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "sudhackar",
+            "time": "Nov 12, 2018 at 6:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "letFunny",
+                    "text": "<span class=\"comment-copy\">I tried your way with no luck. I also tried with sm.run() plainly and it logs      \"\"\"Exit state has over 256 possible solutions. Likely unconstrained; skipping. \"\"\"  over and over and no solution is found.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">@letFunny I have updated my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "letFunny",
+                    "text": "<span class=\"comment-copy\">It does work this way. However the problem with using sm.run() is the number of possible states (&gt;500). How is that possible in such tiny program. When using num_find = 1 it finished thou.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

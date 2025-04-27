@@ -1,0 +1,33 @@
+{
+  "title": "Add Section to pe file function error [closed]",
+  "link": "https://reverseengineering.stackexchange.com/questions/6284/add-section-to-pe-file-function-error",
+  "content": "I'm having some strange errors with the following function which adds a section to a pe executable. When I run the program I get the success message, when I proceed to try to open the executable in ollydbg I get an invalid file error, I then open it in LordPE and find that the section has been added and everything seems to be in order, when I again open the executable in ollydbg it opens the executable and I can see that the section has been added though all the fields aside from section name are set to 0. I have tried this many times and get the same result with different executables. \n\n```\nvoid addSection(char* fileName)\n{\nHANDLE hFile = CreateFile(fileName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);\nif(hFile !=INVALID_HANDLE_VALUE){\n    DWORD fileSize = GetFileSize(hFile, NULL);\n    BYTE *byte = new BYTE[fileSize];\n    DWORD numberOfBytesReadTracker;\n    ReadFile(hFile, byte, fileSize, &numberOfBytesReadTracker, NULL);\n\n    IMAGE_DOS_HEADER *dosHeader = (IMAGE_DOS_HEADER*)byte;\n    IMAGE_NT_HEADERS *ntHeader = (IMAGE_NT_HEADERS*)((DWORD)byte+dosHeader->e_lfanew);\n    if(dosHeader->e_magic==IMAGE_DOS_SIGNATURE && ntHeader->Signature == IMAGE_NT_SIGNATURE){\n        IMAGE_FILE_HEADER *fileHeader = (IMAGE_FILE_HEADER*)((DWORD)byte+dosHeader->e_lfanew+sizeof(IMAGE_NT_SIGNATURE));\n        IMAGE_OPTIONAL_HEADER *optionalHeader = (IMAGE_OPTIONAL_HEADER*)((DWORD)byte+dosHeader->e_lfanew+sizeof(IMAGE_NT_SIGNATURE)+sizeof(IMAGE_FILE_HEADER));\n        IMAGE_SECTION_HEADER *sectionHeader = (IMAGE_SECTION_HEADER*)((DWORD)ntHeader+sizeof(IMAGE_NT_HEADERS));\n\n        const char *sectionName = \"AddedSec\";\n        ZeroMemory(&sectionHeader[fileHeader->NumberOfSections], sizeof(IMAGE_SECTION_HEADER));\n        CopyMemory(&sectionHeader[fileHeader->NumberOfSections].Name, sectionName, 8);\n        sectionHeader[fileHeader->NumberOfSections].Characteristics = 0x60500060;\n        sectionHeader[fileHeader->NumberOfSections].Misc.VirtualSize = 0x1000;\n        sectionHeader[fileHeader->NumberOfSections].VirtualAddress = sectionHeader[fileHeader->NumberOfSections-1].VirtualAddress+optionalHeader->SectionAlignment;\n        sectionHeader[fileHeader->NumberOfSections].SizeOfRawData = optionalHeader->FileAlignment;\n        sectionHeader[fileHeader->NumberOfSections].PointerToRawData = sectionHeader[fileHeader->NumberOfSections-1].PointerToRawData+sectionHeader[fileHeader->NumberOfSections-1].SizeOfRawData;\n\n        fileHeader->NumberOfSections = fileHeader->NumberOfSections+1;\n        optionalHeader->SizeOfImage = optionalHeader->SizeOfImage+alignToSectionAlignment(sectionHeader[fileHeader->NumberOfSections].Misc.VirtualSize, optionalHeader->SectionAlignment);\n        cout << \"ADDED SECTION\" << endl;\n        SetFilePointer(hFile, 0, NULL, FILE_BEGIN);\n        WriteFile(hFile, byte, fileSize, &numberOfBytesReadTracker, NULL);\n    }else{\n        cout << \"Is not a PE executbale\" << endl;\n    }\n    CloseHandle(hFile);\n}\n\n```\n}\n\n",
+  "votes": "-1",
+  "answers": 2,
+  "views": "985",
+  "tags": [
+    "ollydbg",
+    "c++"
+  ],
+  "user": "user28130",
+  "time": "10 years ago",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "```\nIMAGE_SECTION_HEADER *sectionHeader = (IMAGE_SECTION_HEADER*)((DWORD)ntHeader+sizeof(IMAGE_NT_HEADERS));\n\n```\nThe line above is incorrect. It should be:\n\n```\nIMAGE_SECTION_HEADER *sectionHeader = (IMAGE_SECTION_HEADER*)((DWORD)ntHeader+sizeof(IMAGE_NT_SIGNATURE)+sizeof(IMAGE_FILE_HEADER)+fileHeader->SizeOfOptionalHeader);\n\n```\nYou're setting the IMAGE_SCN_ALIGN_16BYTES flag in Characteristics, though this is only valid for object files.\n\n```\nsectionHeader[fileHeader->NumberOfSections].VirtualAddress = sectionHeader[fileHeader->NumberOfSections-1].VirtualAddress+optionalHeader->SectionAlignment;\n\n```\nThe line above will cause problems if the last section in the original PE file has a virtual size greater than the section alignment. \n\n```\nsectionHeader[fileHeader->NumberOfSections].PointerToRawData = sectionHeader[fileHeader->NumberOfSections-1].PointerToRawData+sectionHeader[fileHeader->NumberOfSections-1].SizeOfRawData;\n\n```\nThe line above will cause problems if the last section in the original PE file has a raw size that is not a multiple of the file alignment.\n\n```\nfileHeader->NumberOfSections = fileHeader->NumberOfSections+1;\n\n```\nThe line above will cause problems if the original PE file had 65535 sections.\n\n```\noptionalHeader->SizeOfImage = optionalHeader->SizeOfImage+alignToSectionAlignment(sectionHeader[fileHeader->NumberOfSections].Misc.VirtualSize, optionalHeader->SectionAlignment);\n\n```\nThe line above should be:\n\n```\noptionalHeader->SizeOfImage = optionalHeader->SizeOfImage+alignToSectionAlignment(sectionHeader[fileHeader->NumberOfSections-1].Misc.VirtualSize, optionalHeader->SectionAlignment);\n\n```\nYour code assumes that there's space between the last IMAGE_SECTION_HEADER and the beginning of the first section to add another IMAGE_SECTION_HEADER; this isn't always the case.\n\nAlso, it's very likely that the new section's PointerToRawData + SizeOfRawData is greater than the size of the file, which will cause the loader to fail.\n\nIn the future, please post these types of programming questions to https://stackoverflow.com/ instead.\n\n",
+      "votes": "3",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Consider using TitanEngine (https://bitbucket.org/mrexodia/titanengine-update)\n\nand its function AddNewSection or AddNewSectionEx.\n\nOr have a look how its implemented there https://bitbucket.org/mrexodia/titanengine-update/src/50379e53e9f3a1d9cf835e37e2fd7cbade61dc6a/TitanEngine/TitanEngine.PE.Section.cpp?at=master#cl-512\n\n",
+      "votes": "0",
+      "user": "pHiL",
+      "time": "Sep 23, 2014 at 12:00",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

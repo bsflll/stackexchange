@@ -1,0 +1,66 @@
+{
+  "title": "Confused about calling convention in a Windows kernel mode driver",
+  "link": "https://reverseengineering.stackexchange.com/questions/12336/confused-about-calling-convention-in-a-windows-kernel-mode-driver",
+  "content": "Reverse engineering a kernel mode driver (in its 32-bit x86 incarnation) I stumbled over what seems to be an odd calling convention. For a driver I'd expect to see __cdecl, __fastcall and __stdcall in the Microsoft flavor. And since this driver obviously uses its own C++ runtime I'll expect to see __thiscall as well.\n\nHowever, in this driver I see functions that are passed their first argument in eax. This is completely unexpected, so I am wondering if anyone here has an idea what could be going on?\n\n```\nsub_40XXXX      proc near\n    push    ebx\n    push    esi\n    mov     esi, eax\n    push    edi\n    xor     edi, edi\n\n```\nFrame pointer omission doesn't seem like a credible cause for what I am seeing. Is this a bad case of LTCG?\n\nThe driver in question is a file system mini filter driver and from the looks of it I'd guess it was linked by the linker in the Windows 7 WDK (although I cannot really say which exact version, e.g. 7600.16385.1 or another). Linker version states 9.00 in the PE optional header. Subsystem version is 5.00 which would indicate that it was built to target Windows 2000. It also suggests that the subsystem was passed explicitly, since the Vista WDKs were the last ones to support targeting Windows 2000. Of course this could also have been built using VS 2008, hard to tell (the standalone WDKs used to include the same optimizing compilers as VS). For all I know it could also be a mix of compilers and linkers from different toolchains. But given that the linker needs to know about calling conventions, I'm still expecting to see some standard calling convention.\n\nHere are the clues for the driver in question (trimmed down version of dumpbin /headers ... output):\n\n```\n        9.00 linker version\n        1000 section alignment\n         200 file alignment\n        5.00 operating system version\n        0.00 image version\n        5.00 subsystem version\n\n```\nThe standard calling convention for drivers is __stdcall. But to verify that __fastcall doesn't indeed use eax as I see in the other driver, I decided to create a little driver. In order to prevent the compiler or linker to optimize out my function calls, I messed up some variables subsequently passed to IoCreateSymbolicLink.\n\nThe C++ code for the respective two functions is:\n\n```\nUINT_PTR __fastcall fastcall_test(UINT_PTR arg1, UINT_PTR arg2)\n{\n    UINT_PTR ret = arg1 + arg2;\n    DbgPrint(\"%u, %u -> %u\", arg1, arg2, ret);\n    return ret;\n}\n\nUINT_PTR __stdcall stdcall_test(UINT_PTR arg1, UINT_PTR arg2)\n{\n    UINT_PTR ret = arg1 + arg2;\n    DbgPrint(\"%u, %u -> %u\", arg1, arg2, ret);\n    return ret;\n}\n\n```\nand they're called as:\n\n```\nUINT_PTR fct = fastcall_test((UINT_PTR)status, RegistryPath->MaximumLength);\nUINT_PTR sct = stdcall_test((UINT_PTR)status, RegistryPath->MaximumLength);\n\nusSymlinkName.Buffer += fct;\nusSymlinkName.Length += (USHORT)fct;\nusSymlinkName.Buffer += sct;\nusSymlinkName.MaximumLength += (USHORT)(sct + fct);\n\n```\nfrom DriverEntry between IoCreateDevice and IoCreateSymbolicLink in a default project generated using DDKWizard.\n\nWhen compiling this targeting Windows XP, the outcome is as follows:\n\n```\n.text:00010512 unsigned int __fastcall fastcall_test(unsigned int, unsigned int) proc near\n.text:00010512                                         ; CODE XREF: DriverEntry(x,x)+41p\n.text:00010512 arg1 = ecx\n.text:00010512 arg2 = edx\n.text:00010512                 mov     edi, edi\n.text:00010514                 push    esi\n.text:00010515                 lea     esi, [arg1+arg2]\n.text:00010518                 push    esi\n.text:00010519                 push    arg2\n.text:0001051A                 push    arg1\n.text:0001051B                 push    offset Format   ; \"%u, %u -> %u\"\n.text:00010520                 call    _DbgPrint\n.text:00010525                 add     esp, 10h\n.text:00010528                 mov     eax, esi\n.text:0001052A                 pop     esi\n.text:0001052B                 retn\n.text:0001052B unsigned int __fastcall fastcall_test(unsigned int, unsigned int) endp\n.text:00010532 unsigned int __stdcall stdcall_test(unsigned int, unsigned int) proc near\n.text:00010532                                         ; CODE XREF: DriverEntry(x,x)+50p\n.text:00010532\n.text:00010532 arg1            = dword ptr  8\n.text:00010532 arg2            = dword ptr  0Ch\n.text:00010532\n.text:00010532                 mov     edi, edi\n.text:00010534                 push    ebp\n.text:00010535                 mov     ebp, esp\n.text:00010537                 mov     eax, [ebp+arg1]\n.text:0001053A                 mov     ecx, [ebp+arg2]\n.text:0001053D                 push    esi\n.text:0001053E                 lea     esi, [eax+ecx]\n.text:00010541                 push    esi\n.text:00010542                 push    ecx\n.text:00010543                 push    eax\n.text:00010544                 push    offset Format   ; \"%u, %u -> %u\"\n.text:00010549                 call    _DbgPrint\n.text:0001054E                 add     esp, 10h\n.text:00010551                 mov     eax, esi\n.text:00010553                 pop     esi\n.text:00010554                 pop     ebp\n.text:00010555                 retn    8\n.text:00010555 unsigned int __stdcall stdcall_test(unsigned int, unsigned int) endp\n\n```\nAs expected __fastcall ends up passing arguments via ecx and edx. So what's going on with my other driver?\n\nMeanwhile I found out how the PE header values could be achieved using a vanilla Windows 7 WDK. This will then yield a binary which is compatible with Windows 2000, assuming you build for x86, and contain these exact values (and of course assuming you don't do stupid things like statically importing DDIs only available after Windows 2000).\n\n```\nUSE_MAKEFILE_INC=1\nSUBSYSTEM_VERSION=$(SUBSYSTEM_500)\n# Alternatively:\n#SUBSYSTEM_VERSION=5.00\n\n```\nwhich will force nmake to include makefile.inc from the same location as the sources file and set the SUBSYSTEM_VERSION correctly (5.00 for x86 and 5.02 for amd64).\n\n```\nLINKER_APP_VERSION=0.00\nLINKER_OS_VERSION=$(SUBSYSTEM_VERSION)\n\n```\nwhich works because makefile.inc gets included quite late from makefile.new and therefore we can use it to override the defaults specified by the default build environment.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "windows",
+    "driver",
+    "calling-conventions"
+  ],
+  "user": "0xC0000022L",
+  "time": "Apr 4, 2016 at 15:01",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "BTW you can figure out the exact compiler/linker version by inspecting the Rich signature.",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "@IgorSkochinsky: any pointers? I'm aware of the ntcore document about the topic, but you probably mean something different?",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "try the script here: trendystephen.blogspot.be/2008/01/rich-header.html. Low 16 bits of each compid is the build number of the compiler/linker which produced the object file linked into the final PE.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Most likely it's just LTCG/LTO, especially if the function in question is only never called externally. Using it can result in the following:\n\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Apr 4, 2016 at 14:23",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Many non-Microsoft compilers pass the first argument in EAX.\n\nFrom https://en.wikipedia.org/wiki/X86_calling_conventions:\n\n...\n\n...\n\n...\n\n",
+      "votes": "1",
+      "user": "Jason Geffner",
+      "time": "Apr 4, 2016 at 14:02",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jason Geffner",
+          "text": "If you'd like to share a link to the driver, some folks here may be able to give you more insight into which specific compiler might have been used.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "I cannot share a link to it, but it's the reason I was including the information regarding compiler and linker in my question. Since this is a driver, I'm pretty confident that that's the correct info (i.e. not tampered). Especially since using any non-WDK build environment can get you into trouble quite quickly for KM drivers and all indicators point to a WDK (albeit with overrides). Specifying SUBSYSTEM_VERSION in sources and injecting  a manipulated LINK_OS_VERSIONS will yield this exact result using the Windows 7 WDK.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "I amended my question to include information on how to override the PE header values to achieve the ones seen in my driver binary, while using the Windows 7 WDK. Might be interesting.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

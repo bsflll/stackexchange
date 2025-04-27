@@ -1,0 +1,51 @@
+{
+    "title": "Why might nm find a few undefined symbols that I can't see with xxd?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27250/why-might-nm-find-a-few-undefined-symbols-that-i-cant-see-with-xxd",
+    "content": "I'm cross-comparing a few approaches to testing for binaries that import a symbol and I noticed a YARA rule not finding one in <pre><code>sudo</code></pre> that nm + grep could find.\nI looked at it in <pre><code>xxd</code></pre> to figure out why, but couldn't find a match. This explains why the YARA rule misses, but leaves me with a new question: how are tools like nm or objdump discovering the symbol?\nI checked other the other GLIBC symbols that nm reports to see how common this is, and found 5 symbols that didn't match in the output of xxd: <pre><code>execve exit getpgrp sleep textdomain</code></pre>. (I haven't yet manually verified whether any of the others only fail to match because they're split over a line break, but for this search I did run xxd at a width of 256 cols to minimize the likelihood).\nI'm running something like:\n<pre><code>nm --undefined $(type -p sudo)\nxxd -c 40 $(type -p sudo)\n</code></pre>\nSince this outputs a few thousand lines and there may be platform differences in the binary/commands, I went ahead made a GH repo for reference.\n\nCI run itself\nrelevant section from a committed copy of the CI output for posterity\nactual invocation producing the CI output\ncopy of the sudo binary itself\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "667",
+    "tags": [
+        "static-analysis",
+        "symbols"
+    ],
+    "user": "abathur",
+    "time": "Mar 18, 2021 at 19:44",
+    "comments": [
+        {
+            "user": "abathur",
+            "text": "I initially posted a mangled copy of the log without realizing it; I've fixed it and updated the link as of a few minutes ago.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "how to get the binary in question?\n",
+            "time": null
+        },
+        {
+            "user": "abathur",
+            "text": "@IgorSkochinsky Not sure what you prefer. I put it in a repo so it would be easy to fork and poke at in CI, but I just now pushed a commit with a copy of the binary (github.com/abathur/sudo-make-sense/blob/main/sudo). If you have Nix installed running <pre><code>nix-shell -p sudo</code></pre> should open a shell with something equivalent on PATH.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "Thanks, the Mach-O format was the clue\n",
+            "time": null
+        },
+        {
+            "user": "abathur",
+            "text": "oof. sorry. I am sitting in front of both systems and forgot which I was on. It should be ELF. Gimme a few...\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The recent updates to the Mach-O format (the  <pre><code>LC_DYLD_INFO_ONLY</code></pre> command) have an option of encoding the export symbol information as a trie structure. In such case it's possible that the symbol name does not appear as an exact string in the file.\nHowever, ELF does not use such encoding so normally all symbols must be present as-is in the binary. What seems to happen in your case is that the \"missing\" symbols are substrings of other symbols with longer names, e.g.:\n\n<pre><code>getpgrp</code></pre> is a suffix of <pre><code>tcgetpgrp</code></pre>\n<pre><code>execve</code></pre> - of <pre><code>fexecve</code></pre>\n<pre><code>exit</code></pre> - of <pre><code>_exit</code></pre>\n<pre><code>textdomain</code></pre> - of <pre><code>bindtextdomain</code></pre>\n\nThere is no requirement that each symbol must be present as a separate string in the string table. The symbol record encodes an offset to a start of the string in string table and the dynamic linker simply uses the bytes until the next zero for matching. By reusing suffixes of other strings, the string table can be made smaller (often it is a huge contributor to the ELF file's size).\nFor example, here's the symbol entry for textdomain:\n<pre><code>Elf64_Sym <offset aBindtextdomain+4 - offset unk_1DD0, 12h, 0, 0, \\ ; \"textdomain\"\nLOAD:0000000000000D38                            offset dword_0, 0>\n</code></pre>\nor\n<pre><code>LOAD:0000000000000D38                 dd offset aBindtextdomain+4 - offset unk_1DD0; st_name ; \"textdomain\"\nLOAD:0000000000000D38                 db 12h                  ; st_info\nLOAD:0000000000000D38                 db 0                    ; st_other\nLOAD:0000000000000D38                 dw 0                    ; st_shndx\nLOAD:0000000000000D38                 dq offset dword_0       ; st_value\nLOAD:0000000000000D38                 dq 0                    ; st_size\n</code></pre>\nAs you can see, it points 4 bytes into the string for <pre><code>bindtextdomain</code></pre>. This is perfectly legal and is a common optimization in compilers.\nDiscussion with the patch which added the feature to GNU ld.\n",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Mar 18, 2021 at 19:56",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,53 @@
+{
+    "title": "Malware analysis - Debugger hangs at HttpSendRequestA",
+    "link": "https://reverseengineering.stackexchange.com/questions/31819/malware-analysis-debugger-hangs-at-httpsendrequesta",
+    "content": "I'm reverse engineering a malware that at some point tries to connect to <pre><code>http://api.ipify.org</code></pre> in order to get the IP address of the infected PC.\nI was able to replicate this behaviour with a small Python script, but for some reason, I can't get the same result when debugging the malware (in my dynamic-analysis VM using x32dbg), due to the fact that execution hangs indefinitely inside <pre><code>HttpSendRequestA</code></pre>.\nI tried to trace the execution flow inside that API, and the reason of the hang is a call to <pre><code>WaitForSingleObjectEx</code></pre> in wininet.dll (so, nothing to do with the malware itself).\nIf I try to patch the <pre><code>dwMilliseconds</code></pre> param of <pre><code>WaitForSingleObjectEx</code></pre> (causing a timeout) I can get further to the execution, but eventually I get stuck another time when the malware tries to perform another http request.\nI tried to run this sample on another dynamic-analysis VM with Fakenet-ng installed and I can't even see the attempt to perform the http requests from the log.\nIn both VMs the network is online.\nAm I missing something obvious here?\nEDIT:\nI tried to run the malware outside the debugger (still in a VM with fakenet) and I see the http requests from the log! So the issue described here only happens when running INSIDE the debugger. Still, I don't think that this is an anti-debugging trick: I have reverse-engineered and documented EVERY function of this malware and I haven't found any anti-debugging stuff.\nEDIT2:\nIt seems that this user had the same issue (usign a different debugger):\nOllyDbg \"runs away\" when stepping over wininet.HttpSendRequestW\nEDIT3:\nFound a workaround (described in the answer bellow)\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "302",
+    "tags": [
+        "windows",
+        "debugging",
+        "malware",
+        "x64dbg",
+        "networking"
+    ],
+    "user": "Luca D'Amico",
+    "time": "Apr 27, 2023 at 21:21",
+    "comments": [
+        {
+            "user": "Tobias",
+            "text": "I assume you've tried setting a breakpoint after the function call, and rather than stepping to and over the call, just launch the process and wait for it to hit the breakpoint. What flags are sent to InternetOpen()? Is it setting the async flag? After clearing the dns cache, do you see it doing name lookup before the hang?\n",
+            "time": null
+        },
+        {
+            "user": "Luca D'Amico",
+            "text": "Hello Tobias. Yes, I tried to set a bp just after the function call, but it still get stuck before reaching it. There isn't any flag pushed to InternetOpenA (it pushes 0 as dwFlags param). I don't see any name loopups either. I'm thinking about coding a little prog that simulate this behaviour using same APIs/params and see what happens while debugging it.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Ok after hours of struggle, I found a solution (sort of).\nFirst of all, I still don't know what causes the deadlock, but I found that this happend only when debugging the malware as a dll.\nHow I came to this conclusion? Because I've written a little app (exe, NOT dll) to simulate exacly what the malware is doing, using the same windows apis and in this case I got no deadlock. So I started to suspect that the issue was indeed the fact that I was debugging a dll.\nSo this is what I did:\n\nUsing dll_to_exe I've convert the malware from dll to exe (thanks @hasherezade for this great tool) [https://github.com/hasherezade/dll_to_exe]\nSince the malware uses a custom entry point, I loaded the new executable in x32dbg,  reached the real entry point, then fired up Scylla and produced a new dump with the EP set to the real entry point (I know that this can be done without Scylla at all by simply using a PE editor, but I was lacking any PE editor in that VM and the network was intercepted by Fakenet-NG).\nLoaded this new executable (with the correct EP) in the debugger and executed it. It reached HttpSendRequestA call and I was able to step over it without any deadlock.\n\nStill, if you know why the deadlock happens in the dll version please tell me. I also tried to use OllyDBG just to make sure that this wasn't a bug of x32dbg, but I was able to repliace the same issue there too.\n",
+            "votes": "2",
+            "user": "Luca D'Amico",
+            "time": "Apr 27, 2023 at 21:19",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "I don't know if it's still a problem for you, but it might be related to this:\nhttps://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices\nand more particularly this sentence:\n\"Improper synchronization within DllMain can cause an application to deadlock or access data or code in an uninitialized DLL. Calling certain functions from within DllMain causes such problems.\"\nSo my guess is that the malware you're debugging is trying to call HttpSendRequestA before it exits DllMain ?\n",
+            "votes": "1",
+            "user": "Stanislas Arnoud",
+            "time": "Jun 2, 2023 at 14:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Luca D'Amico",
+                    "text": "<span class=\"comment-copy\">Thank you for this piece of info. This is interesting, considering that this malware doesn't use the regular DllMain, but instead use another entry point.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

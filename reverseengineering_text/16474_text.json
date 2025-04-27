@@ -1,0 +1,39 @@
+{
+    "title": "Getting the current process in Windows",
+    "link": "https://reverseengineering.stackexchange.com/questions/16474/getting-the-current-process-in-windows",
+    "content": "While reading Practical Reverse Engineering by Bruce Dang, I came across the following.\n\n\nAm I correct in my assumption that the procedures return a pointer to the current thread and current process respectively?\nIn PsCurrentProcess, the offset into the current thread is 0B8h whereas in the comment it is written as 0x70. I do not understand what the author means by this. In an attempt to find out I tried to debug a x64 Windows 10 Kernel. \n\n\n\nI couldn't find any thing at offsets 70h nor B8h. But I did find a _KPROCESS at offset 220h. Is this what I am looking for?\n\n\nWill this offset be the same for all Windows 10 x64 systems?\nI would like to know about the internals of all these structures. Is there any resource that explains all the important internal data structures in Windows from a reverse engineering stand point.\n",
+    "votes": "8",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "process",
+        "kernel"
+    ],
+    "user": "Aswin P J",
+    "time": "Oct 3, 2017 at 7:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "To start with, the offsets are more likely to match the current OS at the time of the book's writing (probably Win7) than Windows 10. That said, a good reference to internal kernel structures over different Windows versions is Geoff Chapell's website: https://www.geoffchappell.com/studies/windows/km/index.htm\nFor example, looking at <pre><code>KPCR</code></pre>, we can see that at <pre><code>0x0180</code></pre> we have <pre><code>KPRCB Prcb;</code></pre>, so 188h is 8 bytes into <pre><code>KPRCB</code></pre>. Checking <pre><code>KPRCB</code></pre>, in turn, we see that offset 8 is <pre><code>KTHREAD *CurrentThread;</code></pre>. So the offset <pre><code>0B8h</code></pre> should be looked up in the <pre><code>KTHREAD</code></pre> struct. I was able to find on this page the member <pre><code>KAPC_STATE ApcState;</code></pre> at offset 0x70 in x86 version and 0x98 in x64. \nI'm not sure what OS version is the quoted disassembly coming from, but it looks like there's been some mixup. You should probably submit an errata report on the book's page at Wiley.\nIn the meantime look at the disassembly of mentioned functions in the kernel you're actually running and then match it against the structs you're printing.\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Oct 3, 2017 at 13:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Aswin P J",
+                    "text": "<span class=\"comment-copy\">Thanks for answering. As adviced, I looked into the dissasembly of the function on my system. The offset to ApcState is 0x98 in x64. It seems to be an array. At an offset x20 into the array is the ApcState.Process. So the effective offset is 98h + 20h = B8. Also after googling a lot I found <a href=\"http://terminus.rewolf.pl/terminus/\" rel=\"nofollow noreferrer\">the terminus project</a>. It shows a nice representation of some internal structures in Windows. Thought you might be interested.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "most of these structures can be queried with windbg  \nif you are running in usermode ntdll.pdb has these type information \nif you are running in kernelmode ntos/ntkr/ aka nt*.pdb  has these type information \nyou can use a tool like livekd from sysinternals along with windbg to do a \nlocal kernel debugging session \nfollowing are output from livekd on a win7 x86 machine as far as possible \nthe commands are kept os / version agnostic\nthe current process can be queried as ? @$proc \n<pre><code>kd> ? @$proc\nEvaluate expression: -2050188616 = 85cc9ab8\nkd>\n</code></pre>\nthe single question mark ? represents masm expresssion evaluator \nyou can use ?? question marks to turn on c++ expression evaluator \n<pre><code>kd> ?? @$proc->UniqueProcessId\nvoid * 0x00000538\nkd>\n</code></pre>\nthe above Current process pid is also represented by @$tpid\n<pre><code>kd> ? @$tpid\nEvaluate expression: 1336 = 00000538\nkd> ?? @$tpid\nunsigned int 0x538\nkd>\n</code></pre>\nthe pcr is represented by @$pcr\nyou can mix and match the expression evaluator the @@() lets you insert a c++ expression into a masm evaluation\n<pre><code>kd> ? @$pcr\nEvaluate expression: -2097779712 = 82f66c00\nkd> ?  @@(@$pcr->PrcbData.CurrentThread)\nEvaluate expression: -2048806120 = 85e1b318\nkd>\n</code></pre>\nin my system  PsGetCurrentProcess is as follows\n<pre><code>kd> uf nt!PsGetCurrentThread\nnt!PsGetCurrentThread:\n82e72b99 64a124010000    mov     eax,dword ptr fs:[00000124h]\n82e72b9f c3              ret\nkd>\n</code></pre>\nyou can directly get the raw contents of this segment:offset \n<pre><code>kd> ? poi(fs:00000124)\nEvaluate expression: -2048806120 = 85e1b318\nkd>\n</code></pre>\nthe current thread is denoted by @$thread\n<pre><code>kd> ? @$thread\nEvaluate expression: -2048806120 = 85e1b318\nkd>\n</code></pre>\nApcState is not an array it is a structure \n<pre><code>kd> ?? @$thread->Tcb.ApcState\nstruct _KAPC_STATE\n   +0x000 ApcListHead      : [2] _LIST_ENTRY [ 0x85e1b358 - 0x85e1b358 ]\n   +0x010 Process          : 0x85cc9ab8 _KPROCESS\n   +0x014 KernelApcInProgress : 0 ''\n   +0x015 KernelApcPending : 0 ''\n   +0x016 UserApcPending   : 0 ''\nkd>\n</code></pre>\nyou can get the offset to Process mention in you post like this \n<pre><code>kd> ?? &(@$thread->Tcb.ApcState.Process)\nstruct _KPROCESS ** 0x85e1b368\nkd> ?? *(unsigned long *)&(@$thread->Tcb.ApcState.Process)\nunsigned long 0x85cc9ab8\nkd>\n</code></pre>\nin my system PsGetCurrentProcss is as follows\n<pre><code>kd> uf nt!PsGetCurrentProcess\nnt!PsGetCurrentProcess:\n82ec5fce 64a124010000    mov     eax,dword ptr fs:[00000124h]\n82ec5fd4 8b4050          mov     eax,dword ptr [eax+50h]\n82ec5fd7 c3              ret\nkd>\n</code></pre>\nraw query \n<pre><code>kd> ? poi(30:124)\nEvaluate expression: -2048806120 = 85e1b318\nkd> ? poi(poi(30:124)+50)\nEvaluate expression: -2050188616 = 85cc9ab8\nkd>\n</code></pre>\nexpression query\n<pre><code>kd> ? @@(@$prcb->CurrentThread->ApcState.Process)\nEvaluate expression: -2050188616 = 85cc9ab8\nkd>\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Oct 4, 2017 at 18:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

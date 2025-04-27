@@ -1,0 +1,57 @@
+{
+    "title": "Help unpacking U-boot firmware",
+    "link": "https://reverseengineering.stackexchange.com/questions/20632/help-unpacking-u-boot-firmware",
+    "content": "I'm trying to unpack (extract) and analyse the firmware of an IP Camera (Xiaomi mjsxj02cm).\nI have this <pre><code>tf_recovery.img</code></pre> that's supposedly a U-Boot image, but I can't unpack it either using <pre><code>dumpimage</code></pre> or other techniques because <pre><code>mkimage -l</code></pre> doesn't provide me with enough information.\n<pre><code>dumpimage</code></pre> does nothing:\n<pre><code>$ dumpimage -o out tf_recovery.img\n$ ls\ntf_recovery.img\n</code></pre>\n<pre><code>mkimage -l</code></pre>doesn't show any useful information:\n<pre><code>$ mkimage -l tf_recovery.img\nGP Header: Size 27051956 LoadAddr 5799cfc3\n</code></pre>\n<pre><code>file</code></pre> gives some information, nothing I can use:\n<pre><code>$ file tf_recovery.img \ntf_recovery.img: u-boot legacy uImage, MVX2##I3g60b5603KL_LX318####[BR:\\3757zXZ, Linux/ARM, OS Kernel Image (lzma), 1724412 bytes, Wed Jun  6 08:02:07 2018, Load Address: 0x20008000, Entry Point: 0x20008000, Header CRC: 0x5799CFC3, Data CRC: 0x2FF27A1D\n</code></pre>\nWhat I've already tried without success \n\nMultiple versions of u-boot, including the latest (v2019.04-rc1) built from source.\nTried every image type explicitly, by using <pre><code>-T</code></pre> parameter of <pre><code>dumpimage</code></pre>\nSimply extracting the image like if it was a compressed archive\nSearched for, to the best of my abilities, any alternative methods online\n\nI'd really appreciate if anyone can provide additional ideias on how to unpack this. Thank you!\n",
+    "votes": "5",
+    "answers": 3,
+    "views": "18k",
+    "tags": [
+        "firmware"
+    ],
+    "user": "Telmo Marques",
+    "time": "Feb 16, 2019 at 17:18",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "What ultimately enabled me to understand the firmware structure was Binwalk. Then, it was a matter of using <pre><code>dd</code></pre> to split the parts and putting them back together.\nFor example, here's the output from Binwalk:\n<pre><code>$ binwalk tf_recovery.img \n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n64            0x40            xz compressed data\n2162688       0x210000        Squashfs filesystem, little endian, version 4.0, compression:xz, size: 6502290 bytes, 2019 inodes, blocksize: 131072 bytes, created: 2018-06-06 07:02:05\n9830400       0x960000        JFFS2 filesystem, little endian\n</code></pre>\nThis means:\n\nThere is something from address 0 to 64 (something that binwalk doesn't show, this ended up being u-boot's header).\nThere's a XZ archive from 64 to 2162688.\nThere's also a SquashFS filesystem from 2162688 to 9830400.\nAnd finally a JFFS2 filesystem from 9830400 to the end of the file.\n\nTo unpack everything:\n<pre><code>dd if=tf_recovery.img of=header.bin iflag=count_bytes,skip_bytes count=64 skip=0\ndd if=tf_recovery.img of=xzdata.xz iflag=count_bytes,skip_bytes count=2162624 skip=64\ndd if=tf_recovery.img of=squashfs.bin iflag=count_bytes,skip_bytes count=7667712 skip=2162688\ndd if=tf_recovery.img of=jffs2.bin iflag=count_bytes,skip_bytes skip=9830400\n</code></pre>\nPutting it back together is a matter of doing the reverse:\n<pre><code>dd if=header.bin of=somefile.img iflag=count_bytes oflag=seek_bytes count=64\ndd if=xzdata.xz of=somefile.img iflag=count_bytes oflag=seek_bytes  count=2162624 seek=64\ndd if=squashfs.bin of=somefile.img iflag=count_bytes oflag=seek_bytes  count=7667712 seek=2162688\ndd if=jffs2.bin of=somefile.img iflag=count_bytes oflag=seek_bytes  count=6488144 seek=9830400\n</code></pre>\nImportant note: All these parts were padded to size with <pre><code>x'FF'</code></pre> this is something important to take into account when putting everything back together: How to pad a file with “FF” using dd?\n",
+            "votes": "8",
+            "user": "Dominik Kaszewski",
+            "time": "May 12, 2024 at 1:10",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "uDude",
+                    "text": "<span class=\"comment-copy\">it is best to put it all back together using mkimage so the checksums get properly calculated.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Doron Behar",
+                    "text": "<span class=\"comment-copy\">Great idea to use <code>binwalk</code>! However the <code>dd</code> commands are rather hard to construct. Thankfully, <code>binwalk</code> supports extracting everything automatically - with the <code>-e</code> or the <code>--extract</code> option.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Try dumping the byte stream starting at the signature FD 37 7A 58 5A 00, then extract it using <pre><code>7z</code></pre> or <pre><code>xz</code></pre>.\nNote that it is only a Linux kernel image, it probably does not contain the full filesystem image (at most a minimal ramdisk).\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Feb 17, 2019 at 14:46",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "uDude",
+                    "text": "<span class=\"comment-copy\">The footer for the XZ file is YZ, typically padded with NULLs to a four byte boundary.  I say typically as that is not required and not done when using mkimage.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "curiosity led me to google for the firmware \nfound it at mi forums \nit appears Uboot Image header and data that follows is documented fairly well\ni just cooked a python script to rip the compressed blob out of the firmware \nand testing the blob with 7zip yields no errors\nscript \n<pre><code>import struct\nimport binascii\nimport datetime\nfileext = { 0:'none',1:'gzip',2:'bzip2',3:'lzma',4:'lzo'}\nfin = open(\"tf_recovery.img\" , \"rb\")\nuimghdr = fin.read(64)\nmagic,        = struct.unpack(\"!i\"   , uimghdr[ 0:4 ] )\nheadercrc32,  = struct.unpack(\"!i\"   , uimghdr[ 4:8 ] )\ntimestamp,    = struct.unpack(\"!i\"   , uimghdr[ 8:12] )\ndatasize,     = struct.unpack(\"!i\"   , uimghdr[12:16] )\nLoadAddress,  = struct.unpack(\"!i\"   , uimghdr[16:20] )\nEntryPtAddr,  = struct.unpack(\"!i\"   , uimghdr[20:24] )\nDatacrc32,    = struct.unpack(\"!i\"   , uimghdr[24:28] )\nOperatingSys, = struct.unpack(\"!b\"   , uimghdr[28:29] )\nArchitecture, = struct.unpack(\"!b\"   , uimghdr[29:30] )\nImageType,    = struct.unpack(\"!b\"   , uimghdr[30:31] )\nCompressType, = struct.unpack(\"!b\"   , uimghdr[31:32] )\nImageName,    = struct.unpack(\"!32s\" , uimghdr[32:64] )\nuimgdata = fin.read(datasize)\nfin.close()\ncopy = list(uimghdr)\ncopy[4:8] = '\\x00\\x00\\x00\\x00' \ncrcdata = ''.join(copy)\nrealhdrcrc32 = binascii.crc32(crcdata)\nrealdatacrc32 = binascii.crc32(uimgdata)\nassert ( realhdrcrc32  == headercrc32 )\nassert ( realdatacrc32 == Datacrc32 )\nprint (\"UBoot Header Magic %s\" ) % hex(magic)\nprint (\"UBoot Header crc32 %s\" ) % hex( realhdrcrc32)\nprint (\"UBoot Header Tstmp %s\" ) % datetime.datetime.fromtimestamp(timestamp)\nprint (\"UBoot Header DSize %s\" ) % hex(datasize)\nprint (\"Uboot Compression  %s\" ) % fileext[CompressType]\nfout = open('out.xz' , 'wb')\nfout.write(uimgdata)\nfout.close()\n</code></pre>\nand results are\n<pre><code>:\\>ubootimgdump.py\nUBoot Header Magic 0x27051956\nUBoot Header crc32 0x5799cfc3\nUBoot Header Tstmp 2018-06-06 12:32:07\nUBoot Header DSize 0x1a4ffc\nUboot Compression  lzma\n\n:\\>e:\\7Z\\7z.exe t out.xz\n\n7-Zip [32] 15.14 : Copyright (c) 1999-2015 Igor Pavlov : 2015-12-31\n\nScanning the drive for archives:\n1 file, 1724412 bytes (1684 KiB)\n\nTesting archive: out.xz\n--\nPath = out.xz\nType = xz\nPhysical Size = 1724412\nMethod = LZMA2:23 CRC64\nStreams = 1\nBlocks = 1\n\nEverything is Ok\n\nSize:       3590624\nCompressed: 1724412\n\n:\\>\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Feb 22, 2019 at 21:14",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

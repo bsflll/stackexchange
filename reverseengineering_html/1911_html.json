@@ -1,0 +1,58 @@
+{
+    "title": "What's 'fs:[0]' doing and how can I execute it step by step?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1911/whats-fs0-doing-and-how-can-i-execute-it-step-by-step",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In a 32 bits Windows binary, I see this code:\n </p>\n <pre><code>    push next\n    push fs:[0]\n    mov fs:[0], esp\n    int3\n    ...\nnext:\n</code></pre>\n <p>\n  I see that something happens on the\n  <code>\n   int3\n  </code>\n  (an error), but I don't understand why, and how to follow execution while keeping control.\n </p>\n</div>\n</body></html>",
+    "votes": "24",
+    "answers": 1,
+    "views": "13k",
+    "tags": [
+        "windows",
+        "x86",
+        "seh"
+    ],
+    "user": "Ange",
+    "time": "Apr 23, 2013 at 12:31",
+    "comments": [
+        {
+            "user": "Ange",
+            "text": "<html><body><span class=\"comment-copy\">\n <a href=\"https://www.dropbox.com/s/3oj74p0wz1x1zkq/Exceptions.zip\" rel=\"nofollow noreferrer\">\n  SEH PoCs\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h1>\n  TL;DR\n </h1>\n <ol>\n  <li>\n   <p>\n    the first 3 lines set an exception handler (an 'error catcher')\n   </p>\n  </li>\n  <li>\n   <p>\n    the\n    <code>\n     int3\n    </code>\n    generates an exception\n   </p>\n  </li>\n  <li>\n   <p>\n    execution resumes at\n    <code>\n     next\n    </code>\n   </p>\n  </li>\n </ol>\n <hr/>\n <h1>\n  Explanation\n </h1>\n <p>\n  this trick is (ab)using\n  <a href=\"http://www.microsoft.com/msj/0197/exception/exception.aspx\" rel=\"noreferrer\">\n   Structured Exception Handling\n  </a>\n  , a mechanism to define exception handlers, typically by compilers when\n  <code>\n   try\n  </code>\n  /\n  <code>\n   catch\n  </code>\n  blocks are used.\n </p>\n <p>\n  In 32bits versions of Windows, they can be set on the fly, without any pre-requirement (unless the binary is compiled with /SafeSEH).\n </p>\n <p>\n  The first element of the exception handlers' chain is pointed by the first member of the\n  <a href=\"http://en.wikipedia.org/wiki/Win32_Thread_Information_Block\" rel=\"noreferrer\">\n   Thread Information Block (TIB)\n  </a>\n  , in turn a member of the\n  <a href=\"http://undocumented.ntinternals.net/UserMode/Undocumented%20Functions/NT%20Objects/Thread/TEB.html\" rel=\"noreferrer\">\n   Thread Environment Block (TEB)\n  </a>\n  , which is pointed to by\n  <code>\n   fs:0\n  </code>\n  (which is also reachable 'directly' - via something like\n  <code>\n   ds:7efdd00\n  </code>\n  , depending on the OS version etc)\n </p>\n <p>\n  So here is what happens:\n </p>\n <ol>\n  <li>\n   <p>\n    the first two\n    <code>\n     push\n    </code>\n    reserve stack space for the structure\n    <code>\n     _EXCEPTION_REGISTRATION_RECORD\n    </code>\n    .\n   </p>\n   <ol>\n    <li>\n     the new top handler\n    </li>\n    <li>\n     the previous top handler, which was until now at\n     <code>\n      fs:[0]\n     </code>\n    </li>\n   </ol>\n  </li>\n  <li>\n   <p>\n    the\n    <code>\n     mov\n    </code>\n    sets the current stack position as the new structure. When an exception happens,\n    <code>\n     next\n    </code>\n    will be now the first called handler.\n   </p>\n  </li>\n  <li>\n   <p>\n    <code>\n     int3\n    </code>\n    triggers an exception instantaneously (there are many other kinds of\n    <a href=\"http://seh.corkami.com\" rel=\"noreferrer\">\n     exception triggers\n    </a>\n    ).\n   </p>\n  </li>\n  <li>\n   <p>\n    as an exception is triggered, Windows dispatches the exception to the first handler, and the next one if it's not handled, until one of them has handled it.\n   </p>\n  </li>\n </ol>\n <p>\n  <img alt=\"flowchart of Exception handling\" src=\"https://raw.githubusercontent.com/angea/wiki_old/master/pics/seh_flowchart.png\"/>\n </p>\n <h1>\n  Following execution\n </h1>\n <p>\n  This is done here under OllyDbg 1.10. YMMV.\n </p>\n <p>\n  As we want to go through exceptions ourselves, we have to ask OllyDbg not to handle them:\n </p>\n <ol>\n  <li>\n   <p>\n    go to debugging options:\n    <kbd>\n     Alt\n    </kbd>\n    -\n    <kbd>\n     O\n    </kbd>\n    , tab\n    <code>\n     Exceptions\n    </code>\n   </p>\n  </li>\n  <li>\n   <p>\n    unselect\n    <code>\n     INT3 breaks\n    </code>\n   </p>\n  </li>\n </ol>\n <p>\n  And when an exception is triggered, we have to enforce that execution is done via exceptions (see below).\n </p>\n <p>\n  Here are 3 methods of increasing level to follow the exception handling execution safely:\n </p>\n <h2>\n  step by step: set a breakpoint manually\n </h2>\n <p>\n  As the handler has just been set on the stack, you can manually set a breakpoint then run.\n </p>\n <ol>\n  <li>\n   <p>\n    select the new handler address on the stack\n   </p>\n   <p>\n    <img alt=\"new handler on the stack\" src=\"https://i.sstatic.net/QQQOQ.png\"/>\n   </p>\n  </li>\n  <li>\n   <p>\n    Right-click or\n    <kbd>\n     F10\n    </kbd>\n   </p>\n   <ul>\n    <li>\n     select\n     <code>\n      Follow in Dump\n     </code>\n    </li>\n   </ul>\n  </li>\n  <li>\n   <p>\n    in the dump window, open the menu (same shortcut)\n   </p>\n   <ul>\n    <li>\n     select\n     <code>\n      BreakPoint\n     </code>\n     , then\n     <code>\n      Hardware, on execution\n     </code>\n    </li>\n   </ul>\n  </li>\n  <li>\n   <p>\n    Execute: menu\n    <code>\n     Debug/Run\n    </code>\n    / shortcut\n    <kbd>\n     F9\n    </kbd>\n    / command-line\n    <code>\n     g\n    </code>\n   </p>\n  </li>\n  <li>\n   <p>\n    Exceptions will be triggered\n   </p>\n  </li>\n  <li>\n   <p>\n    Execute with exception handling: shortcut\n    <kbd>\n     Shift\n    </kbd>\n    -\n    <kbd>\n     F9\n    </kbd>\n    / command-line\n    <code>\n     ge\n    </code>\n    .\n   </p>\n  </li>\n </ol>\n <h2>\n  shortcut: execute until exception handler via command-line\n </h2>\n <ul>\n  <li>\n   <p>\n    as the address is on the stack, the easiest way is to type via the command line\n    <code>\n     ge [esp+4]\n    </code>\n    , which means,\n    <code>\n     Go with Exceptions\n    </code>\n    , until the 2nd address on the stack is encountered. Thus, no need to set and unset a breakpoint.\n   </p>\n   <ul>\n    <li>\n     in the case of a more complex example, where the address might not be obvious on the stack anymore, then the absolute formula would be\n     <code>\n      ge ds:[fs:[0]+4]\n     </code>\n     , which just gets the actual address from the TIB.\n    </li>\n   </ul>\n  </li>\n </ul>\n <h2>\n  keeping full control: break on\n  <code>\n   KiUserExceptionDispatcher\n  </code>\n </h2>\n <p>\n  <code>\n   KiUserExceptionDispatcher\n  </code>\n  is the Windows API handling all user-mode exceptions. Setting a breakpoint there guarantees that you keep full control - but then, you're in the middle of a Windows API ;)\n </p>\n <p>\n  In this case, you can ask OllyDbg to skip exceptions, as you will still break execution manually in any cases. You might also want to combine that with a\n  <a href=\"http://tuts4you.com/download.php?list.53\" rel=\"noreferrer\">\n   script\n  </a>\n  .\n </p>\n <p>\n  Of course, some advanced code might check that you set a breakpoint on it before triggering an exception.\n </p>\n</div>\n</body></html>",
+            "votes": "38",
+            "user": "Gehock",
+            "time": "Apr 26, 2020 at 18:00",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">\"In 32bits versions of Windows, they can be set on the fly, without any pre-requirement.\" That's not quite correct, it depends on how the executable was compiled, e.g., if compiled with SafeSEH ntdll!RtlDispatchException (IIRC) will terminate your process if you registered an SEH handler on the fly.</span>",
+                    "time": null
+                },
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">Also, a pretty common obfuscation technique is to modify the instruction pointer of the CPU context that is passed to the SEH handler. So it's usually a good idea to place a breakpoint before the call to NtContinue inside KiUserExceptionDispatcher. IDAStealth can do this for you automatically btw.</span>",
+                    "time": null
+                },
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">Execution <i>does</i> resume at next and since the OS doesn't force you to return from the exception handler, that statement is technically correct. In fact, that's exactly how C++ exceptions are implemented in the CRT.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">don't forget that any Vectored Exception Handler which was registered already will receive control first.  The SEH might never execute at all.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">This is a really great write-up, I'd love to see SEHOP added to this sometime for the sake of completeness.  Also, just to be extremely nit-picky: when <code>int3</code> fires, an interrupt does occur and an interrupt handler invoked, right?  I understand that stepping through the kernel call would be impossible in ImmunityDebugger (and while kernel debugging with Windbg, IIRC), but I just wanted to clarify for my own understanding.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

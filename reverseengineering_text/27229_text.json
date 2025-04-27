@@ -1,0 +1,33 @@
+{
+    "title": "Run ltrace to avoid detection (on a different PID?)",
+    "link": "https://reverseengineering.stackexchange.com/questions/27229/run-ltrace-to-avoid-detection-on-a-different-pid",
+    "content": "I am trying to run <pre><code>ltrace</code></pre> on this file:\n\n./launcher: ELF 32-bit LSB shared object, Intel 80386, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux.so.2, for GNU/Linux 2.6.32, BuildID[sha1]=f6f8cf3307e0ee26723f4d03ec68f022d15e56b6, stripped\n\nWhen I pop it open in ghidra, and view the decompiled c, I can see that it changes the program flow to somewhere I don't want to be when ltrace is running.\n<pre><code>  attached_to_ptrace = ptrace(PTRACE_TRACEME,0,1,0);\n  if (attached_to_ptrace == -1) {\n    puts(\"I am not your property!\");\n    exit_code = 1;\n  }\n  else {\n    // execute main loop\n  }\n</code></pre>\nLooking at the man page for <pre><code>ptrace</code></pre>, I see:\n<pre><code>long ptrace(enum __ptrace_request request, pid_t pid,\n                   void *addr, void *data);\n</code></pre>\nMeaning that if the program? or ltrace? were to run with a different PID, I would be able to successfully run my program using ltrace.\nThis is the current output I get when running the program with <pre><code>ltrace</code></pre>:\n<pre><code>~/ctf/cyberstart/level13/04 [master|…1] $ ltrace ./launcher\n__libc_start_main(0x565a86f0, 1, 0xff837be4, 0x565a8970 <unfinished ...>\nptrace(0, 0, 1, 0)                                                     = 0xffffffff\nputs(\"I am not your property!\"I am not your property!\n)                                        = 24\n+++ exited (status 1) +++\n</code></pre>\nWithout ltrace:\n<pre><code>~/ctf/cyberstart/level13/04 [master|…1] $ ./launcher\n\nEnter the password:\npassword\nAway now, you anklebiter!\n\n[1]+  Stopped                 ./launcher\n</code></pre>\n(This is my second buffer overflow CTF challenge, where the main goal is to mess with this block of code:)\n<pre><code>  int iVar1;\n  char local_1e [10];\n  int local_14;\n  int local_10;\n  \n  local_10 = 0;\n  puts(\"\nEnter the password: \");\n  gets(local_1e);\n  iVar1 = strcmp(local_1e,\"PAssw0rd\");\n  if (iVar1 == 0) {\n    puts(\"Well done! Unfortunately, you have to try harder.\");\n    local_10 = 0;\n  }\n  else {\n    puts(\"Away now, you anklebiter!\");\n  }\n  if (local_10 != 0) {\n    printf(\"Unexpected error condition. Control char is %d\n\",local_10);\n    local_14 = param_2 * local_10;\n    (*(code *)(local_14 + param_1))();\n  }\n</code></pre>\nHow can I run ltrace in a way such that it isn't detected?\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "476",
+    "tags": [
+        "debugging",
+        "buffer-overflow"
+    ],
+    "user": "Peter Stenger",
+    "time": "Mar 13, 2021 at 1:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Ghidra method\nYou can modify the binary via Ghidra in the following way:\n\nload the track\nmove in the assembly code to the point where it checks the result (if statement)\nyou will probably be faced with a jump instruction <pre><code>JNZ</code></pre>, just right click on it and select \"Patch Instruction\" and replace it with the opposite condition <pre><code>JZ</code></pre> (or vice versa).\nNow save the project (<pre><code>Ctrl</code></pre>+<pre><code>S</code></pre>)\nThen navigate to <pre><code>File</code></pre>><pre><code>Export</code></pre> Program and decide where to save the modified binary\n\nIf you have problems with the exported binary, try this script: https://github.com/schlafwandler/ghidra_SavePatch\nLD_PRELOAD method\n\nCreate a file called <pre><code>ptrace.c</code></pre> with the following content:\n\n<pre><code>long ptrace(int request, int pid, void *addr, void *data) {\n    return 0;\n}\n</code></pre>\n\nNow build the file as a shared library: <pre><code>gcc -shared ptrace.c -o ptrace.so</code></pre>;\nNow lunch the following command: <pre><code>export LD_PRELOAD=./ptrace.so</code></pre>\nRun <pre><code>ltrace ./launcher</code></pre>\n\n\nNote: you can also use LD_PRELOAD method with GDB\n\nGDB method\n\nuse GDB to lunch the binary: <pre><code>gdb ./launcher</code></pre>\nin the GDB client shell: <pre><code>catch syscall ptrace</code></pre>\nGDB allows you tun run a series of command when you reach a BP: <pre><code>command 1</code></pre>\ntype: <pre><code>set ($rax) = 0</code></pre>, that will change the value inside the \"return\" register (aka the result of ptrace syscall) x86-registers\nthen enter: <pre><code>continue</code></pre> and <pre><code>end</code></pre>\n(as two separated commands)\nplace a BP on the main function: <pre><code>b main</code></pre> and then type <pre><code>r</code></pre> to continue the execution\n\nAnother option is to use Qiling framework and hook the function/syscall and always return any other value than \"-1\", but that seems a bit overkill.\n",
+            "votes": "2",
+            "user": "zi0Black",
+            "time": "Nov 13, 2021 at 8:09",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "You can patch the CALL to ptrace with NOPs or use LD_PRELOAD to inject your own fake ptrace code which does nothing but return a value other than -1.\n",
+            "votes": "1",
+            "user": "julian",
+            "time": "Nov 12, 2021 at 19:56",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

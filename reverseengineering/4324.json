@@ -1,0 +1,109 @@
+{
+    "title": "Reliable algorithm to extract overlay of a PE",
+    "link": "https://reverseengineering.stackexchange.com/questions/4324/reliable-algorithm-to-extract-overlay-of-a-pe",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I write a Portable Executable (PE) library that also provides finding the starting offset of the overlay (appended data to the PE that is not mapped into memory).</p>\n<p>My algorithm finding the overlay offset looks like this so far:</p>\n<pre><code>public long getOverlayOffset() throws IOException {\n        if (offset == null) {\n            SectionTable table = data.getSectionTable();\n            offset = 0L;\n            for (SectionTableEntry section : table.getSectionEntries()) {\n                long pointerToRaw = section.get(POINTER_TO_RAW_DATA);\n                long sizeOfRaw = section.get(SIZE_OF_RAW_DATA);\n                long virtSize = section.get(VIRTUAL_SIZE);\n                //see https://code.google.com/p/corkami/wiki/PE#section_table: \"if bigger than virtual size, then virtual size is taken. \"\n                //and: \"a section can have a null VirtualSize: in this case, only the SizeOfRawData is taken into consideration. \"\n                if(virtSize != 0 &amp;&amp; sizeOfRaw &gt; virtSize) { \n                    sizeOfRaw = virtSize;\n                }\n                long endPoint = pointerToRaw + sizeOfRaw;\n                if (offset &lt; endPoint) {\n                    offset = endPoint;\n                }\n            }\n        }\n        if(offset &gt; file.length()) {\n            offset = file.length();\n        }\n        return offset;\n    }\n</code></pre>\n<p>I used <a href=\"https://code.google.com/p/corkami/wiki/PE#section_table\" rel=\"noreferrer\">corkami</a> as a source to get to know some of the odds in calculating the overlay offset. I do not only want it to be robust, but also accurate.\nDid I miss something? What else do I have to put into consideration?</p>\n<p>Note: There was a similar question here: <a href=\"https://reverseengineering.stackexchange.com/questions/2014/how-can-one-extract-the-appended-data-of-a-portable-executable\">How can one extract the appended data of a Portable Executable?</a>\nBut it doesn't cover a reliable algorithm so far. As I understand it, using a tool suffices in that question.</p>\n</div>",
+    "votes": "7",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "pe"
+    ],
+    "user": "Karsten Hahn",
+    "time": "May 13, 2014 at 9:41",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Do you care about the code-signature, if any? That's pointed to in one of the directories, but it's actually appended like an overlay.</span>",
+            "time": null
+        },
+        {
+            "user": "Karsten Hahn",
+            "text": "<span class=\"comment-copy\">@0xC0000022L Good question. If it is not in a section, I would define it as overlay.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You appear to be missing the corner cases such as mis-aligned pointers (should round down) and sizes (should round up).</p>\n<p>However, even the rounding has corner cases - the physical pointer should be rounded down to a multiple of 512, regardless of the value in the header, but the read size is rounded up by using a combination of the file alignment and 4kb.  The virtual size is always rounded up to a multiple of 4kb, regardless of the value in the header.</p>\n<p>Digital signatures must be overlays.  This is a check that is enforced now by Windows, for security reasons.  If not an overlay, the file won't load.</p>\n<p>You need something like this (and filealign comes from the PE header):</p>\n<pre><code>        long pointerToRaw = section.get(POINTER_TO_RAW_DATA);\n        long alignedpointerToRaw = pointerToRaw &amp; ~0x1ff;\n        long sizeOfRaw = section.get(SIZE_OF_RAW_DATA);\n        long readsize = ((pointerToRaw + sizeOfRaw) + filealign - 1) &amp; ~(filealign - 1)) - alignedpointerToRaw;\n        readsize = min(readsize, (sizeOfRaw + 0xfff) &amp; ~0xfff);\n        long virtsize = section.get(VIRTUAL_SIZE);\n\n        if (virtsize)\n        {\n            readsize = min(readsize, (virtsize + 0xfff) &amp; ~0xfff);\n        }\n</code></pre>\n<p>Then you have \"alignedpointerToRaw\" as the starting position, and \"readsize\" as the number of bytes in the section.  Sum these to find the end of the section.  You need to perform this calculation for all sections (because physical data might not be sequential in the file).  The largest sum is the end of the image.  Anything beyond that is overlay.</p>\n</div>",
+            "votes": "7",
+            "user": "peter ferrie",
+            "time": "May 13, 2014 at 22:33",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Karsten Hahn",
+                    "text": "<span class=\"comment-copy\">About the alignedPointerToRaw: The specification says it should be a multiple of fileAlignment. The default value of fileAlignment is 512, but let's say it is not set to the default. Is it still correct that the section starts at pointerToRaw &amp; ~0x1ff?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Karsten Hahn",
+                    "text": "<span class=\"comment-copy\">Another question about fileAlignment: Should I correct the fileAlignment to this: \"The value should be a power of 2 between 512 and 64 K, inclusive.\" (pecoff spec)? Thanks a lot for your help.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">aligning PointerToRaw is 512, regardless of the value in the header.  Really.  For possible values of fileAlignment, it's a power of 2, up to 64kb, but including 1 (i.e. 2^^0).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Karsten Hahn",
+                    "text": "<span class=\"comment-copy\">Should I round up/down the file alignment to a power of 2 if it isn't?</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">the file simply won't load if it's not a power of 2.  You don't need to worry about this case.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>For the sake of completeness: This is is the code I made based on Peter Ferrie's suggestions</p>\n<pre><code>/**\n * Calculates the beginning of the overlay\n * \n * @return the file offset to the beginning of overlay\n */\npublic long getOverlayOffset() {\n    SectionTable table = data.getSectionTable();\n    OptionalHeader opt = data.getOptionalHeader();\n    offset = 0L;\n    List&lt;SectionHeader&gt; headers = table.getSectionHeaders();\n    if(headers.size() == 0) {\n        offset = file.length(); //offset for sectionless PE's\n    }\n    for (SectionTableEntry section : table.getSectionEntries()) {\n        long alignedPointerToRaw = section.get(POINTER_TO_RAW_DATA)\n                &amp; ~0x1ff;\n        long endPoint = getReadSize(section) + alignedPointerToRaw;\n        if (offset &lt; endPoint) {\n            offset = endPoint;\n        }\n    }\n    if (offset &gt; file.length()) {\n        offset = file.length();\n    }\n    return offset;\n}\n\n/**\n * Determines the the number of bytes that is read for the section.\n * \n * @param section\n * @return section bytes that are read\n */\nprivate long getReadSize(SectionTableEntry section) {\n    long pointerToRaw = section.get(POINTER_TO_RAW_DATA);\n    long virtSize = section.get(VIRTUAL_SIZE);\n    long sizeOfRaw = section.get(SIZE_OF_RAW_DATA);\n    long fileAlign = data.getOptionalHeader().get(\n            WindowsEntryKey.FILE_ALIGNMENT);\n    long alignedPointerToRaw = section.get(POINTER_TO_RAW_DATA) &amp; ~0x1ff;\n    long readSize = alignedUp(pointerToRaw + sizeOfRaw, fileAlign)\n            - alignedPointerToRaw;\n    readSize = Math.min(readSize,\n            alignedUp(section.get(SIZE_OF_RAW_DATA), 0x1000));\n    if (virtSize != 0) {\n        readSize = Math.min(readSize,\n                alignedUp(section.get(VIRTUAL_SIZE), 0x1000));\n    }\n    return readSize;\n}\n\n/**\n * Returns the value rounded up to a multiple of alignTo.\n * \n * @param value\n * @param alignTo\n * @return value rounded up to a multiple of alignTo\n */\nprivate long alignedUp(long value, long alignTo) {\n    if (value % alignTo != 0) {\n        value = (value + alignTo - 1) &amp; ~(alignTo - 1);\n    }\n    return value;\n}\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "Karsten Hahn",
+            "time": "May 23, 2014 at 20:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Is the constant <code>0x1000</code> the value for <code>SectionAlignment</code>? According to <a href=\"http://msdn.microsoft.com/en-us/library/ms809762.aspx\" rel=\"nofollow noreferrer\">MSDN</a>, this is the <i>default</i> -- but since a value is provided, you might want to use that anyway.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">@Jongware, it's always 0x1000.  This and the 512 are (currently) hard-coded in Windows, despite what the documentation says (note that this is all undocumented, so theoretically might change one day).  Section alignment from the header is for memory allocation purposes, rather than for file content.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">@Veitch, that looks proper.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Have you considered using Microsoft's code to do it? Reverse the loader just enough to find the pointer that you're looking for once the image is loaded, stop it from executing any actual code beyond parsing the PE. The offset to your desired pointer in ntdll or wherever will be version-specific but you'll get a super-accurate parser.</p>\n</div>",
+            "votes": "1",
+            "user": "offbyseveral",
+            "time": "May 23, 2014 at 4:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">that parsing is done in kernel mode, not user mode, and you'd still lack the actual algorithm.  Blindly executing code which can change (even if the format does not) is not recommended.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Karsten Hahn",
+                    "text": "<span class=\"comment-copy\">I was asking for an algorithm, because I write a PE-Library. So this is not an option.</span>",
+                    "time": null
+                },
+                {
+                    "user": "offbyseveral",
+                    "text": "<span class=\"comment-copy\">Well a reference implementation obviously wont help then.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

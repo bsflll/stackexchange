@@ -1,0 +1,64 @@
+{
+    "title": "ELF file crashing after executing shellcode",
+    "link": "https://reverseengineering.stackexchange.com/questions/23083/elf-file-crashing-after-executing-shellcode",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So after changing the entry point via the <strong>e_entry</strong> field I managed to execute my shellcode before returning control to the original entry point. Here's how I did it:</p>\n<pre><code> // write string and jump to OEP, patch address at 23\n    unsigned char shellcode[] = \"\\x48\\x31\\xc0\\x48\\x31\\xff\\x48\\x31\\xf6\\xeb\"\n                      \"\\x16\\x5e\\xb0\\x01\\x40\\xb7\\x01\\xb2\\x09\\x0f\"\n                      \"\\x05\\x48\\xb8\\x41\\x41\\x41\\x41\\x41\\x41\\x41\"\n                      \"\\xff\\xe0\\xe8\\xe5\\xff\\xff\\xff\\x68\\x69\\x6a\"\n                      \"\\x61\\x63\\x6b\\x65\\x64\\x0a\";\n</code></pre>\n<p>So as soon as I parse the ELF header I patch the shellcode:</p>\n<pre><code>uint64_t oep = ehdr-&gt;e_entry;\nmemcpy(&amp;opcode[23], &amp;oep, 8);\n</code></pre>\n<p>Everything works, the shellcode executes and then execution resumes where it should. The problem is that after the target's main function finishes it segfaults(To make things simple I just made a program that prints a string).</p>\n<p>So I used gdb and IDA to see what's going on. Just to make things clear the flow of excution is as follows:</p>\n<ul>\n<li>execution starts at the shellcode</li>\n<li>shellcode jumps to _start</li>\n<li>_start calls libc_start_main</li>\n<li>main executes and returns to libc_start_main</li>\n</ul>\n<p>Now, after main returns IDA shows the following:</p>\n<pre><code>libc_start_main:\n ext:000000000040244B                 lea     rax, [rsp+108h+var_98]\n.text:0000000000402450                 mov     fs:300h, rax\n.text:0000000000402459                 mov     rdx, cs:environ\n.text:0000000000402460                 mov     edi, [rsp+108h+var_FC]\n.text:0000000000402464                 mov     rsi, [rsp+108h+var_F8]\n.text:0000000000402469                 mov     rax, [rsp+108h+mainaddr]\n.text:000000000040246E                 call    rax             ; jump to main\n.text:0000000000402470                 mov     edi, eax\n.text:0000000000402472\n.text:0000000000402472 loc_402472:                             ; CODE XREF: __libc_start_main+4AF↓j\n.text:0000000000402472                 call    exit\n.text:0000000000402477 ; -----------------------------------------------------------\n</code></pre>\n<p>The <strong>exit</strong> function ends up calling <strong>run_exit_handlers</strong> which appears to be the real culprit, as it faults with the following instruction:</p>\n<pre><code>mov     rdx, [rax+18h]\nmov     rdi, [rax+20h]\nmov     qword ptr [rax+10h], 0\nmov     esi, ebp\nror     rdx, 11h\nxor     rdx, fs:30h\ncall    rdx             ; faults\njmp     loc_40823A\n</code></pre>\n<p>For some reason rdx has the value of 9, which is not allowed and hence causes the segmentation fault.</p>\n<p>I searched for information on <strong>run_exit_handlers</strong> but didn't find anything meaningful.</p>\n<p>So my question is: Why is this happening? All my shellcode does is write a string and jump to the OEP, it shouldn't really affect anything else.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "257",
+    "tags": [
+        "ida",
+        "x86",
+        "elf",
+        "shellcode"
+    ],
+    "user": "Trey",
+    "time": "Jan 27, 2020 at 23:06",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">what is the program that you run your shellcode from? I think it might be difficult without checking the code in the debugger to find out what there's a value of 9, so if possible provide some working program that can be debugged</span>",
+            "time": null
+        },
+        {
+            "user": "Trey",
+            "text": "<span class=\"comment-copy\">@PawełŁukasik it's a simple ELF_EXEC,it justs <b>puts</b> a string out. It's a one line program.</span>",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">ok, I'll try to prepare sth myself when I find the time and see if I can reproduce your results</span>",
+            "time": null
+        },
+        {
+            "user": "bart1e",
+            "text": "<span class=\"comment-copy\">Are you sure that you pasted the right shellcode here? Everything before <code>e0 e8</code> seems OK, but the rest disassembles to something strange like <code>in eax, 0xff</code>. By the way, I think you meant <code>memcpy(&amp;shellcode...</code> instead of <code>opcode</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "<span class=\"comment-copy\">Can you share an example patched binary?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You problem is that your shellcode uses <code>RDX</code> by setting <code>dl</code> to <code>9</code> for the sake of <code>sys_write</code> syscall. You are not setting this variable back to it's initial value of <code>0</code> and unfortunately this is being passed to <code>_start</code> where it's being treated as a pointer to function that will be executed as a finalizer. That's why you're getting a segfault since CPU try to execute code from address <code>0x9</code>.</p>\n<p>You should save the registers before you execute your shellcode and restore them before returning to the entry point. But for the sake of this example it will work if you would just clear (r)dx before jumping back.</p>\n<p>Modified shellcode with added <code>\\x48\\x31\\xd2</code> for <code>xor rdx,rdx</code> and changed offsets at <code>shellcode[10]</code> and <code>shellcode[37]</code> to adjust for additional bytes in it (modified them manually - if you have the source code - you can do that in code and compile)</p>\n<pre><code>unsigned char shellcode[] = \n              \"\\x48\\x31\\xc0\\x48\\x31\\xff\\x48\\x31\\xf6\\xeb\"\n              \"\\x19\\x5e\\xb0\\x01\\x40\\xb7\\x01\\xb2\\x09\\x0f\"\n              \"\\x05\\x48\\xb8\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\xff\\x48\\x31\\xd2\"               \n              \"\\xff\\xe0\\xe8\\xe2\\xff\\xff\\xff\\x68\\x69\\x6a\"\n              \"\\x61\\x63\\x6b\\x65\\x64\\x0a\"; \n</code></pre>\n<p>A bit more explanation why <code>RDX</code> is problematic here. After your shellcode finishes its job it executes <code>_start</code> which has those two lines as in the beginning:</p>\n<pre><code>  00400a30 31  ed          XOR       EBP ,EBP\n  00400a32 49  89  d1      MOV       R9 ,RDX\n</code></pre>\n<p>so whatever will be in <code>RDX</code> will be assigned to <code>R9</code>. Later the <code>__libc_start_main</code> is called and if you check its' signature (for example <a href=\"https://refspecs.linuxbase.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/baselib---libc-start-main-.html\" rel=\"nofollow noreferrer\">here</a>) you can see it takes 7 arguments. The are passed via registers and according to Linux ABI the 6th is passed as a <code>R9</code> register and the 6th parameter in <code>_libc_start_main</code> is callback for finalizers. That's why value in <code>RDX</code> matters as it's being passed to <code>R9</code> and in the end ends up as a callback address.</p>\n</div>",
+            "votes": "1",
+            "user": "Paweł Łukasik",
+            "time": "Jan 30, 2020 at 22:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Trey",
+                    "text": "<span class=\"comment-copy\">I still don't get it why the value in RDX is being called as function. Is this specific to RDX? Where can I read more about this behavior?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Paweł Łukasik",
+                    "text": "<span class=\"comment-copy\">see my updated answer</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,40 @@
+{
+    "title": "ARM \"add\" instruction with shift",
+    "link": "https://reverseengineering.stackexchange.com/questions/16154/arm-add-instruction-with-shift",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to understand how ARM\n  <code>\n   add\n  </code>\n  with shift is implemented e.g.\n </p>\n <pre><code>sym.imp.__libc_start_main :                                                                                                                                                           \n\n.plt:0x000082bc 00c68fe2 add ip, pc, 0, 12; after execution ip=0x82c4\n.plt:0x000082c0 08ca8ce2 add ip, ip, 8, 20; after execution ip=0x102c4\n.plt:0x000082c4 48fdbce5 ldr pc, [ip, 0xd48]!\n</code></pre>\n <p>\n  I wonder about the line\n </p>\n <pre><code>.plt:0x000082c0 08ca8ce2 add ip, ip, 8, 20;\n</code></pre>\n <p>\n  it will add\n  <code>\n   #0x8000\n  </code>\n  to the ip register. My question is why\n  <code>\n   #0x8000\n  </code>\n  ?\n </p>\n <p>\n  I'd assume it will be:\n </p>\n <pre><code>ip = ip + (8<<20)\n</code></pre>\n <p>\n  so\n  <code>\n   0x800000\n  </code>\n  but it's more like\n </p>\n <pre><code>ip = ip + (8<<(20-8))\n</code></pre>\n <p>\n  Why is that? do I always have to substract 8 from the shift ?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "arm"
+    ],
+    "user": "krusty",
+    "time": "Aug 21, 2017 at 9:46",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It's a\n  <a href=\"https://en.wikipedia.org/wiki/Circular_shift\" rel=\"noreferrer\">\n   Circular Shift\n  </a>\n  on a 32-bit system.\n </p>\n <h2>\n  Circular Shift\n </h2>\n <blockquote>\n  <p>\n   In computer programming, a circular shift (or bitwise rotation) is a\n  shift operator that shifts all bits of its operand. Unlike an\n  arithmetic shift, a circular shift does not preserve a number's sign\n  bit or distinguish a number's exponent from its significand (sometimes\n  referred to as the mantissa). Unlike a logical shift, the vacant bit\n  positions are not filled in with zeros but are filled in with the bits\n  that are shifted out of the sequence.\n  </p>\n </blockquote>\n <h2>\n  Understanding the code\n </h2>\n <p>\n  <strong>\n   First Line:\n  </strong>\n  \n\n  This is simply translated into\n  <code>\n   add ip, pc\n  </code>\n  because rotate operations on\n  <code>\n   #0\n  </code>\n  is still 0.\n  \n\n  So it's actually\n  <code>\n   IP = PC  + (0 << 12) = PC + 0\n  </code>\n </p>\n <p>\n  <strong>\n   Second Line:\n  </strong>\n  \n\n  Let's take apart the opcodes and understand the problematic line:\n  \n\n  The opcodes should be read like this because of\n  <a href=\"https://en.wikipedia.org/wiki/Endianness\" rel=\"noreferrer\">\n   endianness\n  </a>\n  :\n  <code>\n   e28cca08\n  </code>\n </p>\n <ol>\n  <li>\n   <code>\n    e\n   </code>\n   - always execute this instruction\n  </li>\n  <li>\n   <code>\n    28\n   </code>\n   - add immediate\n  </li>\n  <li>\n   <code>\n    c\n   </code>\n   - Rd is the ip\n  </li>\n  <li>\n   <code>\n    c\n   </code>\n   - Rn is the ip\n  </li>\n  <li>\n   <code>\n    a 08\n   </code>\n   - 8 right rotated by 20\n  </li>\n </ol>\n <p>\n  The things is, that it's not\n  <code>\n   8<<20\n  </code>\n  but instead it is\n  <code>\n   8<<(32-12)\n  </code>\n  because we are on a 32-bit system and it is a Circular Shift.\n </p>\n <p>\n  Here's a C code that showing the Circular Shift based on the example from\n  <a href=\"https://en.wikipedia.org/wiki/Circular_shift#Implementing_circular_shifts\" rel=\"noreferrer\">\n   Wikipedia\n  </a>\n  :\n </p>\n <pre><code>#include <stdint.h>  // for uint32_t, to get 32bit-wide rotates, regardless of the size of int.\n#include <limits.h>  // for CHAR_BIT\n\nuint32_t rotl32 (uint32_t value, unsigned int count) {\n    const unsigned int mask = (CHAR_BIT*sizeof(value)-1);\n    count &= mask;\n    return (value<<count) | (value>>( (-count) & mask ));\n}\n\nuint32_t rotr32 (uint32_t value, unsigned int count) {\n    const unsigned int mask = (CHAR_BIT*sizeof(value)-1);\n    count &= mask;\n    return (value>>count) | (value<<( (-count) & mask ));\n}\n\nint main()\n{\n    printf(\"Result: 0x%x\n\",rotr32(8,20));\n    return 0;\n}\n</code></pre>\n <p>\n  The code will output:\n </p>\n <pre><code>Result: 0x8000\n</code></pre>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Megabeets",
+            "time": "Aug 21, 2017 at 16:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "krusty",
+                    "text": "<span class=\"comment-copy\">I see so its rotate right and not left, thanks! BTW. typo in the anwser on line \"that it's not 8&lt;&lt;20 but instead it is 8&lt;&lt;(32-12)\" should be 8&gt;&gt;(32-12)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It is proposed in the official document of arm\n  <a href=\"https://i.sstatic.net/4HSRM.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"arm1\" src=\"https://i.sstatic.net/4HSRM.png\"/>\n  </a>\n </p>\n <p>\n  When s = 1 and RD = R15 (PC), this instruction is used to save the status register CPSR, not to do calculation\n  <a href=\"https://i.sstatic.net/ncauL.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"arm2\" src=\"https://i.sstatic.net/ncauL.png\"/>\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Dragon",
+            "time": "Dec 23, 2020 at 3:52",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

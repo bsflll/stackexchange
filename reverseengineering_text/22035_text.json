@@ -1,0 +1,56 @@
+{
+    "title": "Patching JNZ (two byte opcode) into JMP near (one byte opcode)?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22035/patching-jnz-two-byte-opcode-into-jmp-near-one-byte-opcode",
+    "content": "I've been tinkering with Fallout New Vegas, and have focused on modifying a very simple record that's hardcoded in the game engine. It's called an Imagespace Modifier, which is a very basic shader that can only have a select number of variables adjusted. It can be modified in the editor, but cannot be stopped from being applied to the screen. So even with it's values set to zero, it's still being calculated by the game.\nSo I decided to try and find the hardcoded function that calls the imagespace modifier. I think I've got it, but I've hit a problem. It uses a JNZ to determine whether or not to process the record, which is a two byte opcode instruction (0F 85). But JMP Near is a single opcode instruction (E9). So I can't just simply patch that word in memory and always skip past the code calling the imagespace modifier.\nWhat would I need to do in order to fix that, and use JMP instead of JNZ? Note, the framework I'm using to modify the process at runtime uses C++, so it needs to be doable in that language.\nScreenshot: https://i.sstatic.net/T9xw4.png\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "ida",
+        "c++",
+        "function-hooking"
+    ],
+    "user": "FiftyTifty",
+    "time": "Sep 4, 2019 at 5:58",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "0f 85 takes a dword or rel32 or 4 bytes in 32 and 64 bit mode\nand two bytes or rel16 in 16 bit mode\nI assume 32 /64 bit because  (hex view in your screen shot has a selection of 6 bytes highlighted )\n0f 85 b5 00 00 00  \nto jmp with e9 \nchange 0f 85 b5 00 00 00  to e9 b6 00 00 00 90\n<pre><code>0:000> eb .\n00007ffc`01d82dbc cc 0f \n00007ffc`01d82dbd eb 85\n00007ffc`01d82dbe 00 b5\n00007ffc`01d82dbf 48 00\n00007ffc`01d82dc0 83 00\n00007ffc`01d82dc1 c4 00\n00007ffc`01d82dc2 38\n0:000> u . l1\nntdll!LdrpDoDebuggerBreak+0x30:\n00007ffc`01d82dbc 0f85b5000000    jne     ntdll!LdrpGetProcApphelpCheckModule+0xab (00007ffc`01d82e77)\n0:000> eb .\n00007ffc`01d82dbc 0f e9\n00007ffc`01d82dbd 85 b6\n00007ffc`01d82dbe b5 00\n00007ffc`01d82dbf 00 00\n00007ffc`01d82dc0 00 00\n00007ffc`01d82dc1 00\n0:000> u . l1\nntdll!LdrpDoDebuggerBreak+0x30:\n00007ffc`01d82dbc e9b6000000      jmp     ntdll!LdrpGetProcApphelpCheckModule+0xab (00007ffc`01d82e77)\n0:000>\n</code></pre>\nor as igorsk edited in nop the first byte and modify the second and third byte\n<pre><code>0:000> eb .\n00007ffc`01d82dbc e9 90\n00007ffc`01d82dbd b6 e9\n00007ffc`01d82dbe 00 b5\n00007ffc`01d82dbf 00 00\n00007ffc`01d82dc0 00 00\n00007ffc`01d82dc1 00 00\n00007ffc`01d82dc2 38\n0:000> u . l2\nntdll!LdrpDoDebuggerBreak+0x30:\n00007ffc`01d82dbc 90              nop\n00007ffc`01d82dbd e9b5000000      jmp     ntdll!LdrpGetProcApphelpCheckModule+0xab (00007ffc`01d82e77)\n0:000>\n</code></pre>\nfor an unconditional jump the byte immediately to the patched instructions do not matter if the patched bytes are less.    \nbut for other instructions which will fall through to the next instruction the instruction boundaries do matter \nsuppose you patched add to sub and sub is one byte less.\nso after executing sub which is one byte lesser the next instruction will start executing on the bogus rogue byte.\nthis is not what was intended. \nwe need to execute the byte which was the originally supposed to be executed and we cant fly in mid air.\nwe need to also execute the dummy rogue byte \nso we change it to a one byte no operation instruction.\nexecute sub as well as nop and then we get to execute the actual original next instruction.\nthat is why the nop it may look silly here for this specific instruction but it is a good habit to patch all the bytes within instruction boundaries. \nthere are single byte nop as well as multibyte nops or instructions like \nmov eax,eax  which do not alter the state but provide space fillers.\nbtw when you read the instruction manuals   rel32 is always a counter it is counted from the start of next instruction \na simple jump eb 00 at address 0x1000 jumps to 0x1002 because eb 00 is two bytes \nadding 2 to 0x1000 will make the next $ip 0x1002 \nso eb 01->0x1003 , eb 02 -> 0x1004 and so on\n",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Sep 5, 2019 at 3:52",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "FiftyTifty",
+                    "text": "<span class=\"comment-copy\">Now that's smart. I thought B5 00 00 00 was just a label, but it's actually the number of bytes to jump forward by. Out of curiosity, why is the last byte a NOP instruction? Is it a failsafe?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">added some more content to address your query take a look</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<pre><code>E9</code></pre> is a so-called near jump which takes a four-byte offset (rel32) so you can’t actually fit it in two bytes. If you have a two-byte <pre><code>jnz</code></pre> (<pre><code>75 xx</code></pre>),  you can instead use the short jump (<pre><code>EB</code></pre>) which takes a one-byte offset(rel8) just like <pre><code>jnz</code></pre>. \nFor the near <pre><code>jnz</code></pre> (<pre><code>0F 85 rel32</code></pre>) you can instead patch the first byte with a NOP (<pre><code>90</code></pre>) and replace <pre><code>85</code></pre> with <pre><code>E9</code></pre> - this should give you the same destination but with unconditional jump.\nReferences:\nhttps://www.felixcloutier.com/x86/jmp\nhttps://www.felixcloutier.com/x86/jcc\n",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Sep 4, 2019 at 8:45",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "FiftyTifty",
+                    "text": "<span class=\"comment-copy\"><a href=\"http://www.unixwiz.net/techtips/x86-jumps.html\" rel=\"nofollow noreferrer\">unixwiz.net/techtips/x86-jumps.html</a> - JNZ Has two opcodes, and it takes one byte as the parameter. So it's <code>0F 85 B5 </code> (a near jump), versus JMP which has one opcode and takes one byte to become <code>E9 B5</code>. Unless I'm missing something, that still leaves the issue of that left out byte.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">oh, I misread the question. For some reason I thought you have a short jump (75 rel8).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

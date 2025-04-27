@@ -1,0 +1,71 @@
+{
+    "title": "What is the protocol for x87 floating point emulation in MS-DOS?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12272/what-is-the-protocol-for-x87-floating-point-emulation-in-ms-dos",
+    "content": "I'm trying to get useful results using the Reko decompiler on a dusty old MS-DOS binary compiled with Borland C++ that appears to be performing a lot of floating point arithmetic. I'm seeing code sequences like\n<pre><code>mov ax,0x4D8C    ; segment selector\nmov es,ax\nint 0x3C         ; call x87 emulator??\nfld dword ptr [<some address>]\nsub sp,8\nint 0x39         ; call x87 emulator??\n</code></pre>\n...etc. A cursory search engine search strongly hints that the <pre><code>int</code></pre> instructions are invoking an x87 emulation library; when the x87 is present, it lets the coprocessor execute the instruction, but when it isn't, the emulator emulates.\nI am well familiar with how to implement FPU operations, with shifts and whatnot. What I'd like to find out more about is the protocol of these invocations to the emulator. I have been unable to locate documentation. Perhaps one of the members of the RE community does?\n",
+    "votes": "19",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "x86"
+    ],
+    "user": "John Källén",
+    "time": "Mar 22, 2016 at 11:33",
+    "comments": [
+        {
+            "user": "ratchet freak",
+            "text": "I'd imaging using shifts and masks to extract the exponent and mantissa and then use fixed point math to get the result\n",
+            "time": null
+        },
+        {
+            "user": "John Källén",
+            "text": "I understand how to perform FP math using integer registers. What I'm wondering about is the binding mechanism used to invoke the FP emulation -- what registers those <pre><code>int</code></pre> instructions are expecting.\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "go to ralf browns home page and download the packages one of the package will contain int.com which you can use to make int calls like int.com 0x3c -ax 0xxx -bx 0xyyyy  cs.cmu.edu/~ralf/files.html todays date  INT.COM 0x21 -ah 0x2a AX=2A00   BX=0000   CX=0000   DX=0000 SI=0000   DI=0000   BP=FFAC   SP=FFA0 CS=0000   DS=0000   ES=0000   SS=0000   CPU Flags: 0n00oditsz0a0p1c  INT: 0x21  AX=2A02   BX=0000   CX=07E0   DX=0316 SI=0000   DI=0000   BP=FFAC   SP=FFA0 CS=0000   DS=0000   ES=0000   SS=0000   CPU Flags: 0N11odItSz0A0P1C DOSERR: 0057 (87)\n",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "This may be helpful: delphigroups.info/2/d7/740.html\n",
+            "time": null
+        },
+        {
+            "user": "John Källén",
+            "text": "@JasonGeffner: thanks, that's exactly the link I was looking for. Seems my copy of Ralf's interrupt list was stale.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Nothing like asking a question on stackexchange, only to be humiliated by finding the answer (or at least part of it). After finding the following source file, it started making sense:\nhttps://github.com/alexhenrie/wine/blob/master/dlls/krnl386.exe16/fpu.c\nOn old 8086 machines, where there is no trap for invalid instructions, the Elders of the Past came up with an emulation strategy. All x87 instructions are in the <pre><code>D8</code></pre>-<pre><code>DF</code></pre> range (8 possible values) followed by modrm and other goodness. If you prefix the instruction with a <pre><code>FWAIT</code></pre> (opcode <pre><code>9B</code></pre>), you guarantee that there always be two bytes of code before the modrm byte, looking something like <pre><code>9B Dx</code></pre>. However, instead of emitting those two bytes, the compiler emits <pre><code>CD xx</code></pre>, where xx ranges <pre><code>34</code></pre>-<pre><code>3B</code></pre> (8 possible values). As we all know, CD is the encoding of the x86 <pre><code>int</code></pre> instruction.\nWhen the CPU executes the <pre><code>int</code></pre> instruction and arrives at the handler for <pre><code>34</code></pre>-<pre><code>3B</code></pre>, it vectors off to the interrupt handler.  If there isn't an x87 coprocessor available, the handler will emulate the floating point instruction, maintaining the coprocessor state in memory. If however there is an x87 coprocessor present, the handler will peek at the return stack to see where the <pre><code>int</code></pre> instruction is located, and overwrite it with the appropriate <pre><code>9B Dx</code></pre> byte sequence, corresponding to the <pre><code>CD 3x</code></pre> byte sequence. It then returns control to the patched instruction so that it gets executed. Now that it has been patched, the instruction is an actual FPU instruction, and future executions of the instructions will no longer take the long detour through the emulator.\nThe documentation for how to deal with interrupt <pre><code>3E</code></pre> is still not forthcoming. However, for the time being, I have enough information to implement x87 emulation support in the Reko decompiler.\n",
+            "votes": "29",
+            "user": "John Källén",
+            "time": "Mar 22, 2016 at 13:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "cat",
+                    "text": "<span class=\"comment-copy\">Self-answers aren't (shouldn't be) humiliating -- learning is a good thing :P</span>",
+                    "time": null
+                },
+                {
+                    "user": "jsbueno",
+                    "text": "<span class=\"comment-copy\">Cool -  I remember seeing the interrupt calls in the binaries back in the time - as a teenager I could not gigure out why the coprocessor opcode did not show up ever.</span>",
+                    "time": null
+                },
+                {
+                    "user": "JDługosz",
+                    "text": "<span class=\"comment-copy\">You know, I actually remembered that. Not the details, just that it used an INT to replace the fpu opcode.</span>",
+                    "time": null
+                },
+                {
+                    "user": "John Källén",
+                    "text": "<span class=\"comment-copy\">This has now been implemented in Reko, and appears to work beautifully.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

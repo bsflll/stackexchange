@@ -1,0 +1,50 @@
+{
+    "title": "Is there any way to watch a block of memory of the current process for change?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27978/is-there-any-way-to-watch-a-block-of-memory-of-the-current-process-for-change",
+    "content": "I'm looking for a way to get notified when some block of memory of the current process change.\nTo be more specific, I want to track when some fields of a struct change.\nLet's say I have one instance of this struct in memory:\n<pre><code>struct {\n   int field_a;\n   int field_b;\n} my_struct;\n</code></pre>\nIs there any way to register a callback to notify me when any field has changed?\nI know some debuggers provide \"data breakpoints\" which pauses execution when a specified variable change.\nIs there any way, maybe some win32 debug api or interrupt that make this possible ?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "181",
+    "tags": [
+        "winapi"
+    ],
+    "user": "Clayton A. Alves",
+    "time": "Jul 10, 2021 at 23:00",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "Hi and welcome to RE.SE. Hmm, it really depends on what you're actually aiming for. As in so many questions (i.e. not just yours) we only are told what route you have already decided on and you want help with that. But potentially there are other ways. It always helps to provide context. Also, this isn't exactly RCE, but it's a related topic, so I'll defer to the community. Either way, you could use <pre><code>VirtualProtect</code></pre> to set up a guard page, catch the exception via SEH/VEH and then resume execution ...\n",
+            "time": null
+        },
+        {
+            "user": "Clayton A. Alves",
+            "text": "Hi @0xC0000022L , I'll add more context to my question. With <pre><code>VirtualProtect</code></pre> I can lock a whole memory page, but I'm looking for a way to lock something smaller, like a <pre><code>struct</code></pre>.\n",
+            "time": null
+        },
+        {
+            "user": "Robert",
+            "text": "Sound like you are searching for something like a \"break on access\" debugger breakpoint: stackoverflow.com/questions/51221203/…\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@Robert those are the mentioned data breakpoints and there is a limited number of them available \"in hardware\". Depending on the debugger in use, it can offer more than those \"in hardware\", but this will typically slow down the debugging considerably.\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@ClaytonA.Alves while you are right, you can see from the context record where the code attempted to perform the access, as blabb shows.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "VirtualProtect locks whole page and Raises an Exception on access and removes the PAGE_GUARD Memory Protection.\nIn the Exception Handler you watch for a your small block\nIf except->ExceptionRecord->ExceptionAddress is not within your watch block\nyou reset the protection within Your Exception Handler.\nreset the ContextRecord->Rip to next instruction and return EXECEPTION_CONTINUE_EXECUTION\nsee below for a sample code\n<pre><code>#include <stdio.h>\n#include <windows.h>\ntypedef struct _S1{\n    int field_a;\n    int field_b;\n} S1, *PS1;\n//putting guarded data in a seperate section for convenience \n#pragma data_seg(push, MyGuardedSection, \".guarded\")\nS1 t1 = {0, 0};\n#pragma data_seg(pop, MyGuardedSection)\nDWORD oldprot = 0;\nint filter(unsigned int code, struct _EXCEPTION_POINTERS *except){\n    if (code == EXCEPTION_GUARD_PAGE &&\n        except->ExceptionRecord->ExceptionAddress != (&(t1.field_b)))    {\n        VirtualProtect(&t1.field_b, sizeof(t1.field_b), 0x140, &oldprot);\n        except->ContextRecord->Rip += 6;\n        return EXCEPTION_CONTINUE_EXECUTION;\n    }\n    printf(\"%x\n%p\n\",\n           except->ExceptionRecord->ExceptionCode,\n           except->ExceptionRecord->ExceptionAddress);\n    return EXCEPTION_EXECUTE_HANDLER;\n}\nint main(void){\n    DWORD counter = 0;\n    DWORD loopcount = 0;\n    VirtualProtect(&t1.field_b, sizeof(t1.field_b), 0x140, &oldprot);\n    __try    {\n        while (loopcount < 2)        {\n            while (counter < 0x30)            {\n                t1.field_a++; //this will raise guard page exception\n                counter++;   // we return here from handler after reguarding\n                printf(\"%x \", counter);\n                Sleep(0x10);\n            }\n            counter = 0;\n            loopcount += 1;\n            printf(\"\nwe have reset guard page exception 0x60 times \n\");\n        }\n        printf(\"we access our field now \n\");\n        t1.field_b = 0xdead; //this again will raise exception and we execute handler \n        \n    }\n    __except (filter(GetExceptionCode(), GetExceptionInformation()))    {\n        //removing page guard\n        VirtualProtect(&t1.field_b, sizeof(t1.field_b), 0x40, &oldprot);\n        printf(\"t1.field_b = %x\n\", t1.field_b);\n        t1.field_b = 0xdead;\n        printf(\"t1.field_b = %x\n\", t1.field_b); // no exception \n        printf(\"Handler for PG %x\n\", GetExceptionCode());\n    }\n}\n</code></pre>\ncompiled and executed\n<pre><code>:\\>cl /Zi /W4 /analyze /EHsc /nologo vlock.cpp /link /release\nvlock.cpp\n\n:\\>vlock.exe\n1 2 3 4 5 6 7 8 9 a b c d e f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f 30\nwe have reset guard page exception 0x60 times\n1 2 3 4 5 6 7 8 9 a b c d e f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f 30\nwe have reset guard page exception 0x60 times\nwe access our field now\nc0000005\n00007FF7CA131159\nt1.field_b = 0\nt1.field_b = dead\nHandler for PG c0000005\n</code></pre>\n",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Jul 11, 2021 at 20:41",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

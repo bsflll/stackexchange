@@ -1,0 +1,31 @@
+{
+    "title": "Server-side bind() function, immlib",
+    "link": "https://reverseengineering.stackexchange.com/questions/2507/server-side-bind-function-immlib",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  How do I get IP address and port number out of bind function in Server application. Can it be achieved with hooks like bphook in immunity debugger?\n </p>\n <p>\n  My problem is that I don't know how to unpack struct psockaddr/sockaddr or how sockaddr is saved on the stack.\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "295",
+    "tags": [
+        "python",
+        "immunity-debugger"
+    ],
+    "user": "user2464",
+    "time": "Jul 20, 2013 at 19:02",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I will assume you are talking about Windows Sockets and IPv4, since you have not mentioned otherwise.\n  <code>\n   sockaddr\n  </code>\n  is very well described in\n  <a href=\"https://i.sstatic.net/8cNC8.png\" rel=\"noreferrer\">\n   MSDN\n  </a>\n  . It is defined as for IPv4 as follows:\n </p>\n <pre><code>struct sockaddr {\n        ushort  sa_family;\n        char    sa_data[14];\n};\n\nstruct sockaddr_in {\n        short   sin_family;\n        u_short sin_port;\n        struct  in_addr sin_addr;\n        char    sin_zero[8];\n};\n</code></pre>\n <p>\n  I will use simple server application for demonstration purposes. Firstly let's set breakpoint on\n  <code>\n   bind()\n  </code>\n  and see what stack looks like:\n </p>\n <p>\n  <img alt=\"enter image description here\" src=\"https://i.sstatic.net/8cNC8.png\"/>\n </p>\n <p>\n  As you can see,\n  <code>\n   pSockAddr\n  </code>\n  is a pointer to\n  <code>\n   sockaddr\n  </code>\n  structure is pushed on to stack as a second argument to the function. Let's go a little further and examine the\n  <code>\n   sockaddr\n  </code>\n  at\n  <code>\n   0x0031F840\n  </code>\n  :\n </p>\n <p>\n  <img alt=\"enter image description here\" src=\"https://i.sstatic.net/0hdv7.png\"/>\n </p>\n <p>\n  One very important thing to note is that\n  <code>\n   sin_port\n  </code>\n  and\n  <code>\n   sin_addr\n  </code>\n  are stored using\n  <a href=\"http://en.wikipedia.org/wiki/Endianness\" rel=\"noreferrer\">\n   <em>\n    big-endian\n   </em>\n  </a>\n  byte order, meaning the most significant part stored first.\n </p>\n <p>\n  Now let's jump in and get\n  <a href=\"https://www.corelan.be/index.php/2010/01/26/starting-to-write-immunity-debugger-pycommands-my-cheatsheet/\" rel=\"noreferrer\">\n   pyCommand\n  </a>\n  created in order to automate it with\n  <a href=\"http://www.immunityinc.com/products-immdbg.shtml\" rel=\"noreferrer\">\n   Immunity Debugger\n  </a>\n  . For this purpose I will use\n  <code>\n   BpHook\n  </code>\n  :\n </p>\n <pre><code># bindtrace PyCommand by PSS \n\nfrom immlib import *\n\nNAME = \"bindtrace\"\n\nclass BindBpHook(BpHook):\n    def __init__(self):\n        BpHook.__init__(self)\n\n    def run(self, regs):\n        imm = Debugger()\n\n        imm.log(\" \")\n        imm.log(\"Bind() called:\")\n\n        # Read sockaddr structure address\n        sockaddr = imm.readLong(regs[\"ESP\"] + 8)        \n\n        # Read 2 bytes of sin_family member\n        sockaddr_sin_family = imm.readShort(sockaddr)\n\n        # Read 2 bytes of sin_port and calculate port number \n        # since it is stored as big-endian\n        portHiByte = ord(imm.readMemory(sockaddr + 2, 1))\n        portLowByte = ord(imm.readMemory(sockaddr + 3, 1))\n        sockaddr_sin_port = portHiByte * 256 + portLowByte\n\n        # Read 4 bytes of sin_addr since it is stored as big-endian\n        ipFirstByte = ord(imm.readMemory(sockaddr + 4, 1))\n        ipSecondByte = ord(imm.readMemory(sockaddr + 5, 1))\n        ipThirdByte = ord(imm.readMemory(sockaddr + 6, 1))\n        ipForthByte = ord(imm.readMemory(sockaddr + 7, 1))\n\n        # Print results to Log View window\n        imm.log(\"---> Pointer to sockaddr structure: 0x%08x\" % sockaddr)\n        imm.log(\"---> sockaddr.sin_family: %d\" % sockaddr_sin_family)\n        imm.log(\"---> sockaddr.sin_port: %d\" % sockaddr_sin_port)\n        imm.log(\"---> sockaddr.sin_addr: %d.%d.%d.%d\" % \\\n                        (ipFirstByte,ipSecondByte,ipThirdByte,ipForthByte))\n        imm.log(\" \")\n        imm.log(\"Press F9 to resume\")\n\n\ndef main(args):\n\n    imm = Debugger()\n    functionToHook = \"ws2_32.bind\"\n\n    # Find address of the function to hook\n    functionAddress = imm.getAddress(functionToHook)\n\n    # Create and install our hook\n    myHook = BindBpHook()\n    myHook.add(functionToHook, functionAddress)\n\n    imm.log(\"Hook for %s installed at: 0x%08x\" % (functionToHook, functionAddress))\n\n    return \"[*] Hook installed.\"\n</code></pre>\n <p>\n  Installation of the script is very simple. All pyCommands are stored in ./pyCommands folder of Immunity Debugger installation. I named my file\n  <code>\n   bindtrace.py\n  </code>\n  .\n </p>\n <p>\n  Thereafter, we load our executable into Immunity Debugger. Debugger will break automatically at entry point. Right after that we invoke the above pyCommand by typing\n  <code>\n   !bindtrace\n  </code>\n  , and run the executable by pressing\n  <kbd>\n   F9\n  </kbd>\n  . As soon as breakpoint hits, we get the result in Log windows, which can be accessed through\n  <kbd>\n   Alt + L\n  </kbd>\n  :\n </p>\n <p>\n  <img alt=\"enter image description here\" src=\"https://i.sstatic.net/7j7pm.png\"/>\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "PSS",
+            "time": "Jul 22, 2013 at 14:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Cream Cracker",
+                    "text": "<span class=\"comment-copy\">cool explanation.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

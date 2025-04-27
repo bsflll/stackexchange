@@ -1,0 +1,59 @@
+{
+    "title": "Is there any tool which parses ollydbg run trace?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2412/is-there-any-tool-which-parses-ollydbg-run-trace",
+    "content": "I'm currently working on a tool to automate several actions which relate to unpacking software. I would like to use the run trace of Ollydbg (1.10 preferred since it has many antidebug/usage/etc plugins). However, I do not seem to know any library which offers parsing Ollydbg run trace.\nDoes anyone know of any library which can do that or any project which has already done it?\n",
+    "votes": "6",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "unpacking",
+        "ollydbg"
+    ],
+    "user": "parser",
+    "time": "Jul 4, 2013 at 16:55",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "The run trace log file is a simple text file with fixed-width (or tab-delimited, based on options) fields. Why do you need a special library to parse that?\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@JasonGeffner: on the contrary why reinvent the wheel when someone could have done it already? :) +1\n",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "@0xC0000022L: My point was that nobody has created a library for parsing an OllyDbg Run Trace string because parsing that string is already trivial. Why create a library when you can already parse the string with a single line of code?\n",
+            "time": null
+        },
+        {
+            "user": "PSS",
+            "text": "@JasonGeffner Totally agree +1\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@JasonGeffner: even simple formats can be intricate to parse so the question isn't at all unwarranted. Reuse is usually encouraged everywhere, so discourage it here selectively?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I have found that parsing the run trace is not as trivial as one would wish (and as I assumed too, like the people who commented your question). There are a few reasons for this:\n\nFields are separated by a variable number of spaces. If one of the fields is too long, a single semicolon is used as a separator instead. However a variable number of spaces is not guaranteed to be a field separator.\nOne of the first fields is the address of the executed instruction. Instead of a hex address, this can also be a (possibly demangled C++) symbol. The lines can include beasts like\n<pre><code>main  std::basic_string<unsigned short,std::char_traits<unsigned short>,std::allocator<unsigned short> >::~basic_string<unsigned short,std::char_traits<unsigned short>,std::allocator<unsigned short> >;push 0;0018EB38=0;ESP=0018EB38\n</code></pre>\nOf course, demangled names can occur in the assembler instruction too as well, not only in the address field. Also, I believe that ABCDEF0 would be both a valid hex address and a valid symbol name, and they cannot be told apart since the trace only reports either the demangled name or the hex address.\nWhen the data pointed to as indicated in the comments field of the trace contains ASCII or unicode data according to OllyDbg's heuristics, the contained string is displayed. At least newlines inside the strings are not escaped, so you have to deal with split lines.\nRelevant at least if you would like to extract a call trace: It is not in general trivial do determine without referring to surrounding instructions whether a call was traced into (the normal case) or traced over (in case of Windows DLL calls). You can use heuristics like whether the \"call instruction\" is shown to modify other registers beyond ESP. By tracking ESP, it should be possible to determine this.\nThe precise format of the dump trace apparently depends heavily on the options, including things like whether the assembly mnemonic is separated from the operands by spaces or a tab, and whether the assembly displayed is all caps or in lower case.\n\nEverything above pertains to OllyDbg 2.01; I suspect there are bound to be differences between different versions (and I for one would not mind if the format was made more parseable in future versions).\nHaving said all that, I have written some (Haskell) code to parse the output that works for me right now with my particular options and the particular application dumped. Here's a PERL-compatible regular expression (won't work as is in a POSIX regex context) I use to match lines:\n<pre><code>^main  ([0-9A-F]{8}|(?:unsigned |operator |vbase destructor|[^ ;]| >)+)(?: +|;)((?:[^=; ]|operator.{0,2}=| (?! ))+)(?:(?: +|;)([^ ]+=.*))?$\n</code></pre>\nThe 1st capturing group is the address/symbolic name, the 2nd group is the assembly instruction, and the 3rd group is the \"comment\" portion of the line containing memory contents and register changes.\nI think I will proceed to make my Haskell program into a filter which parses run traces and outputs them in a more readily machine-parseable format (maybe CSV or something); I can share the code if someone is interested. (Sorry about using Haskell; I just need performance that scripted languages don't give. The size of my dump is 2 gigabytes, and my Haskell parser consumes it at roughly 50 Mb/s.)\n",
+            "votes": "3",
+            "user": "Sami Liedes",
+            "time": "Jan 4, 2014 at 2:08",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "ollydbg runtrace has a profiling option inbuilt \nit can profile the runtrace either module wise \nor globally \ngo to run trace window  <pre><code>(...)icon</code></pre> right click and select <pre><code>profile module</code></pre> or <pre><code>global profile</code></pre>\na simple messagebox.exe (iczelions tutorial 2) will execute <pre><code>1087946</code></pre> instructions from system breakpoint to original entry point  <pre><code>skipping string commands repmovsb ... movsd</code></pre>\nin <pre><code>xpsp3</code></pre> \n<pre><code>Run trace, selected line\n Back=1087946. \n Thread=Main\n Module=ntdll\n Address=7C90120F\n Command=RETN\n Modified registers=ESP=0013FB24\n</code></pre>\nand call _LdrSnapThunk about 1000 times\n<pre><code>Profile of whole memory, item 30\n Count=1012.\n Address=7C917BF1 LdrpSnapThunk\n First command=MOV     EDI, EDI\n</code></pre>\nwill call zwCreateFile 4 times\n<pre><code>Profile of whole memory, item 1046\n Count=4.\n Address=7C90D0AE ZwCreateFile\n First command=MOV     EAX, 25\n</code></pre>\nfrom this global profile you can <pre><code>hop back to disassembly window</code></pre> or <pre><code>run trace window</code></pre>\n<pre><code>mark this position in run trace window</code></pre> and <pre><code>jump to next marked position</code></pre>\nthe details of <pre><code>4 ZwCreateFile</code></pre> from global profile to runtrace window correlated below\n<pre><code>Run trace, selected line\n Back=978309. <-------------------\n Thread=Main\n Module=ntdll\n Address=7C90D0AE ZwCreateFile\n Command=MOV     EAX, 25\n Modified registers=EAX=00000025\n\nRun trace, selected line\n Back=975485. <----------------------\n Thread=Main\n Module=ntdll\n Address=7C90D0AE ZwCreateFile\n Command=MOV     EAX, 25\n Modified registers=EAX=00000025\n\n\nRun trace, selected line\n Back=956331. <-----------------------\n Thread=Main\n Module=ntdll\n Address=7C90D0AE ZwCreateFile\n Command=MOV     EAX, 25\n Modified registers=EAX=00000025\n\n\nRun trace, selected line\n Back=874497. <----------------------\n Thread=Main\n Module=ntdll\n Address=7C90D0AE ZwCreateFile\n Command=MOV     EAX, 25\n Modified registers=EAX=00000025\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jul 10, 2013 at 10:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

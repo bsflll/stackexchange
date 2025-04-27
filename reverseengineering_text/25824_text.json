@@ -1,0 +1,54 @@
+{
+    "title": "The C166 family code meaning",
+    "link": "https://reverseengineering.stackexchange.com/questions/25824/the-c166-family-code-meaning",
+    "content": "What the meaning of this code with an explanation?\n<pre><code>sub_37C2:\nmov     r5, r4\nshr     r5, #14\nshl     r5, #1\nmov     r5, [r5+0FE00h] ; DPP0\nbmov    r4.14, r5.0\nbmov    r4.15, r5.1\nshr     r5, #2\nrets\n; End of function sub_37C2\n</code></pre>\n",
+    "votes": "-2",
+    "answers": 1,
+    "views": "554",
+    "tags": [
+        "ida",
+        "disassembly",
+        "memory",
+        "static-analysis",
+        "c166"
+    ],
+    "user": "Unicornux",
+    "time": "Sep 6, 2020 at 11:36",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Okay, so let's start by converting the first four instructions to rough pseudocode. I'll include the instructions as comments so you can see what each one does.\n<pre><code>r5 = r4;              // mov r5, r4 - Set R5 to equal the value in R4    \nr5 >>= 14;            // shr r5, #14 - Shift R5 14 bits to the right\nr5 <<= 1;             // shl r5, #1 - Shift R5 1 bit to the left\nr5 = *(0xFE00 + r5);  // mov r5, [r5+0FE00h] - Add 0xFE00 to R5, treat the sum as a memory address, and set R5 to equal the 16-bit value at that address.\n</code></pre>\nNotice how r5 is shifted 14 bits to the right, then one to the left. At first glance it may look like this is effectively just a shift to the right by 13 bits, but any bits that are shifted out of the register are lost, and shifting to the left doesn't bring them back. So those first two shifts do add up to a 13 bit shift to the right, except it also clears the least significant bit of r5.\nSo the above code fragment can be simplified as follows:\n<pre><code>r5 = r4 >> 13 & ~1\nr5 = *(0xFE00 + r5)\n</code></pre>\nThe <pre><code>bmov</code></pre> instruction sets one bit of a register to equal a bit in another register. You can think of it like <pre><code>mov</code></pre>, except it works on single bits instead of entire registers at once. These two lines:\n<pre><code>bmov r4.14, r5.0\nbmov r4.15, r5.1\n</code></pre>\nmean to take bit 0 (the least significant) in r5, and copy it to bit 14 in r4. Then take bit 1 in r5, and copy it to bit 15 (the most significant) in r4. In simpler terms, it sets the two most significant bits of r4 to equal the two least significant bits of r5. Adding that line, as well as the rest of the function, to our pseudocode:\n<pre><code>r5 = r4 >> 13 & ~1;\nr5 = *(0xFE00 + r5);\nr4 = r4 & 0x3FFF | r5 << 14\nr5 >>= 2;  // shr r5, #2 - Shift R5 2 bits to the right\nreturn;    // rets - Return from a segmented function (that is, a function called using the 'calls' instruction.)\n</code></pre>\nThe address 0xFE00, as indicated by the comment in the disassembly, refers to a location known as 'DPP0'. This is a 16-bit register which stores the current \"data page pointer\", which control the mapping of 16-bit addresses to a 24-bit physical address space. Importantly, it is followed sequentially by three more 16-bit registers, <pre><code>DPP1</code></pre>-<pre><code>3</code></pre>. So we can think of this like an array which is being indexed, like so:\n<pre><code>volatile uint16_t dpp[4];  // actually located at 0xFE00\nr5 = dpp[r5];              // equivalent to:\n                           //  r5 <<= 1;\n                           //  r5 = *(0xFE00 + r5);\n</code></pre>\nEdit:\nAccording to the comments(below of this post) I (@Unicornux) converted this piece of code to this :\n<pre><code>uint32_t get_Value(uint16_t _arg)\n{\n    uint32_t Value = 0;\n    volatile uint16_t dpp[4] = {0x302,0x403,0x706,0xA08};\n    uint16_t temp = _arg >> 14;\n    temp = dpp[temp];\n    _arg = (_arg & 0x3FFF) | (temp << 14);\n    temp >>= 2;\n    Value = (temp << 16) | (_arg & 0xFFFF);\n    return Value;\n}\n</code></pre>\nExplanation of the function's purpose: The function accepts a 16-bit address in r4, and determines what 24-bit physical address it represents, using the current values of the DPP registers. It returns this address as a 32-bit number, with the upper word in r5 and the lower word in r4.\n",
+            "votes": "4",
+            "user": "Sparkette",
+            "time": "Sep 23, 2020 at 22:51",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Unicornux",
+                    "text": "<span class=\"comment-copy\">Awesome. Thanks @flarn2006. I try harder and I hope to solve this challenge :) Before  invoke <code>sub_37C2</code> we have this piece of code :  <code>mov     r9, #4 add     r9, r0 mov     r4, r9 add     r4, #2 calls   0, sub_37C2</code> As you see, the code use stack. It seems the asm code accesses array data on the call stack, rather than in RAM. What the purpose of this code? :/</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sparkette",
+                    "text": "<span class=\"comment-copy\">@Unicornux Where is it using the stack? The only stack access I see is the <code>calls</code> instruction, and that isn't to store data on the stack.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sparkette",
+                    "text": "<span class=\"comment-copy\">@Unicornux Please see my edit. I reworded my original hint to ensure its meaning is clear, and I also added two more hints, obfuscated with ROT13 so you won't see either unless you intentionally paste it into a decoder.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Unicornux",
+                    "text": "<span class=\"comment-copy\">Thanks @flarn2006.I assign a random value to <code>r4</code>(for example <code>0x4920</code>). So, we have <code>2</code> after passing three steps. Now, According to your Hint I know: <code>r5 = dpp[2]</code>.  But how I can calculate the address of first element of <code>dpp</code>? I wanna to find fix data of dpp array.    I saw this link: <a href=\"https://studfile.net/preview/429299/page:5/\" rel=\"nofollow noreferrer\">studfile.net/preview/429299/page:5</a>   So, for calculate Long Addressing Mode I did this:  <code>DPP0 = 0x1D</code>   so:   <b>Variable Address = (0x1D * 0x4000) + 2(offset) = 0x74002</b> And: <code>ROM:74000 word_74000:  dw 0  ROM:74002    dw 302h  ROM:74004    dw 403h  ROM:74006    dw 706h</code> Is this correct?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sparkette",
+                    "text": "<span class=\"comment-copy\">@Unicornux There was one mistake, in that <code>temp</code> and <code>_arg</code> were reversed in the line that sets Value, but other than that it looks good. So you should be able to answer (what I think is) your question now: what task is this function designed to perform?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

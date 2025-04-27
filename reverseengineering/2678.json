@@ -1,0 +1,68 @@
+{
+    "title": "GAS/x86 disassembled a bare gs register as an instruction, is it a bug?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2678/gas-x86-disassembled-a-bare-gs-register-as-an-instruction-is-it-a-bug",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I encountered a strange x86-32 instruction (opcode <code>0x65</code>) decoded by <code>objdump</code> as <code>gs</code> (not <code>%gs</code> but <code>gs</code>). I found it while a full linear sweep of a binary (<code>objdump -D</code>), so the decoding was surely incorrect. But, still, <code>objdump</code> didn't decode it as a <code>(bad)</code> instruction, so it means that it can be encountered and I would like to know what does it means.</p>\n<p>Here is an example of this instruction:</p>\n<pre><code>080484fc &lt;_IO_stdin_used&gt;:\n 80484fc:       01 00                   add    %eax,(%eax)\n 80484fe:       02 00                   add    (%eax),%al\n 8048500:       48                      dec    %eax\n 8048501:       65                      gs     &lt;======================= Here!!!\n 8048502:       6c                      insb   (%dx),%es:(%edi)\n 8048503:       6c                      insb   (%dx),%es:(%edi)\n 8048504:       6f                      outsl  %ds:(%esi),(%dx)\n 8048505:       20 57 6f                and    %dl,0x6f(%edi)\n 8048508:       72 6c                   jb     8048576 &lt;_IO_stdin_used+0x7a&gt;\n 804850a:       64 21 0a                and    %ecx,%fs:(%edx)\n 804850d:       00 44 6f 64             add    %al,0x64(%edi,%ebp,2)\n 8048511:       67 65 20 54 68          and    %dl,%gs:0x68(%si)\n 8048516:       69                      .byte 0x69\n 8048517:       73 21                   jae    804853a &lt;_IO_stdin_used+0x3e&gt;\n</code></pre>\n<p>Note that searching for this instruction on the Web is quite difficult because of the <code>%gs</code> register which mask all other possible hit.</p>\n<p>So, is it a real \"instruction\" or is it glitch produced by <code>gas</code> ?</p>\n</div>",
+    "votes": "8",
+    "answers": 1,
+    "views": "948",
+    "tags": [
+        "disassembly",
+        "x86",
+        "objdump"
+    ],
+    "user": "perror",
+    "time": "Aug 23, 2013 at 17:04",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Hmm, it seems to be bug from the GNU binutils... The opcode <code>0x65</code> correspond in fact to a prefix corresponding to <code>%gs:(mem_ref)</code>.  But, here, the <code>libopcodes</code> parser seems to wrongly interpret it and <i>forget</i> to interpret what follow as a memory reference... (I may be wrong, but I will try to answer when I will know more about all this).</span>",
+            "time": null
+        },
+        {
+            "user": "DCoder",
+            "text": "<span class=\"comment-copy\">According to Intel's manuals, the <code>ins*</code> instructions <i>ignore</i> segment override prefixes and always use <code>%es</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">So, it means that this is because you have the opcodes <code>0x65</code> followed by an <code>ins</code> instruction that the decoder is wrong... I see, it is interesting. Thanks.</span>",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">A bit late, but: the decoder gets it \"wrong\" because you are disassembling a zero-terminated <i>text string</i>. You cannot make decisions on \"good\" or \"bad\" disassembly while feeding it with bad input. (Funny: this string is so well-known that I got it after ment'ly decoding the first three characters.)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Strictly speaking it's not an instruction. It's the segment override prefix (prefixes are considered to be part of the instruction).</p>\n<p>Most memory accesses use <code>DS</code> segment selector by default except those involving <code>ESP</code> or <code>EBP</code> register (they default to <code>SS</code>) and some \"string\" instructions (<code>movs</code>, <code>scas</code> etc). Segment override prefixes allow you to use another segment selector to access your data. E.g. in DOS times the <code>CS</code> override was commonly used to access data stored in the code segment (such as jump tables):</p>\n<pre><code>seg001:00EA shl bx, 1 ; SWITCH\nseg001:00EC jmp cs:off_13158[bx] ; switch jump\n...\nseg001:0588 off_13158  dw offset loc_12DD7 ; DATA XREF: _main+E6r\nseg001:0588            dw offset loc_12DE5 ; jump table for switch statement\nseg001:0588            dw offset loc_12DE5\nseg001:0588            dw offset loc_12DE5\n</code></pre>\n<p>The 80386 added two extra segment registers (<code>GS</code> and <code>FS</code>) and the corresponding prefixes.</p>\n<p>Since the <code>GS</code> prefix does not actually affect the following instruction (<code>insb</code>) in the code snipped above, GAS opted out for printing it on a separate line.</p>\n<p>In some of the following instructions you can see how it affects the disassembly:</p>\n<pre><code>64 21 0a       -&gt;  and %ecx, %fs:(%edx)\n^^                           ^^^\n67 65 20 54 68 -&gt; and %dl, %gs:0x68(%si)\n   ^^                      ^^^\n</code></pre>\n<p>BTW, 67 is another prefix, this time the <em>address size</em> override. It is why the instruction uses the 16-bit <code>SI</code> register and not the full <code>ESI</code>.</p>\n</div>",
+            "votes": "6",
+            "user": "Igor Skochinsky",
+            "time": "Aug 23, 2013 at 16:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">This is pretty neat and clear (as ever, Igor!). But, would you consider this as an unwanted behavior (bug) of <code>gas</code> ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Well, I don't know. You could argue it both ways. It's not like GAS is hardened against nonsense/obfuscated code, you should be glad it did not crash at least :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">P.S. sometimes it does make sense to put prefix in a separate pseudo-instruction, see e.g. <a href=\"http://pastie.org/pastes/8263242/text\" rel=\"nofollow noreferrer\">this snippet</a> from some old libc.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">If I understand well your example, the symbol is placed <b>after</b> the prefix of the instruction ??? It does mean that depending if we are coming from the block before or if we are jumping to it through the symbol, the semantics is not quite exactly the same (one is atomic and the other is not). I definitely hate x86, it gives me headaches ! :-)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

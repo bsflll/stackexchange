@@ -1,0 +1,57 @@
+{
+  "title": "Hook end/middle of function",
+  "link": "https://reverseengineering.stackexchange.com/questions/2468/hook-end-middle-of-function",
+  "content": "How could I hook anywhere but the beginning of a function? I'm trying to add features to a third party executable, and I need it to execute it's code completely, then pass its data onto my function. I can't quite conceive how to do this.\n\nIs there an easy way to do this? I can't find any hooking engines that implement this. I can't find any information on it anywhere.\n\nI saw someone saying that you could add an illegal opcode then catch the exception, but I do not know how to do that.\n\nExample (pseudo-code):\n\n```\nint moveCharacter(int x, int y) {\n    x += 5;\n    y += 5;\n    return 0;\n}\n\n```\nSay I want to hook right before return 0, and pass the new x and y variables to my own function (in an injected DLL, or code-cave) that writes the variables to a log file. After my function, I want to return to the original function, so that it can return like normal.\n\n",
+  "votes": "9",
+  "answers": 3,
+  "views": "6k",
+  "tags": [
+    "c++",
+    "dll-injection"
+  ],
+  "user": "Sean Heiss",
+  "time": "Jul 14, 2013 at 0:52",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The reason why there aren't engines to hook the end of a function is because it's hard to determine where that is, or if it even exists.  A function has a single entry point, but it can have multiple exit points, including none at all (consider exit()).\nThe exit point can have multiple types, too - return, throw(), longjmp(), C++EH, etc.\n\nThe general idea to hook after function completion is to detour the caller instead, but it's too late for what you need.\nAnyway, it's done this way: First, detour the function of interest, which hooks the start of execution.  When you receive control, unhook the function and then read the return address from the stack (assuming that the function will actually return).\nNext, detour the return address (the caller), and then let the original function execute.  When you receive control again, the function has completed its execution.  You can unhook the return address, perform your additional operations, and then resume execution.\nUnfortunately, you'll lose access to local variables (which you seem to want, based on your description).\nOne way to avoid that problem is to single-step through the function, by installing a Vectored Exception Handler to receive the single-step exception.  That would allow you to examine the instruction that will be executed next (because the exception occurs after the previous instruction executed), and if it's the return instruction, then you can log the values.\n\nAs far as the exception method goes, you would install a Vectored Exception Handler to point to your code, and then place a breakpoint instruction at the place of interest.  Again, the problem is to determine where that place is.\n\n",
+      "votes": "8",
+      "user": "peter ferrie",
+      "time": "Jul 14, 2013 at 4:05",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Microsoft Detours makes this very easy. You'd effectively write the following code (to be safe, you'd want to make other calls such as DetourUpdateThread() as well):\n\n```\nDetourTransactionBegin();\nDetourAttach(&(PVOID&)OriginalFunction, Function);\nDetourTransactionCommit();\n\n```\nAnd then have code such as the following as your hook:\n\n```\nint Function(int x)\n{\n   int r = OriginalFunction(x);\n\n   // Handle r here\n\n   return r;\n}\n\n```\n",
+      "votes": "4",
+      "user": "Jason Geffner",
+      "time": "Jul 14, 2013 at 0:34",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Sean Heiss",
+          "text": "I was under the impression that Detours could only be used for executing before the other function. Instead of making OriginalFunction the beginning of the function, I could make it anything? I added an example to my main post to try to explain what I want to do.",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "Ah, you need access to the local stack variables. In that case, just patch the target function's ret instruction with a jmp to your hook function.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "Detours has a pretty restrictive EULA, though. Not suitable for a lot of purposes.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "A much simpler approach is to identify the point at which the code has actually generated the data you need.  When you find that location, replace the next several bytes with a call or an far call to your own code.  Make careful note of the bytes that you are overwriting.  (As an aside, I recommend a call or far call rather than a jmp so that I don't have to worry so much about code relocation; I can reference the original location to return to from the stack rather than having to worry about where I am relative to the original code.)\n\nThe very first thing that your code should do is preserve state.  Perhaps a pusha/pushf?  Now process away.  Rather than execute a return, the last few bytes of your code should do the following:\n\nThis process is actually the primary way that traditional malware \"hooks\" into your code.  You're creating a sort of detour.\n\n",
+      "votes": "3",
+      "user": "David Hoelzer",
+      "time": "Jul 14, 2013 at 1:07",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

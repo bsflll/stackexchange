@@ -1,0 +1,63 @@
+{
+  "title": "Strange instructions pattern (lw) in MIPS binary",
+  "link": "https://reverseengineering.stackexchange.com/questions/17023/strange-instructions-pattern-lw-in-mips-binary",
+  "content": "I'm trying to reverse a binary and I'm having trouble understanding a pattern that keeps showing in almost half of the functions in the binary.\n\nThis is how one particular function looks like:\n\n\n\nWhy is rsl_setNetCfgObj being loaded in $v1 and not \"used\" (being called) anywhere? I see that the next opcode sets $a1 to an offset of $v1, but those addresses aren't pointing to anything meaningful.\nThis pattern is repeated in a lot of the functions that I'm analysing, and I'm not sure if that's some bug in Binary Ninja and IDA Pro (as they both show the same), or if I'm missing something.\n\nIf that is not a bug, what exactly is rol_setNetCfgObj supposed to do?\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "805",
+  "tags": [
+    "disassembly",
+    "binary-analysis",
+    "mips"
+  ],
+  "user": "alexandernst",
+  "time": "Dec 20, 2017 at 13:20",
+  "comments": [
+    {
+      "user": "Graham Best",
+      "text": "looks to me like obfuscation",
+      "time": null
+    },
+    {
+      "user": "alexandernst",
+      "text": "Can you elaborate a little bit further? How would I proceed if that was the case?",
+      "time": null
+    },
+    {
+      "user": "Graham Best",
+      "text": "My bad, normally stuff like this is placed inside a function when obfuscation happens (which means that its probably packed?), I can't provide you a full answer, I don't have enough info, are the imports bad? Check that, also, en.wikipedia.org/wiki/Obfuscation_(software) What you're going to have to do if it is packed, is to unpack it, I recommend reading: reverseengineering.stackexchange.com/questions/72/…",
+      "time": null
+    },
+    {
+      "user": "Graham Best",
+      "text": "I just re-read your post, yes, I'm 90% sure its packed / obfuscated, if thats showing up in half of the functions.",
+      "time": null
+    },
+    {
+      "user": "alexandernst",
+      "text": "@GrahamBest that \"lw\" shows up in pretty much every function I open, sometimes more than once in a single stub. And yet it feels \"too little\" to be an obfuscation technique. Is there a tool or some way I can tell with certainty that the binary is obfuscated?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Like many RISC implementations, MIPS instruction set uses fixed-width 32-bit instructions, and instructions have only 16 bits for the offset field, meaning you can use only 16-bit constants, giving you 64KB of addressing. However, the actual address space of a MIPS CPU is 4GB (32-bit address size), so how can you access all that? Well, there is the  option of using partial 16-bit moves to build a 32-bit address in a register and then use an indirect load/store to access it. It usually looks similar to:\n\n```\nlui  $r1, 0x0123\naddi $r1, $r1, 0xabcd\n\n```\nor\n\n```\nlui  $r1, 0x0123\nori  $r1, $r1, 0xabcd\n\n```\nBoth of these load 0x0123abcd into r1 aka at (see here).\n\nHowever, this requires knowledge of the address at compile- (or at least link-) time. In case our binary needs to be loaded at a different address (as often the case with shared libraries), it will have to be relocated (instructions would need to be patched). Patching takes time, prevents code page sharing and increases memory consumption, that's why position-independent code (PIC) is preferred to fixed-address. \n\nSo, how we can perform the address calculation independent from the load address? Well, we just need to take our execution address and add a fixed delta to it (usually binaries are loaded as one chunk to memory, so offsets from one part of it to another are fixed).  The MIPS ABI states that for public functions, the value of $t9 at the function entry should be equal to its runtime address, and we can see the code using this fact:\n\n```\n109BC: li $gp, 0x830e4\n109C4: addu $gp, $gp, $t9\n\n```\nIf we assume that $t9 is equal to 0x109BC, we get :\n\n```\ngp = 0x830e4 + 0x109BC = 0x93AA0\n\n```\ngp stands for \"global pointer\" and is not supposed to change during the execution of the function (often it is assumed to have the same value in all functions of the program). This fact may be used by the compiler in all other calculations involving program addresses. For example, looking at the highlighted area:\n\n```\nlw $v1, -0x7fd4($gp) \n\n```\n0x93AA0-0x7fd4 = 0x8BACC, and apparently the program stores 0x70000 at that address, which is used in the next instruction to load $a1:\n\n```\nlw $a1, -0x1b4c($v1)\n\n```\nCalculating it: -0x1b4c+0x70000=0x6E4B4 (helpfully shown by the disassembler).\n\nSo, $v1 (and v0 later) here is just an intermediate variable used for the address calculation (usually $at is reserved for this purpose but reusing it all the time may lead to slower code).\n\nBy the way, 0x70000 has all zeroes in the low 16 bits, and it's not an accident. It may happen to point to rsl_setNetCfgObj but it's just a red herring.\n\nIf you go to the .got section of the binary, you will usually see something like this:\n\n```\n.got:00515B40      .word 0\n.got:00515B44      .word 0x80000000\n.got:00515B48      .word 0x510000\n.got:00515B4C      .word 0x4D0000\n.got:00515B50      .word 0x420000\n.got:00515B54      .word 0x4C0000\n.got:00515B58      .word 0x520000\n.got:00515B5C      .word 0x430000\n.got:00515B60      .word 0x440000\n.got:00515B64      .word 0x450000\n.got:00515B68      .word 0x460000\n.got:00515B6C      .word 0x470000\n.got:00515B70      .word 0x480000\n.got:00515B74      .word 0x490000\n.got:00515B78      .word 0x4A0000\n.got:00515B7C      .word 0x530000\n.got:00515B80      .word 0x4B0000\n.got:00515B84      .word 0\n.got:00515B88      .word 0\n.got:00515B8C      .word 0\n\n```\nThese are so-called local GOT entries, and are used by the compiler purely for address calculations inside the binary and not as pointers to external symbols. The compiler allocates enough different addresses there so it can reach any required address in the local binary with just a 16-bit (signed) offset. The gp itself is usually set to GOT+7FF0 which allows the compiler to load any GOT entry (either external symbol or a local address for further calculation) in one instruction (assuming that GOT does not exceed 64KB).\n\nSo, in summary: what you have here is not obfuscation or a disassembler bug but normal code demonstrating limitations of the MIPS instruction set and its calling conventions.\n\nBTW, IDA knows about these things and by default represents most such references using final addresses. E.g., from a sample binary:\n\n```\n.text:0042C34C   la      $v0, dword_520000\n.text:0042C350   lbu     $v0, (byte_5193CD - 0x520000)($v0)\n.text:0042C354   beqz    $v0, loc_42C36C\n.text:0042C358   li      $v1, 8\n.text:0042C35C   li      $v1, 9\n.text:0042C360   la      $v0, dword_520000\n.text:0042C364   b       loc_42C380\n.text:0042C368   sb      $v1, (sLastPayedFileInfo - 0x520000)($v0)\n\n```\nAnd with simplifications turned off:\n\n```\n.text:0042C34C   lw      $v0, -0x7FD8($gp)\n.text:0042C350   lbu     $v0, (byte_5193CD - 0x520000)($v0)\n.text:0042C354   beq     $v0, $zero, loc_42C36C\n.text:0042C358   addiu   $v1, $zero, 8\n.text:0042C35C   addiu   $v1, $zero, 9\n.text:0042C360   lw      $v0, -0x7FD8($gp)\n.text:0042C364   beq     $zero, $zero, loc_42C380\n.text:0042C368   sb      $v1, (sLastPayedFileInfo - 0x520000)($v0)\n\n```\nWhile you can still somewhat see what's going on, I personally prefer the first one.\n\nFor more info on MIPS I would recommend the See MIPS Run book by Sweetman, as well as the MIPS ABI specifications (see here for a start). Or just go through the code instruction by instruction and try to figure out what they do.\n\n",
+      "votes": "6",
+      "user": "perror",
+      "time": "Dec 20, 2017 at 17:38",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "alexandernst",
+          "text": "Just so I can make sure I understand everything you wrote: you mean that what lw $a1, -0x1b4c($v1) is actually doing is loading whatever 4 bytes there are at the address 0x6E4B4. If so, according to IDA, $a = 0xDCD73AA5. I can upload the binary somewhere, so you can check it, if you want me to do so.",
+          "time": null
+        },
+        {
+          "user": "alexandernst",
+          "text": "Nevermind, I just confirmed my assumptions by successfully reversing the stub that I was interested in. Thank you and kudos for the great explanation!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

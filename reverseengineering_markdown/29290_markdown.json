@@ -1,0 +1,42 @@
+{
+  "title": "How to call your version of the existing function using proxy dll?",
+  "link": "https://reverseengineering.stackexchange.com/questions/29290/how-to-call-your-version-of-the-existing-function-using-proxy-dll",
+  "content": "I have bits of code which decompiles a small part of the existing program. I have added it to the proxy dll. The code to the existing functions is hooked through Detour and looks like below (gui.h and gui.cpp)\n\nBut now how do I call my own implementation of the gamemain function? Can someone may be point me to an existing post(s) where calling proxy dll replaced functions is described in detail.\n\nOr / And if you don't mind spending time looking at the code below, I would appreciate the tips on how to make it work in the similar structure to the one I am using or may be there is another solution I should be considering.\n\nNote, I do know the address for the gamemain function in the original exe.\n\ngui.h\n\n```\n#pragma once\n#include \"world.h\"\n\nnamespace gladius {\n\n    namespace gui {\n    \n        \n        //struct gladius::world::World* __fastcall getworld();\n        struct GUI {\n            //gladius::world::World* __fastcall gladius::gui::GUI::getWorld(gladius::gui::GUI* thisptr);\n            using GetWorld = gladius::world::World* (__fastcall*) (GUI* thisptr);\n            GetWorld getWorld;\n        };\n\n\n        GUI& get();\n    } //namespace gui\n}\n\n```\ngui.cpp\n\n```\n#include \"world.h\"\n#include \"gui.h\"\n#include <array>\n\n\nnamespace gladius {\n\n    namespace gui {\n\n        static std::array<GUI, 1> functions = { {\n\n                // Steam\n                    GUI{\n                            (GUI::GetWorld)0x140b81074,\n                         },\n                } };\n\n\n        GUI& get()\n        {\n            return functions[0];\n        }\n    }\n}\n\n```\nThis works. But now I want to change another function and replace it with my implementation. I.e. the function looks like this:\n\ngame.h\n\n```\n#pragma once\n\n#include \"world.h\"\n#include \"game.h\"\n#include \"gui.h\"\n\nnamespace gladius {\n    \n    \n    struct Game {\n        //virtual int __thiscall main(gladius::Game* thisptr, int param_1, char** param_2, char** param_3);\n        int __thiscall gladius::Game::gamemain(gladius::Game* thisptr, int param_1, char** param_2, char** param_3)\n        {\n\n            gladius::gui::GUI guiInst;\n            gladius::world::World worldInst;\n\n            gladius::Game::initialize(this, param_1, param_2, param_3);\n            // proxy::gui::GUI::run(*(GUI**)(this + 0x28));\n            //worldInst = gladius::gui::GUI::getWorld(*(gladius::gui::GUI**)(this + 0x88));\n\n            gladius::world::World::CreateWorld(*(gladius::world::World**)(*(long long *)(this + 0x5e8) + 0x50));\n            gladius::Game::quit(this);\n            return 0;\n        }\n        void __fastcall gladius::Game::initialize(gladius::Game* thisptr, int a2, char** a3, char** a4);\n        void __fastcall gladius::Game::quit(gladius::Game* thisptr);\n    };\n\n\n}\n\n```\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "162",
+  "tags": [
+    "c++",
+    "dll-injection",
+    "program-analysis"
+  ],
+  "user": "Irbis77",
+  "time": "Sep 14, 2021 at 19:01",
+  "comments": [
+    {
+      "user": "Jack",
+      "text": "what is the issue you are facing with getting it to execute your own gamemain? if you have hooked the original function. the flow would then be original gamemain -> your gamemain -> whereever you want it to go next , so your gamemain function should be called in that way.",
+      "time": null
+    },
+    {
+      "user": "Jack",
+      "text": "also, for your second question, if I get what you are asking, then I think you will want to look at vtable hooking. instead of detouring each function one-by-one, you could alternatively replace the vtable pointer, or the entire vtable with your own. this way your just changing the pointed address, and you don't need to hook a function.",
+      "time": null
+    },
+    {
+      "user": "Irbis77",
+      "text": "Well, the problem with the hook was the exact syntax as it is first time I am doing this. I've figured it out now. Will add to the answer.   The problem with vtable pointing is that ideally I would like an example of how it is done. I can figure it out I guess, but it would be more straight forward to see of how it is done in clear example...",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "In regards to the discussion above in the Comments section. As I've mentioned, I have figured out the hooking part, even though it is not fully working yet with the main application.\n\nHere is the solution:\n\ngame.cpp\n\n```\n#include \"game.h\"\n#include <array>\n\n\nnamespace gladius {\n\n        static std::array<Game, 1> functions = { {\n\n                // Steam\n                    Game{\n                            (Game::GameMain)0x140039ea0,\n                            (Game::Initialize)0x140033e20,\n                            (Game::Quit)0x14003a0e0\n                         },\n\n                } };\n\n\n        Game& get()\n        {\n            return functions[0];\n        }\n}\n\n```\nhooks.cpp\n\n```\n#include \"hooks.h\"\n#include \"game.h\"\n\nnamespace hooks {\n\n    Hooks getHooks()\n    {\n        Hooks hooks{\n            HookInfo{(void**)&gladius::get().gamemain, gamemainHooked}, \n        };\n        return hooks;\n    }\n\n    Hooks getVftableHooks()\n    {\n        Hooks hooks;\n        return hooks;\n    }\n\n    int __fastcall gamemainHooked(gladius::Game* thisptr, int param_1, char** param_2, char** param_3)\n    {\n\n        gladius::get().initialize(thisptr, param_1, param_2, param_3);\n\n        gladius::world::World::CreateWorld(*(gladius::world::World**)(*(long long*)(thisptr + 0x5e8) + 0x50));\n        gladius::get().quit(thisptr);\n\n        return gladius::get().gamemain(thisptr, param_1, param_2, param_3);\n    }\n\n```\nhooks.h\n\n```\n#pragma once\n\n#ifndef HOOKS_H\n#define HOOKS_H\n\n#include <string>\n#include <utility>\n#include <vector>\n#include \"game.h\"\n\n\nnamespace hooks {\n\n    using HookInfo = std::pair<void**, void*>;\n    using Hooks = std::vector<HookInfo>;\n\n    /** Returns array of hooks to setup. */\n    Hooks getHooks();\n    Hooks getVftableHooks();\n\n    int __fastcall gamemainHooked(gladius::Game* thisptr, int param_1, char** param_2, char** param_3);\n\n} // namespace hooks\n\n#endif // HOOKS_H\n\n```\nThe problem I found with this kind of work, there is a very scarce set of information and examples on the topic.\n\nI will probably endeavour on writing wiki page with the examples and explanations on how it is done, once I am convinced that this is working.\n\nBecause for me personally it would be so much easier if there are simple and comprehensive examples on how it can be done.\n\nThe same goes to vtable pointers. I mean, may be it is just me, but is there some source, where I can check different a simple examples of how exactly it is done for the complex programs, not for \"Hello World!\" apps? Because the later ones tend to reverse the entire code and what I need is a mixture of the reversed and original code working together...\n\n",
+      "votes": "0",
+      "user": "Irbis77",
+      "time": "Sep 19, 2021 at 12:53",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

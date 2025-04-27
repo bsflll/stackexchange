@@ -1,0 +1,53 @@
+{
+  "title": "Finding the actual Thumb code in firmware",
+  "link": "https://reverseengineering.stackexchange.com/questions/5945/finding-the-actual-thumb-code-in-firmware",
+  "content": "I'm planning to buy my first mechanical keyboard, a KBT Poker II, and apart from the physical characteristics of it, another thing that caught my attention is that it sports reflashable firmware! Reversing and hacking on the firmware would be a fun personal project. (Unfortunately, the flasher is windows-only... I'm not sure how to deal with that, but that's another question.)\n\nSadly though, when I tried poking around with the firmware files I couldn't make sense of it--I tried running a few Thumb disassemblers (as well as hacking up my own to learn more about Thumb) on parts of it that would seem to contain code (upon hexdump inspection), but they all came up with garbage instruction as far as a I could tell--certainly no function prologues/epilogues, and a lot of crazy immediates all over the place as well as absurd amounts of shifts and LDMs.\n\nSome technical information on the hardware inside the keyboard: it's built around a Nuvoton NUC122SC1AN, which features a Cortex-M0 CPU.  The firmware files in question are supplied in an attachment to this forum post (by the keyboard manufacturer).\n\nWhat I have found, however, is the interrupt table located at $0000--its length exactly matches that of the one documented on ARM's website, including IRQs 0..31. However, another oddity here is that they all point to interrupts in the high memory--$ffff_fff00 and such.  This area isn't included in the memory map of the NUC122, and ARM's spec has it as \"reserved\", but I'm guessing it might be mapped to some internal memory containing the chip-flashing-receiving code and such, and that the interrupts either trampoline to user (firmware) code or the table gets overwritten with interrupt handlers supplied by the firmware. Anyway, I'd probably be able to figure that out once I have some code to look at.\n\nI've tried binwalking the files, and it came up empty for all of them.\n\nTo be clear, what I'm looking for in an answer here is guidance to where I find the actual executable code in one of the firmware files above (supplied by the manufacturer itself, so there should be no legal isues here), because I'm really not getting it. I should add that I'm relatively new to the world of reversing.  Thanks!\n\n",
+  "votes": "10",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "disassembly",
+    "binary-analysis",
+    "firmware"
+  ],
+  "user": "FireFly",
+  "time": "Jul 27, 2014 at 19:00",
+  "comments": [
+    {
+      "user": "Willem Hengeveld",
+      "text": "For ARM thumb code i would expect to see 0xb510 or 0xb5f0  code sequences ('push'),  i don't see those at all in the bin files.",
+      "time": null
+    },
+    {
+      "user": "FireFly",
+      "text": "Hrmmm. Well, it should be Thumb, since the Cortex-M0 only supports Thumb + a few Thumb-2 instructions, and this photo of the PCB clearly says it sports a NUC122. Perhaps it's compressed somehow? Although the distribution (from manual inspection and through some naive analysis) doesn't look at all like compressed data. Are there any tools for identifying filetype/type-of-data by byte distribution?",
+      "time": null
+    },
+    {
+      "user": "mr_peck",
+      "text": "Do you have made some progress on reversing the poker firmware ? I was planning to replace the PCB of my poker ii with a programmable controller but if you succed to build a custom firmware i might keep the original PCB.",
+      "time": null
+    },
+    {
+      "user": "FireFly",
+      "text": "@mr_peck sorry, I've put it on hold for the time being.. I haven't decided whether to go ahead or not yet, and some other projects of mine caught my attention instead. The windows-only flasher also complicates things a bit for me...",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I downloaded the archive you referenced and the first thing I noticed was that the firmware files are very heavy in the 0x80 - 0xff range.  Inverting each byte resulted in a much nicer byte distribution and looked like it had some structure but still not quite right.  I assume that since they went as far as inverting the bytes, they might have done some bit-manipulation such as XOR.\n\nSince this file is a firmware update, there is usually a header or a footer.  It looks like there is a header of offsets or something, but nothing made sense.  Scrolling further through the file, around byte 35000, there appears to be a block of structured data, followed by a block of 0xff and then a 16-byte \"footer\":\n\n```\n003F1F0: 84 95 74 64 B4 63 13 14 00 00 00 00 3C DC C5 6C\u0013   ..td.c......<...\u0013\n\n```\nThe first 8 bytes look like a good place to start.  Going through a few common XOR strategies resulted in nothing.  Then I noticed that these bytes have a low nibble of 3, 4 or 5 which would place them in the printable ASCII range.  So swap the nibbles of each byte (aka rotate left 4 bits) ... :\n\n```\n003F1F0: 48 59 47 46 4B 36 31 41 00 00 00 00 C3 CD 5C C6   HYGFK61A........\n\n```\nBingo!  Since the firmware updater window title is \"HY USB Firmware Downloader\", I think this is a winner.  Loading the resulting file into IDA, Cortex M-0 Thumb 2 settings, and sure enough, we have valid code starting at offset 0x0120 and ASCII string block at offset 0x32121.\n\nSummary: Decode the .bin files by processing each byte as:\n\n```\nrotate left 4 bits and invert:  \nc = (((c & 0x0f) << 4) | ((c & 0xf0) >> 4)) ^ 0xff\n\n```\n",
+      "votes": "14",
+      "user": "David",
+      "time": "Jul 28, 2014 at 19:32",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "FireFly",
+          "text": "Oh! That explains everything. I'd noticed the footer after the padding null-bytes, but had written it off as \"not important for me presently\"--man, was I wrong. As an aside, the last four bytes differ between the different firmwares so I'm guessing they're a checksum of some sort. Anyway, thanks a lot, I should be able to carry on from here.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

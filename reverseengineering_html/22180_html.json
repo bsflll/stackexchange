@@ -1,0 +1,62 @@
+{
+    "title": "How to help IDA to auto complete libc functions?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22180/how-to-help-ida-to-auto-complete-libc-functions",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a x86_64 ELF binary which is statically compiled. With some digging,\nI have found the C library is musl. In IDA Pro 7.0, the decompiled pseudo code\nshows sycalls as inline assembly code. But in latest IDA Pro 7.3.x it is shown\nas an incomplete function. Take\n  <code>\n   fork()\n  </code>\n  as an example:\n </p>\n <ul>\n  <li>\n   In assembly:\n  </li>\n </ul>\n <pre><code>mov eax, 57\nsyscall\n</code></pre>\n <ul>\n  <li>\n   In IDA Pro 7.0:\n  </li>\n </ul>\n <pre><code>__asm { syscall; LINUX - sys_fork }\n</code></pre>\n <ul>\n  <li>\n   In IDA Pro 7.3.x:\n  </li>\n </ul>\n <pre><code>sys_fork()\n</code></pre>\n <p>\n  So, there is some improvement :)\n </p>\n <p>\n  I want IDA to automatically resolve the function parameters and return values.\nIn Windows world, I did something similar by\n  <a href=\"https://reverseengineering.stackexchange.com/q/18669/23069\">\n   creating type libraries\n  </a>\n  .\nIs there any way to import the whole C library (musl or glibc) in IDA without\nmanually editing every libc functions?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "hexrays",
+        "libc"
+    ],
+    "user": "Biswapriyo",
+    "time": "Sep 24, 2019 at 9:38",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Inline syscalls are rarely used on their own even in minimal libraries like musl. Usually there are wrapper functions around the syscall which is what actually ends up in the binary. So what you can do is use the FLAIR toolkit to generate a FLIRT signature from the musl’s static library and then apply the signature to your binary. This way you should get all the wrapper functions recognized which, coupled with one of the standard type libraries, should give you names and arguments for the C library functions.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Sep 27, 2019 at 21:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Compiled musl from git repo. Ran <code>./pelf libc.a</code>. Got this error <code>(__init_tls.lo): Unknown relocation type 42 (offset in section=0x41)</code>. Though it generated <code>libc.pat</code> file, <code>./sigmake libc.pat libc.sig</code> shows this error <code>./lib/libc.pat (1): FATAL: can't find eof marker (---)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">IIRC you can handle unsupported relocations with -r switch</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">It’s a switch for pelf, not sigmake</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">I have to find the compiler. Now flirt works, IDA can shows 90% of the syscall/libc function names.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Here are the required steps using\n  <a href=\"https://reverseengineering.stackexchange.com/a/22202/23069\">\n   Igor Skochinsky's answer\n  </a>\n  :\n </p>\n <ul>\n  <li>\n   Clone musl git repository:\n  </li>\n </ul>\n <pre><code>git clone --depth=1 git://git.musl-libc.org/musl\n</code></pre>\n <ul>\n  <li>\n   Compile the code:\n  </li>\n </ul>\n <pre><code>cd musl; ./configure; make -s -j2\n</code></pre>\n <ul>\n  <li>\n   Extract Flair tool from IDA SDK. Run\n   <code>\n    pelf\n   </code>\n   (ELF parser) with the musl static\nlibrary which is compiled in above step:\n  </li>\n </ul>\n <pre><code>cd ./lib\n~/flair/bin/linux/pelf libc.a\n</code></pre>\n <p>\n  The output will be something like below:\n </p>\n <pre><code>Fatal [/mnt/c/MyFiles/libc.a] (__init_tls.lo): Unknown relocation type 42 (offset in section=0x3a).\n</code></pre>\n <ul>\n  <li>\n   To fix the unsupported relocation error, run\n   <code>\n    pelf\n   </code>\n   with\n   <code>\n    -r\n   </code>\n   option:\n  </li>\n </ul>\n <pre><code>./flair/bin/linux/pelf -r42:58:0 libc.a musl.pat\n</code></pre>\n <p>\n  The\n  <code>\n   -r\n  </code>\n  option is specified as\n  <code>\n   -rN:O:L\n  </code>\n  where N is relocation type, mark as\nvariable L bytes at offset O from the relocation address. This creates a PAT file.\n </p>\n <ul>\n  <li>\n   Now run\n   <code>\n    sigmake\n   </code>\n   to create the Flair signature file:\n  </li>\n </ul>\n <pre><code>./flair/bin/linux/sigmake -n musl musl.pat musl.sig\n</code></pre>\n <p>\n  If the output does not show any warning then the SIG file is OK. But if there\nany collisions with the function signature the output will be something like below:\n </p>\n <pre><code>libc.sig: modules/leaves: 1550/1775, COLLISIONS: 41\n</code></pre>\n <p>\n  To mitigate the error, remove comments from\n  <code>\n   musl.exc\n  </code>\n  collision file. Then run\nthe above\n  <code>\n   sigmake\n  </code>\n  command again. There will be a\n  <code>\n   musl.sig\n  </code>\n  file which can be\nimported in IDA Pro from File > Load File > FLIRT signature file.\n </p>\n <p>\n  FLIRT signature\n  <strong>\n   depends on the C/C++ compiler\n  </strong>\n  . For my case it is clang. I found\nit in the exception handling function. There will be a static string like\n  <code>\n   CLNGC++\\0\n  </code>\n  .\nThe string can not be found in IDA's String Window. So, one has to find the\nexception handling function first. The trick is that the function is called whenever\na error value returns.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Biswapriyo",
+            "time": "Nov 19, 2019 at 15:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Much appreciated!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

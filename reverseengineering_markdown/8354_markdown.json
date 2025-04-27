@@ -1,0 +1,53 @@
+{
+  "title": "Why doesn't WinDbg resolve the function names?",
+  "link": "https://reverseengineering.stackexchange.com/questions/8354/why-doesnt-windbg-resolve-the-function-names",
+  "content": "This is definitely a beginner question but the WinDbg docs didn't help me out much because most of it is oriented around debugging programs with PDB files available. I tried .reload but it didn't have any effect.\n\nHere is a simple call to MessageBox disassembled with WinDbg/kd:\n\n```\n00000000`012f1000 6a00            push    0\n00000000`012f1002 68d0202f01      push    offset ReverseMe+0x20d0 (012f20d0)\n00000000`012f1007 68dc202f01      push    offset ReverseMe+0x20dc (012f20dc)\n00000000`012f100c 6a00            push    0\n00000000`012f100e ff159c202f01    call    dword ptr [ReverseMe+0x209c (012f209c)]\n\n```\nWhy is WinDbg not resolving the function name on the call for me? I can't imagine someone would be able to reverse engineer a program like this. When I trace the instructions, I'll end up at MessageBoxW so at least on some level WinDbg knows what is going on. I mean, it should, because the PDBs for the Windows APIs are available.\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "7k",
+  "tags": [
+    "windbg"
+  ],
+  "user": "dvvr",
+  "time": "Mar 1, 2015 at 1:15",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "If WinDbg does not show method names, the symbols are not correct.\n\nUse\n\n```\n.symfix C:\\debug\\symbols\n\n```\nto be able to download PDB files from Microsoft. Then use\n\n```\n.sympath+ C:\\mypdbs\n\n```\nto add the symbols of your own application.\n\nFinally, use\n\n```\n.reload /f\n\n```\nto make use of them.\n\n",
+      "votes": "2",
+      "user": "Thomas Weller",
+      "time": "Mar 24, 2015 at 22:13",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "To resolve function names you need symbol information and symbol information is kept in pdb file if you do not have pdb file then it is definitely a very very hard task until you learn a few tricks / memorize a few patterns / understand few gotchas  \n\nwindbg knows nothing about symbols if you have the symbol file do .reload /f depending on the psb type(private pdb / public pdb)   and compilation type (release / debug ) windbg will resolve public names and or private locals \n\nif you do not have symbol information you may need piece it together \n\nmessagebox without symbol info \n\n```\n0:000> u 401000\nimage00400000+0x1000:\n00401000 6a00            push    0\n00401002 6800304000      push    offset image00400000+0x3000 (00403000)\n00401007 6819304000      push    offset image00400000+0x3019 (00403019)\n0040100c 6a00            push    0\n0040100e e807000000      call    image00400000+0x101a (0040101a)\n00401013 6a00            push    0\n00401015 e806000000      call    image00400000+0x1020 (00401020)\n0040101a ff2508204000    jmp     dword ptr [image00400000+0x2008 (00402008)]\n\n```\nbased on disassembly you may need to look for the right information\nor simply view the hex i know MessageBoxA takes two ascii strings so i print them with %ma \nto know what is pointed by the call (jmp [402008] i print the symbol information of the call  (i know microsoft provides public symbols for its core dlls i know user32.dll is a microsoft dll and i know i have the symbols (pdb file for this user32.dll)\n\n```\n0:000> .printf \"%ma  \n%ma  \n%y  \n\" , 403000, 403019,poi(402008)\nIczelion's tutorial no.2\nWin32 Assembly is Great!\nuser32!MessageBoxA (7e4507ea)\n\n```\nnow the same application with symbols\n\nsee windbg properly resolving function names when symbol info is available in disassembly \n\n```\n0:000> u 401000\ndbgmsgbox!start [dbgmsgbox.asm @ 17]:\n00401000 6a00            push    0\n00401002 6800304000      push    offset dbgmsgbox!MsgCaption (00403000)\n00401007 6819304000      push    offset dbgmsgbox!MsgBoxText (00403019)\n0040100c 6a00            push    0\n0040100e e807000000      call    dbgmsgbox!MessageBoxA (0040101a)\n00401013 6a00            push    0\n00401015 e806000000      call    dbgmsgbox!ExitProcess (00401020)\ndbgmsgbox!MessageBoxA:\n0040101a ff2508204000    jmp     dword ptr [dbgmsgbox!_imp__MessageBoxA (00402008)]\n\n```\nthe information printed out earlier by printf hack is now available with pertinent type information\n\n```\n0:000> ?? (char *) @@((403000))\nchar * 0x00403000\n \"Iczelion's tutorial no.2\"\n0:000> ?? (char *) @@((403019))\nchar * 0x00403019\n \"Win32 Assembly is Great!\"\n0:000> ln poi(402008)\n(7e4507ea)   user32!MessageBoxA   |  (7e450838)   user32!MessageBoxExW\nExact matches:\n    user32!MessageBoxA = <no type information>\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Mar 1, 2015 at 12:08",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "dvvr",
+          "text": "I tried .reload /f but it did not really help. So is this an inherent limitation of WinDbg? I know that I can't expect it to know all the symbols (eg. the names of non-exported functions of ReverseMe) without the PDB files. But I have seen other debuggers and disassemblers show the calls to WinAPI functions correctly. For example, OllyDbg v. 2.01 shows \"CALL DWORD PTR DS:[<&USER32.MessageBoxW>]\" for the same executable. When I single step the call, WinDbg shows it correctly inside the MessageBoxW function. Would I need to write a custom extension for it to fetch the names for me?",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "please read the complete reply and try to apply all the suggested examples to your current scenerio by using .printf command you can retrieve the symbol information for the call you dont have to write any extension do not compare ollydbg or ida to windbg ollydbg is an excellent usermode debugger and has some inbuilt analysis capability ida's disassembler also has analysis capability builtin to identify patterns  windbg is primarly meant for kernel debugging. user mode debugging with fancy function names is not the contract for windbg.",
+          "time": null
+        },
+        {
+          "user": "Thomas Weller",
+          "text": "@blabb: \"user mode debugging with fancy function names is not the contract for windbg.\" - I solely (>95%) use WinDbg for user mode debugging.",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "yeah sure you can use windbg for usermode debuging the issue was about  display of fancy function names without relevent  pdb files where other usermode debugers like ollydbg  are a bit better  and my reply points to some workarounds on how to find some clues about symbols",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+    "title": "segmentation fault at `mov byte [esi+7], al`",
+    "link": "https://reverseengineering.stackexchange.com/questions/20868/segmentation-fault-at-mov-byte-esi7-al",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<pre><code>Section .text\n        global _start\n\n_start:\n        jmp short GoToCall\n\nshellcode:\n        pop             esi\n        xor             eax, eax\n        mov byte        [esi+7], al\n        lea             ebx, [esi]\n        mov long        [esi + 8], ebx\n        mov long        [esi + 12], eax\n        mov byte        al, 0x0b\n        mov             ebx, [esi]\n        lea             ecx, [esi + 8]\n        lea             edx, [esi + 12]\n        int             0x80\n\nGoToCall:\n        Call shellcode\n        db      \"/bin/shJAAAABBBB\"\n</code></pre>\n<p>After compiling the above shellcode I got below disassembly. where at 3rd line I am getting the Segmentaion fault.</p>\n<pre><code>(gdb) disassemble shellcode \nDump of assembler code for function shellcode:\n   0x08049002 &lt;+0&gt;: pop    %esi\n   0x08049003 &lt;+1&gt;: xor    %eax,%eax\n=&gt; 0x08049005 &lt;+3&gt;: mov    %al,0x7(%esi)\n   0x08049008 &lt;+6&gt;: lea    (%esi),%ebx\n   0x0804900a &lt;+8&gt;: mov    %ebx,0x8(%esi)\n   0x0804900d &lt;+11&gt;:    mov    %eax,0xc(%esi)\n   0x08049010 &lt;+14&gt;:    mov    $0xb,%al\n   0x08049012 &lt;+16&gt;:    mov    (%esi),%ebx\n   0x08049014 &lt;+18&gt;:    lea    0x8(%esi),%ecx\n   0x08049017 &lt;+21&gt;:    lea    0xc(%esi),%edx\n   0x0804901a &lt;+24&gt;:    int    $0x80\nEnd of assembler dump.\n(gdb) printf \"%s\", $esi\n/bin/shJAAAABBBB(gdb) printf \"%s\", $esi+7\nJAAAABBBB(gdb) si\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x08049005 in shellcode ()\n(gdb) \n</code></pre>\n</div>",
+    "votes": "3",
+    "answers": 4,
+    "views": "2k",
+    "tags": [
+        "assembly",
+        "shellcode"
+    ],
+    "user": "Mukesh",
+    "time": "Mar 13, 2019 at 20:18",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The instruction that causes the SIGSEGV is trying to store a <code>'\\0'</code> after the <code>'h'</code> in <code>\"/bin/shJAAAABBBB\"</code>.</p>\n<p>All your code/data is in the <code>.text</code> section which is probably read-only.\nRun <code>objdump -h</code> on the resulting binary, and you should see something like the following in the output:</p>\n<pre><code>  5 .text         00000031  00001000  00001000  00001000  2**4\n                  CONTENTS, ALLOC, LOAD, READONLY, CODE\n</code></pre>\n<p>which contains the addresses where the bytes of the string are stored.</p>\n</div>",
+            "votes": "2",
+            "user": "booto",
+            "time": "Mar 13, 2019 at 22:36",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "wisk",
+                    "text": "<span class=\"comment-copy\">Actually for ELF executable, memory protections are set according to the segment and not the section. But anyways, you're right.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mukesh",
+                    "text": "<span class=\"comment-copy\">If I want to write into the <code>\"/bin/shJAAAABBBB\"</code> and execute the shellcode what update I have to make in the assemble?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The memory where you shellcode is located and executed is not writable.\nIt could happen for different reasons, my guess is your shellcode is encoded as a C literal string. Since this memory location is not writable, so you get an exception.</p>\n<p>If you just want to try the shellcode, allocate a memory page using <code>mmap(2)</code> with flag <code>PROT_EXEC | PROT_READ | PROT_WRITE</code>, copy your shellcode inside and jump on it.</p>\n<p>By the way, your shellcode is null byte free, if you copy it using <code>strcpy(3)</code> function, you can remove both <code>xor eax, eax</code> and <code>mov [esi+7], al</code> because <code>strcpy(3)</code> will write the 0x00 for you. Just make sure to trim \"/bin/shJAAAABBBB\" to \"/bin/sh\".</p>\n</div>",
+            "votes": "1",
+            "user": "wisk",
+            "time": "Mar 13, 2019 at 22:36",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It's because <code>/bin/sh</code> needs <code>\\0</code>, so replace it <code>\"AAAABBBB\"</code> with <code>\\0</code></p>\n</div>",
+            "votes": "1",
+            "user": "Febriyanto Nugroho",
+            "time": "Oct 5, 2019 at 12:12",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As the answer of @booto shows, <code>objdump -h</code> prints out <code>.text</code> section is readonly.</p>\n<p>You can try to compile like this and don't have to update the original source code:</p>\n<pre><code>nasm -f elf32 -o ./Execve.o Execve.nasm\nld -N -o ./Execve ./Execve.o\n</code></pre>\n<p><code>ld -N</code>:</p>\n<blockquote>\n<p>Set the text and data sections to be readable and writable.</p>\n</blockquote>\n</div>",
+            "votes": "0",
+            "user": "jasonz",
+            "time": "Dec 27, 2019 at 7:25",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

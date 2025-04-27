@@ -1,0 +1,57 @@
+{
+    "title": "Hook end/middle of function",
+    "link": "https://reverseengineering.stackexchange.com/questions/2468/hook-end-middle-of-function",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>How could I hook anywhere but the beginning of a function? I'm trying to add features to a third party executable, and I need it to execute it's code completely, then pass its data onto my function. I can't quite conceive how to do this.</p>\n<p>Is there an easy way to do this? I can't find any hooking engines that implement this. I can't find any information on it anywhere.</p>\n<p>I saw someone saying that you could add an illegal opcode then catch the exception, but I do not know how to do that.</p>\n<p>Example (pseudo-code):</p>\n<pre><code>int moveCharacter(int x, int y) {\n    x += 5;\n    y += 5;\n    return 0;\n}\n</code></pre>\n<p>Say I want to hook right before <code>return 0</code>, and pass the new <code>x</code> and <code>y</code> variables to my own function (in an injected DLL, or code-cave) that writes the variables to a log file. After my function, I want to return to the original function, so that it can return like normal.</p>\n</div>",
+    "votes": "9",
+    "answers": 3,
+    "views": "6k",
+    "tags": [
+        "c++",
+        "dll-injection"
+    ],
+    "user": "Sean Heiss",
+    "time": "Jul 14, 2013 at 0:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The reason why there aren't engines to hook the end of a function is because it's hard to determine where that is, or if it even exists.  A function has a single entry point, but it can have multiple exit points, including none at all (consider exit()).\nThe exit point can have multiple types, too - return, throw(), longjmp(), C++EH, etc.</p>\n<p>The general idea to hook after function completion is to detour the caller instead, but it's too late for what you need.\nAnyway, it's done this way: First, detour the function of interest, which hooks the start of execution.  When you receive control, unhook the function and then read the return address from the stack (assuming that the function will actually return).\nNext, detour the return address (the caller), and then let the original function execute.  When you receive control again, the function has completed its execution.  You can unhook the return address, perform your additional operations, and then resume execution.\nUnfortunately, you'll lose access to local variables (which you seem to want, based on your description).\nOne way to avoid that problem is to single-step through the function, by installing a Vectored Exception Handler to receive the single-step exception.  That would allow you to examine the instruction that will be executed next (because the exception occurs after the previous instruction executed), and if it's the return instruction, then you can log the values.</p>\n<p>As far as the exception method goes, you would install a Vectored Exception Handler to point to your code, and then place a breakpoint instruction at the place of interest.  Again, the problem is to determine where that place is.</p>\n</div>",
+            "votes": "8",
+            "user": "peter ferrie",
+            "time": "Jul 14, 2013 at 4:05",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><a href=\"http://research.microsoft.com/en-us/projects/detours/\" rel=\"nofollow\">Microsoft Detours</a> makes this very easy. You'd effectively write the following code (to be safe, you'd want to make other calls such as <code>DetourUpdateThread()</code> as well):</p>\n<pre><code>DetourTransactionBegin();\nDetourAttach(&amp;(PVOID&amp;)OriginalFunction, Function);\nDetourTransactionCommit();\n</code></pre>\n<p>And then have code such as the following as your hook:</p>\n<pre><code>int Function(int x)\n{\n   int r = OriginalFunction(x);\n\n   // Handle r here\n\n   return r;\n}\n</code></pre>\n</div>",
+            "votes": "4",
+            "user": "Jason Geffner",
+            "time": "Jul 14, 2013 at 0:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Sean Heiss",
+                    "text": "<span class=\"comment-copy\">I was under the impression that Detours could only be used for executing before the other function. Instead of making <code>OriginalFunction</code> the beginning of the function, I could make it anything? I added an example to my main post to try to explain what I want to do.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Ah, you need access to the local stack variables. In that case, just patch the target function's ret instruction with a jmp to your hook function.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Detours has a pretty restrictive EULA, though. Not suitable for a lot of purposes.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A much simpler approach is to identify the point at which the code has actually generated the data you need.  When you find that location, replace the next several bytes with a call or an far call to your own code.  Make careful note of the bytes that you are overwriting.  (As an aside, I recommend a call or far call rather than a jmp so that I don't have to worry so much about code relocation; I can reference the original location to return to from the stack rather than having to worry about where I am relative to the original code.)</p>\n<p>The very first thing that your code should do is preserve state.  Perhaps a pusha/pushf?  Now process away.  Rather than execute a return, the last few bytes of your code should do the following:</p>\n<ul>\n<li>Pop the flags and registers</li>\n<li>copy in the bytes from the original code that you previously overwrite</li>\n<li>Unwind the stack by adjusting SP to account for the call or far call</li>\n<li>jmp or far jmp to the IP or CS:IP immediately below the current SP</li>\n</ul>\n<p>This process is actually the primary way that traditional malware \"hooks\" into your code.  You're creating a sort of detour.</p>\n</div>",
+            "votes": "3",
+            "user": "David Hoelzer",
+            "time": "Jul 14, 2013 at 1:07",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

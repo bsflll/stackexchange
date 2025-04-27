@@ -1,0 +1,84 @@
+{
+    "title": "Is Null in Windows equal to zero?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26434/is-null-in-windows-equal-to-zero",
+    "content": "(This question refers to assembly language.)  I'm a little bit confused.  I've encountered many times Windows functions that are supposed to return a Handle, and if they don't they return NULL.  Why do the checks afterward check against zero?  Zero isn't equal to NULL.\nAs an example:\nGetModuleHandleA:\nhttps://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea\n",
+    "votes": "6",
+    "answers": 4,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "malware"
+    ],
+    "user": "Daniel Benisti",
+    "time": "Dec 9, 2020 at 12:40",
+    "comments": [
+        {
+            "user": "Alexei Levenkov",
+            "text": "Side note: I think originally all those methods were documented with returning zero on failure but now most switched to \"NULL\", but you can still find \"zero\" - docs.microsoft.com/en-us/windows/win32/api/libloaderapi/… (which is just Ex version of function in the question)\n",
+            "time": null
+        },
+        {
+            "user": "Thorbjørn Ravn Andersen",
+            "text": "You may not have to check for null because the hardware catches the bad memory reference and tells your handler.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "In C, and many other low-level programming languages the term <pre><code>NULL</code></pre> is equivalent to <pre><code>0</code></pre>.\nThe C standard requires NULL to be <pre><code>#define</code></pre>d to an \"implementation defined value\", however all implementations have chosen (for obvious reasons) to use <pre><code>0</code></pre> for that purpose. For that reason if you'll attempt to \"See definition\" for <pre><code>NULL</code></pre>, many IDEs will drop you in a line <pre><code>#define NULL 0</code></pre> or something similar.\nThis has the additional benefit of <pre><code>NULL</code></pre> evaluating to <pre><code>false</code></pre> making conditional statements readable and intuitive.\nThe proper way, from a strict standard following perspective, would be to use <pre><code>NULL</code></pre> and not 0, and that's what most developers do. The compiler (or pre-processor in the case of <pre><code>#define NULL 0</code></pre>) will however translate that to a <pre><code>0</code></pre>.\nSome higher level languages (such as javascript and C++) use special expressions to signify null. One example is C++'s <pre><code>nullptr</code></pre>, that since C++11 is the required definition of <pre><code>NULL</code></pre>. Javascript uses a special object, <pre><code>null</code></pre>.\n",
+            "votes": "13",
+            "user": "NirIzr",
+            "time": "Dec 3, 2020 at 17:44",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Comments are not for extended discussion; this conversation has been <a href=\"https://chat.stackexchange.com/rooms/117015/discussion-on-answer-by-nirizr-does-null-in-windows-equal-to-zero\">moved to chat</a>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "ISO C and C++ allow implementations to use a non-zero bit-pattern as the object representation for a null pointer, despite requiring that a literal <pre><code>0</code></pre> or <pre><code>(void*)0</code></pre> in the source (in a pointer context) is evaluated as a null pointer, equivalent to <pre><code>NULL</code></pre>.  Reasoning based on source definitions like <pre><code>#define NULL 0</code></pre> is not sufficient in C or C++.\nBut fortunately for everyone's sanity, all modern C and C++ implementations for x86 (and other modern ISAs) do use <pre><code>0</code></pre> in asm as the bit-pattern for NULL.  This makes non-portable code like <pre><code>memset(ptr_array, 0, size)</code></pre> work as expected, equivalent to a loop that sets each element to <pre><code>NULL</code></pre>.\nWhen was the NULL macro not 0? is asking about source-level non-zero definitions, but I think that's not allowed in modern C.  The answers mention several historical machines that had non-zero null pointer bit-patterns.  (i.e. what you'd see in the asm for code like <pre><code>do {...} while(p = p->next);</code></pre>)\n\nRemember that in asm, pointers are just 64-bit (or 32-bit) integers.  The whole idea of <pre><code>NULL</code></pre> is in-band signalling, not some special thing that isn't even a pointer-sized integer.  So we have to pick some constant.\n<pre><code>0</code></pre> is a convenient sentinel value because many ISAs can branch slightly more efficiently on a value being non-zero than checking for any other value.  e.g. ARM has <pre><code>cbnz</code></pre> to branch on non-zero without needing a <pre><code>cmp</code></pre>.  x86 has a minor code-size optimization of <pre><code>test eax, eax</code></pre> / <pre><code>jnz</code></pre> instead of <pre><code>cmp eax, 0</code></pre> / <pre><code>jnz</code></pre>.  (Test whether a register is zero with CMP reg,0 vs OR reg,reg?).  If FLAGS are already set by another arithmetic instruction, no <pre><code>test</code></pre> would be needed, but that's unusual for null pointer tests: usually you don't do math on a pointer and then test for NULL.\n(You're not seeing that optimization in your asm because your debug build stores to memory before testing.)\nAlso, <pre><code>0</code></pre> is easy to generate.  Some large number might take a larger instruction, or more instructions on some ISAs, to create in a register.  (e.g. x86 <pre><code>xor eax,eax</code></pre> instead of <pre><code>mov eax, imm32</code></pre>).  And zero-initialized static storage like <pre><code>static int *table = NULL;</code></pre> can be in the BSS instead of <pre><code>.data</code></pre> - modern systems zero-init the BSS.\n\nOn some systems (especially embedded) the <pre><code>0</code></pre> address isn't special, and you actually have system-management stuff there, like the start of a table of interrupt handlers.  So <pre><code>0</code></pre> can be a valid address, as well as being equal to <pre><code>NULL</code></pre>.  This kinda sucks, so this is where one might actually want a non-zero object representation for null pointers.  @Simon Richter comments about hacking an ARM compiler to use <pre><code>0x20000000</code></pre> as the NULL bit-pattern.\nOn systems using virtual memory (like Windows), we can simply avoid ever mapping the page containing that address, which helps detect bugs by making sure NULL-dereference actually faults.  (Remember that undefined behaviour in C and C++ is not required to fault, but it's certainly convenient if it does.)\n",
+            "votes": "7",
+            "user": "Peter Cordes",
+            "time": "May 12, 2024 at 4:04",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">There was a useful and interesting comment here that this answer linked to, but apparently it's been deleted.  &gt;.&lt;  Some comments are worth keeping.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "When looking at Windows API calls or disassembly of C/C++ code, NULL Is always 0, in Visual Studio this is defined in vcruntime.h\n<pre><code>#ifndef NULL\n    #ifdef __cplusplus\n        #define NULL 0\n    #else\n        #define NULL ((void *)0)\n    #endif\n#endif\n</code></pre>\nHowever if you are looking at higher level languages NULL will not necessarily be zero, for example within .NET C# code like this:\n<pre><code>if (args == null)\n{\n    Console.WriteLine(\"null!\");\n}\n</code></pre>\nWill compile to Common Intermediate Language (CIL). You can see with ldnull null is not simply zero.\n<pre><code>IL_0001: ldarg.0\nIL_0002: ldnull\nIL_0003: ceq\nIL_0005: stloc.0\nIL_0006: ldloc.0\nIL_0007: brfalse.s IL_0016\nIL_000a: ldstr \"null!\"\nIL_000f: call void [mscorlib]System.Console::WriteLine(string)\n</code></pre>\n",
+            "votes": "6",
+            "user": "chentiangemalc",
+            "time": "Dec 3, 2020 at 23:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\"><code>0</code> in a pointer context has special meaning in C and C++.  This definition does <i>not</i> definitively tell you that the object-representation for a null pointer is <code>0x00000000</code>.  (That is the case in all mainstream C++ implementations for x86, and almost all mainstream C and C++ implementations ever.  There are a few historical exceptions: <a href=\"https://stackoverflow.com/a/2597156\">When was the NULL macro not 0?</a> mentions some and quotes the C standard re: <code>0</code> in the source vs. the bit-pattern used.)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">This means ISO C++ doesn't guarantee that <code>memset(ptr_array, 0, 16)</code> would initialize pointers to NULL, or in the OP's case that a compare would check against zero in the generated asm.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "NULL is zero.\nBut in the Windows SDK you can also find ERROR_SUCCESS which is also equal to 0 (as described here) and defined as \"the operation completed successfully\". Some Windows API functions will return ERROR_SUCCESS when successful rather than a handle.\nUltimately it depends on each API and it's return values.\nIf you look at the documentation for GetModuleHandleA you can see clearly that it is said that\n\"Return value\nIf the function succeeds, the return value is a handle to the specified module.\nIf the function fails, the return value is NULL. To get extended error information, call GetLastError.\"\n",
+            "votes": "-1",
+            "user": "rotem.salinas",
+            "time": "May 13, 2024 at 5:38",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

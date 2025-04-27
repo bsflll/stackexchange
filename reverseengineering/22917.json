@@ -1,0 +1,67 @@
+{
+    "title": "A question about the Base field in the PE Export Directory",
+    "link": "https://reverseengineering.stackexchange.com/questions/22917/a-question-about-the-base-field-in-the-pe-export-directory",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've been examining the PE file structure graph located <a href=\"http://www.openrce.org/reference_library/files/reference/PE%20Format.pdf\" rel=\"nofollow noreferrer\">here</a>. The following is written there about the export directory: </p>\n<blockquote>\n<p>If a symbol N is exported by ordinal and name then:<br/>\n  -Its name will be located at AddressOfNames[N]</p>\n<p>-Its ordinal at AddressOfNameOrdinals[N]</p>\n<p>-And its address* will be\n  AddressOfFunctions[AddressOfNameOrdinals[N]]</p>\n</blockquote>\n<p>I thought that the address would be <code>AddressOfFunctions[AddressOfNameOrdinals[N] -  _IMAGE_EXPORT_DIRECTORY.Base]</code> because Base is the number that we subtract from the ordinal to get the index into the <code>AddressOfFunctions</code> array. </p>\n<p>For example, if we have <code>Base = 8</code>, the minimal entry in <code>AddressOfNameOrdinals</code> will be 8. The first index of the <code>AddressOfFunctions</code> array is zero, so to get the address of the function with the ordinal equal to 8, we subtract the base from the ordinal and get 0.</p>\n<p>Where have I made a mistake?</p>\n</div>",
+    "votes": "1",
+    "answers": 3,
+    "views": "1k",
+    "tags": [
+        "pe"
+    ],
+    "user": "Student12",
+    "time": "Jan 6, 2020 at 10:24",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you don't have the <code>GetProcAddress()</code> function, you have to iterate entire export table, here a example how i made it in the past...</p>\n<pre><code>template&lt;typename INTH_T&gt;\nNTSTATUS GetRemoteProcAddressArch(HANDLE hProcess, HMODULE ModuleHandle, LPCSTR RoutineName, PULONG_PTR hRoutine)\n{\n\n    HMODULE hModule = GetModuleHandleA(\"Ntdll.dll\");\n\n    if(!hModule)\n        hModule = LoadLibraryA(\"Ntdll.dll\");\n\n    NTSTATUS Result = STATUS_UNSUCCESSFUL;\n\n    if(hModule)\n    {\n        NTSTATUS(WINAPI*ZwReadVirtualMemory)\n        (\n            HANDLE ProcessHandle,\n            PVOID BaseAddress,\n            PVOID Buffer,\n            SIZE_T NumberOfBytesToRead,\n            PSIZE_T NumberOfBytesReaded\n        ) = reinterpret_cast&lt;NTSTATUS(WINAPI*)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T)&gt;(GetProcAddress(hModule, \"ZwReadVirtualMemory\"));\n\n\n        if(ZwReadVirtualMemory)\n        {\n            const size_t rLength = strlen(RoutineName);\n            char* rNameSz = new char[rLength + 1] { 0 };\n\n\n            if(ModuleHandle)\n            {\n                PIMAGE_DOS_HEADER iDos = reinterpret_cast&lt;PIMAGE_DOS_HEADER&gt;(ModuleHandle);\n                SIZE_T BytesReaded = NULL;\n                LONG PEHeaderVirtualAddress = NULL; // same both x86 and x64, shuldn't be problem...\n                NTSTATUS rResult = ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;iDos-&gt;e_lfanew), &amp;PEHeaderVirtualAddress, sizeof(LONG), &amp;BytesReaded);\n\n                if(rResult == STATUS_SUCCESS)\n                {\n                    INTH_T* PEHeader = reinterpret_cast&lt;INTH_T*&gt;(PEHeaderVirtualAddress + reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle));\n\n                    ULONG ImageExportDirectoryVirtualAddress = NULL; // same both x86 and x64\n                    BytesReaded = NULL;\n                    rResult = ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;PEHeader-&gt;OptionalHeader.DataDirectory[0]), &amp;ImageExportDirectoryVirtualAddress, sizeof(ULONG), &amp;BytesReaded);\n\n                    if(rResult == STATUS_SUCCESS)\n                    {\n                        PIMAGE_EXPORT_DIRECTORY nED = reinterpret_cast&lt;PIMAGE_EXPORT_DIRECTORY&gt;(reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle) + ImageExportDirectoryVirtualAddress);\n                        IMAGE_EXPORT_DIRECTORY ed = { 0 };\n\n\n                        BytesReaded = NULL;\n                        if(ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(nED), &amp;ed, sizeof(IMAGE_EXPORT_DIRECTORY), &amp;BytesReaded) == STATUS_SUCCESS)\n                        {\n\n                            PDWORD rvaNames = reinterpret_cast&lt;PDWORD&gt;(reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle) + static_cast&lt;ULONG_PTR&gt;(ed.AddressOfNames));\n                            PDWORD rvaFunctions = reinterpret_cast&lt;PDWORD&gt;(reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle) + static_cast&lt;ULONG_PTR&gt;(ed.AddressOfFunctions));\n                            PWORD rvaOrdinals = reinterpret_cast&lt;PWORD&gt;(reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle) + static_cast&lt;ULONG_PTR&gt;(ed.AddressOfNameOrdinals)); \n\n\n                            for(DWORD i = 0; i &lt; ed.NumberOfFunctions; i++)\n                            {\n                                BytesReaded = NULL;\n                                DWORD rva = NULL;\n                                if(ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;rvaNames[i]), &amp;rva, sizeof(DWORD), &amp;BytesReaded) == STATUS_SUCCESS)\n                                {\n                                    BytesReaded = NULL;\n                                    if(ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle) + static_cast&lt;ULONG_PTR&gt;(rva)), reinterpret_cast&lt;PVOID&gt;(const_cast&lt;LPSTR&gt;(rNameSz)), rLength, &amp;BytesReaded) == STATUS_SUCCESS)\n                                    {\n                                        if(!ncstrncmp(rNameSz, RoutineName, rLength))\n                                        {\n                                            BytesReaded = NULL;\n                                            WORD rvaOrdinal = NULL;\n\n                                            if(ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;rvaOrdinals[i]), &amp;rvaOrdinal, sizeof(WORD), &amp;BytesReaded) == STATUS_SUCCESS)\n                                            {\n                                                BytesReaded = NULL;\n                                                rva = NULL;\n\n                                                if(ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;rvaFunctions[rvaOrdinal]), &amp;rva, sizeof(DWORD), &amp;BytesReaded) == STATUS_SUCCESS)\n                                                {\n                                                    *hRoutine = (static_cast&lt;ULONG_PTR&gt;(rva) + reinterpret_cast&lt;ULONG_PTR&gt;(ModuleHandle));\n                                                    Result = STATUS_SUCCESS;            \n                                                }\n                                            }\n                                            break;\n                                        }       \n                                    }\n                                }\n                            }                   \n                        }               \n                    }\n                }\n            }\n            delete[] rNameSz;\n        }\n    }   \n    return Result;\n}\n</code></pre>\n<p>usage example:</p>\n<pre><code>auto hProcess = OpenProcess( ... );\nauto possibleHandle = RemoteHandleFrom(hProcess, \"ntdll.dll\"); // i owe you, but you can find it in the msdn, there's a lot examples...\nULONG_PTR addr = NULL;\nGetRemoteProcAddressArch&lt;IMAGE_NT_HEADERS64&gt;(hProccess, possibleHandle, \"ZwOpenProcess\", &amp;addr );\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "MindLerp",
+            "time": "Jan 7, 2020 at 22:14",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Student12",
+                    "text": "<span class=\"comment-copy\">Apologies for a late question. In your code you are writing: if (ZwReadVirtualMemory(hProcess, reinterpret_cast&lt;PVOID&gt;(&amp;rvaFunctions[rvaOrdinal]), &amp;rva, sizeof(DWORD), &amp;BytesReaded) == STATUS_SUCCESS). But why isn't it &amp;rvaFunctions[rvaOrdinal-Base]? Shouldn't we subtract it from the ordinal because the array members start at 0 and the ordinals start at the number written in the Base field?</span>",
+                    "time": null
+                },
+                {
+                    "user": "MindLerp",
+                    "text": "<span class=\"comment-copy\">@Student12 No, we add the relative virtual address to our current module base, since the function assembly it's on (OurCurrentModuleBase + rva), when a module it's mapped into memory, it's mapped with forward memory address logic... like first we have the Dos Stub, PE header, sections .text, .data, etc, so we have to add it... since our base address it's before than all...</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">What strikes me as odd about this function is that your <code>for</code> loop uses <code>NumberOfFunctions</code> as the upper boundary. This seems wrong to me, as the <code>NumberOfNames</code> governs the size of the parallel <code>AddressOfNameOrdinals</code> and <code>AddressOfNames</code> arrays. What am I missing? Won't you overrun with this code?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The ordinal base is the value that you have to add to the ordinal to get the actual/true ordinal used for importing.</p>\n<p>The example code below should explain what I mean:</p>\n<pre><code>//p_module_base is a char* pointer to the module base \n//p_export_directory is a PIMAGE_EXPORT_DIRECTORY pointer for the module\nPDWORD p_func_names = (PDWORD)(p_module_base + p_export_directory-&gt;AddressofNames);\nPWORD p_ordinals = (PWORD)(p_module_base + p_export_directory-&gt;AddressOfNameOrdinals);\n\n//As an example, consider the 0th named function in the DLL:\nchar * example_name = (char*)(p_module_base + p_func_names[0]);\nWORD example_ordinal = p_ordinals[0];\n\n//Adjust the ordinal by adding the ordinal base\nWORD true_ordinal = example_ordinal + p_export_directory-&gt;Base;\n\n//The following two returned addresses are THE SAME:\nFARPROC addr_one = GetProcAddress((HMODULE)p_module_base, (LPCSTR)example_name);\nFARPROC addr_two = GetProcAddress((HMODULE)p_module_base, (LPCSTR)true_ordinal);\n</code></pre>\n<hr/>\n<p>UPDATE (to address the comment):</p>\n<p>To get the function address without GetProcAddress, you index into the Function address table and then add the module base. The addresses are RVAs.</p>\n<p>Example code:</p>\n<pre><code>//List of function RVAs\nPDWORD p_addresses = (PDWORD)(p_module_base + p_export_directory-&gt;AddressOfFunctions);\n\n//For our example function considered in the code above, get the address\nPVOID example_address = (PVOID)(p_module_base + p_addresses[p_ordinals[0]]);\n\nprintf(\"The function named %s is located in memory here: %p\\n\", \n    example_name, \n    example_address);\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "hft",
+            "time": "Jan 8, 2020 at 2:45",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Student12",
+                    "text": "<span class=\"comment-copy\">What if I don't have the GetProcAddress function and have to search for the exports manually? I parse the export directory, find the name of the function in the names array, then I find the ordinal in the ordinals array. What index do I use now to get the function address from the EAT?</span>",
+                    "time": null
+                },
+                {
+                    "user": "hft",
+                    "text": "<span class=\"comment-copy\">@Student12 please see my update to address your comment</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>From what I can see by viewing Kernelbase.dll in PE Bear, the First Function <code>AccessCheck()</code> is at AddressOfNames[0], and the corresponding Ordinal at AddressOfOrdinal[0] is 4, which according to the PDF would mean the Address of the Function would be at AddressOfFunctions[4], which it is. Which means there are 4 functions defined in the AddressOfFunctions Table before <code>AccessCheck()</code>, at positions AddressOfFunctions[0] to AddressOfFunctions[3]. Although there is <code>_IMAGE_EXPORT_DIRECTORY.Base</code> value of 1 in the dll, I'm not sure how that is coming into play as the PDF description appears to be correct. I will have to see how the function names of the first 4 functions before <code>AccessCheck</code> are mapped with the first 4 addresses in the AddressOfFunctions table though.</p>\n</div>",
+            "votes": "0",
+            "user": "EvilSapphire",
+            "time": "Jan 5, 2020 at 22:16",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

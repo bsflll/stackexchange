@@ -1,0 +1,72 @@
+{
+    "title": "OllyDBG saved executable crashes",
+    "link": "https://reverseengineering.stackexchange.com/questions/25054/ollydbg-saved-executable-crashes",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm kind of new to this sort of thing so I hope someone can help me. I'm currently trying to understand how most malwares infect other files/modify an exe. Using Visual Studio 2017 I made an exe (with c++) that only does 2 things: print \"Injection didn't work!\" and after that runs \"pause&gt;NUL\". I compiled it in x86 Release mode. Then I made a second exe which only prints \"Injection worked\". My main goal was to inject code into the first/target exe so that it runs the second exe first and then itself. So the final output after the injection should look something like this: \"Injection worked. Injection didn't work!\".\nMy idea was to use OllyDBG. I opened the target exe and I added the following code into the code cave at the end of the code: </p>\n<pre><code>ASCII \"inject.exe\"\nPUSH 1\nPUSH 008B1F7C               (Address of ASCII \"inject.exe\")\nCall WinExec\nCall __security_init_cookie (This is the assembly code at the entrypoint which I overwrote with a JMP instruction to this codecave)\nJMP 008B1572 (JMP back to next instruction after entrypoint)\n</code></pre>\n<p>And the entrypoint looks like this:</p>\n<pre><code>JMP 008B1F87 (JMP to codecave)\n</code></pre>\n<p>This code should execute inject.exe which is the second exe I made (and this exe is located in the same folder as the target exe). When I run this in OllyDBG it works and it gives me the desired output but as soon as I save it to an exe (Copy to exectuable -&gt; All modifications -&gt; Copy All -&gt; Save as InjectionTestPatched.exe) it won't run anymore and crashes before printing anything. I also checked the %errorlevel% after execution which was -1073741819 and not 0. I don't really understand why the code worked in OllyDBG but not when I save it as an exe.</p>\n<p>Does someone know what is going on here?\n(Please excuse my bad English as I'm not a native english speaker)</p>\n<p>EDIT: I think I figured out WHY it is behaving like this but I don't know how to fix it. When I debug the Patched EXE every address seems to be correct but the address to the ASCII isn't. all JMP/CALL addresses adjust accordingly to the offset but the address to the ASCII remains static (the PUSH 008B1F7C doesnt change). Could ASLR be the source of my problems? And if yes, how can I bypass this...</p>\n<p><a href=\"https://i.sstatic.net/tduYV.jpg\" rel=\"nofollow noreferrer\"><img alt=\"OllyDBG\" src=\"https://i.sstatic.net/tduYV.jpg\"/></a></p>\n<p>Here the address in red should point to the ASCII but it is the same as it was before (the addresses changed after the exe was made). What I don't understand is that the JMP address changed to the right address but the PUSH not. Why does that happen, how can I fix this? (EDIT2: Problem solved)</p>\n<p>EDIT2: So I figured out a way to push the ASCII address on the stack correctly everytime by loading the EIP into EAX and sub it. This seems to work beacause the ASCII address is always on the stack when I reload the code. But now I have the next problem which is that WinExec doesnt seem to work anymore after reloading. OllyDBG doesn't even recoginze this instruction anymore as it shows it as 4 individual DB lines and not as CALL WinExec. How could I solve this?</p>\n<p>EDIT3: PROBLEM SOLVED! the Call for WinExec seemed to have been changed due to ASLR even tho the address is always the same. I solved it by loading the static address to EAX and then with a CALL EAX i can call a static address which is not affected by ASLR. My Injection worked now.</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "270",
+    "tags": [
+        "ollydbg",
+        "patching"
+    ],
+    "user": "skudo",
+    "time": "May 18, 2020 at 15:19",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">Without much looking into the issue I think the common solution to such is <code>call</code> after the string + <code>pop</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "skudo",
+            "text": "<span class=\"comment-copy\">Why pop and call after the string? The original problem was that i \"hard-coded\" the address of the ASCII for the PUSH. the Problem with that is that ASLR changes the address of the ASCII and thus the PUSH becomes invalid. As I said the workaround was to write code that calculated the ASCII address relatively. I did it by getting the current address (EIP) and subtracting 10h of it to get the address of the ASCII. This worked beautifully</span>",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">when you <code>call</code>, an address of the next instruction is pushed on the stack for the <code>ret</code> opcode. In your case it would be a string and thus by <code>pop</code>-ing you could obtain the address of it.</span>",
+            "time": null
+        },
+        {
+            "user": "skudo",
+            "text": "<span class=\"comment-copy\">Oh thats what you mean.Yes thats exactly what I did. I just didn't know that this was possible as I was still pretty confused by the ASLR.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So I finally solved my problem. Here a quick explanation on how I did it:</p>\n<p>The original problem was that I used \"fixed\" addresses for the <code>PUSH</code> meaning that it <em>pushes</em> always the same address (which should be the address of the ASCII). But ASLR randomizes the base address upon creating the EXE which means that the address becomes invalid as it points now to a totally different place than before. The workaround was to determine the address more \"relatively\" rather than absolute.</p>\n<p>The main idea was to somehow get the current address (<code>EIP</code>) and subtract a specific number from it so that now it points to the ASCII. This is possible by creating a function which is called. Every time a <code>CALL</code> is executed the address of the next instruction will be pushed on the stack.  In this function the address is saved in <code>EAX</code> with <code>POP</code> and later pushed back so that the <code>RET</code> still knows where to return.</p>\n<p>I added a <code>CALL</code> after the string to retrieve the address and subtracted <code>10h</code> from it. Now I had the address of the ASCII in <code>EAX</code> then follows the same code as before where <code>WinExec</code> is called only with the difference that now <code>EAX</code> is pushed onto the stack rather than the \"absolute\" address. Before calling <code>WinExec</code> I saved the address of <code>WinExec</code> in <code>EAX</code> (because the address for WinExec stays the same even with ASLR and the problem with ASLR is that the Address is going to modified and thus it won't corresponding to <code>WinExec</code> anymore). Then I  just made a <code>CALL EAX</code> to run <code>WinExec</code> and the rest is the same.</p>\n<p>Here is the full code:</p>\n<pre><code>Entrypoint: JMP &lt;address of the first CALL in injected code&gt;\n\nPOP EAX                               (Puts address of next instruction into EAX)\nPUSH EAX                              (Copies address back to the stack so that RET knows where to go)\nRET\n\nASCII \"inject.exe\"\nCALL &lt;address of the routine above&gt;   (puts address of next instruction into EAX)\nSUB EAX,0x10                          (SUB EAX,&lt;this number depends on the size of the executable name. Just subtract the address of this instruction with the address of the ASCII&gt;)\nPUSH 1\nPUSH EAX\nPUSH WinExec                          (Puts address of WinExec onto stack so that the address won't change because of ASLR)\nPOP EAX\nCALL EAX                              (execute WinExec)\nCALL __security_init_cookie           (replace this instruction with the instruction that will be overwritten by the JMP instruction to this code cave. In my case it's this call)\nJMP &lt;address of second Instruction at Entrypoint&gt;\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "skudo",
+            "time": "May 18, 2020 at 15:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Paweł Łukasik",
+                    "text": "<span class=\"comment-copy\">well then it's not an answer to your question and as such should be removed. Please consider writing an actual answer for the sake of future seekers ;)</span>",
+                    "time": null
+                },
+                {
+                    "user": "skudo",
+                    "text": "<span class=\"comment-copy\">Well I kind of explained it briefly in my original post but I suppose I'll include a more detailed version in my answer then.</span>",
+                    "time": null
+                },
+                {
+                    "user": "skudo",
+                    "text": "<span class=\"comment-copy\">I made a more detailed explanation. I hope it's understandable as I have trouble explaining things in english...</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@skudo thanks. If you could also replace the image by the textual version, that would be brilliant. Thanks in advance.</span>",
+                    "time": null
+                },
+                {
+                    "user": "skudo",
+                    "text": "<span class=\"comment-copy\">I also included some comments to explain the code a bit better. Is this ok or should I remove them?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

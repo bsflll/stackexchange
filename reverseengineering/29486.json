@@ -1,0 +1,55 @@
+{
+    "title": "How to reverse engineer a setjmp/longjmp sequence?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29486/how-to-reverse-engineer-a-setjmp-longjmp-sequence",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to reverse engineer the GNU libc x86 (32 bit) setjmp / longjmp (re a vuln which may allow arbitrary overwrite of the <code>jmp_buf env</code>.</p>\n<p>There's a <a href=\"https://offlinemark.com/2016/02/09/lets-understand-setjmp-longjmp/\" rel=\"nofollow noreferrer\">great writeup of the musl setjmp</a> but I can find almost nothing online about the GNU. I've tried to navigate the source, but it's a spaghetti ball of macros, probably due to being so sys dependent. The asm is unusual, using things like:</p>\n<pre><code>CALL       dword ptr GS :[0x10 ]\n</code></pre>\n<p>which I don't fully understand (I thought segments were for 16 bit 8088 code! What is the <code>GS:</code>?).</p>\n<p>A priori, I would expect that setjmp would simply save a few registers, but it seems much more complicated.  I've found posts claiming GNU intentionally obfuscates it, either to prevent programmers from relying on internals, or for some security purpose, both of which I'm skeptical of.</p>\n<p>Experimenting with a debugger has shown one thing: the <code>jmp_buf env</code> changes with each invocation, such as that even the same program, with the same params, and the same stack pointers, if you're using a debugger to load the <code>jmp_buf</code> from one invocation into another you get a SIGV.  The contents are clearly not a pure function of the program and stack, but somehow change (randomly?) with each invocation.</p>\n<p>Are any of the crack REs here able to penetrate <code>setjmp</code>?</p>\n</div>",
+    "votes": "5",
+    "answers": 1,
+    "views": "363",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "x86",
+        "memory",
+        "operating-systems"
+    ],
+    "user": "SRobertJames",
+    "time": "Nov 10, 2021 at 10:21",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Check out <a href=\"https://en.wikipedia.org/wiki/X86_memory_segmentation#Later_developments\" rel=\"nofollow noreferrer\">Later developments</a>. A few of the segment selectors have been repurposed to hold base addresses to specific pieces of data. In Windows, for example <code>fs</code> plays a role in retrieving the TIB/TEB pointer and ultimately the PEB pointer, but also when setting up SEH in a function. Specific to your question <a href=\"https://stackoverflow.com/a/6617004/476371\">read this</a>.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'll start with answering a few basic questions, some of which you didn't even ask!</p>\n<h5>What are segment registers doing in modern code?</h5>\n<p>It's been a while since we've needed extra registers to address a memory region. 32, and especially 64, bits are more than enough. OS developers took advantage of those unused registers and nowadays most modern OSes use at least some of the registers to hold OS related data. As mentioned in the comments, on amd64 processors segment registers cannot be used for segmentation but OSes have been doing it on 32 bit processors as well.</p>\n<p>You can read more about it <a href=\"https://reverseengineering.stackexchange.com/questions/2006/how-are-the-segment-registers-fs-gs-cs-ss-ds-es-used-in-linux\">here</a> regarding linux, <a href=\"https://reverseengineering.stackexchange.com/questions/16336/where-es-gs-fs-are-pointing-to\">here</a> and <a href=\"https://en.wikipedia.org/wiki/Win32_Thread_Information_Block\" rel=\"nofollow noreferrer\">here</a> regarding windows, etcetera.</p>\n<h5>Why can't I restore data from a previous execution of a program</h5>\n<p>Although you may control some variables of a program's execution (parameters, stack addresses, process loading addresses and heap location) you're still not controlling all variables (locations of specifica allocations, values returned from \"external\" sources such as the kernel and as we'll see soon, anti-exploitation mitigations might interfere with that sort of thing too).</p>\n<p>Generally, you should never expect such a thing to work without taking the necessary adjustments. Let alone in something as low-level and nuanced as setjmp/longjmp.</p>\n<h5>Why isn't the setjmp/longjmp implementation documented?</h5>\n<p>Firstly, we're in a reverse engineering community, avoiding documentation does not guarantee confidentiality. Secondly, <em>documentation is in the code</em> :)</p>\n<p>I would imagine documentation is rather difficult for such low-level details that may change frequently and are <em>very architecture specific</em>. Which leads us to your next question -</p>\n<h4>Why is setump/longjmp architecture-dependent?</h4>\n<p>Obviously, this goes without saying, but for completeness I thought it'd be better to be explicit here. Here are some reason this has to be done on an per-architecture level:</p>\n<ol>\n<li>As these functions touch the some of a CPU's ABI (specifically the <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions\" rel=\"nofollow noreferrer\">calling convention</a>), the code has to follow a different conventions.</li>\n<li>Accessing registers by name, for their specific purpose is abstracted in C.</li>\n<li>C is a <a href=\"https://en.wikipedia.org/wiki/Procedural_programming\" rel=\"nofollow noreferrer\">procedural language</a>, therefore setjmp/longjmp in their core are direct contradiction to the nature of C since it breaks the boundaries of procedures (functions).</li>\n<li>Additional architecture-specific features (that are implemented differently, <a href=\"https://sourceware.org/pipermail/libc-alpha/2017-December/089675.html\" rel=\"nofollow noreferrer\">shadow stack</a> and <a href=\"https://sourceware.org/glibc/wiki/PointerEncryption\" rel=\"nofollow noreferrer\">pointer guard</a> are such examples) might change how setjmp/longjmp need to handle specific cases.</li>\n</ol>\n<p>I'll discuss amd64 from now on.</p>\n<h4>How is setjump implemented</h4>\n<p>Now, although this isn't C (and isn't the most readable assembly either), the code for setjmp on amd64 can be found in <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/setjmp.S\" rel=\"nofollow noreferrer\">setjmp.S</a>, longjmp is <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/__longjmp.S\" rel=\"nofollow noreferrer\">__longjmp.S</a>. It's even quite commented and the code is pretty straight forward!</p>\n<p>You can clearly see the registers as they're saved onto the structure (For example, <code>movq %r12, (JB_R12*8)(%rdi)</code>). You can see <code>PTR_MANGLE</code> is called if the aformentinoed pointer guard feature is enabled.</p>\n<p>Because your question mostly revolved around <em>finding</em> the code and not <em>reading</em> the code and since the code is quite straight-forward, I'll leave reading the functions as an exercise for the reader for now. I'll come back and add more details later on, so feel free to ask follow-up questions.</p>\n<h5>How is the <code>jmp_buf</code> structure defined</h5>\n<p>Since we're dealing with assembly we don't have structures. Instead, there are several <code>#define</code> preprocessor directives to define the <code>jmp_buf</code> structure. Those are located in a dedicated header: <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/jmpbuf-offsets.h\" rel=\"nofollow noreferrer\">jmpbuf-offsets.h</a></p>\n<h5>Where are those files located? Where can I find different architecture implementations?</h5>\n<p>These files are located in the <a href=\"https://sourceware.org/git/?p=glibc.git;a=tree;f=sysdeps\" rel=\"nofollow noreferrer\"><code>sysdep</code></a> module, which holds subdirectories for each supported architecture-specific components. <code>aarch64</code> stands for arm 64-bit, <code>x86</code> for 32-bit intel 8086 compatible processors, <code>86_64</code> for 64 bit intel 8086 CPUs, etcetera.</p>\n</div>",
+            "votes": "5",
+            "user": "NirIzr",
+            "time": "Nov 3, 2021 at 8:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "SRobertJames",
+                    "text": "<span class=\"comment-copy\">Superb answer.  Where is <code>PTR_MANGLE</code> defined? gdb suggests it does two things: rol and xor.  What is the point of the rotation? It doesn't add any true encryption, of course.</span>",
+                    "time": null
+                },
+                {
+                    "user": "SRobertJames",
+                    "text": "<span class=\"comment-copy\">Is definition on Intel x64 different than AMD? Or is it just called AMD since they were first? Where is x86-32 bit defined? What is the scheme / layout to find these files?</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Intel x64, x86_64 and amd64 are practically the same. amd64 indeed comes from amd being the \"first\". <code>PTR_MANGLE</code> is a MACRO used for Linux's \"pointer guard\" feature I mentioned in the answer. The <code>SHADOW_STACK_</code> MACROs (also used by setjmp) are used for the \"Shadow stack\" feature (also mentioned above).</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\"><code>PTR_MANGLE</code> is defined in the architecture's <code>sysdep.h</code>. <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/unix/sysv/linux/x86_64/sysdep.h\" rel=\"nofollow noreferrer\">x86_64</a> for example. You can browse for them <a href=\"https://sourceware.org/git/?p=glibc.git;a=tree;f=sysdeps/unix/sysv/linux\" rel=\"nofollow noreferrer\">here</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

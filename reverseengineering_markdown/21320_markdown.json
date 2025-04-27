@@ -1,0 +1,36 @@
+{
+  "title": "Automate looking for calls to an offset of a structure",
+  "link": "https://reverseengineering.stackexchange.com/questions/21320/automate-looking-for-calls-to-an-offset-of-a-structure",
+  "content": "I want to automate the search for function calls to a function that does not live in the binary and where the function address is passed, via a pointer to a struct, at runtime through a function parameter.\n\nAs an example, the first parameter of a JNI class is JNIEnv* which is a struct that contains, among other things, pointers to JNI functions. If you decompile a JNI function, you might see something like this:\n\n```\nJava_com_example_ExampleClass_exampleMethod(JNIEnv*, ...) {\n   ...\n   clazz = (*(*env)->FindClass)(env,jniClass);\n   ...\n}\n\n```\nUsing Ghidra's pcode API, is it possible to automate locating all references to the FindClass function? For reference, the call to FindClass will look something like the following in x86 assembly and pcode.\n\n```\n  000fd2be 8b 0f           MOV        ECX,dword ptr [EDI]\n                                              $U16f0:4 = LOAD ram(EDI)\n                                              ECX = COPY $U16f0\n\n\n  000fd2c7 ff 51 18        CALL       dword ptr [ECX + 0x18]\n                                              $U3a0:4 = INT_ADD ECX, 24:4\n                                              ESP = INT_SUB ESP, 4:4\n                                              STORE ram(ESP), 0xfd2ca:4\n                                              $U16f0:4 = LOAD ram($U3a0)\n                                              CALLIND $U16f0\n\n```\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "ghidra"
+  ],
+  "user": "Ayrx",
+  "time": "May 16, 2019 at 8:24",
+  "comments": [
+    {
+      "user": "blabb",
+      "text": "i was going to suggest did you try  JniAnalyzer mentioned in this query  but the nick looks like it is related",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "If you want to do this using the pcode API, you will have to examine the arguments to the PTRSUB operation, which is the equivalent of -> on the C level.\n\nNote that the PTRSUB operation is not a part of the raw pcode posted in the question, but it is inserted by the decompiler during the analysis process. Quoting the documentation again:\n\nThe following code will find all calls to a structure offset in a given function:\n\n```\nDecompileResults results = decompiler.decompileFunction(function,\n    decompiler.getOptions().getDefaultTimeout(), monitor);\nHighFunction hfunc = results.getHighFunction();\n\nfor(PCodeOpAST op : hfunc.getPcodeOps()) {\n    if (op.getOpcode() == PcodeOp.CALLIND) {\n        Varnode funcAddress = op.getInput(0);\n\n        while (funcAddress.getDef().getOpcode() == PcodeOp.LOAD)\n            funcAddress = funcAddress.getDef().getInput(1);\n\n        if (funcAddress.getDef().getOpcode() == PcodeOp.PTRSUB) {\n            Varnode struct = funcAddress.getDef().getInput(0);\n            Varnode field = funcAddress.getDef().getInput(1);\n\n            DataType structDataType = struct.getHigh().getDataType();\n            while(structDataType instanceof Pointer || structDataType instanceof TypeDef) {\n                if (structDataType instanceof Pointer)\n                    structDataType = ((Pointer)structDataType).getDataType();\n                else if (structDataType instanceof TypeDef)\n                    structDataType = ((TypeDef)structDataType).getDataType();\n            }\n\n            if (structDataType instanceof Structure && field.isConstant()) {\n                Structure structure = (Structure) structDataType;\n                int offset = (int)field.getOffset();\n\n                DataTypeComponent component = structure.getComponentAt(offset);\n                System.out.println(\"Call to \" + component.getFieldName() +\n                    \" in \" + structure.getName());\n                for (int i = 1; i < op.getNumInputs(); ++i) {  // 0 is the function address, 1+ are arguments\n                    System.out.println(\" with argument \" + i + \" = \" + op.getInput(i).getAddress());\n                }\n            }\n        }\n    }\n}\n\n```\nAlternatively, you can search for all references to the FindClass field in the program instead, but note that this will list all types of references, not just calls:\n\n```\nDataType jniEnvDataType = program.getDataTypeManager().getDataType(\"/jni_all.h/JNIEnv\");\nAccumulator<LocationReference> accumulator = new ListAccumulator<>();\nReferenceUtils.findDataTypeReferences(accumulator, jniEnvDataType, \"FindClass\",\n    program, TaskMonitor.DUMMY);\nfor(LocationReference location : accumulator) {\n    System.out.println(location.getLocationOfUse());\n}\n\n```\n(this is basically the equivalent of \"Find Uses of JNIEnv.FindClass ...\" in the UI)\n\n",
+      "votes": "3",
+      "user": "krzys_h",
+      "time": "Oct 2, 2020 at 19:29",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "karsten",
+          "text": "nice solution for the problem!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

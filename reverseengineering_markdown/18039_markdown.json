@@ -1,0 +1,78 @@
+{
+  "title": "How is data transferred from the process’ memory to the console screen?",
+  "link": "https://reverseengineering.stackexchange.com/questions/18039/how-is-data-transferred-from-the-process-memory-to-the-console-screen",
+  "content": "I am learning about how the call stack works by reverse engineering binaries using Radare2 (in a Linux environment). The ISA on the server (a P5 micro-architecture) I am analyzing binaries off of is x86 (Intel syntax). \n\nSay I want to print a very simple string to the console by compiling a C program named hello.c in to an executable:\n\n```\nint main()\n{\n    printf(\"Hello world!\");\n\n    return (0);\n}\n\n```\nHow does the CPU transfer the data containing the \"Hello world!\" string from the stack space reserved for the hello executable in memory to the console output?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "268",
+  "tags": [
+    "x86",
+    "memory",
+    "stack"
+  ],
+  "user": "Darien Springer",
+  "time": "May 10, 2018 at 7:01",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "what's an \"output sink\"?",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "BTW, please try to avoid editing questions in a way that invalidates existing answers.",
+      "time": null
+    },
+    {
+      "user": "Darien Springer",
+      "text": "I don't know how I am supposed to correct the question when it apparently was faulty to begin with. I am not attempting to invalidate existing answers but I have no idea how I am otherwise supposed to get this question to get at least one upvote. If you have enough questions with 0 votes or less, you are prevented from asking more questions. So what would you have me do?",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "well, at least maybe explain what you mean by “output sink” and why you changed to it from the original title. I don’t think I’ve heard this term before.",
+      "time": null
+    },
+    {
+      "user": "Darien Springer",
+      "text": "en.wikipedia.org/wiki/Sink_(computing)",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "To print to the terminal, a process started by the shell performs file I/O by making a write() system call using the already open stdout file descriptor inherited from the shell (the parent process).\n\n\n\nThis means that if one wishes to print to the terminal, one must make a write() system call using the already open stdout file descriptor.\n\nHere is a simple example program to make things more clear:\n\n```\n#include <stdio.h>\n#include <sys/types.h>\n#include <unistd.h>\n\nint main(void) {\n        pid_t current_PID = getpid();\n        pid_t parent_PID = getppid();\n\n        printf(\"Current process ID: %d  \n\", current_PID);\n        printf(\"Parent process ID: %d  \n\", parent_PID);\n\n        return 0;\n}\n\n```\nWe can retrieve the process ID of the shell via the echo $$ command (bash is assumed to be the shell here).\n\n```\n$ echo $$\n29760\n\n```\nThen we compile and run the example program (which I simply called pid):\n\n```\n$ ./pid \nCurrent process ID: 9071\nParent process ID: 29760\n\n```\nThe parent process ID is that of the shell which started the pid process.\n\nTo see what is happening at the CPU level, here is disassembly of main() with comments explaining the relevant operations:\n\n```\n<main>:\npush   %ebp\nmov    %esp,%ebp\nand    $0xfffffff0,%esp\nsub    $0x20,%esp\ncall   8048340 <getpid@plt>  # libc wrapper around getpid() system call\nmov    %eax,0x18(%esp)       # write return value (PID) in register to stack\ncall   8048370 <getppid@plt> # libc wrapper around getppid() system call\nmov    %eax,0x1c(%esp)       # write return value (PPID) in register to stack\nmov    0x18(%esp),%eax       # read from stack, write to register\nmov    %eax,0x4(%esp)        # write register value to stack as 2nd arg to printf (PID)\nmovl   $0x8048560,(%esp)     # read format string from memory, write to stack as 1st arg to printf\ncall   8048330 <printf@plt>  # libc wrapper around write() system call\nmov    0x1c(%esp),%eax       # read PPID saved on stack, write to register\nmov    %eax,0x4(%esp)        # write PPID in register to stack as 2nd arg to printf\nmovl   $0x8048578,(%esp)     # read format string from memory, write to stack as 1st arg to printf\ncall   8048330 <printf@plt>  # libc wrapper around write() system call\nmov    $0x0,%eax\nleave  \nret    \n\n```\nHere is the strace output for the example program:\n\n```\n$ strace ./pid\nexecve(\"./pid\", [\"./pid\"], [/* 53 vars */]) = 0\n[ Process PID=10017 runs in 32 bit mode. ]\nbrk(0)                                  = 0x943d000\naccess(\"/etc/ld.so.nohwcap\", F_OK)      = -1 ENOENT (No such file or directory)\nmmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0xfffffffff7793000\naccess(\"/etc/ld.so.preload\", R_OK)      = -1 ENOENT (No such file or directory)\nopen(\"/etc/ld.so.cache\", O_RDONLY|O_CLOEXEC) = 3\nfstat64(3, {st_mode=S_IFREG|0644, st_size=155012, ...}) = 0\nmmap2(NULL, 155012, PROT_READ, MAP_PRIVATE, 3, 0) = 0xfffffffff776d000\nclose(3)                                = 0\naccess(\"/etc/ld.so.nohwcap\", F_OK)      = -1 ENOENT (No such file or directory)\nopen(\"/lib/i386-linux-gnu/libc.so.6\", O_RDONLY|O_CLOEXEC) = 3\nread(3, \"\\177ELF\\1\\1\\1\\0\\0\\0\\0\\0\\0\\0\\0\\0\\3\\0\\3\\0\\1\\0\\0\\0P\\234\\1\\0004\\0\\0\\0\"..., 512) = 512\nfstat64(3, {st_mode=S_IFREG|0755, st_size=1763068, ...}) = 0\nmmap2(NULL, 1772156, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0xfffffffff75bc000\nmmap2(0xf7767000, 12288, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1aa000) = 0xfffffffff7767000\nmmap2(0xf776a000, 10876, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0xfffffffff776a000\nclose(3)                                = 0\nmmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0xfffffffff75bb000\nset_thread_area(0xffc17c00)             = 0\nmprotect(0xf7767000, 8192, PROT_READ)   = 0\nmprotect(0x8049000, 4096, PROT_READ)    = 0\nmprotect(0xf77b8000, 4096, PROT_READ)   = 0\nmunmap(0xf776d000, 155012)              = 0\ngetpid()                                = 10017\ngetppid()                               = 10014\nfstat64(1, {st_mode=S_IFCHR|0620, st_rdev=makedev(136, 13), ...}) = 0\nmmap2(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0xfffffffff7792000\nwrite(1, \"Current process ID: 10017  \n\", 26Current process ID: 10017\n) = 26\nwrite(1, \"Parent process ID: 10014  \n\", 25Parent process ID: 10014\n) = 25\nexit_group(0)                           = ?\n+++ exited with 0 +++\n\n```\nNote the execve() system call on the first line and the write() system calls at the bottom.\n\n",
+      "votes": "2",
+      "user": "julian",
+      "time": "Apr 21, 2018 at 3:58",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Darien Springer",
+          "text": "Edited question to clarify what I am asking. Does that make my question clearer?",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@DarienSpringer It does not.",
+          "time": null
+        },
+        {
+          "user": "Darien Springer",
+          "text": "What is not clear?",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@DarienSpringer The statement \"Does the stack directly transfer data from memory to the child process of the shell when a function is called to access some data in memory to print or return it to the console output? \" - Each process has its own stack space, so this does not make sense. Did you read anything I wrote?",
+          "time": null
+        },
+        {
+          "user": "Darien Springer",
+          "text": "Yes, I did read what you said. I have clarified my question.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

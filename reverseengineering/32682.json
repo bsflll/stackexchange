@@ -1,0 +1,44 @@
+{
+    "title": "How to hook RuntimeException to prevent crashes?",
+    "link": "https://reverseengineering.stackexchange.com/questions/32682/how-to-hook-runtimeexception-to-prevent-crashes",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I tried to find out how <a href=\"https://developer.android.com/reference/java/lang/RuntimeException\" rel=\"nofollow noreferrer\">RuntimeException</a> works internally in <a href=\"https://cs.android.com/\" rel=\"nofollow noreferrer\">cs.android.com</a> so I can understand how to prevent crashes but didn't find anything useful and I have no clue how to analyze components-related JDK in perspective of reverse engineering, I'm curious what's going on behind <a href=\"https://docs.oracle.com/javase/8/docs/api/java/lang/RuntimeException.html\" rel=\"nofollow noreferrer\">RuntimeException</a> so I can prevent crashes</p>\n<p>I tried with this Frida script but no luck</p>\n<pre class=\"lang-js prettyprint-override\"><code>Java.perform(function() {\n    var RuntimeException = Java.use('java.lang.RuntimeException');\n    RuntimeException.$init.overload().implementation = function(){\n        console.log(\"hits .overload()\")\n        return;\n    }\n    \n    RuntimeException.$init.overload('java.lang.String').implementation = function(arg1){\n        console.log(\"hits .overload('java.lang.String')\")\n        return;\n    }\n    \n    RuntimeException.$init.overload('java.lang.Throwable').implementation = function(arg1){\n        console.log(\"hits .overload('java.lang.Throwable')\")\n        return;\n    }\n    \n    RuntimeException.$init.overload('java.lang.String', 'java.lang.Throwable').implementation = function(arg1,arg2){\n        console.log(\"hits .overload('java.lang.String', 'java.lang.Throwable')\")\n        return;\n    }\n    \n    RuntimeException.$init.overload('java.lang.String', 'java.lang.Throwable', 'boolean', 'boolean').implementation = function(arg1,arg2,arg3,arg4){\n        console.log(\"hits .overload('java.lang.String', 'java.lang.Throwable', 'boolean', 'boolean')\")\n        return;\n    }\n    \n})\n</code></pre>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "199",
+    "tags": [
+        "android",
+        "java",
+        "frida",
+        "exception"
+    ],
+    "user": "IVs",
+    "time": "Feb 2, 2024 at 11:22",
+    "comments": [
+        {
+            "user": "IVs",
+            "text": "<span class=\"comment-copy\">@Robert then why when we try to patch <code>RuntimeException</code> calls the app is still crash when it calls <code>RuntimeException</code> ? is there someting happening internally ?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><code>RuntimeException</code> is an Exception class like all the others, the only difference is that developers are not forced to catch <code>RuntimeException</code> and its child classes. And there is no special relation between <code>RuntimeException</code> and \"native calls\" (JNI calls).</p>\n<p>Your problems are independent of the <code>RuntimeException</code> instead they are located in your Frida hooking code:</p>\n<p>When hooking an Java/Android method (or constructor) the Frida hook replaces the original function. So if you just want to log method/constructor calls you always have to manually execute the original method inside the hook.</p>\n<p>At the moment you don't call the original constructor of <code>RuntimeException</code> and return nothing, which means if Android tries to create an instance of <code>RuntimeException</code> no exception instance is created. This can never happen in compiled Java code and in the end the app crashes.</p>\n<p>Therefore you have to modify your hooking code to call the original constructor and return the created <code>RuntimeException</code> instance:</p>\n<pre><code>let RuntimeException = Java.use('java.lang.RuntimeException');\nlet RTctor1 = RuntimeException.$init.overload();\nRTctor1.implementation = function() {\n    console.log(\"hits .overload()\");\n    return RTctor1.call(this);\n}\nlet RTctor2 = RuntimeException.$init.overload('java.lang.String');\nRTctor2.implementation = function(arg0) {\n    console.log(\"hits .overload('java.lang.String')\");\n    return RTctor2.call(this, arg0);\n}\n...\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "Robert",
+            "time": "Feb 2, 2024 at 12:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "IVs",
+                    "text": "<span class=\"comment-copy\">thank you Robert, but your hook code is only logging - actually it just makes the crash easier -, \"you don't call the original constructor of RuntimeException and return nothing\" -&gt; this is the point to prevent <a href=\"https://darvincitech.wordpress.com/2019/12/23/detect-frida-for-android/#comment-49\" rel=\"nofollow noreferrer\">RuntimeException-based crashes</a>. are these <a href=\"https://github.com/dqzg12300/fridaUiTools/blob/master/js/anti_debug.js#L137-L168\" rel=\"nofollow noreferrer\">cases</a> are not possible with RuntimeException ? and if not, why ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Robert",
+                    "text": "<span class=\"comment-copy\">@IVs OK, now I really understand what you are trying to do. But that can and will not work. If the app is crashing because of a RuntimeException that you can only try to hook the code and modify values/arguments in a way so that the exception is never thrown. If the app tries to throw an Exception it is already too late. Catching in exceptions in Frida e.g. by hooking a method that throws an Exception is also not that easy to my experience.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

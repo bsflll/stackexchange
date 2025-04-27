@@ -1,0 +1,81 @@
+{
+  "title": "How can breakpoint be set using offset in ELF file, not virtual address?",
+  "link": "https://reverseengineering.stackexchange.com/questions/18922/how-can-breakpoint-be-set-using-offset-in-elf-file-not-virtual-address",
+  "content": "First, generate a simple executable. (ignore the warnings, the executable runs anyway)\n\n```\necho 'main(){puts(\"123\");}'|gcc -x c - -o a\n\n```\nLoad it with gdb a, then:\n\n```\n(gdb) info file\nSymbols from \"/home/user202729/PINCE/a\".\nLocal exec file:\n        `/home/user202729/PINCE/a', file type elf64-x86-64.\n        Entry point: 0x520\n        [...]\n\n```\nSet some breakpoints:\n\n```\n(gdb) b _start\nBreakpoint 1 at 0x520\n(gdb) b *0x520\nNote: breakpoint 1 also set at pc 0x520.\nBreakpoint 2 at 0x520\n(gdb) info b\nNum     Type           Disp Enb Address            What\n1       breakpoint     keep y   0x0000000000000520 <_start>\n2       breakpoint     keep y   0x0000000000000520 <_start>\n\n```\n(using gdb's break command) Breakpoint 1 was set using break function syntax, and breakpoint 2 was set using break *address.\n\nRun the program:\n\n```\n(gdb) r\nStarting program: /home/user202729/PINCE/a \nWarning:\nCannot insert breakpoint 2.\nCannot access memory at address 0x520\n\n(gdb) info b\nNum     Type           Disp Enb Address            What\n1       breakpoint     keep y   0x0000555555554520 <_start>\n2       breakpoint     keep y   0x0000000000000520 \n\n```\nQuestion:\n\n",
+  "votes": "13",
+  "answers": 4,
+  "views": "12k",
+  "tags": [
+    "gdb"
+  ],
+  "user": "user202729",
+  "time": "Jul 30, 2018 at 9:41",
+  "comments": [
+    {
+      "user": "user202729",
+      "text": "Possible duplicate on Stack Overflow, apparently...",
+      "time": null
+    },
+    {
+      "user": "user202729",
+      "text": "And this question...",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The basic problem is that the load address is not known until the file is actually mapped by the OS, and by that time it may be too late if the program is already running. Several workarounds for this may be possible:\n\n",
+      "votes": "10",
+      "user": "Community",
+      "time": "Jul 30, 2018 at 19:41",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user202729",
+          "text": "The second bullet point might be misleading, when the address is 0x555555... instead of a random value then it's highly likely ASLR has already been disabled, but even in that case the load address is not equal to the file address (which is what happens in the question to begin with).",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "No, in fact you misunderstood something. :-)\n\nThe address 0x0000000000000520 is the offset from the beginning of the ELF file from the section .text where the _start procedure lies. And, the address 0x0000555555554520 correspond to the address where the section .text has been mapped by the operating system plus the offset of the procedure: 0x0000555555554000 + 0x0000000000000520 (.text section address + main procedure offset).\n\ngdb (without a run) will only have the offset of the .text section as if it was starting at zero. Then, after running the _start procedure, the .text section will be remapped within the virtual memory by the OS. This remapping happen when the loader is called.\n\nAnd, if you observe a difference between the two breakpoints, it is mainly because the first breakpoint has been set onto the symbol _start and the other one has been set onto the address. The remapping of the symbol will be taken into account by gdb but, an address is an address and it will not change anymore.\n\nFor example, just after loading the executable file in gdb (no run):\n\n```\n(gdb) info files\nSymbols from \"/tmp/a\".\nLocal exec file:\n    `/tmp/a', file type elf64-x86-64.\n    Entry point: 0x1050\n    0x00000000000002a8 - 0x00000000000002c4 is .interp\n    0x00000000000002c4 - 0x00000000000002e4 is .note.ABI-tag\n    0x00000000000002e4 - 0x0000000000000308 is .note.gnu.build-id\n    0x0000000000000308 - 0x000000000000032c is .gnu.hash\n    0x0000000000000330 - 0x00000000000003d8 is .dynsym\n    0x00000000000003d8 - 0x000000000000045a is .dynstr\n    0x000000000000045a - 0x0000000000000468 is .gnu.version\n    0x0000000000000468 - 0x0000000000000488 is .gnu.version_r\n    0x0000000000000488 - 0x0000000000000548 is .rela.dyn\n    0x0000000000000548 - 0x0000000000000560 is .rela.plt\n    0x0000000000001000 - 0x0000000000001017 is .init\n    0x0000000000001020 - 0x0000000000001040 is .plt\n    0x0000000000001040 - 0x0000000000001048 is .plt.got\n    0x0000000000001050 - 0x00000000000011c2 is .text\n    0x00000000000011c4 - 0x00000000000011cd is .fini\n    0x0000000000002000 - 0x0000000000002008 is .rodata\n    0x0000000000002008 - 0x0000000000002044 is .eh_frame_hdr\n    0x0000000000002048 - 0x0000000000002150 is .eh_frame\n    0x0000000000003de8 - 0x0000000000003df0 is .init_array\n    0x0000000000003df0 - 0x0000000000003df8 is .fini_array\n    0x0000000000003df8 - 0x0000000000003fd8 is .dynamic\n    0x0000000000003fd8 - 0x0000000000004000 is .got\n    0x0000000000004000 - 0x0000000000004020 is .got.plt\n    0x0000000000004020 - 0x0000000000004030 is .data\n    0x0000000000004030 - 0x0000000000004038 is .bss\n\n```\nWe can see the _start procedure is located exactly at the beginning of the .text section:\n\n```\n(gdb) disas 0x0000000000001050, 0x00000000000011c2\nDump of assembler code from 0x1050 to 0x11c2:\n   0x0000000000001050 <_start+0>:   xor    %ebp,%ebp\n   0x0000000000001052 <_start+2>:   mov    %rdx,%r9\n   0x0000000000001055 <_start+5>:   pop    %rsi\n   0x0000000000001056 <_start+6>:   mov    %rsp,%rdx\n   0x0000000000001059 <_start+9>:   and    $0xfffffffffffffff0,%rsp\n   0x000000000000105d <_start+13>:  push   %rax\n   0x000000000000105e <_start+14>:  push   %rsp\n   0x000000000000105f <_start+15>:  lea    0x15a(%rip),%r8  # 0x11c0 <__libc_csu_fini>\n   0x0000000000001066 <_start+22>:  lea    0xe3(%rip),%rcx  # 0x1150 <__libc_csu_init>\n   0x000000000000106d <_start+29>:  lea    0xc1(%rip),%rdi  # 0x1135 <main>\n   0x0000000000001074 <_start+36>:  callq  *0x2f66(%rip)    # 0x3fe0\n   0x000000000000107a <_start+42>:  hlt    \n   0x000000000000107b:  nopl   0x0(%rax,%rax,1)\n   0x0000000000001080 <deregister_tm_clones+0>: lea    0x2fa9(%rip),%rdi       \n   0x0000000000001087 <deregister_tm_clones+7>: lea    0x2fa2(%rip),%rax \n   ...\n\n```\nAnd, once we hit the 'start' command (corresponding to a tbreak main + run):\n\n```\n(gdb) start\nTemporary breakpoint 1 at 0x1139\nStarting program: /tmp/a \n\nTemporary breakpoint 1, 0x0000555555555139 in main ()\n(gdb) info files\nSymbols from \"/tmp/a\".\nNative process:\n    Using the running image of child process 22585.\n    While running this, GDB does not access memory from...\nLocal exec file:\n    `/tmp/a', file type elf64-x86-64.\n    Entry point: 0x555555555050\n    0x00005555555542a8 - 0x00005555555542c4 is .interp\n    0x00005555555542c4 - 0x00005555555542e4 is .note.ABI-tag\n    0x00005555555542e4 - 0x0000555555554308 is .note.gnu.build-id\n    0x0000555555554308 - 0x000055555555432c is .gnu.hash\n    0x0000555555554330 - 0x00005555555543d8 is .dynsym\n    0x00005555555543d8 - 0x000055555555445a is .dynstr\n    0x000055555555445a - 0x0000555555554468 is .gnu.version\n    0x0000555555554468 - 0x0000555555554488 is .gnu.version_r\n    0x0000555555554488 - 0x0000555555554548 is .rela.dyn\n    0x0000555555554548 - 0x0000555555554560 is .rela.plt\n    0x0000555555555000 - 0x0000555555555017 is .init\n    0x0000555555555020 - 0x0000555555555040 is .plt\n    0x0000555555555040 - 0x0000555555555048 is .plt.got\n    0x0000555555555050 - 0x00005555555551c2 is .text\n    0x00005555555551c4 - 0x00005555555551cd is .fini\n    0x0000555555556000 - 0x0000555555556008 is .rodata\n    0x0000555555556008 - 0x0000555555556044 is .eh_frame_hdr\n    0x0000555555556048 - 0x0000555555556150 is .eh_frame\n    0x0000555555557de8 - 0x0000555555557df0 is .init_array\n    0x0000555555557df0 - 0x0000555555557df8 is .fini_array\n    0x0000555555557df8 - 0x0000555555557fd8 is .dynamic\n    0x0000555555557fd8 - 0x0000555555558000 is .got\n    0x0000555555558000 - 0x0000555555558020 is .got.plt\n    0x0000555555558020 - 0x0000555555558030 is .data\n    ....\n\n```\nYou can see that all sections have been remapped by the loader (and some sections have been added to handle the dynamic libraries).\n\nIf you want to know more about the loading process of executable under Linux, I would strongly advise you to take a look at this excellent article from Patrick Horgan. I think it will cover most of the questions you might have about this process.\n\nHope this helped.\n\n",
+      "votes": "8",
+      "user": "perror",
+      "time": "Jul 30, 2018 at 9:34",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "perror",
+          "text": "As I said, you can set breakpoints on symbols (if they are present), it will be remapped automatically. But, if the binary has been stripped (no symbol), there is no silver bullet. You will be forced to step through the binary to locate the main function. Another way is to use the start command from gdb which might help.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "reverseengineering.stackexchange.com/questions/8724",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "I didn't know this starti GDB command, quite handful. Thanks Igor!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "You can't do this in vanilla gdb but if you are using pwndbg you can. \n\nThe command is called breakrva or brva for short. You can use it like this:\n\n```\nbrva 0x520\n\n```\nbut the program has to run.\n\n",
+      "votes": "5",
+      "user": "Paweł Łukasik",
+      "time": "Jul 30, 2018 at 17:48",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Surprised that no one has mentioned this, If you have symbols you can use break * _start+9 to achieve the same result.\nExample\n\n```\npwndbg> b * main+29\nBreakpoint 1 at 0x9f7\npwndbg> r\nStarting program: /tmp/a.out \n\nBreakpoint 1, 0x00005555555549f7 in main ()\n\n```\nBut in case of absolute addresses, it fails when the binary is loaded due to the presence of PIE and the load address of .text is now subject to ASLR.\n\n```\npwndbg> disass main\nDump of assembler code for function main:\n   0x00000000000009da <+0>: push   rbp\n   0x00000000000009db <+1>: mov    rbp,rsp\n   0x00000000000009de <+4>: push   rbx\n   0x00000000000009df <+5>: sub    rsp,0x18\n   0x00000000000009e3 <+9>: mov    edi,0x8\n   0x00000000000009e8 <+14>:    call   0x890 <_Znwm@plt>\n   0x00000000000009ed <+19>:    mov    rbx,rax\n   0x00000000000009f0 <+22>:    mov    QWORD PTR [rbx],0x0\n   0x00000000000009f7 <+29>:    mov    rdi,rbx\n   0x00000000000009fa <+32>:    call   0xb08 <_ZN7VehicleC2Ev>\n   0x00000000000009ff <+37>:    mov    QWORD PTR [rbp-0x18],rbx\n   0x0000000000000a03 <+41>:    mov    rax,QWORD PTR [rbp-0x18]\n   0x0000000000000a07 <+45>:    mov    rax,QWORD PTR [rax]\n   0x0000000000000a0a <+48>:    mov    rax,QWORD PTR [rax]\n   0x0000000000000a0d <+51>:    mov    rdx,QWORD PTR [rbp-0x18]\n   0x0000000000000a11 <+55>:    mov    rdi,rdx\n   0x0000000000000a14 <+58>:    call   rax\n   0x0000000000000a16 <+60>:    mov    rax,QWORD PTR [rbp-0x18]\n   0x0000000000000a1a <+64>:    mov    rax,QWORD PTR [rax]\n   0x0000000000000a1d <+67>:    add    rax,0x8\n   0x0000000000000a21 <+71>:    mov    rax,QWORD PTR [rax]\n   0x0000000000000a24 <+74>:    mov    rdx,QWORD PTR [rbp-0x18]\n   0x0000000000000a28 <+78>:    mov    rdi,rdx\n   0x0000000000000a2b <+81>:    call   rax\n   0x0000000000000a2d <+83>:    mov    eax,0x0\n   0x0000000000000a32 <+88>:    add    rsp,0x18\n   0x0000000000000a36 <+92>:    pop    rbx\n   0x0000000000000a37 <+93>:    pop    rbp\n   0x0000000000000a38 <+94>:    ret    \nEnd of assembler dump.\npwndbg> b * main+29\nBreakpoint 1 at 0x9f7\npwndbg> info breakpoints \nNum     Type           Disp Enb Address            What\n1       breakpoint     keep y   0x00000000000009f7 <main+29>\npwndbg> b * 0x0000000000000a11\nBreakpoint 2 at 0xa11\npwndbg> info breakpoints \nNum     Type           Disp Enb Address            What\n1       breakpoint     keep y   0x00000000000009f7 <main+29>\n2       breakpoint     keep y   0x0000000000000a11 <main+55>\npwndbg> r\nStarting program: /tmp/a.out \nWarning:\nCannot insert breakpoint 2.\nCannot access memory at address 0xa11\n\n```\n",
+      "votes": "4",
+      "user": "sudhackar",
+      "time": "Jul 31, 2018 at 10:22",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

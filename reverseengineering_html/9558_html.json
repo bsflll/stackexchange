@@ -1,0 +1,58 @@
+{
+    "title": "How to get current PHP function name in gdb?",
+    "link": "https://reverseengineering.stackexchange.com/questions/9558/how-to-get-current-php-function-name-in-gdb",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm following these\n  <a href=\"https://bugs.php.net/bugs-generating-backtrace.php\" rel=\"noreferrer\">\n   steps\n  </a>\n  to locate the current PHP function call as below:\n </p>\n <ol>\n  <li>\n   <p>\n    Run dummy script:\n   </p>\n   <pre><code>$ gdb -ex run --args php -r \"sleep(10);\"\n</code></pre>\n  </li>\n  <li>\n   <p>\n    Pressed\n    <kbd>\n     Ctrl+C\n    </kbd>\n    to get back to\n    <code>\n     gdb\n    </code>\n    to run:\n   </p>\n   <pre><code>(gdb) bt full\n#1  0x00007ffff6007dd4 in __sleep (seconds=0) at ../sysdeps/unix/sysv/linux/sleep.c:137\n        ts = {tv_sec = 8, tv_nsec = 306649388}\n        set = {__val = {65536, 0 <repeats 15 times>}}\n        oset = {__val = {0, 4469319, 4294967295, 8081486, 140737319884960, 140737354070488, 15761488, 15454080, 15337134, \n            140737354001040, 0, 7307048, 16048064, 206158430232, 140737488342304, 140737488342096}}\n        result = <optimized out>\n#2  0x00000000006156ef in zif_sleep ()\nNo symbol table info available.\n#3  0x00000000006ddd7b in dtrace_execute_internal ()\nNo symbol table info available.\n#4  0x000000000079dde5 in ?? ()\nNo symbol table info available.\n#5  0x0000000000717b18 in execute_ex ()\nNo symbol table info available.\n#6  0x00000000006ddc79 in dtrace_execute_ex ()\nNo symbol table info available.\n#7  0x00000000006e1b0a in zend_eval_stringl ()\nNo symbol table info available.\n#8  0x00000000006e1bf9 in zend_eval_stringl_ex ()\n...\n(gdb) frame 2\n#2  0x00000000006156ef in zif_sleep ()\n(gdb) print (char *)(executor_globals.function_state_ptr->function)->common.function_name\nAttempt to extract a component of a value that is not a structure.      \n(gdb) print (char *)(executor_globals.function_state_ptr->function)\nAttempt to extract a component of a value that is not a structure.\n(gdb) print (char *)(executor_globals)\n$2 = 0xffffffffffffcf48 <error: Cannot access memory at address 0xffffffffffffcf48>\n</code></pre>\n   <p>\n    So it seems\n    <code>\n     executor_globals\n    </code>\n    symbol is not available. Is it because the binary has been optimized, I'm in the wrong frame or something else? Or I should use\n    <code>\n     lldb\n    </code>\n    instead?\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "debugging",
+        "gdb",
+        "php"
+    ],
+    "user": "kenorb",
+    "time": "Aug 5, 2015 at 13:38",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<html><body><span class=\"comment-copy\">\n If the symbol was unavailable, you'd get a different error message, about an unknown symbol. (Try\n <code>\n  print (char *) (blarflgrumpf)\n </code>\n ). This seems like your binary has been compiled with optimization on (which could put some variables into registers, without\n <code>\n  gdb\n </code>\n knowing, and relying on the (wrong) stack value). Try to compile/link\n <code>\n  php\n </code>\n with\n <code>\n  -O0\n </code>\n and\n <code>\n  -g\n </code>\n . Also, unless you cut some parts of the backtrace, your stack is probably broken, as\n <code>\n  execute_ex\n </code>\n seems to have been called out of thin air. This broken stack may be the reason for all sorts of unexpected behaviour.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "kenorb",
+            "text": "<html><body><span class=\"comment-copy\">\n @GuntramBlohm Thanks, yes, there are more frames in bt (up to #10 with ??), I've re-added. Yes, unknown symbol is printing different message. So that means I can't access/extract that data about the current function without re-compiling the PHP?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "<html><body><span class=\"comment-copy\">\n Well, some things seem a bit fishy to me: the instructions tell you to move the frame to the last\n <code>\n  execute\n </code>\n call, while you only have\n <code>\n  execute_ex\n </code>\n ; if\n <code>\n  executor_globals\n </code>\n is indeed a global variable, the stack frame shouldn't matter, but if it's local, you shouldn't find it in the\n <code>\n  zif_sleep\n </code>\n frame. I wonder how up-to-date the site is you linked to. But as the value of\n <code>\n  executor_globals\n </code>\n is wrong, and your PHP site says \"Important! To get a backtrace with correct information you must have PHP configured with --enable-debug! \", I think you need to recompile.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "chx",
+            "text": "<html><body><span class=\"comment-copy\">\n Highly relevant\n <a href=\"https://stackoverflow.com/a/31240030/308851\">\n  stackoverflow.com/a/31240030/308851\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  According to\n  <a href=\"https://derickrethans.nl/what-is-php-doing.html\" rel=\"noreferrer\">\n   this link\n  </a>\n  , it should be possible to find the function in use with the following steps:\n </p>\n <ol>\n  <li>\n   Attach gdb to the currently-running PHP process:\n   <code>\n    gdb -p <processid>\n   </code>\n  </li>\n  <li>\n   Load in the PHP\n   <code>\n    .gdbinit\n   </code>\n   file for your version of PHP (available from\n   <a href=\"https://github.com/php/php-src/blob/master/.gdbinit\" rel=\"noreferrer\">\n    here\n   </a>\n   )\n  </li>\n  <li>\n   Use the\n   <code>\n    zbacktrace\n   </code>\n   command to display the currently-running PHP script\n  </li>\n </ol>\n <p>\n  For example:\n </p>\n <pre><code>gdb -p 4584\n(gdb) source PHP_5_5/.gdbinit\n(gdb) zbacktrace\n[0xec906090] addOne() /tmp/yourscript.php:9\n</code></pre>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Moshe",
+            "time": "Nov 30, 2016 at 1:38",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Anna Völkl",
+                    "text": "<span class=\"comment-copy\">Awesome! The link in 2. to the .gdbinit file helped a lot! Thanks!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Akira Yamamoto",
+                    "text": "<span class=\"comment-copy\">This link was also useful for me to install <code>php5-cli-dbgsym</code> <a href=\"https://wiki.ubuntu.com/DebuggingProgramCrash\" rel=\"nofollow noreferrer\">wiki.ubuntu.com/DebuggingProgramCrash</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

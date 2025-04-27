@@ -1,0 +1,61 @@
+{
+    "title": "windbg - Why does the GS register resolve to offset 0x0?",
+    "link": "https://reverseengineering.stackexchange.com/questions/21033/windbg-why-does-the-gs-register-resolve-to-offset-0x0",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to understand how to resolve segment addressing (specifically the GS register in X64).\n </p>\n <p>\n  My toy program:\n </p>\n <pre><code>int main()\n{\n    unsigned long long x;\n    __debugbreak();\n    x = __readgsqword(0x30);\n    printf(\"0x%I64X\", x);\n}\n</code></pre>\n <p>\n  which compiles to:\n </p>\n <pre><code>kd> u\n00007ff6`10201074 cc                 int     3\n00007ff6`10201075 65488b142530000000 mov   rdx,qword ptr gs:[30h]\n...\n</code></pre>\n <p>\n  Then I step once to reach the instruction which reads memory using the\n  <code>\n   GS\n  </code>\n  register, and I retrieve the value of the\n  <code>\n   GS\n  </code>\n  register, the content of the GDT, etc.\n </p>\n <pre><code>kd> r @gs\ngs=002b\n\nkd> r @gdtr\ngdtr=fffff80105471fb0\n\nkd> .formats @gs\nEvaluate expression:\n  Hex:     00000000`0000002b\n  ...\n  Binary:  00000000 00000000 00000000 00000000 00000000 00000000 00000000 00101011\n\nkd> dq (@gdtr + (5 * 8)) L1\nfffff801`05471fd8  00cff300`0000ffff\n\nkd> .formats poi(@gdtr + (5 * 8))\nEvaluate expression:\n  Hex:     00cff300`0000ffff\n  ...\n  Binary:  00000000 11001111 11110011 00000000 00000000 00000000 11111111 11111111\n\nkd> dg gs\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n002B 00000000`00000000 00000000`ffffffff Data RW Ac 3 Bg Pg P  Nl 00000cf3\n</code></pre>\n <p>\n  So from\n  <code>\n   dg gs\n  </code>\n  , I can see that the\n  <code>\n   GS\n  </code>\n  segment is at offset\n  <code>\n   0x0\n  </code>\n  , which is consistent with the entry retrieved from the GDT using the\n  <code>\n   GS\n  </code>\n  register value.\n </p>\n <p>\n  Observe that at this point, offset\n  <code>\n   0x0\n  </code>\n  is not \"valid\" memory:\n </p>\n <pre><code>kd> dq gs:[30]\n002b:00000000`00000030  ????????`???????? ????????`????????\n\nkd> dq 30\n00000000`00000030  ????????`???????? ????????`????????\n</code></pre>\n <p>\n  Also note that the value of\n  <code>\n   RDX\n  </code>\n  at this point (before storing the QWORD retrieved from memory):\n </p>\n <pre><code>kd> r @rdx\nrdx=000001dfbf892d40\n</code></pre>\n <p>\n  Then I step once, expecting a bug check as I am retrieving invalid memory.\n </p>\n <p>\n  But surprisingly, it doesn't, and\n  <code>\n   RDX\n  </code>\n  appeared to have gotten assigned a value from\n  <em>\n   somewhere\n  </em>\n  :\n </p>\n <pre><code>kd> r @rdx\nrdx=00000035ed53f000\n</code></pre>\n <p>\n  Even more surprising, the\n  <code>\n   GS\n  </code>\n  register still resolves to offset\n  <code>\n   0x0\n  </code>\n  which still contains \"invalid\" memory!\n </p>\n <pre><code>kd> r @gs\ngs=002b\n\nkd> r @gdtr\ngdtr=fffff80105471fb0\n\nkd> dq (@gdtr + (5 * 8)) L1\nfffff801`05471fd8  00cff300`0000ffff\n\nkd> dg gs\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n002B 00000000`00000000 00000000`ffffffff Data RW Ac 3 Bg Pg P  Nl 00000cf3\n\nkd> dq gs:[30]\n002b:00000000`00000030  ????????`???????? ????????`????????\n</code></pre>\n <p>\n  So...\n </p>\n <ol>\n  <li>\n   <p>\n    Why does my\n    <code>\n     GS\n    </code>\n    register resolve to offset 0x0?\n   </p>\n  </li>\n  <li>\n   <p>\n    And where/how does the\n    <code>\n     mov rdx,qword ptr gs:[30h]\n    </code>\n    read memory from?\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "windbg",
+        "kernel"
+    ],
+    "user": "Pie Faced",
+    "time": "Apr 3, 2019 at 16:19",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In long mode, segmentation is not really used and all segment registers have base of 0.\n  <code>\n   fs\n  </code>\n  and\n  <code>\n   gs\n  </code>\n  are exceptions that were added to address thread-specific data. Their real base addresses are stored in MSRs (model specific registers) instead of the descriptor table. The MSRs are only accessible in kernel mode, but you can get the value of\n  <code>\n   GS\n  </code>\n  indirectly via the\n  <code>\n   !teb\n  </code>\n  command, or\n  <code>\n   ~\n  </code>\n  (list threads). The\n  <code>\n   Teb:\n  </code>\n  field will show the TEB base which matches the\n  <code>\n   GS\n  </code>\n  base for that thread. For more info, check\n  <a href=\"https://wiki.osdev.org/SWAPGS\" rel=\"nofollow noreferrer\">\n   SWAPGS\n  </a>\n  on the Osdev wiki.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Apr 4, 2019 at 13:28",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Pie Faced",
+                    "text": "<span class=\"comment-copy\">in other words, 1. GS base is obtained from MSR C0000101 whenever it is referenced. 2. In usermode, MSR C0000101 contains TEB base. 3. In kernel mode, MSR C0000101 is swapped with MSR C0000102 (SWAPGS during SYSCALL) and then contains KPCR base. Correct?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  gs is kernel mode only\n </p>\n <p>\n  you can see the data in windbg if you are in a kd session\n </p>\n <pre><code>0: kd> ? @@c++(@$pcr->GdtBase)\nEvaluate expression: -8781100130384 = fffff803`7da55fb0\n0: kd> dq gs:[0] l1\n002b:00000000`00000000  fffff803`7da55fb0\n</code></pre>\n <p>\n  __readgsword() is an intrinsic it must have some magic :)\n </p>\n <pre><code>1: kd> rdmsr c0000101\nmsr[c0000101] = ffffe601`555ea000\n1: kd> dq ffffe601`555ea000 l1\nffffe601`555ea000  ffffe601`555fdfb0\n1: kd> ? @@c++(@$pcr->GdtBase)\nEvaluate expression: -28581575008336 = ffffe601`555fdfb0\n1: kd> dq gs:[0] l1\n002b:00000000`00000000  ffffe601`555fdfb0\n</code></pre>\n <p>\n  !teb is user_gs_base (which is swapped by swapgs on entering kmode )\n </p>\n <pre><code>1: kd> rdmsr c0000102\nmsr[c0000102] = 00000080`56086000\n1: kd> !teb\nTEB at 0000008056086000\n    ExceptionList:        0000000000000000\n    StackBase:            0000008055f40000\n    StackLimit:           0000008055f00000\n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Apr 4, 2019 at 17:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">What magic do you know about it? I just see only <code>mov rax, gs:[offset]</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>gs</code> is used in user mode too for thread-local data (similar to <code>fs</code> in x86).</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@Biswapriyo nothing they are read using rdmsr in ring 0  msr for GS_BASE and kernel_gs_base are respectively c000_0101 / c000_0102  see the edit</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@igorsk  !teb is  rdmsr 0xc000_0102  gs;[0] in kmode is rdmsr 0xc000_0101</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

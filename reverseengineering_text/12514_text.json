@@ -1,0 +1,40 @@
+{
+    "title": "Reverse Engineering Crypto Methods",
+    "link": "https://reverseengineering.stackexchange.com/questions/12514/reverse-engineering-crypto-methods",
+    "content": "Since few days, Ive started to Reverse Engineer a little game. That game includes some data files, where the 3d files are stored. I want to write a little Software, where I can add own 3d models, to improve (cutomize) that game.\nLuckily the game is compiled in debug mode, so I can clearly see all method names, c++ classes, etc., so I clearly know what happens in particular places in the code. Since I am new on reverse engineering (but not new in development), Ive figured out a lot of the code base and reimplemented many things related to the \"Data management of the game\".\nI see, in the disassembled code, there is a class which decrypts a file. Two methods are used. Initializing the decryptor and reading a character. Since I am not good at \"reverse engineering\" and crypto algorithms (I don´t even know whether the used crypto is a know algorithm or an own one), I hoped you guys could help me out to figure out what happens exactly on those methods, so I can re implement that in c++.\nI am going to include the asm sections and the pseudo c code (which my decompiler has produced). Notice that these methods are part of a class. So I will give you some additional information of what Ive figured out so far. I hope you guys could help me.\nDecryptor init method:\n(edi + 0x100 + offset) seems to be a char array of size 128 byte, but I couldn´t figure out the rest (It seems to be worked with char array, but like mentioned, I dont have that much experience with RE)\nASM Code:\nhttp://pastebin.com/LiM10Cr5\nPseudo-C:\nhttp://pastebin.com/1ewfxAh1\nDecryptor decrypt next char method:\n(edi + 0x200) seems to be a char (byte) where the next char or something similar is stored.\nASM Code:\nhttps://pastebin.com/aWp8LYua\nPseudo-C:\nhttps://pastebin.com/u4w5yGYS\nIf you need some more information, like mentioned, the application is fully compiled in debug mode, so its like a dream... I have all labels, all vtables, all information...\nI also have a read method, where these both methods are gonna called, but I guess I have reverse engineered that method properly (I hope so)...\nThanks :)\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "867",
+    "tags": [
+        "cryptography"
+    ],
+    "user": "Vertices",
+    "time": "Apr 24, 2016 at 8:44",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The crypto definitely isn't a \"good\" one. Check what happens in your <pre><code>nextDecrypt</code></pre> function.\nThe nextDecrypt function\nThere's a variable at <pre><code>ebx+0x200</code></pre> which gets loaded into <pre><code>edx</code></pre>. This variable gets incremented by one, then written back to <pre><code>ebx+0x200</code></pre>, and this variable is also used to be <pre><code>xor</code></pre>ed with some byte (low byte of <pre><code>ecx</code></pre>, i.e. <pre><code>cl</code></pre>) before that byte is returned. So we have an algorithm that, very trivially, <pre><code>xor</code></pre>s every byte, with the value that's <pre><code>xor</code></pre>ed being incremented every time.\nThere's a bit of special casing; the <pre><code>xor</code></pre> value avoids the value <pre><code>0</code></pre>; if the value is <pre><code>0xff</code></pre>, it's set to <pre><code>1</code></pre> instead of being incremented. Also, the value that's returned gets negated, and your decompiler made an error here; the <pre><code>!</code></pre> operator should have been a <pre><code>~</code></pre> as that's what the <pre><code>not</code></pre> assembly instruction does. (Another reason why you should use decompiled C as a first glance, but always look at assembly code to understand what's really going on).\nInitialization\nThe initialization function seems to be a bit more complicated, until you realize that there are 8 identical blocks in the <pre><code>do..while</code></pre> loop; probably an inner loop that the compiler unrolled. It seems to shuffle around the bytes a bit at <pre><code>[edx+0x100]</code></pre>, and create an index map at <pre><code>[ecx]</code></pre>. The last thing it does seems to initialize the <pre><code>xor</code></pre> value from the <pre><code>nextDecrypt</code></pre> to <pre><code>0x7f</code></pre>. But something seems to be wrong in the first part; your code accesses <pre><code>arg_4</code></pre> but there is just an <pre><code>arg_0</code></pre>. And this <pre><code>arg_4</code></pre> seems to influence the step with of the byte shuffler.\nThis is about as far as it makes sense to statically analyze the code; what a reverser should do at this point is run the thing in a debugger, and single-step through those 2 functions, checking how the data buffers change, to verify those assumptions. For example, i'd verify the \"initializing the xor value to 0x7f\" assumption can't be checked from your code alone, but in a debugger, you could check if the addresses are indeed the same. Also, it would be interesting to know what some real-world values of these arguments are, and where they come from.\nSummary\nSo, to sum it up: This seems to be a \"crypto\" mechanism the author invented, not a standard one; it's not a complicated one; and you'll need some dynamic analysis of the software to get the details right of what it does.\nAdditional note\nIn cases like this, it makes sense to give as much information as possible, for example, the name of the game you're hacking. For example, loading up the binary in IDA makes analysis much easier than plaintext sourcecode, and people might actually be able to run the code and test a few assumptions on it.\n",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Apr 24, 2016 at 9:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Vertices",
+                    "text": "<span class=\"comment-copy\">First, thanks for your answer. Let me clear the arg_4 and arg_0 problems. Arg_0 is a pointer to the object instance it self (c++ equivalence is \"this\").  arg_4 is actually the first argument (it should be named unsigned int arg4).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Vertices",
+                    "text": "<span class=\"comment-copy\">Answer on your additional note: I don´t know whether I am allowed to name the game or not (I guess RE is not allowed by EULA, but I am not sure). The game is available on both platforms windows and osx. Only the OSX version is compiled in debug mode. Can you help me also by implementing that in c++ when I fail?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Vertices",
+                    "text": "<span class=\"comment-copy\">Ive figured out in the recent hours, what is generated by initAndReset. It looks very simple and there is a pattern:  <a href=\"http://pastebin.com/pGmyfDqA\" rel=\"nofollow noreferrer\">pastebin.com/pGmyfDqA</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

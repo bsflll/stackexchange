@@ -1,0 +1,49 @@
+{
+    "title": "getting function address by reading ADRP and ADD instruction values",
+    "link": "https://reverseengineering.stackexchange.com/questions/15418/getting-function-address-by-reading-adrp-and-add-instruction-values",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Hello reverse engineers,\n </p>\n <p>\n  I'm analysing a fat Macho-O binary, and it has an ADRP and an ADD instruction in it.\nI'm talking about these instructions:\n </p>\n <pre><code>__text:00000001002E050C                 ADRP            X8, #some_function@PAGE\n__text:00000001002E0510                 ADD             X8, X8, #some_function@PAGEOFF\n</code></pre>\n <p>\n  The ADRP instruction has the bytes \"08 00 00 90\".\n </p>\n <p>\n  The ADD instruction has the bytes \"08 61 0D 91\"\nHow could I get the value out of the 2 instructions?\nThis is my program to calculate the address of some_function:\nIt should sign extend a 21-bit offset, shift it left by 12, and add it to PC with the 12 bottom bits cleared.\nThen I should get the last 12 bits from the ADD instruction, and add it to this value.\n </p>\n <pre><code>    int instr = 0x90000008;\n    //int instr = 0x80000090;\n    int value = 0x1fffff & instr;\n    int mask = 0x100000;\n    if(mask & instr)\n    {\n            value += 0xffe00000;\n    }\n    printf(\"value : %08x\n\", value);\n    value = value << 12;\n    printf(\"value : %08x\n\", value);\n    int instr2 = 0x910d6108;\n    //int instr2 = 0x08610d91;\n    value += (instr2 & 0xfff); //get the last 12 bits from instr2\n    printf(\"value : %08x\n\", value);\n</code></pre>\n <p>\n  After executing the instructions, the value 00000001002E0358 should be in X8, because that is the address of the function we want to calculate.\nThe output of my program is:\n </p>\n <pre><code>value : 00000008\nvalue : 00008000\nvalue : 00008108\n</code></pre>\n <p>\n  What am I doing wrong?\n </p>\n <p>\n  Conclusion: I was reading the wrong ARM manual.\nThe official AArch64-manual from ARM is the one you should use.\n </p>\n <p>\n  The final code :\n </p>\n <pre><code>    const int tab32[32] = {\n     0,  9,  1, 10, 13, 21,  2, 29,\n    11, 14, 16, 18, 22, 25,  3, 30,\n     8, 12, 20, 28, 15, 17, 24,  7,\n    19, 27, 23,  6, 26,  5,  4, 31};\n\n    int log2_32 (uint32_t value)\n    {\n        value |= value >> 1;\n        value |= value >> 2;\n        value |= value >> 4;\n        value |= value >> 8;\n        value |= value >> 16;\n        return tab32[(uint32_t)(value*0x07C4ACDD) >> 27];\n    }\n\n    uint64_t get_page_address_64(uint64_t addr, uint32_t pagesize)\n    {\n            int bits_page_offset;\n            bits_page_offset = log2_32(pagesize);\n            return (addr >> (bits_page_offset - 1)) << (bits_page_offset - 1);\n    }\n\n    uint64_t get_adrp_add_va(unsigned char *adrp_loc, uint64_t va){\n        uint32_t instr, instr2, immlo, immhi;\n        int32_t value;\n        int64_t value_64;\n        //imm12 64 bits if sf = 1, else 32 bits\n        uint64_t imm12;\n        instr = *(uint32_t *)adrp_loc;\n        immlo = (0x60000000 & instr) >> 29;\n        immhi = (0xffffe0 & instr) >> 3;\n        value = (immlo | immhi) << 12;\n        //sign extend value to 64 bits\n        value_64 = value;\n        //get the imm value from add instruction\n        instr2 = *(uint32_t *)(adrp_loc + 4);\n        imm12 = (instr2 & 0x3ffc00) >> 10;\n        if(instr2 & 0xc00000)\n        {\n                imm12 <<= 12;\n\n        }\n        return get_page_address_64(va, PAGE_SIZE) + value_64 + imm12;\n    }\n</code></pre>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "ida",
+        "assembly",
+        "arm",
+        "ios",
+        "mach-o"
+    ],
+    "user": "exploiter",
+    "time": "Jun 9, 2017 at 11:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  For the first instruction (\n  <code>\n   0x90000008\n  </code>\n  ) it matches the opcode below for PC relative addressing instruction.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/VLGfS.png\" rel=\"noreferrer\">\n   <img alt=\"pc-relative addressing opcode\" src=\"https://i.sstatic.net/VLGfS.png\"/>\n  </a>\n </p>\n <p>\n  <code>\n   0x90000008 = 0b10010000000000000000000000001000\n  </code>\n  so we have op=1 (ADRP), immlo=0, immhi=0 and Rd=8 (X8). The  instruction decodes to\n  <code>\n   ADRP X8, #0\n  </code>\n  . This is going take the current page the instruction pointer is at, add 0<<12, and store in register\n  <code>\n   X8\n  </code>\n  so you would have\n </p>\n <p>\n  <code>\n   X8 = page_address_of(0x00000001002E050C) + 0<<12 = 0x00000001002E0000\n  </code>\n </p>\n <p>\n  The next instruction\n  <code>\n   0x910d6108\n  </code>\n  matches the instruction for ADD/SUBTRACT immediate.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/Ev9fK.png\" rel=\"noreferrer\">\n   <img alt=\"add/sub opcode\" src=\"https://i.sstatic.net/Ev9fK.png\"/>\n  </a>\n </p>\n <p>\n  <code>\n   0x910d6108 = 0b10010001000011010110000100001000\n  </code>\n  so we have sf=1 (64-bit variant), op=0 (add), S=0 (non-saturating), shift=0 (LSL #0), imm12=0x358, Rn=8 (X8), Rd=8 (X8).\n </p>\n <p>\n  It decodes to\n  <code>\n   ADD X8, X8, #0x358\n  </code>\n  which would add 0x358 to X8 so you would have\n </p>\n <p>\n  <code>\n   X8 = X8 + 0x358 = 0x00000001002E0358\n  </code>\n </p>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "cimarron",
+            "time": "May 25, 2017 at 17:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "exploiter",
+                    "text": "<span class=\"comment-copy\">How did you decode the 0x90000008 instruction?</span>",
+                    "time": null
+                },
+                {
+                    "user": "exploiter",
+                    "text": "<span class=\"comment-copy\">And where could I find information about decoding ARM instructions?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ian Cook",
+                    "text": "<span class=\"comment-copy\">That'll be the ARMv8 architecture reference manual.</span>",
+                    "time": null
+                },
+                {
+                    "user": "exploiter",
+                    "text": "<span class=\"comment-copy\">Thank you very much! Found the right manual, now writing code to calculate this, I will post the solution.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

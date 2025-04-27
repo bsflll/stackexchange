@@ -1,0 +1,56 @@
+{
+    "title": "Check if instruction is reached",
+    "link": "https://reverseengineering.stackexchange.com/questions/19796/check-if-instruction-is-reached",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am doing a challenge for a CTF and I have to reverse an encryption scheme to find a flag. However it would be easier to just try all inputs but they are too much.</p>\n<p>There is an instruction that when reached means we have guessed the current letter. How can I check in a script if that breakpoint is reached before the program ends and how much times.</p>\n<p>I have tried using the gdb python interface but i find it not very well documented. I have tried frida but i cannot hook to an address but to a function. And r2pipe cannot send text to stdin easily.</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "262",
+    "tags": [
+        "disassembly",
+        "hooking"
+    ],
+    "user": "letFunny",
+    "time": "Nov 2, 2018 at 14:20",
+    "comments": [
+        {
+            "user": "dsasmblr",
+            "text": "<span class=\"comment-copy\">Try putBreakpoint() via Frida: <a href=\"https://www.frida.re/docs/javascript-api/\" rel=\"nofollow noreferrer\">frida.re/docs/javascript-api</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You can start gdb and initialize it with a python script using <code>-x</code> command line flag. This can be launched using <code>subprocess</code> in another python instance. This can give you a way to bruteforce.</p>\n<p>Some code. The driver file <code>driver.py</code></p>\n<pre><code>import subprocess\nimport sys\nrax = sys.argv[1]\nd = subprocess.Popen(\"gdb -q -ex 'py rax = \" + str(rax) + \"' -x ./gdb_attach.py \", shell=True, stdout=subprocess.PIPE).stdout.read().strip()\nprint \"Breakpoint hit ::: \", \"HIT\" in d\nprint d\n</code></pre>\n<p>Python script evaluated in gdb <code>gdb_attach.py</code> with some predefined example offsets. Note that my gdb was built with python3 support.</p>\n<pre><code>import gdb\n\nclass MyBreakpoint(gdb.Breakpoint):\n    def stop (self):\n        print(\"HIT\")\n        return True\n\ngdb.execute('file ./x')\n# gdb.execute(\"set environment LD_PRELOAD /home/sudhakar/tools/preeny/x86_64-linux-gnu/desleep.so\")\nMyBreakpoint(\"*0x40050b\")\ngdb.execute(\"run\")\ngdb.execute('set $rax=0x%x' % rax)\ngdb.execute(\"continue\")\ngdb.execute('quit')\n</code></pre>\n<p>The binary is a simple yes/no check.</p>\n<pre><code>#include &lt;stdio.h&gt;\n\nint dum(){\n    return 0;\n    }\nint main(int argc, char **argv)\n{\n    if(dum()) puts(\"Yeaa!\");\n    else puts(\"No!\");\n    return 0;\n}\n</code></pre>\n<p>The offsets look like this.</p>\n<pre><code>[0x00400400]&gt; pdf @ main\n┌ (fcn) main 58\n│   main (int argc, char **argv, char **envp);\n│           ; var char **local_10h @ rbp-0x10\n│           ; var int local_4h @ rbp-0x4\n│           ; arg int argc @ rdi\n│           ; arg char **argv @ rsi\n│           ; DATA XREF from entry0 (0x40041d)\n│           0x004004f2      55             push rbp\n│           0x004004f3      4889e5         mov rbp, rsp\n│           0x004004f6      4883ec10       sub rsp, 0x10\n│           0x004004fa      897dfc         mov dword [local_4h], edi   ; argc\n│           0x004004fd      488975f0       mov qword [local_10h], rsi  ; argv\n│           0x00400501      b800000000     mov eax, 0\n│           0x00400506      e8dcffffff     call sym.dum\n│           0x0040050b      85c0           test eax, eax\n│       ┌─&lt; 0x0040050d      740c           je 0x40051b\n│       │   0x0040050f      bfb4054000     mov edi, str.Yeaa           ; 0x4005b4 ; \"Yeaa!\" ; const char *s\n│       │   0x00400514      e8d7feffff     call sym.imp.puts           ; int puts(const char *s)\n│      ┌──&lt; 0x00400519      eb0a           jmp 0x400525\n│      ││   ; CODE XREF from main (0x40050d)\n│      │└─&gt; 0x0040051b      bfba054000     mov edi, 0x4005ba           ; const char *s\n│      │    0x00400520      e8cbfeffff     call sym.imp.puts           ; int puts(const char *s)\n│      │    ; CODE XREF from main (0x400519)\n│      └──&gt; 0x00400525      b800000000     mov eax, 0\n│           0x0040052a      c9             leave\n└           0x0040052b      c3             ret\n</code></pre>\n<p>The driver file launches a gdb instance with <code>gdb_attach.py</code>. Additional python variables can be passed using <code>-ex</code> flag. <code>gdb_attach.py</code> sets a breakpoint at an offset and changes some value. You can print values when a bp is hit and parse them in the main driver script. This is quite hackish but it does the job.</p>\n<p>Here's how it looks</p>\n<pre><code>$ python driver.py 0\nBreakpoint hit ::: True\nBreakpoint 1 at 0x40050b\nHIT\nBreakpoint 1, 0x000000000040050b in main ()\nNo!\n[Inferior 1 (process 3874) exited normally]\n$ python driver.py 1\nBreakpoint hit ::: True\nBreakpoint 1 at 0x40050b\nHIT\nBreakpoint 1, 0x000000000040050b in main ()\nYeaa!\n[Inferior 1 (process 3947) exited normally]\n</code></pre>\n<p>See how I was able to print/detect hit breakpoints and change the flow of the binary using another python script. Hope this helps.</p>\n</div>",
+            "votes": "0",
+            "user": "sudhackar",
+            "time": "Nov 5, 2018 at 5:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "letFunny",
+                    "text": "<span class=\"comment-copy\">I find gdb python api to be frankly very bad. I selected your answer because I ended up doing something similar. I tested frida vs r2pipe vs angr. (I will write something soon). Meanwhile:   TLDR; frida crashed with 32bit binaries in 64bit machines (great api otherwise) and i am having probelms with angr. I ended up useing r2pipe. The only thing that is less intuitive is using stdin but it was a better experience overall.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Easy stupid way: patch the instruction with an invalid one, if the program crashes you know the instruction has been hit</p>\n</div>",
+            "votes": "1",
+            "user": "Fabian Mendez",
+            "time": "Nov 2, 2018 at 20:32",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user202729",
+                    "text": "<span class=\"comment-copy\">This assumes the program itself is valid (has no invalid instruction/doesn't cause segfault/etc.)</span>",
+                    "time": null
+                },
+                {
+                    "user": "user202729",
+                    "text": "<span class=\"comment-copy\">Besides,  the program may checksum itself to see if it's modified.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

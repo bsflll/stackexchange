@@ -1,0 +1,66 @@
+{
+    "title": "Edit an .so file",
+    "link": "https://reverseengineering.stackexchange.com/questions/21061/edit-an-so-file",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have here an .so file that contains a language pack and I want to edit them. My problem is that I don't always have enough space for a clean translation.\nI know that I can change the texts if they keep the same length or become shorter (fill the rest with NULL). Is if it is possible to create more space?\nplaceholder and resize the file and jump to the end of the binary file?\nor maybe a reference to a .txt file?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "elf",
+        "binary-editing"
+    ],
+    "user": "Alonia",
+    "time": "May 1, 2020 at 14:42",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <strong>\n   Note:\n  </strong>\n  My original answer was formulated without an access to the file you wanted to modify, so here comes another one, based on the file you have uploaded.\n </p>\n <p>\n  In the case you want to modify data in the program, it's essential to get grasp on how (and where) it is accessed. In your case, there are three section involved:\n </p>\n <ul>\n  <li>\n   <code>\n    .data\n   </code>\n  </li>\n  <li>\n   <code>\n    .data.rel.ro\n   </code>\n  </li>\n  <li>\n   <code>\n    .rodata\n   </code>\n  </li>\n </ul>\n <h1>\n  <code>\n   .data\n  </code>\n </h1>\n <p>\n  All strings in the file are referenced via the\n  <code>\n   .data\n  </code>\n  section, which contains an array with pointers to entries in\n  <code>\n   .data.rel.ro\n  </code>\n  , where the actual pointers to strings in\n  <code>\n   .rodata\n  </code>\n  are stored. After analysis in\n  <code>\n   radare2\n  </code>\n  ,\n  <code>\n   .data\n  </code>\n  looks like:\n  <a href=\"https://i.sstatic.net/sLLGA.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"sectionData\" src=\"https://i.sstatic.net/sLLGA.jpg\"/>\n  </a>\n </p>\n <p>\n  Hence it's just the array of pairs containing\n  <strong>\n   pointer\n  </strong>\n  and\n  <strong>\n   index\n  </strong>\n  of each string item. This is the only section from before mentioned three, that you don't need to change.\n </p>\n <h1>\n  <code>\n   .rodata\n  </code>\n </h1>\n <p>\n  It contains all strings used in the file both in English and Chinese versions.\n  <a href=\"https://i.sstatic.net/GwQ7I.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"sectionRodata\" src=\"https://i.sstatic.net/GwQ7I.jpg\"/>\n  </a>\n </p>\n <p>\n  This is the section I recommend to change first - replace all Chinese string with their German counterparts. You may do it in a way described in my previous answer, that is replacing the entire section with a content of previously created file.\n </p>\n <h1>\n  <code>\n   .data.rel.ro\n  </code>\n </h1>\n <p>\n  It is the last section you want to modify. It contains pointers to the strings that were in the\n  <code>\n   .rodata\n  </code>\n  section before you modified them.\n  <a href=\"https://i.sstatic.net/EXd9B.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"sectionDataRelRo\" src=\"https://i.sstatic.net/EXd9B.jpg\"/>\n  </a>\n </p>\n <p>\n  So, now you need to fix all of the pointers contained here to point on the strings in the new\n  <code>\n   .rodata\n  </code>\n  section you have just created. Notice that each entry here is just a pointer (i.e. contains\n  <code>\n   4\n  </code>\n  bytes, so it has fixed length), so you may just patch it right away, without need to replace this section using\n  <code>\n   objcopy\n  </code>\n  .\n </p>\n <p>\n  After doing these steps, you should have all strings translated.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Alonia",
+                    "text": "<span class=\"comment-copy\">With your contribution I was able to successfully write a program in C#. It exports the .rodata in a CSV. After editing it you can import it and the pointers in the .data.rel.ro are patched automatically. But now I have another binary file where it is different. You are welcome to have a look at it: <a href=\"https://reverseengineering.stackexchange.com/questions/25943/modify-strings-in-a-elf-executable-and-linking-format-that-are-stored-in-the\" title=\"modify strings in a elf executable and linking format that are stored in the\">reverseengineering.stackexchange.com/questions/25943/…</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Yes, it is possible. Although you could solve your problem in several ways, I'll provide you with the easiest one in my opinion. The tool you could use is\n  <a href=\"https://sourceware.org/binutils/docs/binutils/objcopy.html\" rel=\"nofollow noreferrer\">\n   objcopy\n  </a>\n  . It allows you to change contents of ELF files and I'll show you step-by-step example how to use it to achieve your goal. In the example presented below, I'm working on 64bit Linux machine.\n </p>\n <p>\n  Consider the following C program:\n </p>\n <pre><code>#include <stdio.h>\n#include <stdlib.h>\n\n#define NUM_OF_LANGUAGES 5\n#define MAX_STR_LENGTH 21\n\nconst char LANGUAGES_TABLE[NUM_OF_LANGUAGES][MAX_STR_LENGTH] = {\n    \"stringInEnglish\",\n    \"stringInPolish\",\n    \"stringInSpanish\",\n    \"stringInItalian\",\n    \"stringInFrench\"\n};\n\nchar* someOtherData = \"some other data\";\nchar* lastString = \"last string in file\";\n\nint main(int argc, char** argv)\n{\n    int langID = atoi(argv[1]);\n    printf(\"%s\n\", LANGUAGES_TABLE[langID]);\n    return 0;\n}\n</code></pre>\n <p>\n  Let's pretend for a moment that we don't have its source code (since I wanted to make it as simple as possible, there is no error checking here). As you see, it takes argument (index of language) at its start and prints string in given language. But we want to add an extra string, say\n  <code>\n   stringInYourFavouriteLanguage\n  </code>\n  and make our program capable of printing it as well.\n </p>\n <p>\n  Our first step will be finding ELF section containing all strings in different languages. To do this, you may use\n  <a href=\"https://sourceware.org/binutils/docs/binutils/objdump.html#objdump\" rel=\"nofollow noreferrer\">\n   objdump\n  </a>\n  - just look at the section name, where you see these strings. In my case it is\n  <code>\n   .rodata\n  </code>\n  as you may see below:\n  <a href=\"https://i.sstatic.net/8AJR7.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/8AJR7.jpg\"/>\n  </a>\n  Please note that we encounter additional problem here - every string in\n  <code>\n   LANGUAGES_TABLE\n  </code>\n  takes only 21 bytes, while\n  <code>\n   stringInYourFavouriteLanguage\n  </code>\n  uses 30. I'll return to it in a while.\n </p>\n <p>\n  Now, we would like to prepare a file, say\n  <code>\n   langData\n  </code>\n  , containing data we would like to have in new\n  <code>\n   .rodata\n  </code>\n  section. I recommend you just copy the existing one and then append patched version of strings in different languages - this way you will avoid changing all offsets in\n  <code>\n   .rodata\n  </code>\n  accesses in code; you will only need to change these related to languages.\n </p>\n <p>\n  In our example, we also need to change the second dimension of\n  <code>\n   LANGUAGES_TABLE\n  </code>\n  to 30, so we will add 9 NULL bytes at the end of every string in this array. Then we append\n  <code>\n   stringInYourFavouriteLanguage\n  </code>\n  +NULL to the end of the file. Before appending to file containing entire data from\n  <code>\n   .rodata\n  </code>\n  , our file looks like this:\n  <a href=\"https://i.sstatic.net/QBxO7.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/QBxO7.jpg\"/>\n  </a>\n  Now, we may concatenate these files and get one file -\n  <code>\n   langData\n  </code>\n  containing new data to be added to\n  <code>\n   .rodata\n  </code>\n  . Then we use objcopy like this:\n </p>\n <pre><code>objcopy --update-section .rodata=langData langPack langPackPatched\n</code></pre>\n <p>\n  , where\n  <code>\n   langPack\n  </code>\n  is the ELF file we want to modify and\n  <code>\n   langPackPatched\n  </code>\n  is the output file. You may now check this file with objdump and see that changes were indeed made.\n </p>\n <p>\n  So now, we have\n  <code>\n   .rodata\n  </code>\n  having desired content. Now we want to make our executable capable of printing\n  <code>\n   stringInYourFavouriteLanguage\n  </code>\n  as well.\n </p>\n <p>\n  To achieve that, we will need to actually change some code in our program - firstly, we have to change offsets, so that every memory access to\n  <code>\n   LANGUAGES_TABLE\n  </code>\n  will use our appended data and, secondly, we need to change scaling, so that instead of printing\n  <code>\n   PATCHED_LANGUAGES_TABLE[21*arg]\n  </code>\n  , our program will print\n  <code>\n   PATCHED_LANGUAGES_TABLE[30*arg]\n  </code>\n  . And that is the trickiest part of the whole process.\n </p>\n <p>\n  First of all, you need to find the piece of code to patch. In our example it is:\n  <a href=\"https://i.sstatic.net/xVig9.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/xVig9.jpg\"/>\n  </a>\n  Note that 21 bytes starting from offset\n  <code>\n   0x6e8\n  </code>\n  are actually responsible for multiplying arg by 21 and loading address of\n  <code>\n   LANGUAGES_TABLE\n  </code>\n  to RDX. Here,\n  <code>\n   lea\n  </code>\n  computes this offset using RIP. What we need to do, is to determine offset we want to add to RIP to achieve\n  <code>\n   LANGUAGES_TABLE_PATCHED\n  </code>\n  .\n </p>\n <p>\n  And here, please keep in mind an important thing - we have to determine this offset depending on the address of this\n  <code>\n   lea\n  </code>\n  instruction in our\n  <strong>\n   patched\n  </strong>\n  file.\n </p>\n <p>\n  So, either we leave it at its place and change only offset (that is last 4 bytes of opcode), so that it points to our patched table, or we just write our code and then add relevant number of\n  <code>\n   nop\n  </code>\n  s (we could then write\n  <code>\n   lea\n  </code>\n  as\n  <code>\n   lea [rip]\n  </code>\n  and then simply check the required offset with a debugger and change this to\n  <code>\n   lea [rip+offset]\n  </code>\n  ) - that's what I did. Nevertheless, our patched code may look like this:\n  <a href=\"https://i.sstatic.net/uhAgw.jpg\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/uhAgw.jpg\"/>\n  </a>\n </p>\n <p>\n  It's responsible for calculating address of\n  <code>\n   LANGUAGES_TABLE_PATCHED[30*arg]\n  </code>\n  .\n </p>\n <p>\n  So, that's it! We may now test it; if we run\n  <code>\n   ./langPackPatched 5\n  </code>\n  , we get:\n </p>\n <pre><code>stringInYourFavouriteLanguage,\n</code></pre>\n <p>\n  as desired, while program behaviour remains unchanged for other arguments.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "bart1e",
+            "time": "Apr 8, 2019 at 9:33",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Alonia",
+                    "text": "<span class=\"comment-copy\">Thanks for your idea 💡   Can you help me, please? I can follow you, but I can't do it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">Of course I can. Could you specify which part of answer is unclear?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alonia",
+                    "text": "<span class=\"comment-copy\">I don't know how to apply that to my file. Can I send personal messages here? I haven't found the point yet. Then I can show you the file.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">As far as I know it's not possible to send PMs here.  So you may consider uploading it here, or asking another question precisely describing the point where you have difficulties.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">I'll look at it, but I encourage you to update your question with these files, so that other users can help you too.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

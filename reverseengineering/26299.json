@@ -1,0 +1,62 @@
+{
+    "title": "reverse engineering bluetooth smart thermostat payload",
+    "link": "https://reverseengineering.stackexchange.com/questions/26299/reverse-engineering-bluetooth-smart-thermostat-payload",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to reverse engineering an <em>ENSTO</em> \"smart\" bluetooth thermostat, which i just got installed in the house. The thermostat due to some technical and electrical challenges sometimes got placed at weird positions, so I thought, I am giving this a try, and see how far I can get.</p>\n<p>In their official app, i was playing around to generat some log, so I managed to sniff the bluetooth packages, then using <em>wireshark</em>, noticated some patterns, but having hard times actually understanding them:</p>\n<p><a href=\"https://i.sstatic.net/8bCYM.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/8bCYM.png\"/></a></p>\n<p>The first <code>01</code> or <code>00</code> definitely indicates whether we are increasing or decreasing, but what the rest could be?</p>\n<p>Any tips, ideas, and suggestions are welcome!</p>\n<p>I am a fullstack engineer, and pretty new all these iot and smarthome things, but trying my best.</p>\n<pre><code>\nACTION  PAYLOAD\nINCREASE_BY_5_IN_ONE_HOUR   Value: 01f401143c003c00\nDECREASE_BY_5_IN_ONE_HOUR   Value: 00f401143c003c00\n    \nINCREASE_BY_3_IN_ONE_HOUR   Value: 012c010a3c003c00\nDECREASE_BY_3_IN_ONE_HOUR   Value: 002c010a3c003c00\n    \nINCREASE_BY_1_IN_3_HOURS    Value: 01640014b400b400\nDECREASE_BY_1_IN_3_HOURS    Value: 00640014b400b400\n</code></pre>\n<p>Thank you!</p>\n</div>",
+    "votes": "2",
+    "answers": 3,
+    "views": "391",
+    "tags": [
+        "bluetooth"
+    ],
+    "user": "Richard Zilahi",
+    "time": "Nov 14, 2020 at 0:10",
+    "comments": [
+        {
+            "user": "morsisko",
+            "text": "<span class=\"comment-copy\">Why don't you disassembly the .apk? Try some tools like jadx and localize the function that is capable of parsing bluetooth packets</span>",
+            "time": null
+        },
+        {
+            "user": "Richard Zilahi",
+            "text": "<span class=\"comment-copy\">@morsisko hmmm, that is an excellent idea! gonan give it a try asap! :) thanks!</span>",
+            "time": null
+        },
+        {
+            "user": "pythonpython",
+            "text": "<span class=\"comment-copy\">Some useful information <a href=\"https://www.ensto.com/company/newsroom/product-news/smart-heating-with-new-beta-heaters/\" rel=\"nofollow noreferrer\">here</a> about Ensto devices. First... EuroProduct, so assume temp is in Celsius.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Some elements of answer:<br/>\nINCREASE_BY_5_IN_ONE_HOUR Value: 01f401143c003c00<br/>\n01=increase<br/>\nf401 = 0x1f4=500 times 1/100 of degree (little-endian)<br/>\n14 =0x14=20  could be a step ?(other case 0x0a=10 )<br/>\n3c00 =0x3c = 60 minutes<br/> ( 2 times to check the validity of the frame ?)</p>\n<p>more data would be needed to go further</p>\n</div>",
+            "votes": "2",
+            "user": "Gordon Freeman",
+            "time": "Nov 14, 2020 at 11:19",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I second the 0x3c00 and 0xb400 as times.</p>\n<pre><code>&gt;&gt;&gt; struct.pack(\"&lt;h\",60).hex() # 1 hours\n'3c00'\n&gt;&gt;&gt; struct.pack(\"&lt;h\",180).hex() # 3 hours\n'b400'\n&gt;&gt;&gt; struct.pack(\"&lt;h\",720).hex() # 12 hours\n'd002'\n&gt;&gt;&gt; struct.pack(\"&lt;h\",1440).hex() # 24 hours\n'a005'\n</code></pre>\n<p>Assume the data is all little endian. I suspect the 2x repeat of the time plays some role reporting data for specific ranges, such as between 5pm and 8am in a day.</p>\n<p>I think I've found the degrees. I swapped out the f40114 for Bits. I think this is sub-byte format.</p>\n<pre><code>ACTION  PAYLOAD\nINCREASE_BY_5_IN_ONE_HOUR   Value: 01 |f40114| 3c00 3c00    01 | 111 101 00 00000001 00010100 | 3c00 3c00\nDECREASE_BY_5_IN_ONE_HOUR   Value: 00 |f40114| 3c00 3c00    00 | 111 101 00 00000001 00010100 | 3c00 3c00\n    \nINCREASE_BY_3_IN_ONE_HOUR   Value: 01 |2c010a| 3c00 3c00    01 | 001 011 00 00000001 00001010 | 3c00 3c00\nDECREASE_BY_3_IN_ONE_HOUR   Value: 00 |2c010a| 3c00 3c00    00 | 001 011 00 00000001 00001010 | 3c00 3c00\n    \nINCREASE_BY_1_IN_3_HOURS    Value: 01 |640014| b400 b400    01 | 011 001 00 00000000 00010100 | b400 b400\nDECREASE_BY_1_IN_3_HOURS    Value: 00 |640014| b400 b400    00 | 011 001 00 00000000 00010100 | b400 b400\n                                                                     ^^^Degrees                 ^^^^Minutes\n</code></pre>\n<p>So digging on the <a href=\"https://www.ensto.com/company/newsroom/product-news/smart-heating-with-new-beta-heaters/\" rel=\"nofollow noreferrer\">Ensto website some useful things</a>... First, European product, so maybe we can assume the units are in Celsius (at least for this dataset). <code>Extremely accurate (+/-0.1°C) and completely silent intelligent thermostat</code> tells us the precision. <code>The new Beta heaters are equipped with smart electronic thermostats (for 5–30 °C) that can be controlled manually or with Ensto’s Heat Control application (for Android and iOS)</code> tells us the range. In terms of units this is 50 to 300... which is 250 discrete values, which means we probably have a single byte for temperature. If the OP could tell us the temperatures when these samples were taken, we can see if the temperature is in the message.</p>\n</div>",
+            "votes": "2",
+            "user": "pythonpython",
+            "time": "Dec 1, 2020 at 23:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Richard Zilahi",
+                    "text": "<span class=\"comment-copy\">wow! I will post more detailed information and logs about the device, but I feel we are on a good track!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Maybe this API-documentation will help (managed to get it from github while enstoflow was active earlier this year). It has all the payloads documented.\n<a href=\"https://drive.google.com/file/d/1ALbayheoGqpcOpPPEXFPCOlECvhd37kC/view?usp=sharing\" rel=\"nofollow noreferrer\">https://drive.google.com/file/d/1ALbayheoGqpcOpPPEXFPCOlECvhd37kC/view?usp=sharing</a></p>\n<p>A snippet from the document:\n2.2.5. Boost\nBoost gives time in minutes or duration in percentage depending on the mcu mode. Boost offset\n(setpoint) is also given and it is between -20 and +20 degrees.</p>\n<p>Characteristics UUID ca3c0685-b708-4cd4-a049-5badd10469e7\nvalue BYTE[0] Boost 0=disabled, 1=enabled</p>\n<p>BYTE[1-2]: Boost offset int16_t as degrees (20\nas 2000 and 21,5 as 2150)\nBYTE[3]: Boost offset int8_t percentage\nBYTE[4-5]: Boost time set point in minutes\nuint8_t\nBYTE[6-7]: Boost time in minutes uint8_t,\nreturns remaining boost time, write does not\nhave effect</p>\n<p>Best regards,\nMika</p>\n</div>",
+            "votes": "1",
+            "user": "Mika",
+            "time": "Dec 28, 2020 at 13:19",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,42 @@
+{
+  "title": "CreateProcess - First thread routine - where is the memory allocated for the thread?",
+  "link": "https://reverseengineering.stackexchange.com/questions/12861/createprocess-first-thread-routine-where-is-the-memory-allocated-for-the-thr",
+  "content": "When calling CreateProcess internally it will call (obviously ZwCreateProcessEx and then) ZwCreateThread with a CreateSuspended set to True, then i assume final initialization is taking place. Afterwards it is calling ZwResumeThread and then everything is working as it should.\n\nMy question is focused on the ZwCreateThread function:\nhttp://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtCreateThread.html\n\nWhere exactly in this whole CreateProcess Routine, it is allocating the memory in the remote process for the ThreadStartRoutine Parameter, which in the ZwCreateThread, is the parameter ThreadContext->EAX, i have seen a couple of NtAllocateVirtualMemory with Protect of value PAGE_EXECUTE_READWRITE - 0x40 but none of them is allocating the memory for the NewThreadRoutine.. so where exactly the Thread entrypoint is being allocated?\n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "windows",
+    "memory",
+    "winapi",
+    "thread",
+    "process"
+  ],
+  "user": "0xAK",
+  "time": "Jun 16, 2016 at 12:56",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Disclaimer:  The implementation of these APIs is likely to change between versions of Windows.  I will be referencing 32-bit Windows XP SP3 in my answer.  Your results may vary.\n\nThere are three structures that must be initialized before calling NtCreateThread:\n\nIn my implementation, there are dedicated functions that handle each of these tasks: BaseCreateStack, BaseInitializeContext, and BaseFormatObjectAttributes, respectively.\n\nThe BaseInitializeContext function is the one you're interested in, however, since the new thread will begin at CONTEXT.Eip.\n\nInterestingly, BaseInitializeContext instead puts the thread's start address (i.e. the entry point of the new process) in CONTEXT.Eax.  And CONTEXT.Eip is set to the address of BaseProcessStartThunk.  (Since kernel32 is mapped at the same address in every process, we know this will also be the address of BaseProcessStartThunk in the other process)\n\nSo when we call NtCreateThread, we start a new thread in the other process at BaseProcessStartThunk with eax equal to the entry point.\n\nBaseProcessStartThunk saves the start address from register eax. It sets the start address internally by calling NtSetInformationThread with a ThreadInformationClass of ThreadQuerySetWin32StartAddress (see ntddk.h).  It then calls the start address.  Finally, when the thread returns, it calls ExitThread.\n\nIf you want to know the process was created in the first place, we have to go back a few steps.\n\nFirst, a handle to the new process executable is opened via NtOpenFile.\n\nThe file handle is used to create a section object via NtCreateSection.\n\nA call to NtQuerySection with InformationClass set to SectionImageInformation is made.  This parses the the section object and fills out a SECTION_IMAGE_INFORMATION structure, which most notably includes fields the EntryPoint field.  This is how the entry point of the new process is determined.\n\nEventually, NtCreateProcessEx is called, given the section handle from NtCreateSection as a parameter.  This is what actually creates the new process and maps the executable image into the new process' address space, among many other things.  NtCreateProcessEx also provides the process handle that we pass to NtCreateThread to create the new thread.\n\n",
+      "votes": "4",
+      "user": "user1354557",
+      "time": "Jun 16, 2016 at 16:20",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "0xAK",
+          "text": "this is hilarious, microsoft were the first to implement injection methods ;)",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Ok so ZwCreateThread has it in the context structure (PCONTEXT + 0xB0)\n\nThe api calls to receive the address are like this:\nCreateSection(..SectionInformation..) - Probably to create to initial address\n\nNtQuerySection(Handle, x, SectionInformation, x, x)\n\nThis SectionInformation is containing the address of the EntryPoint of the remote process, later initializing the ThreadContext with the function _BaseInitializeContext@20 and then using ZwCreateThread...\n\nThis was all checked under windows xp, hopefully it will be of use for someone\n\n",
+      "votes": "2",
+      "user": "0xAK",
+      "time": "Jun 16, 2016 at 15:30",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

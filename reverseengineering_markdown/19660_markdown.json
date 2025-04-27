@@ -1,0 +1,86 @@
+{
+  "title": "Is there any way to get my own image base without calling any WinAPI functions, such as GetModuleHandle?",
+  "link": "https://reverseengineering.stackexchange.com/questions/19660/is-there-any-way-to-get-my-own-image-base-without-calling-any-winapi-functions",
+  "content": "Is there any way to get the image base of an .exe without calling WinAPI functions (i.e. imported functions) so that it can't be easily viewed in a disassembler/debugger?\n\nI've been thinking of declaring a global variable anywhere in code and reading its address in a loop backwards until e.g.MZ is found (obviously checking for NULL in the meantime). However, there may be a section which isn't readable, a string in .rdata which contains the MZ characters or some value (especially a function address or generally pointers) that contains the MZ bytes (0x4D, 0x5A) (and probably a few more \"situations\").\n\nHave you any idea how to achieve that? Is it even possible?\n\n",
+  "votes": "11",
+  "answers": 3,
+  "views": "4k",
+  "tags": [
+    "windows",
+    "pe",
+    "executable",
+    "exe"
+  ],
+  "user": "Jason",
+  "time": "Oct 19, 2018 at 1:06",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I can think of a couple of ways of doing that\n\nYou could easily get the EIP of your own code without calling any APIs. There are a few ways to achieve that using inline assembly, but the most common one is to include the following two instructions:\n\n```\ncall $+5\npop eax\n\n```\nThis works because call will push the next address (where pop eax is onto the stack) and then execute the instruction right after it (again, our pop eax). When pop eax is executed, it'll pop the address just pushed by call $+5 into a register.\n\nAfter you got your EIP value you can easily scan backwards as you thought of doing, but this time starting at a position a lot closer to your image base.\n\nKeeping in mind image bases are aligned to page boundaries, you can scan in PAGE_SIZE (4096 bytes) intervals.\n\nThe Process Environment Block (also here) structure is accessible using a designated segment register (fs on 32 bit systems and gs on 64 bit systems) which stores the address of the Thread Information Block from which the PEB is reachable. Although most of the PEB is undocumented, in it is a lot of data relating to the operational aspects of the currently running process.\n\nOne such piece of information is the ImageBaseAddress, an undocumented (but consistent) field that holds the process's image base. If you're interested in the .exe's image base (opposed to a loaded DLLs image base), this will do.\n\nIf you want something more reliable you could use the Ldr member, which points to a PEB_LDR_DATA structure which points to a linked list of LDR_DATA_TABLE_ENTRYs, which lists all loaded modules, their addresses and a lot of other information about each loaded module. Your executable's image base is the DllBase field.\n\n",
+      "votes": "8",
+      "user": "0xC0000022L",
+      "time": "Oct 20, 2018 at 22:43",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "josh poley",
+          "text": "PEB.ImageBaseAddress will be easier than walking the Ldr structures.",
+          "time": null
+        },
+        {
+          "user": "Jason",
+          "text": "@Nirlzr Thank you very much, that's a great idea!   I can't however understand why I can read the eip in 0x1000 intervals. If you meant something like: while(*(WORD*)eip != 'ZM') (DWORD)eip -= PAGE_SIZE;, then what if the image base actually was 0x400000 and the eip was, say, 0x400ABC? Am I missing something?",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "@joshpoley Cool. I thought there must be something like that but couldn't find it when skimming for it. I'll add that!",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "@Jason You can easily align the address to a 4k boundary by performing eip & ~(4096-1)",
+          "time": null
+        },
+        {
+          "user": "Jason",
+          "text": "@Nirlzr Alright, I've already seen this technique with virtual addresses, just misunderstood you.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "If you use Visual C++, you can use the special symbol __ImageBase which points to image base of the current module. For example, here's code from VS2010 CRT source (pesect.c):\n\n```\nBOOL __cdecl _IsNonwritableInCurrentImage(\n    PBYTE pTarget\n    )\n{\n    PBYTE                 pImageBase;\n    DWORD_PTR             rvaTarget;\n    PIMAGE_SECTION_HEADER pSection;\n\n    pImageBase = (PBYTE)&__ImageBase;\n\n    __try {\n        //\n        // Make sure __ImageBase does address a PE image.  This is likely an\n        // unnecessary check, since we should be running from a normal image,\n        // but it is fast, this routine is rarely called, and the normal call\n        // is for security purposes.  If we don't have a PE image, return\n        // failure.\n        //\n        if (!_ValidateImageBase(pImageBase))\n        {\n            return FALSE;\n        }\n\n        //\n        // Convert the targetaddress to a Relative Virtual Address (RVA) within\n        // the image, and find the corresponding PE section.  Return failure if\n        // the target address is not found within the current image.\n        //\n        rvaTarget = pTarget - pImageBase;\n        pSection = _FindPESection(pImageBase, rvaTarget);\n        if (pSection == NULL)\n        {\n            return FALSE;\n        }\n\n        //\n        // Check the section characteristics to see if the target address is\n        // located within a writable section, returning a failure if yes.\n        //\n        return (pSection->Characteristics & IMAGE_SCN_MEM_WRITE) == 0;\n    }\n    __except (GetExceptionCode() == STATUS_ACCESS_VIOLATION)\n    {\n        //\n        // Just return failure if the PE image is corrupted in any way that\n        // triggers an AV.\n        //\n        return FALSE;\n    }\n}\n\n```\nAt the top of the file there is code declaring this variable as extern:\n\n```\n#if defined (_WIN64) && defined (_M_IA64)\n#pragma section(\".base\", long, read)\n__declspec(allocate(\".base\"))\nextern IMAGE_DOS_HEADER __ImageBase;\n#else  /* defined (_WIN64) && defined (_M_IA64) */\nextern IMAGE_DOS_HEADER __ImageBase;\n#endif  /* defined (_WIN64) && defined (_M_IA64) */\n\n```\nSo it may be that the key is the .base section and not the variable name by itself.\n\n",
+      "votes": "5",
+      "user": "Igor Skochinsky",
+      "time": "Oct 18, 2018 at 21:00",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "NirIzr",
+          "text": "+1 Cool! I couldn't find any official documentation, the closest thing was this: blogs.msdn.microsoft.com/oldnewthing/20041025-00/?p=37483 Too bad it's Visual C specific!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "To get your own image base in 32-bit code, you can do this:\n\n```\nmov eax, fs:[30h]\nmov eax, [eax+8]\n```\nwhich you can obviously obfuscate in multiple ways, such as by moving fs: into ds: temporarily, calculating \"30h\" and \"8\" by multiplying, etc.\n\n64-bit code is gs:[60h] and +10h instead.\n\n",
+      "votes": "4",
+      "user": "peter ferrie",
+      "time": "Oct 20, 2018 at 22:23",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "Might wanna mention that this is effectively the PEB/TEB method discussed in the accepted answer.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "Definitely a more to-the-point and a practical take on that, though! +1",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

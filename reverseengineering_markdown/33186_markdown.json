@@ -1,0 +1,29 @@
+{
+  "title": "Extending a Struct in a Compiled Executable",
+  "link": "https://reverseengineering.stackexchange.com/questions/33186/extending-a-struct-in-a-compiled-executable",
+  "content": "I'm currently extending an existing compiled executable (32 bit) using DLL proxying. My goal is to add a new member to a struct that exists in the original executable. For that, I modify the original byte code to allocate additional space for the new member and hook the constructor. In my hooked constructor I then call the original constructor and initialize the new member. Below is a trimmed down example.\n\n```\n// The original struct plus its newly added member at the end\nstruct DataStruct {\n\n    uint8_t unknown_original_struct_data_1[40];\n\n    int32_t some_known_member;\n\n    uint8_t unknown_original_struct_data_2[8];\n\n    // A newly added variable not present in the original DataStruct\n    int32_t my_member;\n\n} __attribute__((packed, aligned(1)));\n\n// The size of DataStruct is 52 bytes: 48 for the original DataStruct, plus 4 for for my_member\n\n// Function pointer to the original constructor of DataStruct\nauto existing_DataStruct_constructor = (void * (__thiscall *)(void *)) 0x412000;\n\n// The function that replaces the original constructor of DataStruct to initialize its new members\nvoid * __thiscall new_DataStruct_constructor(DataStruct *self) {\n    // Due to the byte code modifications made in DllMain, self points to 52 bytes of allocated memory\n\n    // This initializes the first 48 bytes\n    existing_DataStruct_constructor(self);\n\n    self->my_member = 10;\n\n    return self;\n}\n\nBOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID p) {\n    switch (reason) {\n        case DLL_PROCESS_ATTACH: {\n            // Modify the method that allocates the memory when constructing the original DataStruct.\n\n            // The address, byte code and assembler code are:\n            //   00439201  68 30 00 00 00  PUSH 0x30\n\n            int *size_address = (int *) (0x00439201 + 1);\n\n            DWORD protections = 0;\n\n            VirtualProtect(size_address, 4, PAGE_EXECUTE_READWRITE, &protections);\n\n            *size_address = sizeof(DataStruct);\n\n            VirtualProtect(size_address, 4, protections, &protections);\n\n            // The address, modified byte code and modified assembler code now are:\n            //   00439201  68 34 00 00 00  PUSH 0x34\n\n            // Hook the original constructor to initialize the new members\n            Hook(&existing_DataStruct_constructor, new_DataStruct_constructor);\n            break;\n        }\n    }\n\n    return TRUE;\n}\n\n```\nEverything seems to work, but I am unsure whether or not I'm relying on undefined behavior.\n\n```\nvoid * __thiscall new_DataStruct_constructor(DataStruct *self) {\n\n```\nDoes the line above introduce UB with respect to strict aliasing? My assumption is no, as I do not break the aliasing rules within the scope of the DLL. The compiler can't know which type is actually at the passed address, as it is determined at runtime. However, I am not sure that I am not breaking some rule I don't know about.\n\n```\nauto existing_DataStruct_constructor = (void * (__thiscall *)(void *)) 0x412000;\n\n```\nIs casting a literal integer to a function pointer safe, assuming the function exists at that address and the calling conventions are identical? If so, is this the ideal way to declare such functions? I'm currently using C++17, but could also use C++20 if required.\n\n",
+  "votes": "0",
+  "answers": 0,
+  "views": "45",
+  "tags": [
+    "windows",
+    "c++",
+    "function-hooking",
+    "dll-injection"
+  ],
+  "user": "Alluvium",
+  "time": "Aug 30, 2024 at 8:52",
+  "comments": [
+    {
+      "user": "ynwarcs",
+      "text": "You only need to worry about strict aliasing if you're going to be violating it within the code you're compiling. In this case, if you don't actually call the new constructor within your own code, there's nothing to worry about. The returned ptr is only going to be used in the existing runtime code, and that's already well-defined. As for function pointer conversion, as it relies on the calling convention which is platform defined, that's out of scope of the language. The only thing that matters is the behaviour of the compiler when compiling for that specific platform.",
+      "time": null
+    },
+    {
+      "user": "Alluvium",
+      "text": "@ynwarcs Thanks!",
+      "time": null
+    }
+  ],
+  "answers_data": []
+}

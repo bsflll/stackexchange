@@ -1,0 +1,49 @@
+{
+  "title": "Is it possible to get python bytecode without using co_code?",
+  "link": "https://reverseengineering.stackexchange.com/questions/1934/is-it-possible-to-get-python-bytecode-without-using-co-code",
+  "content": "I posted this a while back on stackoverflow (too old to migrate though).\n\nSay I am in the python interpreter and define a function as follows:\n\n```\ndef h(a):\n  return a\n\n```\nIf I want to look at the bytecode (not a disassembly using dis), I can typically use h.func_code.co_code. Is there any other way to look at the bytecode? This particular application was packaged with a custom python interpreter (using py2exe probably) which removed access to co_code. I can't just look at the pyc file as they are encrypted.\n\nFor example, in the interpreter, if I just type h without making it a function call, I get the address of the function. Can I use that address to get the bytecode? Is there some other way?\n\nP.S. My original goal in doing this at the time was to use pyREtic (which calls co_code) to decompile. Since it called co_code, it would fail to work. I figured out one way to do it which I will post as an answer eventually. Wanted to see what others have done or come up with.\n\n",
+  "votes": "18",
+  "answers": 2,
+  "views": "8k",
+  "tags": [
+    "python"
+  ],
+  "user": "mikeazo",
+  "time": "May 23, 2017 at 12:37",
+  "comments": [
+    {
+      "user": "Avery3R",
+      "text": "Don't have access to a computer right now, but have you tried digging into the python source code to see what co_code does?",
+      "time": null
+    },
+    {
+      "user": "mikeazo",
+      "text": "yeah, co_code is just a buffer that stores the bytecode of the given function.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "First, just a small reminder about \"what is co_code\".\n\nIn Python, every element of the language (functions, methods, classes, ...) is defined and stored in an object. The co_code is one of the fields attached to the class used to represent a function or a method.  Lets practice a bit with Python 2.7.\n\n```\n$> python2.7\nPython 2.7.3 (default, Mar  4 2013, 14:57:34) \n[GCC 4.7.2] on linux2\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> def foo():\n...     print('Hello World!')\n... \n>>> dir(foo.__code__)\n\n['__class__', '__cmp__', '__delattr__', '__doc__', '__eq__', '__format__', '__ge__', \n '__getattribute__', '__gt__', '__hash__', '__init__', '__le__', '__lt__', '__ne__', \n '__new__',  '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', \n '__str__', '__subclasshook__', 'co_argcount', 'co_cellvars', 'co_code', 'co_consts', \n 'co_filename', 'co_firstlineno', 'co_flags', 'co_freevars', 'co_lnotab', 'co_name', \n 'co_names', 'co_nlocals', 'co_stacksize', 'co_varnames']\n>>> foo.__code__.co_code\n'd\\x01\\x00GHd\\x00\\x00S'\n\n```\nSo, you can see that the co_code field contain the compiled bytecode of the function we just defined previously. In fact, it seems that co_code is just a buffer to store the compiled bytecode in a lazy manner. It is compiled only when it is accessed for the first time.\n\nAssuming this, the co_code is just a unified helper to access the bytecode which might be stored in several forms. One form are the *.pyc files which are storing the compiled Python bytecode of a whole file. Another form is just the on-the-fly compilation of the function/method.\n\nNevertheless, there is a way to access directly the function/method definition and, thus, to the bytecode. The point is to intercept the Python process with gdb and analyze it. A few tutorials exists in the web about this (see here, here, here or here). But, here is a quick example (you need to install the python-gdb package first):\n\n```\n$> python2.7-dbg\nPython 2.7.3 (default, Mar  4 2013, 14:27:19) \n[GCC 4.7.2] on linux2\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> def foo():\n...     print('Hello World!')\n... \n[40809 refs]\n>>> foo\n<function foo at 0x1a5e1b0>\n[40811 refs]\n>>> foo.__code__.co_code\n'd\\x01\\x00GHd\\x00\\x00S'\n[40811 refs]\n>>> \n[1]+  Stopped                 python2.7-dbg\n\n```\nThen, you need to get the PID of the Python process and attach gdb on it.\n\n```\n$ gdb -p 5164\nGNU gdb (GDB) 7.4.1-debian\n...\nAttaching to process 5164\nProgram received signal SIGTSTP, Stopped (user).\nReading symbols from /usr/bin/python2.7-dbg...done.\nReading symbols from /lib/x86_64-linux-gnu/libpthread.so.0...\nReading symbols from /usr/lib/debug/lib/x86_64-linux-gnu/libpthread-2.13.so...done.\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library \"/lib/x86_64-linux-gnu/libthread_db.so.1\".done.\n...\n(gdb) print *(PyFunctionObject*)0x1a5e1b0\n$1 = {_ob_next = 0x187aca0, _ob_prev = 0x189dd08, ob_refcnt = 2, \n      ob_type = 0x87ce00, func_code = <code at remote 0x187aca0>, \n      func_globals = {'__builtins__': <module at remote 0x7f5ebcb5e470>,\n      '__name__': '__main__', 'foo': <function at remote 0x1a5e1b0>, '__doc__': None, \n      '__package__': None}, func_defaults = 0x0, func_closure = 0x0, func_doc = None, \n      func_name = 'foo', func_dict = 0x0, func_weakreflist = 0x0, \n      func_module = '__main__'}\n(gdb) print  (*(PyFunctionObject*)0x1a5e1b0)->func_name\n$2 = 'foo'\n(gdb) print (*(PyCodeObject*)0x187aca0)\n$3 = {_ob_next = 0x18983a8, _ob_prev = 0x1a5e1b0, ob_refcnt = 1, ob_type = 0x872680, \n      co_argcount = 0, co_nlocals = 0, co_stacksize = 1, co_flags = 67,\n      co_code = 'd\\x01\\x00GHd\\x00\\x00S', co_consts = (None, 'Hello World!'),\n      co_names = (), co_varnames = (), co_freevars = (), co_cellvars = (),\n      co_filename = '<stdin>', co_name = 'foo', co_firstlineno = 1,\n      co_lnotab = '\\x00\\x01', co_zombieframe = 0x0, co_weakreflist = 0x0}\n(gdb) print (*(PyCodeObject*)0x187aca0)->co_code\n$4 = 'd\\x01\\x00GHd\\x00\\x00S'\n\n```\nSo, here is the way to access directly the bytecode, given the address of the function.\n\nJust to try to  be complete, the best documentation I found on Python bytecode (and how to access it), is the Python code itself and especially the inspect module (2.7, 3.2). Try to look at it, it is quite instructive.\n\nAnother help you can use is the dis module that provide a disassembler for the Python bytecode. Here is an example of what can do this disassembler.\n\n```\n$> python2.7\nPython 2.7.3 (default, Mar  4 2013, 14:57:34) \n[GCC 4.7.2] on linux2\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\n>>> def foo():\n...     print(\"Hello World!\")\n... \n>>> import dis\n>>> dis.dis(foo)\n  2           0 LOAD_CONST               1 ('Hello World!')\n              3 PRINT_ITEM          \n              4 PRINT_NEWLINE       \n              5 LOAD_CONST               0 (None)\n              8 RETURN_VALUE \n\n```\n",
+      "votes": "20",
+      "user": "perror",
+      "time": "Apr 27, 2013 at 18:13",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "mikeazo",
+          "text": "That's pretty cool! I'm not 100% sure this would have worked in the particular project I was working on as it had a custom python interpreter that I probably couldn't install the gdb bindings for. Still a great technique nonetheless. Thanks for sharing!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "perror's answer I think is the correct way to do it. I wanted to post the way I ended up doing this for other's sake just in case the issue I mentioned in my comment to perror's answer is correct. I don't have all my notes with me right now and will update if necessary.\n\nBasically I ran the program in gdb, set a break point in PyObject_New (or possibly PyObject_Init). I set the break point near the end of the function so that the object would be created. From there I was able to look into the object in memory to extract the byte code.\n\nTo get this info back to pyREtic, I dumped function names and bytecode to a file from within GDB, modified pyREtic so that instead of calling co_code to get the bytecode, it would extract it from the file.\n\nLike I said, it has been a while now (the stackoverflow question was from Sept 2012). I'll look back over my notes and fill in the details.\n\n",
+      "votes": "2",
+      "user": "mikeazo",
+      "time": "Apr 27, 2013 at 19:21",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

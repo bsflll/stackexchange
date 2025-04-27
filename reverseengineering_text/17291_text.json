@@ -1,0 +1,41 @@
+{
+    "title": "What is the difference between a GLOBAL symbol and NONE?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17291/what-is-the-difference-between-a-global-symbol-and-none",
+    "content": "I'm playing with a pe32 file. With <pre><code>is</code></pre>, Some of my symbols say <pre><code>GLOBAL</code></pre> others say <pre><code>NONE</code></pre>,\n<pre><code>006 0x00027514 0x100428114 GLOBAL   FUNC    0 k.exe_asdf\n....\n002 0x0002a808 0x10042c008   NONE   FUNC    0 imp.foo.dll_bar\n</code></pre>\nAre the only two options <pre><code>GLOBAL</code></pre> and <pre><code>NONE</code></pre>? Where can I find the output definition of this screen. If I run the same executable under <pre><code>objdump -t</code></pre> it just shows\n<pre><code>./k.exe:     file format pei-x86-64\n\nSYMBOL TABLE:\nno symbols\n</code></pre>\n<pre><code>nm</code></pre> also shows no symbols. I'm guessing though that <pre><code>radare2</code></pre> is just better working with pe32+ files?\n",
+    "votes": "1",
+    "answers": 3,
+    "views": "524",
+    "tags": [
+        "radare2",
+        "symbols"
+    ],
+    "user": "Evan Carroll",
+    "time": "Jan 25, 2018 at 17:36",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "PE Binding\n\"GLOBAL\" and \"NONE\" are values of the \"Bind\" column in radare2's symbol table. As @blabb correctly described, whenever you look at the \"Exports\" through radare2 you'll see the value <pre><code>\"GLOBAL\"</code></pre> assigned to <pre><code>ptr->bind</code></pre> and you'll see <pre><code>\"NONE\"</code></pre> assigned to each import. The thing is, that this is only relevant for PE files and I'll soon explain it deeper. For now, let's look at the implemented code in radare2.\n@blabb mentioned that you can easily spot this in the code, that's true. Here's how the implementation of <pre><code>bind</code></pre> is for PE exports:\n<pre><code>if ((symbols = PE_(r_bin_pe_get_exports)(bf->o->bin_obj))) {\n        for (i = 0; !symbols[i].last; i++) {\n            if (!(ptr = R_NEW0 (RBinSymbol))) {\n                break;\n            }\n            ptr->name = strdup ((char *)symbols[i].name);\n            ...\n            ptr->bind = r_str_const (\"GLOBAL\");\n            ptr->type = r_str_const (\"FUNC\");\n            ptr->size = 0;\n            ...\n            ...\n</code></pre>\nYou can see that <pre><code>ptr->bind</code></pre> is unconditionally assigned to be \"GLOBAL\".\nThat's how the implementation of <pre><code>bind</code></pre> is looking like for PE import:\n<pre><code>if ((imports = PE_(r_bin_pe_get_imports)(bf->o->bin_obj))) {\n        for (i = 0; !imports[i].last; i++) {\n            if (!(ptr = R_NEW0 (RBinSymbol))) {\n                break;\n            }\n            ...\n            ptr->name = r_str_newf (\"imp.%s\", imports[i].name);\n            ptr->bind = r_str_const (\"NONE\");\n            ptr->type = r_str_const (\"FUNC\");\n            ptr->size = 0;\n            ...\n            ...\n</code></pre>\nAgain, it is unconditionally assigned to \"NONE\".\n\nSymbol Binding\nSymbol binding is a subject that thoroughly was already answered by @SYS_V in this incredibly good answer.\nTo quote from his answer:\n\nThere must be a way for the link editor (ld) to determine the scope of\n  a symbol during link-time. In other words, symbol binding allows the\n  link editor to differentiate between symbols visible only within a\n  particular file being linked (local scope) vs. symbols that can be\n  referenced from within functions located in other files (global\n  scope).\n\nFor ELF files, GLOBAL binding means the symbol is visible outside the file. LOCAL binding is visible only in the file. WEAK is like global, the symbol can be overridden.\nThere are many more binding values for ELF as you can see in this table:\n<pre><code>+------------+-------+\n|    Name    | Value |\n+------------+-------+\n| STB_LOCAL  |     0 |\n| STB_GLOBAL |     1 |\n| STB_WEAK   |     2 |\n| STB_LOOS   |    10 |\n| STB_HIOS   |    12 |\n| STB_LOPROC |    13 |\n| STB_HIPROC |    15 |\n+------------+-------+\n</code></pre>\nAnd radare2 implemented it as well in <pre><code>fill_symbol_bind_and_type</code></pre>:\n<pre><code>switch (ELF_ST_BIND(sym->st_info)) {\ncase STB_LOCAL:  s_bind (\"LOCAL\"); break;\ncase STB_GLOBAL: s_bind (\"GLOBAL\"); break;\ncase STB_WEAK:   s_bind (\"WEAK\"); break;\ncase STB_NUM:    s_bind (\"NUM\"); break;\ncase STB_LOOS:   s_bind (\"LOOS\"); break;\ncase STB_HIOS:   s_bind (\"HIOS\"); break;\ncase STB_LOPROC: s_bind (\"LOPROC\"); break;\ncase STB_HIPROC: s_bind (\"HIPROC\"); break;\ndefault:         s_bind (\"UNKNOWN\");\n}\n</code></pre>\nFurther reading\nI highly recommend @SYS_V's answer for more information. You can also read more about Symbol Resolution here and you can find more information about Symbol visibility in this link.\n",
+            "votes": "1",
+            "user": "Megabeets",
+            "time": "Jan 25, 2018 at 21:31",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "exported functions in a binary are denoted by GLOBAL\nimported function in a binary are denoted by NONE\n<pre><code>:\\>rabin2  -i ..\\..\\miscinfo\\Debug\\tzinfo.dll | grep -i Mod\n003 0x10016008 NONE FUNC KERNEL32.dll_GetModuleFileNameA\n011 0x10016028 NONE FUNC KERNEL32.dll_GetModuleHandleW\n009 0x10016088 NONE FUNC VCRUNTIME140D.dll___vcrt_GetModuleFileNameW\n010 0x1001608c NONE FUNC VCRUNTIME140D.dll___vcrt_GetModuleHandleW\n\n:\\>rabin2  -E ..\\..\\miscinfo\\Debug\\tzinfo.dll\n[Exports]\n000 0x0000bb80 0x1000c780 GLOBAL   FUNC    0 tzinfo.dll_DebugExtensionInitialize\n001 0x0000bc10 0x1000c810 GLOBAL   FUNC    0 tzinfo.dll_DebugExtensionNotify\n002 0x0000bbb0 0x1000c7b0 GLOBAL   FUNC    0 tzinfo.dll_DebugExtensionUninitialize\n003 0x0000bad0 0x1000c6d0 GLOBAL   FUNC    0 tzinfo.dll_help\n004 0x00000670 0x10001270 GLOBAL   FUNC    0 tzinfo.dll_tzinfo\n</code></pre>\nbtw you can get the source for radare  and grep through the src to find most of the answers\n<pre><code>>grep -r \"\\\"GLOBAL\\\"\" *\nlibr/bin/format/elf/elf.c:      case STB_GLOBAL: s_bind (\"GLOBAL\"); break;\nlibr/bin/p/bin_mach0.c:                 \"LOCAL\":\"GLOBAL\");\nlibr/bin/p/bin_pe.c:                ptr->bind = r_str_const (\"GLOBAL\");\nlibr/core/bin.c:        return (strcmp (s->bind, \"GLOBAL\") == 0);\nshlr/java/class.c:                      sym->bind = r_str_const (\"GLOBAL\");\nshlr/java/class.c:                      sym->bind = r_str_const (\"GLOBAL\");\n</code></pre>\nand actual srccode \n<pre><code>>grep -r -B 10 -A 5 \"\\\"GLOBAL\\\"\"  .\\libr\\bin\\p\\bin_pe.c\n        if (!(ret = r_list_new ()))\n                return NULL;\n        ret->free = free;\n        if ((symbols = PE_(r_bin_pe_get_exports)(arch->o->bin_obj))) {\n                for (i = 0; !symbols[i].last; i++) {\n                    if (!(ptr = R_NEW0 (RBinSymbol)))\n                        break;\n                    ptr->name = strdup ((char *)symbols[i].name);\n                    ptr->forwarder = r_str_const ((char *)symbols[i].forwarder);\n                    //strncpy (ptr->bind, \"NONE\", R_BIN_SIZEOF_STRINGS);\n                    ptr->bind = r_str_const (\"GLOBAL\");\n                    ptr->type = r_str_const (\"FUNC\");\n                    ptr->size = 0;\n                    ptr->vaddr = symbols[i].vaddr;\n                    ptr->paddr = symbols[i].paddr;\n                    ptr->ordinal = symbols[i].ordinal;\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Jan 25, 2018 at 19:01",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Though I'm not sure, I think <pre><code>NONE</code></pre> means <pre><code>IMPORTED</code></pre> as the Symbol list of the NONE can be reproduced with <pre><code>rabin -i</code></pre> where <pre><code>-i</code></pre> means show imported symbols,\n<pre><code>2 0x10042c008    NONE    FUNC NETAPI32.dll_NetUserModalsSet\n</code></pre>\n",
+            "votes": "-1",
+            "user": "Evan Carroll",
+            "time": "Jan 25, 2018 at 17:56",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

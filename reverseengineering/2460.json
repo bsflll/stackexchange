@@ -1,0 +1,60 @@
+{
+    "title": "Change RadASM hotkey and add middle mouse click hotkey",
+    "link": "https://reverseengineering.stackexchange.com/questions/2460/change-radasm-hotkey-and-add-middle-mouse-click-hotkey",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to modify RadASM so that Ctrl+W will close the tab, instead of Ctrl+F4, and also make it so that if you middle mouse click the tab, it will close. The context menu for a tab is just a copy of the \"Windows\" menu bar item. The problem is, I can not figure out which library or even function is used to create menu bars and its items. I can not find any relevant strings in OllyDBG, and I've tried making breakpoints for just about every call I thought it might be, but I can't get anything.</p>\n<p>Can anybody point me in the right direction? I couldn't locate the function in RadASM for determining which hotkeys/shortcuts do what either.</p>\n<p>I know all about code caves and injecting DLLs, so adding a function like the middle mouse click shouldn't be impossible; I just need to know where to start since I'm quite new to reverse engineering.</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "434",
+    "tags": [
+        "assembly",
+        "ollydbg"
+    ],
+    "user": "Sean Heiss",
+    "time": "Jul 13, 2013 at 21:29",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To change <kbd>Ctrl</kbd>+<kbd>F4</kbd> to <kbd>Ctrl</kbd>+<kbd>W</kbd> you can use a resource editor such as <a href=\"http://www.angusj.com/resourcehacker/\" rel=\"nofollow noreferrer\">Resource Hacker</a>.</p>\n<p>Open RadASM.exe in the resource editor, modify the accelerators, and save your changes. </p>\n<p>Assuming you're using Resource Hacker, you'd change</p>\n<pre><code>VK_F4, 47001, NOINVERT, CONTROL, VIRTKEY\n</code></pre>\n<p>to</p>\n<pre><code>VK_W, 47001, NOINVERT, CONTROL, VIRTKEY\n</code></pre>\n<p>Then press the <kbd>Compile Script</kbd> button, and save the changed file.</p>\n<p><img alt=\"Resource Hacker\" src=\"https://i.sstatic.net/3RkyP.png\"/></p>\n<p>As for handling a middle-click on the tab, I used Spy++ to find the Window Procedure for the tab window. For RadASM 2.2.1.6 it's at virtual address <code>004061D4</code>:</p>\n<p><img alt=\"Spy++\" src=\"https://i.sstatic.net/mkKDV.png\"/></p>\n<p>The function at that address is the <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms645469%28v=vs.85%29.aspx\" rel=\"nofollow noreferrer\">DialogProc callback function</a> for the SysTabControl32 window. You can patch that function in RadASM.exe to monitor for and act on the <code>uMsg</code> value <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/ms645610%28v=vs.85%29.aspx\" rel=\"nofollow noreferrer\"><code>WM_MBUTTONDOWN</code></a>.</p>\n</div>",
+            "votes": "3",
+            "user": "Jason Geffner",
+            "time": "Jul 14, 2013 at 0:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Sean Heiss",
+                    "text": "<span class=\"comment-copy\">Thanks! I also edited the Menu in Resource Hacker so it shows the correct hotkey. Do you have any idea about adding the feature of middle mouse clicking to close the tab?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">I updated my answer above with how to handle the middle mouse click.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sean Heiss",
+                    "text": "<span class=\"comment-copy\">I've begun writing my code cave, but I can't figure out what to do if <code>uMsg == WM_MBUTTONDOWN</code>. I cannot figure out what closes a tab. Do you have any idea what function does that, or any idea how I could find it?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Internally, RadASM sends TCM_HITTEST to the SysTabControl32 window to determine the tab that was clicked, sends TCM_SETCURSEL, TCM_GETITEM, and WM_MDIACTIVATE to make that tab active in the MDI, and then sends WM_CLOSE to the now-active MDI window. You need to replicate that.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<pre><code>ollydbg radasm.exe\nview windows (W Icon)\nsort class\nand look for Mdi class like mdiEditChild / dialog etc\n</code></pre>\n<p>example</p>\n<pre><code>Windows, item 96\n Handle=000704EE\n Title=C:\\testrad\\Html\\Projects\\testrad\\testradinc3.html\n Parent=000203E4\n ID=0000FDEA (65002.)\n Style=56CF0001 WS_CHILD|WS_GROUP|WS_TABSTOP|WS_CLIPSIBLINGS|WS_CLIPCHILDREN|WS_VISIBLE|WS_SYSMENU|WS_THICKFRAME|WS_CAPTION|1\n ExtStyle=00000340 WS_EX_MDICHILD|WS_EX_WINDOWEDGE|WS_EX_CLIENTEDGE\n Thread=Main\n ClsProc=00xxxxxx RadASM.00xxxxxx\n Class=MdiEditChild\n</code></pre>\n<p>right click message breakpoint on class proc</p>\n<p>in the dialog</p>\n<pre><code>choose window creation and destruction\nnever pause radio button\nlog winproc args always\n</code></pre>\n<p>you should be able to capture the <code>WM_CLOSE</code> sent by ctrl+f4</p>\n<pre><code>Log data\nAddress    Message\n00XXXXXX   CALL to Assumed WinProc from USER32.7E418731\n             hWnd = 000704EE ('C:\\testrad\\Html\\Projects\\test...',class='MdiEditChild',parent=000203E4)\n             Message = WM_CLOSE\n             wParam = 0\n             lParam = 0  \n</code></pre>\n<p>The <strong>patch</strong> below should pop up a <code>Messagebox</code> when you hit Middle Mouse Button \non the <code>SysTabControl</code></p>\n<pre><code>004071A7             |&gt; \\90            NOP                                      ;  Default case of switch 004070B6\n004071A8             |.  90            NOP\n004071A9             |.  90            NOP\n004071AA             |.  E8 5D1F0400   CALL    RadASMWM.0044910C\n\n00449100 &lt;STRING&gt;                 .  57 4D 5F 4D 42 5&gt;ASCII   \"WM_MB_CLICK\",0\n0044910C &lt;WM_MB_CLICK_HANDLER&gt;   /$  60               PUSHAD                                   ;  CALL FROM 4071AA\n0044910D                         |.  9C               PUSHFD\n0044910E                         |.  3D 07020000      CMP     EAX, 207                         ;  WM_MB\n00449113                         |.  75 13            JNZ     SHORT &lt;RadASMWM.RETTOORIGHANDLER&gt;\n00449115                         |.  6A 00            PUSH    0                                ; /Style = MB_OK|MB_APPLMODAL\n00449117                         |.  68 00914400      PUSH    &lt;RadASMWM.STRING&gt;                ; |Title = \"WM_MB_CLICK\"\n0044911C                         |.  68 00914400      PUSH    &lt;RadASMWM.STRING&gt;                ; |Text = \"WM_MB_CLICK\"\n00449121                         |.  6A 00            PUSH    0                                ; |hOwner = NULL\n00449123                         |.  E8 A2FBFFFF      CALL    &lt;JMP.&amp;user32.MessageBoxA&gt;        ; \\MessageBoxA\n00449128 &lt;RETTOORIGHANDLER&gt;      |&gt;  9D               POPFD\n00449129                         |.  61               POPAD\n0044912A                         |.  8B45 08          MOV     EAX, DWORD PTR SS:[EBP+8]        ;  RadASMWM.&lt;ModuleEntryPoint&gt;\n0044912D                         |.  E8 F7B8FBFF      CALL    &lt;RadASMWM.ORIGINAL HANDLER&gt;\n00449132                         \\.  C3               RETN\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Jul 14, 2013 at 12:08",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Sean Heiss",
+                    "text": "<span class=\"comment-copy\">Thanks! I should be able to figure this out with the help from you and Jason Geffner.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

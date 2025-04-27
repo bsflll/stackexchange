@@ -1,0 +1,70 @@
+{
+    "title": "How to investigate Windows 32/64bit (WOW64) transition",
+    "link": "https://reverseengineering.stackexchange.com/questions/16200/how-to-investigate-windows-32-64bit-wow64-transition",
+    "content": "There is surprisingly little information about Windows WOW64 mechanism.\nI'm trying to investigate it. \nSo when we have system call in 32-land, it calls an address that is stored in <pre><code>FS</code></pre>, which leads us to a weird <pre><code>jmp</code></pre> with <pre><code>033:</code></pre> prefix.\nIf I understand correctly, this jump is transferring us to 64-land, but still on user-mode. The jump to kernel-mode should happen afterwards.\nI want to follow this jump. My debugger doesn't do that. How can I do it?\n",
+    "votes": "8",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "windows",
+        "debugging",
+        "x86",
+        "anti-debugging",
+        "x86-64"
+    ],
+    "user": "Shmuel Fomberg",
+    "time": "Jun 11, 2018 at 14:10",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "are you using x86 debugger? which one?\n",
+            "time": null
+        },
+        {
+            "user": "Henno Brandsma",
+            "text": "Have you read  \"Windows Internals\" by Russinovitch et al. ?\n",
+            "time": null
+        },
+        {
+            "user": "conio",
+            "text": "Also relevant: reverseengineering.stackexchange.com/questions/14848/… TLDR: Use WinDbg.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The technique of jumping to 64bit code from a 32bit WOW64-ed process is commonly called \"Heaven's gate\" when performed manually. This is usually done to use 64bit features (such as manipulating 64bit processes by calling 64bit versions of windows APIs) or by malware to make debugging more difficult, which is coincidentally what you seem to be experiencing ;).\nSearching for that term online may yield more results.\nMost user-mode debuggers indeed don't handle that transition well for multiple reasons (one being the debugger assumes a 32bit process, while you're now executing 64bit code, another being user-mode debugging APIs don't support that).\nTL;DR: The \"solution\" for that situation is to debug using a debugger that explicitly made the effort to support 32 and 64 bit interleaved processes. Although this is often easier for a kernel mode debugger), such as windbg, or other debuggers that support both 32 and 64 bit modes (x64dbg should be able to do it, although I never tried As mentioned in the comments x64dbg is unable to do that).\nA brief explanation of Heaven's gate\nThere's a special DLL loaded into 32bit processes on 64bit windows environments, this DLL is <pre><code>wow64cpu.dll</code></pre>. This DLL is responsible for most of the WOW64 magic, and specifically for implementing the transition from 32 to 64 bit inside 32 bit processes (WOW64-ed processes).\nThis is mandatory because as the operating system is natively 64 bit, all utilities, APIs and low level functionalities are implemented using 64 bit code (otherwise what's the point of having 64 bit OSes??). Therefore, every time an WOW64-ed process requires a OS assistance, it must first translate from 32bit CPU mode to 64 bit CPU mode.\nSo, how's the transition done, and what's that wow64cpu.dll you mentioned got to do with it?\nTo make a long story short, the value at <pre><code>fs:[0c0h]</code></pre> is set to an address inside <pre><code>wow64cpu.dll</code></pre>. This field is called <pre><code>WOW32Reserved</code></pre> and it points to a far jump to a specific address, using the <pre><code>033</code></pre> segment. Changing the segment selector to <pre><code>33</code></pre> (from <pre><code>23</code></pre>, which is used for 32bit code) does not change the code selector or the base addressing, you're merely changing the GDT entry used to execute the target code, specifically - you replace the 4th GDT with the 6th.\nGDT entries 4 and 6 only differ in a couple of flags being set - those controlling whether the CPU is executing in 16, 32, and 64 modes (well, those GDT entries only have flags set for 32 and 64 bit modes, but transitioning to 16 bit can be achieved in a similar manner).\nWhere to go on from here?\nAs this is a big and complicated topic, I prefer redirecting you to relevant articles over touching the low-level details in here more than I already did. Here are several useful articles, on the more theoretical side of things:\n\nExplanation of the \"weird jump to <pre><code>33:</code></pre> segment\".\nExplanation of the entire WOW64 mechanism from the process's perspective, including how to debug it to see it happening.\nA very brief explanation of the flow executed, and the article historically keying the term \"Heaven's gate\".\nAnother in-depth explanation.\nThe Windows Internals book series.\n\nAdditionally, here are several actual open source implementations of natively executing 64 bit code inside <pre><code>WOW64</code></pre>-ed 32 bit process:\n\nThis is a code snippet that implements some direct 64 bit OS operations.\nThis is a full blown heaven's gate implementation.\nThis is another, later, full blown heaven's gate implementation.\n",
+            "votes": "18",
+            "user": "NirIzr",
+            "time": "Sep 3, 2017 at 7:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">x64dbg can't do that. it is a pair of debuggers, one for x86 and one for x64. not one that do both.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@ShmuelFomberg Thanks for the clarification, as I said i had no idea. I'll correct my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">WinDbg (x64) can debug this. It has not been implemented in x64dbg for various technical reasons...</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">Derp you are right (just woke up and read over it)... However you don't need a kernel mode debugger to debug this.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">I found a library that does exactly what I wanted to do: <a href=\"https://github.com/rwfpl/rewolf-wow64ext\" rel=\"nofollow noreferrer\">github.com/rwfpl/rewolf-wow64ext</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

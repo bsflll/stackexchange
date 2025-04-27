@@ -1,0 +1,83 @@
+{
+    "title": "What is \"overlapping instructions\" obfuscation?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1531/what-is-overlapping-instructions-obfuscation",
+    "content": "I analyzed some binaries in x86/x86-64 using some obfuscation tricks. One was called overlapping instructions. Can someone explain how does this obfuscation work and how to work around?\n",
+    "votes": "23",
+    "answers": 4,
+    "views": "8k",
+    "tags": [
+        "obfuscation",
+        "binary-analysis",
+        "deobfuscation"
+    ],
+    "user": "perror",
+    "time": "Apr 7, 2013 at 15:12",
+    "comments": [
+        {
+            "user": "lynks",
+            "text": "I have wondered what the proper term for this is. I have heard 'instruction scission' used fairly frequently.\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "I encounter several way of speaking about this technique. But, it is true that none was broadly adopted by the community. \"Overlaping Instructions\" was the most used I can find since now. But, I might have read only a small part of the existing documentation about it.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The paper Static Analysis of x86 Executables explains overlapping instructions quite well. The following example is taken from it (page 28):\n<pre><code>0000: B8 00 03 C1 BB  mov eax, 0xBBC10300\n0005: B9 00 00 00 05  mov ecx, 0x05000000\n000A: 03 C1           add eax, ecx\n000C: EB F4           jmp $-10\n000E: 03 C3           add eax, ebx\n0010: C3              ret\n</code></pre>\nBy looking at the code, it is not apparent what the value of eax will be at the return instruction (or that the return instruction is ever reached, for that matter). This is due to the jump from 000C to 0002, an address which is not explicitly present in the listing (jmp $-10 denotes a relative jump from the current program counter value, which is 0xC, and 0xC10 = 2). This jump transfers control to the third byte of the five byte long move instruction at address 0000. Executing the byte sequence starting at address 0002 unfolds a completely new instruction stream:\n<pre><code>0000: B8 00 03 C1 BB  mov eax, 0xBBC10300\n0005: B9 00 00 00 05  mov ecx, 0x05000000\n000A: 03 C1           add eax, ecx\n000C: EB F4           jmp $-10\n0002: 03 C1           add eax, ecx\n0004: BB B9 00 00 00  mov ebx, 0xB9\n0009: 05 03 C1 EB F4  add eax, 0xF4EBC103\n000E: 03 C3           add eax, ebx\n0010: C3              ret\n</code></pre>\nIt would be interesting to know if/how Ida Pro and especially the Hex Rays plugin handle this. Perhaps @IgorSkochinsky can comment on this...\n",
+            "votes": "30",
+            "user": "perror",
+            "time": "Jun 20, 2013 at 8:52",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "It's also known as the 'jump in the middle' trick.\nexplanation\nexecution rules\n\nmost instructions take more than one byte to be encoded\n\nthey can take up to 15 bytes on modern CPUs\n\nexecution can start at any position as long as permissions are valid\n\nso any byte following the first one of an instruction can be re-used to start another instruction.\nabusing disassemblers\n\nstraighforward disassemblers start the next instruction right after the end of the last one.\n\nso such disassemblers (that don't follow the flow) will hide the instruction that is in the middle of a visible one.\nexamples\ntrivial\n<pre><code>00: EB 01           jmp  3\n02: 68 c3 90 90 90  push 0x909090c3\n</code></pre>\nwill effectively execute as\n<pre><code>00: EB 01           jmp  3\n03: C3              retn\n...\n</code></pre>\nas the first <pre><code>jmp</code></pre> skips the first byte <pre><code>68</code></pre> (which encodes an immediate push) of the following instruction.\nmultiple overlaps\nfrom this example, <pre><code>69 84</code></pre> defines an <pre><code>imul</code></pre> instruction that can take up to 11 bytes. Thus you can fit several lines of instruction in its 'fake' operands.\n<pre><code>00: EB02                    jmp  4\n02: 69846A40682C104000EB02  imul eax, [edx + ebp*2 + 0102C6840], 0x002EB0040\n0D: ....\n</code></pre>\nwill actually be executed as\n<pre><code>00: EB02       jmp  4\n04: 6A40       push 040\n06: 682C104000 push 0x40102C\n0B: EB02       jmp  0xF\n0F: ...\n</code></pre>\ninstruction overlapping itself\nThe instruction is jumping in the 2nd byte of itself:\n<pre><code>00: EBFF    jmp 1\n02: C0C300  rol bl, 0\n</code></pre>\nwill actually be executed as\n<pre><code>00: EBFF    jmp 1\n01: FFC0    inc eax\n03: C3      retn\n</code></pre>\ndifferent CPU modes\nthis obfuscation can be extended to jumping to the same EIP but in different CPU mode:  \n\n64b CPUs still supports 32b instruction\n64b mode is using <pre><code>0x33</code></pre> for <pre><code>cs</code></pre>\nsome instructions are available only in a particular mode:\n\n<pre><code>arpl</code></pre> in 32b mode\n<pre><code>movsxd</code></pre> in 64b mode\n\n\nso you can jump to the same <pre><code>EIP</code></pre> but with a different <pre><code>CS</code></pre>, and get different instructions.\nIn this example, this code is first executed in 32b mode:\n<pre><code>00: 63D8   arpl   ax,bx\n02: 48     dec    eax\n03: 01C0   add    eax,eax\n05: CB     retf\n</code></pre>\nand then re-executed in 64 bit mode as:\n<pre><code>00: 63D8   movsxd rbx,eax\n02: 4801C0 add    rax,rax\n05: CB     retf\n</code></pre>\nIn this case, the instructions are overlapping, not because of a different EIP, but because the CPU temporarily changed from 32b to 64b mode.\n",
+            "votes": "16",
+            "user": "Ange",
+            "time": "Apr 8, 2013 at 15:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Dougall",
+                    "text": "<span class=\"comment-copy\">Is it possible to change from 32 to 64-bit mode as a program running in user space on any major operating systems?</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">@Dougall yes. On Windows it is done by <code>X86SwitchTo64BitMode()</code> (or manually with a far call/jump with the segment selector 33). However I'm quite certain that this is specific to the windows WOW64 implementation and not in applicable in another OS.</span>",
+                    "time": null
+                },
+                {
+                    "user": "robert",
+                    "text": "<span class=\"comment-copy\">@Ange, can you update the link <a href=\"https://code.google.com/p/corkami/source/browse/trunk/src/CoST/CoST.asm?r=1593#2247\" rel=\"nofollow noreferrer\">code.google.com/p/corkami/source/browse/trunk/src/CoST/…</a> ? Thank you!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Almost any multi-byte instruction can be used as an overlapping instruction in x86/x86_64. The reason is very easy: x86 and x86_64 instruction sets are CISC. Which means, among other things, that the instructions doesn't have a fixed length. So, as the instruction are variable length, carefully writing that machine code, every instruction is susceptible of hiding overlapping instructions.\nFor example, given the following code:\n<pre><code>[0x00408210:0x00a31e10]> b\n0x000050f5 (01) 56                     PUSH ESI \n0x000050f6 (04) 8b742408               MOV ESI, [ESP+0x8] \n0x000050fa (01) 57                     PUSH EDI \n0x000050fb (03) c1e603                 SHL ESI, 0x3 \n0x000050fe (06) 8bbe58a04000           MOV EDI, [ESI+0x40a058] \n0x00005104 (01) 57                     PUSH EDI \n0x00005105 (06) ff15f4804000           CALL 0x004080f4  ; 1 KERNEL32.dll!GetModuleHandleA\n0x0000510b (02) 85c0                   TEST EAX, EAX \n0x0000510d (02) 750b                   JNZ 0x0000511a   ; 2 \n</code></pre>\nLet's suppose that somewhere after the last instruction there is a jump in the middle of some instruction in the displayed code as, for example, to the 2nd byte in the MOV ESI... instruction:\n<pre><code>[0x000050f7:0x00405cf7]> c\n0x000050f7 (02) 7424                   JZ 0x0000511d    ; 1 \n0x000050f7 ----------------------------------------------------------------------\n0x000050f9 (03) 0857c1                 OR [EDI-0x3f], DL \n0x000050fc (02) e603                   OUT 0x3, AL \n</code></pre>\nIt turns out that this instruction changes to a JZ. Which is valid. Jumping to the 3rd byte...\n<pre><code>[0x000050f7:0x00405cf7]> s +1\n[0x000050f8:0x00405cf8]> c\n0x000050f8 (02) 2408                   AND AL, 0x8 \n0x000050fa (01) 57                     PUSH EDI \n0x000050fb (03) c1e603                 SHL ESI, 0x3 \n0x000050fe (06) 8bbe58a04000           MOV EDI, [ESI+0x40a058] \n</code></pre>\nJumping to the 2nd byte of the CALL instruction:\n<pre><code>[0x000050f5:0x00405cf5]> s 0x5106\n[0x00005106:0x00405d06]> c\n0x00005106 (05) 15f4804000             ADC EAX, 0x4080f4    ; '\\x8e\\x91'\n0x0000510b (02) 85c0                   TEST EAX, EAX \n0x0000510d (02) 750b                   JNZ 0x0000511a   ; 1 \n</code></pre>\nAs you can see, virtually any multi-byte instruction is susceptible of being used as an overlapping instruction.\nThis anti-reversing trick is quite often used with opaque predicates in order to f**k the flow graph.\n",
+            "votes": "8",
+            "user": "joxeankoret",
+            "time": "Apr 3, 2013 at 9:19",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">So, you mean that there is no way to build such list ? Another point that surprise me a lot about x86/x86-64 opcodes, is its capacity to resynchronise after a while to the original instruction flow. This property helps also a lot in making instruction overlapping. Though, I have no idea why resynchronisation is working so nicely.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Because x86 instructions can be any length and don't need to be aligned, one instruction's immediate value can be another instruction altogether. For example:\n<pre><code>00000000  0531C0EB01        add eax,0x1ebc031\n00000005  055090EB01        add eax,0x1eb9050\n0000000A  05B010EB01        add eax,0x1eb10b0\n0000000F  EBF0              jmp short 0x1\n</code></pre>\nThis does exactly what it says, until the jump. When it jumps, the immediate value being added to eax become an instruction, so the code looks like:\n<pre><code>00000000  05                db 5\n00000001  31C0              xor ax,ax           xor ax, ax\n00000003  EB01              jmp short 0x6\n00000005  05                db 5\n00000006  50                push ax             push ax\n00000007  90                nop\n00000008  EB01              jmp short 0xb\n0000000A  05                db 5\n0000000B  B010              mov al,0x10         mov al,0x10\n....\n</code></pre>\nThe instructions which are actually significant are shown in the right-hand column. In this example, short jump instructions are used to skip the <pre><code>add eax</code></pre> part of the instruction (<pre><code>05</code></pre>). It should be noted that this could be done more effectively by using an single-byte to eat the <pre><code>05</code></pre>s, like <pre><code>3C05</code></pre> which is <pre><code>cmp al, 0x5</code></pre>, and would be harmless in code that doesn't care about the flags.\nIn the pattern above, you easily replace all the <pre><code>05</code></pre>s with <pre><code>90</code></pre> (nop) to view the correct disassembly. This can be made trickier by using the <pre><code>05</code></pre>s as immediate values to hidden code (that the execution depends on). In reality, the person obfuscating the code would probably not use <pre><code>add eax</code></pre> over and over again, and might change the execution order to make it messier to trace.\nI prepared a sample using the pattern above. This is a 32-bit Linux ELF file in base64. The effect of the hidden code is running <pre><code>execve(\"//usr/bin/python\", 0, 0)</code></pre>. I suggest you don't run random binaries from SE answers. You can, however, use it to test your disassemblers. IDA, Hopper and objdump all fail miserably at first glance, although I imagine you can get IDA to do it correctly somehow.\n<pre><code>f0VMRgEBAQAAAAAAAAAAAAIAAwABAAAAYIAECDQAAAAoAQAAAAAAADQAIAABACgAAwACAAEAAAAA\nAAAAAIAECACABAgUAQAAFAEAAAUAAAAAEAAAAAAAAAAAAAAAAAAABTHA6wEFUJDrAQWwEOsBBffg\n6wEF9+DrAQWJw+sBBbRu6wEFsG/rAQX34+sBBbRo6wEFsHTrAQVQkOsBBbR56wEFsHDrAQX34+sB\nBbQv6wEFsG7rAQVQkOsBBbRp6wEFsGLrAQX34+sBBbQv6wEFsHLrAQVQkOsBBbRz6wEFsHXrAQX3\n4+sBBbQv6wEFsC/rAQVQkOsBBTHJ6wEF9+HrAQWJ4+sBBbAL6wEFzYDrAelN////AC5zaHN0cnRh\nYgAudGV4dAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwAAAAEA\nAAAGAAAAYIAECGAAAAC0AAAAAAAAAAAAAAAQAAAAAAAAAAEAAAADAAAAAAAAAAAAAAAUAQAAEQAA\nAAAAAAAAAAAAAQAAAAAAAAA=\n</code></pre>\n",
+            "votes": "3",
+            "user": "Dougall",
+            "time": "Apr 8, 2013 at 15:16",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

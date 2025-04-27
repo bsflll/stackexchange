@@ -1,0 +1,49 @@
+{
+  "title": "How to find the starting address of text section of a DLL inside a process? (64 bit)",
+  "link": "https://reverseengineering.stackexchange.com/questions/22130/how-to-find-the-starting-address-of-text-section-of-a-dll-inside-a-process-64",
+  "content": "There was a question about this a year ago, but the answer doesn't explain how to do it in C/C++: \n\nHow to find start of .text section?\n\nI'm not talking about module start address, which we can get using GetModuleHandle(module)\n\nI'm talking about the start of text section of a DLL inside a process, so when i inject a process (using dll injection) i can get the starting address of a target DLL and patch part of its instructions, basically i know the offset of a instruction inside the DLL's file on disk, and i just want to find the start of text section and add to it that offset so i can patch it by injecting into the process that loaded it\n\nand the offset of that part inside the PE file is different from disk, for example in a test program that i checked the offset in disk was 0x300 and on memory was 0x1000 (32 bit app)\n\nso how can i do this   that can work in both 32 bit and 64 bit apps?  \n\n",
+  "votes": "4",
+  "answers": 3,
+  "views": "6k",
+  "tags": [
+    "windows",
+    "x86",
+    "x86-64",
+    "windows-10"
+  ],
+  "user": "Mery Ted",
+  "time": "Sep 16, 2019 at 4:27",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "There are lots of helper functions in dbghelp.h to fully parse the PE file\n\nif you do not wish to use dbghelp.h almost all of these function has an Rtl Equivalent function in ntdll.dll which you can call dynamically (LoadLibrary, GetProcAddres)\n\nFor example, the function ImageNtHeader has an equivalent RtlImageNtHeader in ntdll.dll which you can use with GetProcAddress()\n\nBelow is a sample code that dump some pertinent details of all sections in a given module using dbghelp.h:\n\n```\n#include <windows.h>\n#include <dbghelp.h>\n#include <stdio.h>\n#pragma comment(lib, \"dbghelp.lib\")\nint main(void)\n{\n    HMODULE hMod = GetModuleHandleA(\"kernelbase.dll\");\n    if (hMod)\n    {\n        PIMAGE_NT_HEADERS64 NtHeader = ImageNtHeader(hMod);\n        WORD NumSections = NtHeader->FileHeader.NumberOfSections;\n        PIMAGE_SECTION_HEADER Section = IMAGE_FIRST_SECTION(NtHeader);\n        for (WORD i = 0; i < NumSections; i++)\n        {\n            printf(\"%-8s\\t%x\\t%x\\t%x  \n\", Section->Name, Section->VirtualAddress,\n                   Section->PointerToRawData, Section->SizeOfRawData);\n            Section++;\n        }\n    }\n    return 0;\n}\n\n```\ncompile and linked and executed\n\n```\ncl /Zi /W4 /nologo /analyze /EHsc /Od %1 /link /release\n\nTextSectAddr.exe\n======================================\nName            VA      Raw     Size\n======================================\n.text           1000    400     102600\n.rdata          104000  102a00  155e00\n.data           25a000  258800  1600\n.pdata          25f000  259e00  e800\n.didat          26e000  268600  800\n.rsrc           26f000  268e00  600\n.reloc          270000  269400  22400\n\n```\n",
+      "votes": "4",
+      "user": "winapiadmin",
+      "time": "Nov 8, 2023 at 23:14",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "In order to get the text section of the desired dll, first you need its base address (DOS Header in other words) which leads you to its PE Header (using the e_lfanew field of IMAGE_DOS_HEADER).\n\nAt the PE Header (or in it's structured name IMAGE_NT_HEADERS) you'll find a field named FileHeader that contain information regarding the number of sections exist in the desired image.\n\nto get to the first section (again it has a structured name IMAGE_SECTION_HEADER), you need to pass the DOS_HEADER, and NT_HEADERS by adding their size to the image's base address, and then you iterate through the sections checking it's Characteristics field for the values \n\n```\nIMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE\n\n```\nwhich indicates for code/text section.\n\nWhen you reach the header of the text section, you can use the field\n\n```\nVirtualAddress\n\n```\nto get the start address of the code section\n\nThink of it as this struct \n\n```\n ___________________________\n|                           |\n|      IMAGE_DOS_HEADER     |\n|___________________________|\n|                           |\n|     IMAGE_NT_HEADERS      | <-- Contains FileHeader which has the number of sections exist in the dll\n|___________________________|\n|                           |\n|   IMAGE_SECTION_HEADER    |\n|___________________________|\n|                           |\n|   IMAGE_SECTION_HEADER    |\n|___________________________|\n|                           |\n|   IMAGE_SECTION_HEADER    |\n|___________________________|\n|                           |\n|   IMAGE_SECTION_HEADER    |\n|___________________________|\n|                           |\n|   IMAGE_SECTION_HEADER    |\n|___________________________|\n\n```\n",
+      "votes": "1",
+      "user": "0xC0000022L",
+      "time": "Sep 15, 2019 at 20:45",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "Hi @stylo and welcome tom RE.SE. Thanks for contributing on our site. Just as a remark, the inquirer was rather specific about needing some kind of API or C/C++ function rather than merely the description of how to achieve the goal.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Here is another way to get PE image sections using stylo's answer.\nThe following C code uses fopen(), fread() and fseek() functions.\nSo, this code can be use in any Unix-like systems.\n\n```\nint main(int argc, char* argv[])\n{\n    if (argc < 2)\n        return;\n\n    FILE* file = fopen(argv[1], \"rb\");\n    if (file == NULL)\n        return;\n\n    IMAGE_DOS_HEADER dosHeader = { 0 };\n    fread(&dosHeader, sizeof dosHeader, 1, file);\n    fseek(file, dosHeader.e_lfanew, SEEK_SET);\n\n    IMAGE_NT_HEADERS ntHeader = { 0 };\n    fread(&ntHeader, sizeof ntHeader, 1, file);\n\n    IMAGE_SECTION_HEADER secHeader = { 0 };\n\n    for (int i = 0; i < ntHeader.FileHeader.NumberOfSections; i++)\n    {\n        fread(&secHeader, sizeof secHeader, 1, file);\n        printf(\"%-8s\\t%x\\t%x\\t%x  \n\",\n               secHeader.Name,\n               secHeader.VirtualAddress,\n               secHeader.PointerToRawData,\n               secHeader.SizeOfRawData);\n    }\n\n    return 0;\n}\n\n```\nSo, what does the code do?\n\n",
+      "votes": "0",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "title": "replacing static value with variable",
+  "link": "https://reverseengineering.stackexchange.com/questions/19474/replacing-static-value-with-variable",
+  "content": "I'm trying to replace a static value:\n\n```\nMOV DWORD PTR SS:[EBP-30],4c\n\n```\nWith a value from a specific address:\n\n```\nMOV DWORD PTR SS:[EBP-30],400400 // MOV DWORD PTR SS:[EBP-30],OFFSET 400400\n\n```\nBut SS:[EBP-30] is not being set to the value from 0x400400.\n\nI'm new to this but I was thinking this would work:\n\n```\nMOV DWORD PTR SS:[EBP-30],DWORD PTR DS:[400400]\n\n```\nBut I guess it doesn't because ollydbg gives an error.\n\nThe value from 0x400400 is int 100 or 64 00 00 00. Why doesn't it work? And what are my options? \n\nI was also thinking of doing something like:\n\n```\nMOV ECX,DWORD PTR DS:[400400]\nMOV DWORD PTR SS:[EBP-30],ECX\n\n```\nBut I don't know how to add a new line of instruction in ollydbg I was also afraid it would change all the addresses.\n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "613",
+  "tags": [
+    "disassembly",
+    "ollydbg",
+    "pointer"
+  ],
+  "user": "majidarif",
+  "time": "Sep 27, 2018 at 18:04",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Let's split this up a bit. I'll skip over some stuff that you might already understand, but we may need to expand this if some stuff is not clear.\n\nThe syntax is a bit wonky but we can understand that you want to encode a MOV with two memory operands.\nLet's take a look at some documentation\n\nRef: https://www.felixcloutier.com/x86/MOV.html\n\nThere is no possible encoding for MOV that accepts m32,m32. With m32 understood to be a 32 bit pointer.\n\nIt's not obvious this is the case, but unfortunately it is.\n\nRef: https://stackoverflow.com/a/33799523/10279341\n\nThis is a good answer if you care about why, but it is supplemental reading only, not critical to this situation.\n\nSo, if we want to copy memory to memory with x86:\n\nRef: https://stackoverflow.com/a/1299094/10279341\n\nA commonly accepted solution is to use a register as a temporary value store.\n\nTake note that we need to save the state of the register we are using else we might accidentally alter the program state.\n\nSo this is on the right track. But we need to save ECX beforehand in case something else is using it.\n\n```\n0x00000000: 51                  push ecx\n0x00000001: 8b 0d 00 04 40 00   mov ecx, dword ptr [0x400400]\n0x00000007: 89 4d e2            mov dword ptr [ebp - 0x1e], ecx\n0x0000000a: 59                  pop ecx\n\n```\nThis should do that you want. We save ECX by pushing it onto the stack. Load the value at address 0x400400 into ECX. Then write the value of ECX into the memory at [EBP-0x1E], then restore ECX to it's previous value.\n\nSo how do we patch this into the binary image?\n\nThe above assembly is 11 bytes in length and our goal is to alter the instruction\n\n0:  c7 45 e2 4c 00 00 00    mov    DWORD PTR [ebp-0x1e],0x4c\n\nWhich we can see is 7 bytes long.\n\nWe can get these extra 4 bytes by use of a \"code cave\". We will redirect execution into an unused bit of memory, execute our code, then jump back.\n\nRef: https://www.codeproject.com/Articles/20240/The-Beginners-Guide-to-Codecaves\n\nIn short, we're looking \"empty space\" that is allocated/mapped within the exe image, preferably in the .text section, but are not used by the program under any circumstances. This will occur in nearly every executable image due to SectionAlignment in Windows PE being 4096 by default.\n\nThe easiest way to implement this is to find unused bytes in the same region of memory that we are trying to modify.\n\nA rudimentary way of finding/applying a code cave with ollydbg is shown here:\n\nhttps://medium.com/@vysec.private/backdoor-101-f318110e1fcb\n\nAfter finding suitable memory for our cave, patch in the shellcode:\n\n```\n0x00000000: 51                  push ecx\n0x00000001: 8b 0d 00 04 40 00   mov ecx, dword ptr [0x400400]\n0x00000007: 89 4d e2            mov dword ptr [ebp - 0x1e], ecx\n0x0000000a: 59                  pop ecx\n\n```\nusing ollydbg's assembler.\n\nThen change the original instruction of mov DWORD PTR [ebp-0x1e],0x4c to JMP x where x is your shellcode address, in the same module/image.\n\nOverwrite the rest of the instruction bytes with 0x90 (NOP) if you want. So that we end up with:\n\nc7 45 e2 4c 00 00 00 - Original instruction\n\ne9 xx xx xx xx 90 90 - JMP rel32 plus 2 NOPs\n\nRef for x86 JMP: https://c9x.me/x86/html/file_module_x86_id_147.html\n\nafter pop ecx back in our code cave assemble: JMP y\n\nwhere y is the address of the instruction directly after mov DWORD PTR [ebp-0x1e],0x4c. You should end up skipping over the NOP instructions when jumping out of the code cave, which is why I said they were optional.\n\nSummary,\n\n",
+      "votes": "6",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "majidarif",
+          "text": "does it matter that the value I'm trying to read is only 1-100? like the value is maxed at 100. so technically I can get away with reading it as a single byte.",
+          "time": null
+        },
+        {
+          "user": "Abigail",
+          "text": "it won't matter unless the bytes around the value are changed. eg 0x400401, 0x400402, contain other values not part of the value. dword ptr [0x400400] will read 4 bytes (little-endian) starting at 0x400400. if you change it to byte ptr, it will only read the one byte.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Memory-to-memory MOV does not exist. You could try the following:\n\n```\n    MOV eax, DWORD PTR DS : [400400]\n    MOV DWORD PTR SS : [EBP - 30], eax\n\n```\nPlease check also if the absolute numbers are interpreted as hex values in your assembler.\n\n",
+      "votes": "1",
+      "user": "josh",
+      "time": "Sep 27, 2018 at 14:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "majidarif",
+          "text": "I was actually thinking of this but how do I do it in ollydbg? I'm not sure how to add a new line of instructions and it might change all the addresses?",
+          "time": null
+        },
+        {
+          "user": "josh",
+          "text": "If your intent is to patch an existing code, and the patch needs more bytes than the replaced code, you must be sure that either the code in the additional space is not needed any more, or you could insert (i.e. patch) a jmp to a free memory location, re-insert the \"destroyed\" code and jmp back to the original code where it can continue like before the patch. With respect to Olly, I don't know the answer, because I usually work in Ida.",
+          "time": null
+        },
+        {
+          "user": "majidarif",
+          "text": "Thank you. Unfortunately although I think I get what you meant. I'm really new to this to know how to do it. When you say JMP to an free memory location. Do I replace the current instructions with JMP then use that to do those instructions are return back? But, how do I do that exactly? And how do I find a free memory?",
+          "time": null
+        },
+        {
+          "user": "josh",
+          "text": "I think you got it right. How you do it technically depends. Try to become proficient with your tools. One possibility would be to create the machine code (usually not by hand, but from an assembler), then patch it in the exe file and test it in your debugger. Often the tricky part is to find a free mem location, large enough, and to not introduce new errors, by e.g. relying on absolute mem addresses (try to understand what \"ASLR\" means) etc. No standard recipes exist.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+    "title": "IDA: Generic approach to determine if an instruction reads from, or writes to, memory?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12053/ida-generic-approach-to-determine-if-an-instruction-reads-from-or-writes-to-m",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I would like to determine if an instruction a) reads from or b) writes to a memory address.\nI can currently think of two approaches in IDA:\n </p>\n <ol>\n  <li>\n   <p>\n    Looking for a list of mnemonics (better: particular opcodes?), e.g. for x86 see\n    <a href=\"https://en.wikibooks.org/wiki/X86_Assembly/Data_Transfer\" rel=\"nofollow\">\n     here\n    </a>\n    and manually map each and every one of them to\n    <code>\n     read\n    </code>\n    ,\n    <code>\n     write\n    </code>\n    .\n   </p>\n   <p>\n    This does not seem to be very elegant to me.\n   </p>\n  </li>\n  <li>\n   <p>\n    Work with the\n    <code>\n     idc.GetOpType(ea, n)\n    </code>\n    function and check for the relevant\n    <code>\n     o_*\n    </code>\n    constants (see\n    <a href=\"https://github.com/idapython/src/blob/master/python/idc.py\" rel=\"nofollow\">\n     here\n    </a>\n    ), i.e:\n   </p>\n   <pre><code>o_mem      = idaapi.o_mem       # Direct Memory Reference  (DATA)      addr\no_phrase   = idaapi.o_phrase    # Memory Ref [Base Reg + Index Reg]    phrase\no_displ    = idaapi.o_displ     # Memory Reg [Base Reg + Index Reg + Displacement] phrase+addr\n</code></pre>\n   <p>\n    Yet, these do not tell me if the instruction reads from or writes to memory.\n   </p>\n  </li>\n </ol>\n <p>\n  Is there a better way to find out what I want? Ideally a way that works for multiple CPU architectures?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 4,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "assembly",
+        "idapython",
+        "idapro-sdk"
+    ],
+    "user": "langlauf.io",
+    "time": "Sep 14, 2016 at 23:52",
+    "comments": [
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n Is it required to use IDA? Do you want to do static or dynamic analysis?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "langlauf.io",
+            "text": "<html><body><span class=\"comment-copy\">\n @TaThanhDinh : static analysis. IDA would be nice but if there is another way, that is fine too.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ta Thanh Dinh",
+            "text": "<html><body><span class=\"comment-copy\">\n In this case, you may find\n <a href=\"https://software.intel.com/en-us/articles/xed-x86-encoder-decoder-software-library\" rel=\"nofollow noreferrer\">\n  Xed\n </a>\n useful. It gives high-level API to determine whether an instruction may\n <a href=\"https://software.intel.com/sites/landingpage/xed/ref-manual/html/group__DEC.html#ga1d1b81a6e49ae396bdad946439794b5f\" rel=\"nofollow noreferrer\">\n  read\n </a>\n or\n <a href=\"https://software.intel.com/sites/landingpage/xed/ref-manual/html/group__DEC.html#gaeda7bba6faea14f777752fbab269d425\" rel=\"nofollow noreferrer\">\n  write\n </a>\n memory. I dont know whether\n <a href=\"http://www.capstone-engine.org/\" rel=\"nofollow noreferrer\">\n  Capstone\n </a>\n has similar API.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "langlauf.io",
+            "text": "<html><body><span class=\"comment-copy\">\n Sounds like a good plan.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  While the API may be cumbersome, most of the information you are looking for is \"readily\" available from IDA during static analysis. Some of it is somewhat generic, while other pieces require different handling per processor type.\n </p>\n <p>\n  To check if an operand performs read or write access to memory, you can use the following:\n </p>\n <pre><code>import idaapi\nimport idautils\nimport idc\n\nOPND_WRITE_FLAGS = {\n    0: idaapi.CF_CHG1,\n    1: idaapi.CF_CHG2,\n    2: idaapi.CF_CHG3,\n    3: idaapi.CF_CHG4,\n    4: idaapi.CF_CHG5,\n    5: idaapi.CF_CHG6,\n}\n\nOPND_READ_FLAGS = {\n    0: idaapi.CF_USE1,\n    1: idaapi.CF_USE2,\n    2: idaapi.CF_USE3,\n    3: idaapi.CF_USE4,\n    4: idaapi.CF_USE5,\n    5: idaapi.CF_USE6,\n}\n\ndef print_insn_mem_interaction(ea):\n    insn = idautils.DecodeInstruction(ea)\n\n    # The features are needed for operand flags.\n    feature = insn.get_canon_feature()\n\n    for op in insn.ops:\n        # You always get 6 operands. Some of them are set to `o_void` to indicate\n        # that they are not used.\n        if op.type == idaapi.o_void:\n            break\n\n        # There are 3 types of memory references in IDA. We want all 3.\n        is_mem = op.type in (idaapi.o_mem, idaapi.o_phrase, idaapi.o_displ)\n\n        # Extract per-operand read/write status from the feature.\n        is_write = feature & OPND_WRITE_FLAGS[op.n]\n        is_read = feature & OPND_READ_FLAGS[op.n]\n\n        if not is_mem:\n            # Operand does not access memory.\n            continue\n\n        # Ugly line for the display. Sorry.\n        action = 'memory {}'.format('/'.join(filter(bool, ('read' if is_read else None, 'write' if is_write else None))))\n\n        print(f\"Operand[{op.n}]<{idc.print_operand(ea, op.n)}> : {action}\")\n</code></pre>\n <p>\n  Telling the addresses accessed, though, is a different story.\n </p>\n <p>\n  The parsing of\n  <code>\n   o_displ\n  </code>\n  and\n  <code>\n   o_phrase\n  </code>\n  operands is processor-type specific, and is completely undocumented (actually, the docs say\n  <a href=\"https://www.hex-rays.com/products/ida/support/sdkdoc/classop__t.html#afb5775d8aaa7bcefcb17d51c0b298135\" rel=\"nofollow noreferrer\">\n   \"do as you like\"\n  </a>\n  ).\nIf you are interested in a working parser for x86 and x64, you can check my code\n  <a href=\"https://github.com/tmr232/Sark/blob/784ab9cd57fdf9dc140e4dcaef3963d9a83df263/sark/code/instruction.py#L28\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  .\n </p>\n <p>\n  If you need to work with any other architecture, I'd recommend using a more script-friendly disassembler.\n  <a href=\"http://www.capstone-engine.org/\" rel=\"nofollow noreferrer\">\n   Capstone\n  </a>\n  is probably a good choice on that matter.\n </p>\n <p>\n  And finally, if you need the actual addresses, you will probably have to turn to  dynamic analysis.\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "tmr232",
+            "time": "May 12, 2022 at 11:50",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "KulaGGin",
+                    "text": "<span class=\"comment-copy\">I believe there's potentially a bug in this code. When you check if operand type is <code>o_void</code> in <code>if op.type == idaapi.o_void: break</code>, you break out of the loop that iterates through the sequence of all operands in the instruction. So if first operand is <code>o_void</code>, it break and not check all other operands after it, which could potentially be valid operands. I noticed it after I saw that when you check if operand <code>is_mem</code> or not, you continue and don't break. I understand that on practice on x86 pretty much all the time third+ operands will always be null. But what about all other architectures?</span>",
+                    "time": null
+                },
+                {
+                    "user": "KulaGGin",
+                    "text": "<span class=\"comment-copy\">Thx for the answer, btw. Would've taken me 10 hours, or more like days of work and parsing through the IDA documentation to be able to decipher it and manage to write a plugin to log all instructions in a function that write to memory.</span>",
+                    "time": null
+                },
+                {
+                    "user": "tmr232",
+                    "text": "<span class=\"comment-copy\">@KulaGGin it's been some years since... But I think my assumption was that if an operand is empty, the ones after it will be empty as well. Might have been a mistake.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Updated\n  <a href=\"https://reverseengineering.stackexchange.com/a/13519/33592\">\n   @tmr232's answer\n  </a>\n  for IDA 7.4+ using a better syntax for printing strings(f-strings):\n </p>\n <pre><code>import idaapi\nimport idautils\nimport idc\n\nOPND_WRITE_FLAGS = {\n    0: idaapi.CF_CHG1,\n    1: idaapi.CF_CHG2,\n    2: idaapi.CF_CHG3,\n    3: idaapi.CF_CHG4,\n    4: idaapi.CF_CHG5,\n    5: idaapi.CF_CHG6,\n}\n\nOPND_READ_FLAGS = {\n    0: idaapi.CF_USE1,\n    1: idaapi.CF_USE2,\n    2: idaapi.CF_USE3,\n    3: idaapi.CF_USE4,\n    4: idaapi.CF_USE5,\n    5: idaapi.CF_USE6,\n}\n\ndef print_insn_mem_interaction(ea):\n    insn = idautils.DecodeInstruction(ea)\n\n    # The features are needed for operand flags.\n    feature = insn.get_canon_feature()\n\n    for op in insn.ops:\n        # You always get 6 operands. Some of them are set to `o_void` to indicate\n        # that they are not used.\n        if op.type == idaapi.o_void:\n            break\n\n        # There are 3 types of memory references in IDA. We want all 3.\n        is_mem = op.type in (idaapi.o_mem, idaapi.o_phrase, idaapi.o_displ)\n\n        # Extract per-operand read/write status from the feature.\n        is_write = feature & OPND_WRITE_FLAGS[op.n]\n        is_read = feature & OPND_READ_FLAGS[op.n]\n\n        if not is_mem:\n            # Operand does not access memory.\n            continue\n\n        # Ugly line for the display. Sorry.\n        action = 'memory {}'.format('/'.join(filter(bool, ('read' if is_read else None, 'write' if is_write else None))))\n\n        stringToPrint = f\"Operand[{op.n}]<{idc.print_operand(ea, op.n)}> : {action}\"\n        print(stringToPrint)\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "KulaGGin",
+            "time": "May 10, 2022 at 21:00",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If you have IDA Pro 6.x, then solution is pretty straightforward:\n  <a href=\"https://www.hex-rays.com/products/ida/support/tutorials/tracing.pdf\" rel=\"nofollow\">\n   https://www.hex-rays.com/products/ida/support/tutorials/tracing.pdf\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "-1",
+            "user": "assp1r1n3",
+            "time": "Feb 16, 2016 at 22:21",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Sorry, I do not understand what you mean. Could you be a bit more specific ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "assp1r1n3",
+                    "text": "<span class=\"comment-copy\">@stackoverflowwww place the cursor inside the disassembly view, right-click menu or main \"Debugger\" menu, and you will see \"Add read/write trace\". Hope that helps</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Other than dynamic analysis (like suggested in the comments) there's no way to get that information from IDA.\n </p>\n <p>\n  IDA does not maintain a complete\n  <a href=\"https://en.wikipedia.org/wiki/Intermediate_representation\" rel=\"nofollow\">\n   Intermediate Representation\n  </a>\n  (also called\n  <em>\n   intermediate language\n  </em>\n  ) and that sort of information is unavailable to IDA, mostly because it's unneeded for implementation of disassemblers. It is however needed for decompilers, so\n  <a href=\"https://www.hex-rays.com/products/decompiler/\" rel=\"nofollow\">\n   hex-rays decompiler\n  </a>\n  probably implements a more complete IR but doesn't make it accessible to the user.\n </p>\n <p>\n  Usually using IL each assembly instruction is translated into multiple\n  <em>\n   intermediate language\n  </em>\n  instructions, which together achieve the same goal as the original instruction. This turns instructions into operations that are less complex and are easier to manipulate/process.\n </p>\n <p>\n  There are open source tools that provide or implement an IL such as\n  <a href=\"https://github.com/Cr4sh/openreil\" rel=\"nofollow\">\n   OpenREIL\n  </a>\n  , which you could use outside of IDA (Specifically it has the\n  <code>\n   STM\n  </code>\n  and\n  <code>\n   LDM\n  </code>\n  instructions).\n </p>\n</div>\n</body></html>",
+            "votes": "-1",
+            "user": "NirIzr",
+            "time": "Sep 14, 2016 at 23:48",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

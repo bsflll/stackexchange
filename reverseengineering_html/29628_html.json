@@ -1,0 +1,38 @@
+{
+    "title": "IDA Pro - configure register clobbering",
+    "link": "https://reverseengineering.stackexchange.com/questions/29628/ida-pro-configure-register-clobbering",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  TL;DR:\n </p>\n <p>\n  The __fastcall convention in IDA Pro assumes that all the registers which could be used for transferring parameters are clobbered after a call (tested on x86, clobbered regs are\n  <code>\n   eax\n  </code>\n  ,\n  <code>\n   edx\n  </code>\n  ,\n  <code>\n   ebx\n  </code>\n  ,\n  <code>\n   ecx\n  </code>\n  ). I'm wondering how can I change that.\n </p>\n <p>\n  Full explanation:\n </p>\n <p>\n  I have a chunk of code (used Watcom\n  <a href=\"https://en.wikipedia.org/wiki/Name_mangling\" rel=\"nofollow noreferrer\">\n   name mangling\n  </a>\n  ):\n </p>\n <pre><code>cseg01:00062A6B                 mov     edx, [ebp+tng1]\ncseg01:00062A6E                 mov     eax, [ebp+this1]\ncseg01:00062A71                 call    W?MyMethod$_Whatever$n_x__pn$SubObject$$\ncseg01:00062A76                 call    W?MySubMethod$_SubObject$n_pn$Thing$$_l\ncseg01:00062A7B                 cmp     eax, 0Ah\n</code></pre>\n <p>\n  The functions are:\n </p>\n <pre><code>SubObject *__fastcall Whatever::MyMethod(Whatever *__hidden this);\nint __fastcall SubObject::MySubMethod(SubObject *__hidden this, Thing *tng);\n</code></pre>\n <p>\n  IDA Pro produces:\n </p>\n <pre><code>(v3 = Whatever::MyMethod(this1), SubObject::MySubMethod(v3, v4) < 10)\n</code></pre>\n <p>\n  So the proper code clearly is:\n </p>\n <pre><code>(this1->MyMethod()->MySubMethod(tng1) < 10)\n</code></pre>\n <p>\n  The problem is — IDA did not use\n  <code>\n   tng1\n  </code>\n  as the 2nd argument of\n  <code>\n   MySubMethod()\n  </code>\n  — instead, it defined a separate variable\n  <code>\n   v4\n  </code>\n  with an unset value.\n </p>\n <p>\n  Because we use\n  <code>\n   __fastcall\n  </code>\n  for both functions, first arg is passed through\n  <code>\n   eax\n  </code>\n  , second by\n  <code>\n   edx\n  </code>\n  . The code so happens to set the value of\n  <code>\n   edx\n  </code>\n  before the first call, even though it's really an argument for the second call. IDA seem to assume that\n  <code>\n   MyMethod()\n  </code>\n  overwrote (or with proper nomenclature,\n  <a href=\"https://en.wikipedia.org/wiki/Clobbering\" rel=\"nofollow noreferrer\">\n   clobbered\n  </a>\n  ) the value of\n  <code>\n   EDX\n  </code>\n  ).\n </p>\n <p>\n  I tried __usercall and __userpurge, and it had no impact on the code — IDA still assumes\n  <code>\n   EDX\n  </code>\n  was clobbered by the first call.\n </p>\n <p>\n  Is there a way to configure/change that behavior, making IDA know that function calls does not clobber registers?\n </p>\n <p>\n  I remember fixing it in the past, so there is a way, just can't remember what it was exactly...\n </p>\n <p>\n  Also, it would be nice to configure that on a project level instead of defining a custom calling convention for every function.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "884",
+    "tags": [
+        "ida",
+        "x86",
+        "register",
+        "calling-conventions"
+    ],
+    "user": "mefistotelis",
+    "time": "Nov 30, 2021 at 8:17",
+    "comments": [
+        {
+            "user": "mefistotelis",
+            "text": "<html><body><span class=\"comment-copy\">\n Oh right, the clobbering is configured per-function using __spoils. Details here:\n <a href=\"https://hex-rays.com/products/ida/support/idadoc/1361.shtml\" rel=\"nofollow noreferrer\">\n  hex-rays.com/products/ida/support/idadoc/1361.shtml\n </a>\n But I don't think there's project-wide setting for it. Or is there?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<html><body><span class=\"comment-copy\">\n I'm not sure defining a calling convention is necessary. I think defining the prototype of\n <code>\n  mySubMethod\n </code>\n to accept two arguments (I assume it accepts one now) will do the trick. I think the main issue here is not with clobbering but with incorrectly identifying the number of arguments in\n <code>\n  mySubMethod\n </code>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In the absence of an explicit\n  <code>\n   __spoils\n  </code>\n  declaration on the called function's prototype, Hex-Rays makes decisions about which registers should be spoiled at a call site based on the compiler that has been chosen for the binary, which can be viewed and modified under\n  <code>\n   Options->Compiler\n  </code>\n  . Your first step should be to ensure that the\n  <code>\n   Compiler\n  </code>\n  dropdown box says \"Watcom C++\".\n </p>\n <p>\n  The authors of Hex-Rays need to implement support for each compiler's ABI separately. That is to say, if you were to reverse engineer the part of Hex-Rays that chose the standard clobber set to be used throughout call analysis, you'd find that the logic made use of\n  <code>\n   if\n  </code>\n  -statements that were checking the database's compiler settings (as described in the previous paragraph).\n </p>\n <p>\n  Unfortunately, as of the last time I reverse engineered that part of Hex-Rays, they had not yet implemented support for Watcom's ABI. It's possible this has changed in the meantime -- again, your first step should be to set the compiler to Watcom and see what happens. I get the impression they\n  <a href=\"https://hex-rays.com/products/ida/news/7_3/\" rel=\"nofollow noreferrer\">\n   might have added it in 7.3, based on the following changelog\n  </a>\n  :\n </p>\n <blockquote>\n  <p>\n   BUGFIX: TYPES: corrected the list of spoiled registers for watcom files\n  </p>\n </blockquote>\n <p>\n  However, if setting the compiler doesn't work, then there's nothing you can do as a user to fix this without manually annotating each function's\n  <code>\n   __spoils\n  </code>\n  set. If so, this would be a great time to contact Hex-Rays support with your license key, and a copy of the binary if possible, and ask them if they can implement ABI support for Watcom in the decompiler. It may not happen in the next release, but if enough customers have enough requests involving Watcom binaries, it'll happen. After all, it's probably not that much work on their end to implement it, and it's a nice feature to have out-of-the-box.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Rolf Rolles",
+            "time": "Nov 30, 2021 at 14:07",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

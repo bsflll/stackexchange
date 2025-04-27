@@ -1,0 +1,61 @@
+{
+  "title": "Two examples of the same code looks different",
+  "link": "https://reverseengineering.stackexchange.com/questions/31366/two-examples-of-the-same-code-looks-different",
+  "content": "These are two examples of the same code. The same code in IDA looks different. Why? For compilation this C++ code was used VS2019.\n\n```\n.text:004E27A0 ; =============== S U B R O U T I N E =======================================\n.text:004E27A0\n.text:004E27A0 ; Attributes: bp-based frame\n.text:004E27A0\n.text:004E27A0 ; int __cdecl WinMainCRTStartup()\n.text:004E27A0                 public _WinMainCRTStartup\n.text:004E27A0 _WinMainCRTStartup proc near\n.text:004E27A0                 push    ebp\n.text:004E27A1                 mov     ebp, esp\n.text:004E27A3                 call    __scrt_common_main\n.text:004E27A8                 pop     ebp\n.text:004E27A9                 retn\n.text:004E27A9 _WinMainCRTStartup endp\n.text:004E27A9\n.text:004E27A9 ; ---------------------------------------------------------------------------\n\n```\n```\n.text:005AC230 ; =============== S U B R O U T I N E =======================================\n.text:005AC230\n.text:005AC230 ; Attributes: bp-based frame\n.text:005AC230\n.text:005AC230 ; int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)\n.text:005AC230 WinMain         proc near               ; CODE XREF: j_WinMainj\n.text:005AC230\n.text:005AC230 var_C           = dword ptr -0Ch\n.text:005AC230 var_8           = dword ptr -8\n.text:005AC230 var_4           = dword ptr -4\n.text:005AC230 hInstance       = dword ptr  8\n.text:005AC230 hPrevInstance   = dword ptr  0Ch\n.text:005AC230 lpCmdLine       = dword ptr  10h\n.text:005AC230 nShowCmd        = dword ptr  14h\n.text:005AC230\n.text:005AC230                 push    ebp\n.text:005AC231                 mov     ebp, esp\n.text:005AC233                 sub     esp, 4Ch\n.text:005AC236                 push    ebx\n.text:005AC237                 push    esi\n.text:005AC238                 push    edi\n.text:005AC239                 mov     eax, [ebp+lpCmdLine]\n.text:005AC23C                 mov     GpCmdLine, eax\n.text:005AC241                 push    498h            ; size_t\n.text:005AC246                 push    0               ; int\n.text:005AC248                 push    offset App      ; void *\n.text:005AC24D                 call    j__memset\n.text:005AC252                 add     esp, 0Ch\n.text:005AC255                 mov     eax, [ebp+hInstance]\n.text:005AC258                 mov     hinst, eax\n\n```\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "175",
+  "tags": [
+    "ida"
+  ],
+  "user": "black4joss",
+  "time": "Jan 8, 2023 at 9:00",
+  "comments": [
+    {
+      "user": "josh poley",
+      "text": "What do you mean \"same code\"? Those are two very different functions. WinMainCRTStartup Is provided by the CRT and gives the CRT a chance to do it's initialization; the CRT will then call your WinMain when it is ready.",
+      "time": null
+    },
+    {
+      "user": "Rolf Rolles",
+      "text": "+1, that is not the same code. One is part of the CRT, the other is the main function written by the application developer.",
+      "time": null
+    },
+    {
+      "user": "black4joss",
+      "text": "I compiled the same C++ code with different project settings, and got that in the first code example, I can't find the WinMain function. Why it's not there I don't understand.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "TL;DR: the gist is roughly the same as commented before on the question. WinMainCRTStartup is the function which performs some boilerplate initialization for the C/C++ runtime (\"CRT\") and eventually calls your WinMain. So the former isn't your own code, but code supplied by the compiler toolchain and the latter gets eventually called by the former. The leading underscore(s) originate from name mangling.\n\nFrankly you are giving too little context, but based on experience I will fill the gaps with assumptions 😉\n\nYou may want to have a look at this answer first and this answer second, I'll wait.\n\nOkay, so not assuming too much prior knowledge (i.e. in case you skipped the reading part), you should know that we have several levels here.\n\nWe can prove this easily. Suppose we take a trivial C++ program like this (go ahead, follow along):\n\n```\n// File is named test.cpp\n#define WIN32_LEAN_AND_MEAN\n#include <Windows.h>\n\nint APIENTRY WinMain(HINSTANCE hInst, HINSTANCE hInstPrev, PSTR cmdline, int cmdshow)\n{\n    return MessageBox(NULL, \"Hello, world\", \"Hellow Windows world\", 0);\n}\n\n```\nAnd compile it from a Visual C++/Studio \"Developer Command Prompt\" (32-bit/x86 default) with:\n\n```\ncl /nologo /permissive- /Zi /Fe:test.exe test.cpp /link /opt:ref /opt:icf user32.lib\n\n```\n/Zi removes optimizations as it implies /debug, so we counter with /opt:ref and /opt:icf passed directly to the linker.\n\nLooking at the resulting test.exe first with dumpbin /nologo /headers test.exe from the same prompt you should be seeing something along the lines of (excerpt):\n\n```\nOPTIONAL HEADER VALUES\n             10B magic # (PE32)\n           14.34 linker version\n            C600 size of code\n            8400 size of initialized data\n               0 size of uninitialized data\n            125C entry point (0040125C) _WinMainCRTStartup\n            1000 base of code\n\n```\nThe penultimate line contains the reference to _WinMainCRTStartup which is set as entry point for the PE file. Exactly what you are seeing, right?\n\nWell, turns out if you have the Professional edition or higher of Visual Studio, you have the source code to this stuff probably installed already (it's still proprietary code!). It's inside $(VCToolsInstallDir)\\crt ($(VCToolsInstallDir) can be retrieved by invoking \"%Program Files(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe\" -nologo -property installationPath and drilling down into VC\\Tools\\MSVC\\*).\n\nNow you can find the files for the entry point(s):\n\nSo in your case we're looking at a GUI program without _UNICODE defined (\"ANSI entry point\").\n\nLoading this file into IDA we will land right at _WinMain@16:\n\n\n\nBut pay attention to the Exports view which I added here as well. We can see the _WinMainCRTStartup. That function is defined by Visual Studio and the linker is hardcoded to \"know\" about a bunch of names for entry points, this one included, by default.\n\nThe code (also seen in exe_winmain.cpp) amounts to:\n\n```\nextern \"C\" DWORD WinMainCRTStartup(LPVOID)\n{\n    return __scrt_common_main();\n}\n\n```\nAnd the extern \"C\" is what causes the name to be mangled and prepended an underscore.\n\nIt's worthwhile peeking at the code for the C/C++ runtime startup code yourself and getting to know it. Potentially the thread local storage (TLS) callbacks also get to run prior to your entry point.\n\nNB: A prior look at The Old New Thing can't hurt 😉\n\nAlright, let's swap the contents of the test.cpp for this one:\n\n```\n#define WIN32_LEAN_AND_MEAN\n#include <Windows.h>\n\nDWORD CALLBACK TrueEntryPoint(void)\n{\n    (void)::MessageBeep(0xFFFFFFFFU);\n    return 42;\n}\n\n```\n(Note: the choice of MessageBeep was deliberate so we could rebuild still with only importing from user32.dll.)\n\n... and rebuild, this time telling the linker to use TrueEntryPoint as the PE entry point:\n\n```\ncl /nologo /permissive- /Zi /Fe:test.exe test.cpp /link /opt:ref /opt:icf user32.lib /entry:TrueEntryPoint\n\n```\nExecuting the code you should now hear a beep (speaker) or some short sound which you also get otherwise in the GUI on occasion.\n\nBut wait, the binary is now 2.5 KiB in size, as compared to a staggering 81.0 KiB for the original binary.\n\nThat size difference is owed to all the C/C++ runtime functionality such as printf, but also some default exception handling, buffer overrun checks etc. Some may consider it bloat, but if you don't have it you aren't allowed to call any of the C/C++ runtime functionality without first performing the initialization steps yourself.\n\nNote that if we hadn't statically linked the C/C++ runtime but instead used it dynamically, things would be slightly different, as all of that \"bloat\" would now be in the C/C++ runtime DLLs which hopefully only exist once (per version) on a given system. But it requires you to install the \"Runtime Redistriutables\" in order to run your application.\n\n",
+      "votes": "1",
+      "user": "0xC0000022L",
+      "time": "Jan 9, 2023 at 8:19",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "black4joss",
+          "text": "I'm just wondering why I enabled Incremental:NO in the linker settings of Visual Studio 2019 and the look of the code in IDA has changed.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@black4 makes sense as a question, but it wasn't the question you asked. The mention of incremental:no in your comment is the only mention in this whole Q&A.",
+          "time": null
+        },
+        {
+          "user": "black4joss",
+          "text": "I'm sorry, I didn't ask the question objectively. I have a Visual Studio 2019 project. I compiled it. Opened the exe file in IDA. I see the WinMain function. Then I changed the project settings Linker->Incremental No, compiled it, and again opened the exe file in IDA. I didn't see the WinMain function. Instead, the IDA opened the _WinMainCRTStartup function. The question is why is this happening? That is, now you need to look for WinMain yourself. I don't know what project settings to enable to always have the WinMain function in IDA. I can open a new topic with this question if needed.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@black4 I know this may be annoying, but you should actually write that up as a separate question. You may very well refer to this one and that you understand the difference between entry point and main function, but that your question is about the code differences you see from toggling that switch. I think this could even be a rather interesting Q&A (although I'll admit I'd have to research for the answer). But since the idea behind incremental linking is to lower link times, I have at least a guess where to look and what for ...",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

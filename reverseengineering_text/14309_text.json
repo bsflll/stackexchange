@@ -1,0 +1,44 @@
+{
+    "title": "Unable to call function with CreateRemoteThread",
+    "link": "https://reverseengineering.stackexchange.com/questions/14309/unable-to-call-function-with-createremotethread",
+    "content": "I am messing around with some dll injection/code injection. Therefore I made a little program which does nothing, but it has a function in it, which never get called and I wrote another program which injects code into the first which should call that function.\nHere is my program which injects the code (only relevant part is shown):\n<pre><code>BYTE codeCave[15] = {\n        0xFF, 0x74, 0x24, 0x04, //PUSH DWORD PTR:[ESP+04]\n        0x88, 0x00, 0x00, 0x00, 0x00,   //MOV EAX, 0x0  (0x0 is the address of the function)\n        0xFF, 0xD0, //CALL EAX\n        0x83, 0xC4, 0x04,   //ADD ESP, 0x04\n        0xC3    //RETN\n    };\n\n    DWORD offset = 0x00014D80;\n    DWORD funcAdr = offset + myLib.getBaseAdress();\n    memcpy(&codeCave[5], &funcAdr, 4);\n\n    char testString[] = \"I called the function.\";\n\n    int stringlen = strlen(testString) + 1; //+1 for \\0 at the end\n    int caveLen = sizeof(codeCave);\n    int fullLen = caveLen + stringlen;\n\n    LPVOID remoteString = myLib.allocateMemoryInProcess(fullLen);\n    if (remoteString == NULL) {\n        printf(\"FAILED\");\n        return 1;\n    }\n    LPVOID remoteCave = (LPVOID)((DWORD)remoteString + stringlen);\n    myLib.writeMemory((LPVOID)remoteString, testString);\n    myLib.writeMemory((LPVOID)remoteCave, codeCave);\n    printf(\"%x\n\", funcAdr);\n    printf(\"%x\n\", remoteCave);\n    getchar();\n    myLib.createThread((LPTHREAD_START_ROUTINE)remoteCave, remoteString);\n</code></pre>\nWith:\n<pre><code>LPVOID allocateMemoryInProcess(int length) {\n    return VirtualAllocEx(gameHandle, 0, length, MEM_COMMIT, PAGE_EXECUTE);\n}\n</code></pre>\nand:\n<pre><code>void createThread(LPTHREAD_START_ROUTINE startAdr, LPVOID arg) {\n    HANDLE thread = CreateRemoteThread(gameHandle, NULL, NULL, startAdr, arg, NULL, NULL);\n    WaitForSingleObject(thread, INFINITE);\n    CloseHandle(thread);\n}\n</code></pre>\nThe \"funcAdr\" is the address I want to call in the other program, it is right as I print it out and opened it up in ollydbg:\n<pre><code>CPU Disasm\nAddress   Hex dump          Command                                  Comments\n00034D80  /$  55            PUSH EBP                                 ; ListTest.print(string)\n00034D81  |.  8BEC          MOV EBP,ESP\n00034D83  |.  81EC C0000000 SUB ESP,0C0\n00034D89  |.  53            PUSH EBX\n00034D8A  |.  56            PUSH ESI\n00034D8B  |.  57            PUSH EDI\n00034D8C  |.  8DBD 40FFFFFF LEA EDI,[EBP-0C0]\n00034D92  |?  B9 30000000   MOV ECX,30\n00034D97  |?  B8 CCCCCCCC   MOV EAX,CCCCCCCC\n00034D9C  |?  F3:AB         REP STOS DWORD PTR ES:[EDI]\n00034D9E  |?  68 28BC0300   PUSH OFFSET 0003BC28                     ; ASCII \"TROLOLOLO\"\n00034DA3  |.  E8 61C8FFFF   CALL 00031609\n00034DA8  |?  83C4 04       ADD ESP,4\n00034DAB  |?  8B45 08       MOV EAX,DWORD PTR SS:[EBP+8]\n00034DAE  |?  50            PUSH EAX\n00034DAF  |?  E8 55C8FFFF   CALL 00031609\n00034DB4  |.  83C4 04       ADD ESP,4\n00034DB7  |?  5F            POP EDI\n00034DB8  |?  5E            POP ESI\n00034DB9  |?  5B            POP EBX\n00034DBA  |.  81C4 C0000000 ADD ESP,0C0\n00034DC0  |?  3BEC          CMP EBP,ESP\n00034DC2  |?  E8 5AC4FFFF   CALL 00031221\n00034DC7  |.  8BE5          MOV ESP,EBP                              ; |\n00034DC9  |?  5D            POP EBP                                  ; |\n00034DCA  |?  C3            RETN                                     ; |\n00034DCB  |?  CC            INT3                                     ; |\n00034DCC  |?  CC            INT3                                     ; |\n</code></pre>\nThe function which I want to call from my second program simply receives a const char* and prints it.\n<pre><code>void print(const char* string) {\n    printf(\"TROLOLOLO\");\n    printf(string);\n}\n</code></pre>\nIf I run the above code I receive following error:\n\nIf I however change my print function in the first application so that it doesn't receive any argument and I call \"funcAdr\" directly through .createThread it works without problems though.\nCan you guys maybe help me and tell me where I have something wrong?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "696",
+    "tags": [
+        "dll-injection",
+        "byte-code",
+        "shellcode",
+        "injection"
+    ],
+    "user": "Peter",
+    "time": "Jan 2, 2017 at 19:35",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "One issue I spotted is that <pre><code>remoteCave</code></pre> points to the end of the allocated buffer, instead of it's begining.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Since I cannot add a comment I will post it here:\n@NirIzr :\nWell it doesn't actually point to the end, does it?\nIt should point to the memory where the actual byte array starts. Note that I first write the testString into the memory of my second program then the bytecode.\nThen I do remoteCave = (LPVOID)((DWORD)remoteString + stringlen) which should then be the start of the bytecode.\nEDIT: Okey I found the answer...I had an error in my byte buffer. I needed to change the 0x88 from my second line to 0xB8.\n",
+            "votes": "1",
+            "user": "user7353965",
+            "time": "Jan 3, 2017 at 10:16",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">If this is an answer you feel comfortable with you should mark it as Accepted Answer by clicking the V button below the up/down vote buttons.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user7353965",
+                    "text": "<span class=\"comment-copy\">Yeah I thought about that already, but I cannot seem to find a button to accept the answer? Can maybe a mod or someone mark it?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

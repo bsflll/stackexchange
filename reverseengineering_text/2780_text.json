@@ -1,0 +1,42 @@
+{
+    "title": "Connecting to jtag-openocd-gdb to arm11 device with IDA gets no control",
+    "link": "https://reverseengineering.stackexchange.com/questions/2780/connecting-to-jtag-openocd-gdb-to-arm11-device-with-ida-gets-no-control",
+    "content": "I have a binary chunk from a piece of hardware I've been deciphering with IDA for a couple days now. Today I finally got a probe connected via JTAG and have openocd start up a GDB server. IDA is connecting to the GDB service but when I attach to process it shows all zeros in memory and the PC is no were where I expect it to be. Basically seems like IDA has no control and is not hooking to it. BTW, the target is running and I rather not do a halt reset if I don't have to. I believe this is possible with JTAG. \nThere is no process per-say but I really would like to be able to set breakpoints and single step in some places in the code. Obviously there is some setup issue. Any ideas?\nUPDATE:\nI had a lot to learn and turned out a number of things wrong. \n\nStart out with using OPENOCD via the terminal\nYou really need to halt the target to get access to the registers in arm\nSeemed I had the JTAG speed too high  \nThe device under test had the WDT turned on. Now with that off, I can halt the target and see the correct registers. I could see this was happening since it would start reading the PC just fine but by the time it got to lower regs it would read all F's\nThe DUT has cache and the MMU enabled so although I can halt the target, restarting always ends up with a data abort. Looking at arm11.c in ocd seems there are a bunch of stubs that aren't quite implemented for the cache to be turned on. I've tried flushing the cache before resuming but I still get a data abort. More investigation needed but if anyone has advice, let me know.\n\nThx for your help so far, this surely has been a learning experience.\n",
+    "votes": "10",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "hardware",
+        "gdb",
+        "arm",
+        "jtag"
+    ],
+    "user": "frunk420",
+    "time": "Sep 13, 2013 at 15:17",
+    "comments": [
+        {
+            "user": "dingo_kinznerhook",
+            "text": "Can you post here the OpenOCD output, the output from the telnet command-line, and the commands you are using in GDB to do this? I am not an expert at OpenOCD and could be wrong, but on many targets I think that you have to enter debug mode in order to do this, and that involves halting the processor.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Turns out openocd for ARM11 had a few bugs in it. I ended up making a few changes to get it working as per the arm spec: \nIn <pre><code>arm11_debug_entry</code></pre>\n\nTurning on the drain of the data aborts. The check should be: \n<pre><code>if (!(dscr & DSCR_STICKY_ABORT_IMPRECISE))\n</code></pre>\nThen added the following code before the C1 control register\n<pre><code>/* Enable Debug Cache write back, and disable line fills */\n/* mcr p15,7,R0,c15,c0,0 */\nretval = arm11_run_instr_data_to_core_via_r0(arm11, 0xeeef0f10, 0x07);\nif (retval != ERROR_OK)\n    return retval;\n</code></pre>\nAnd now I save and then restore the C1 control register\n<pre><code>/* Read Modify write control register 1 to disable MMU/Cache etc. Store to reprogram upon return */\n/* MRC p15,0,R0,c1,c0,0 */\narm11_run_instr_data_from_core_via_r0(arm11, 0xee110f10, &cntrlregval);\nif (retval != ERROR_OK)\n    return retval;\n\narm11->saved_c1cntrl = cntrlregval;\n\n/* Perform Modifications */\n\n/* MCR p15,0,R0,c1,c0,0 */\nretval = arm11_run_instr_data_to_core_via_r0(arm11, 0xee010f10, cntrlregval);\nif (retval != ERROR_OK)\n    return retval;\n</code></pre>\n\nIn <pre><code>arm11_leave_debug_state</code></pre>\n<pre><code>    /* disable debug cache write thrus, etc */\nretval = arm11_run_instr_data_prepare(arm11);\n    if (retval != ERROR_OK)\n        return retval;\n\n retval = arm11_run_instr_data_to_core_via_r0(arm11, 0xeeef0f10, 0x00);\n    if (retval != ERROR_OK)\n        return retval;\n\n /* re write Coprocessor control */\n retval = arm11_run_instr_data_to_core_via_r0(arm11, 0xee010f10, arm11->saved_c1cntrl);\n    if (retval != ERROR_OK)\n        return retval;\n\n retval = arm11_run_instr_data_finish(arm11);\n    if (retval != ERROR_OK)\n        return retval;\n</code></pre>\nI'll try to get these changes rolled in so others don't have my problem.\n",
+            "votes": "5",
+            "user": "frunk420",
+            "time": "Sep 16, 2013 at 12:50",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Given that you want to single step you'll be halting the processor sooner or later, what keeps you from trying it now? \nI'm trying to envision how the JTAG unit would be able to inspect the memory if the running program is keeping the bus(ses) in use? I expect the TAP can access some boundary cells while the processor is running as they're basically copied/mirrored values, but other memories I don't know. \nI'd suggest halting the target and trying again. It makes most sense to me that IDA can only query and next correctly display the state of the CPU registers and memory when it has control.\n",
+            "votes": "1",
+            "user": "ixje",
+            "time": "Sep 12, 2013 at 14:42",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

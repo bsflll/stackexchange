@@ -1,0 +1,63 @@
+{
+  "title": "BIOS first jump leads to empty memory",
+  "link": "https://reverseengineering.stackexchange.com/questions/23086/bios-first-jump-leads-to-empty-memory",
+  "content": "I'm trying to reverse a BIOS of an industrial PC in order to repair it. The device is based on an ETX-formfactor mobo, obscure Italian SECO M671, very similar to an old Kontron PM-15(C), but with a custom OEM BIOS. I.e., Intel Celeron M (mobile = Dothan family) processor + 82855 Northbridge + 82801 (ICH4) Southbridge. BIOS is stored on an Intel Firmware Hub-compatible flash chip (sst49lf004b), which is connected to the LPC bus.\n\nThe mobo started to refuse to POST (blank screen and nothing happens) with POST sequence d0, 00, d1, d2. I don't know why there is 00h code (it usually means that control is handed to the OS) and I tried to ignore it. d0, d1, d2 pattern corresponds to AMIBIOS8, I thought, (and yes, noone remembers the bios manufacturer) and means bad bootblock checksum.\n\nThen I've made a dump of the contents of the flash chip with a parallel programmer. But they turned out to be fine, exactly equal to the backup file (taking into account some offset differences)! Actually, except one thing: flash chip contains (far apart from the \"main\" code section) a second VGA BIOS module which I've not found in the backups. But I suppose it can't hurt that much and it is there probably for some optional functionality.\n\nSo either a bad LPC controller inside flash chip (because programming interface is parallel, this is still possible), or I've misinterpreted the POSTcodes. Also I've compared my backup file to some AMI update files and found no similarities. So it seems BIOS reversing and understanding D2 is now my only option. Probably once I disassemble it right, I'll just have to search for immediate 0xd2-s and find the right one).\n\nI've loaded flash chip image into IDA, looked up chipset datasheet (which, BTW, I found incredibly unclear on the topic of BIOS memory mapping) and corrected flash chip addresses accordingly, i.e. copied upper 128K of BIOS ROM to 0xE0000 to 0xFFFFF 16-bit analysis section, and also copied everything that fits to High-BIOS area FFE0_0000h-FFFF_FFFFh (32-bit analysis section, because of 32-bit address). Then started analysis at 0xFFFF0 (x86 reset vector, 16-bit real mode). Processor setting is P6 (as far as I can tell Dothan family is based on P6 arch) And this is what I get (note that F7A1 and the pointer in red both lead to memory which is not mapped to BIOS ROM, at least as far as I can tell from the datasheet):\n\n\nObviously, 32-bit analysis (at FFFF_FFF0) of the first 16 bytes executed makes no sense too, since the processor starts up in real mode.\n\nKeyboard controller access (first check if it's busy, then enable A20 - standard x86 thing) tells me that I was probably right with reset vector memory mapping.\n\nBut why does it jump to some empty locations? What am I doing wrong? Flash chip image and backup file: https://drive.google.com/drive/folders/1MwpiqiRK3N9ZBajyiOUuZde522236gmq?usp=sharing\n\nEDIT: The pointer in red actually leads to a location mapped to BIOS ROM, my bad.\nHere is where the control jumps:\n\nWe've found POSTcode D0, that's great. But here all jumps lead to some low addresses, which are not mapped to BIOS ROM. Same problem repeats.\n\n",
+  "votes": "5",
+  "answers": 2,
+  "views": "501",
+  "tags": [
+    "ida",
+    "x86",
+    "firmware",
+    "firmware-analysis",
+    "bios"
+  ],
+  "user": "kutukvpavel",
+  "time": "Jan 24, 2020 at 21:38",
+  "comments": [
+    {
+      "user": "kutukvpavel",
+      "text": "Datasheets I used are in the Google drive folder I share.",
+      "time": null
+    },
+    {
+      "user": "Iwan",
+      "text": "did you solve the problem? Seems I have about same problems with my second card.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You need to load the last 64KB of the ROM at linear address 0xF0000 (0xF000:0000) and create there a 16-bit segment with the base 0xF000. Then all your “low addresses” will line up (they point into the current segment with CS=0xF000). \n\nIn case you get references to E000, load the second 64KB chunk and so on. \n\nOnce you get to 32-bit code, it will likely be using 32-bit addressing with the end of the ROM at FFFFFFFF, so load and create 32-bit segments accordingly. \n\n",
+      "votes": "5",
+      "user": "Igor Skochinsky",
+      "time": "Jan 27, 2020 at 9:00",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Your disassembly doesn't show enough memory to know if the target is empty memory, but the x86 segmentation model means that the jump target for 0xF000:E205 is 0xFE205 (i.e. the (0xF000 << 4) + the 0xE205).  IDA doesn't show that in an obvious way by default.\n\n",
+      "votes": "3",
+      "user": "peter ferrie",
+      "time": "Jan 24, 2020 at 20:07",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "kutukvpavel",
+          "text": "Oh... My bad. I just assumed that it's red color and the fact that jump on double click mean it's invalid jump for my disassembly and overlooked that it's 0xFE205! Of course it is mapped to BIOS ROM then. BTW, how do I make IDA use linear addressing for such pointers? Segmented addresses always confuse me...",
+          "time": null
+        },
+        {
+          "user": "kutukvpavel",
+          "text": "But the first part of the question remains valid. Why on earth is there a jump to 0xF7A2? And why does it compare keyboard control register against 0xFF and does not check the busy bit specifically? As far as I understand, jmp to the main code gets executed only if al is equal to FFh.",
+          "time": null
+        },
+        {
+          "user": "peter ferrie",
+          "text": "In order to answer why it goes there, you'd have to show a disassembly of 0xFF7A2.  It's within the same 0xF000 segment as the rest of that code (which is why the first 0xF is missing), so it's likely a valid address.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

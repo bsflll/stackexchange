@@ -1,0 +1,40 @@
+{
+    "title": "What is the gdb command equivalent of bp MODULE_NAME+0x12345678 in WinDBG?",
+    "link": "https://reverseengineering.stackexchange.com/questions/32501/what-is-the-gdb-command-equivalent-of-bp-module-name0x12345678-in-windbg",
+    "content": "What is the gdb command equivalent of <pre><code>bp MODULE_NAME+0x12345678</code></pre> in WinDBG?\nI found this command useful to debug with ASLR (w/o disabling it).\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "139",
+    "tags": [
+        "debugging",
+        "gdb",
+        "windbg"
+    ],
+    "user": "alond22",
+    "time": "Nov 15, 2023 at 12:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "You can use <pre><code>gdb.Function</code></pre> from GDB's Python API to expose a function to your expressions to accomplish this. Essentially you'll be parsing the output of the <pre><code>info proc mappings</code></pre> command to get the base address you're interested in. I'm pretty sure that <pre><code>pwndbg</code></pre> does something like this, but if you prefer something lightweight the following in your <pre><code>.gdbinit</code></pre> might be enough.\n<pre><code># define a function that is exposed as $baseaddy(\"module_name\") in gdb.\npython\nimport os\nclass baseaddy(gdb.Function):\n    @classmethod\n    def mappings(cls):\n        mappings = gdb.execute('info proc mappings', False, True)\n        rows = mappings.strip().split('\n')\n\n        # only grab rows that start with a number (ignoring headers)\n        iterable = (index for index, row in enumerate(rows) if row.lstrip().startswith('0x'))\n        index = next(iterable, 0)\n\n        # extract the field names from the header\n        headers = rows[:index][-1].rsplit(None, 4)\n        iterable = itertools.chain(filter(None, headers[:1][0].rsplit('  ')), headers[1:])\n\n        # join everything into a list of dicts\n        fields = [header.strip() for header in iterable]\n        return [{field : value for field, value in zip(fields, row.strip().split())} for row in rows[index:]]\n\n    @classmethod\n    def by_module(cls, module):\n        # uses os.path.split to ignore the path and only match against the \"module\"\n        objfiles, mappings = {}, cls.mappings()\n\n        # create a dictionary of lists keyed by the \"objfile\" field.\n        [objfiles.setdefault(item.get('objfile', ''), []).append(item) for index, item in enumerate(mappings) if int(item['Offset'], 16) == 0]\n\n        # filter the dictionary for each \"objfile\" matching the \"module\"\n        # parameter. we use os.path.split to strip out the path.\n        iterable = (name for name in objfiles if os.path.split(name)[-1] == module)\n\n        # get the list of matching candidates and select the \"objfile\"\n        # and start address of each item. normally we would sort this to\n        # get the minimum address, but we rely on our \"objfiles\" dict\n        # preserving the order of the mappings we gathered.\n        candidates = {(item.get('objfile', ''), int(item['Start Addr'], 16)) for item in itertools.chain(*(objfiles[name] for name in iterable))}\n        if not candidates:\n            # FIXME: need to return a failure or emptiness of some sort, but this is a function so..\n            return gdb.Value(-1)\n        if len(candidates) > 1:\n            gdb.write(\"WARNING: More than one base address was found for module: {:s}\n\".format(module))\n            [gdb.write(\"WARNING: Path at {:s} is mapped at {:#x}.\n\".format(fp, ea)) for fp, ea in sorted(candidates)]\n            candidates = [next(iter(candidates))]\n\n        # unpack the address and return it.\n        [(_, ea)] = candidates\n        return ea\n\n    def invoke(self, parameter):\n        return self.by_module(parameter.string())\n\n# instantiate the class so gdb recognizes it\nbaseaddy=baseaddy('baseaddy')\nend\n</code></pre>\n(Apologies for the cut-and-paste job and haphazard documentation, this is just a snippet chopped out of my own <pre><code>.gdbinit</code></pre> at https://github.com/arizvisa/dotfiles/tree/master/posix/.gdbinit.)\nThe prior snippet literally parses the output of <pre><code>info proc mappings</code></pre> into a list of dictionaries that contain the fields for each item. Afterwards, it's used to filter the \"objfile\" field for each item, and then the minimum address of the filtered results are returned. Generally you should be fitting the boundaries of each mapping into an interval tree and updating it as new mappings enter and exit the process, but but as long as you're not repeatedly invoking this inside a breakpoint you'll probably be fine performance-wise.\nAnyways, once you add that <pre><code>gdb.Function</code></pre> to your own <pre><code>.gdbinit</code></pre> file (and instantiate it), you can use it in your expressions as <pre><code>$baseaddy(\"bash\")</code></pre>. The following could be an example of using it to set a breakpoint via <pre><code>break</code></pre>.\n<pre><code>(gdb) break *($baseaddy(\"bash\")+0x20)\nBreakpoint 4 at 0x555555554020\n(gdb) p $baseaddy(\"bash\")\n$1 = 0x555555554000\n(gdb) lm *bash*\n0x555555554000..0x555555576000 (0x000000+0x22000) <r--p> /usr/bin/bash\n0x555555576000..0x555555665000 (0x022000+0xef000) <r-xp> /usr/bin/bash\n0x555555665000..0x55555569a000 (0x111000+0x35000) <r--p> /usr/bin/bash\n0x55555569a000..0x5555556a7000 (0x145000+0x0d000) <rw-p> /usr/bin/bash                  \n</code></pre>\n",
+            "votes": "1",
+            "user": "Ali Rizvi-Santiago",
+            "time": "Oct 9, 2024 at 22:52",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Reading through the man page shows the command <pre><code>break [file:][function|line]</code></pre>\nMore specifically you would load the file into gdb as normal, and then enter <pre><code>break function_name+offset_value</code></pre> such as: <pre><code>break main+12345678</code></pre>\n",
+            "votes": "0",
+            "user": "Schiz Sec",
+            "time": "Jan 9, 2024 at 21:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">The main issue seems to be that the OP may not have an exact symbol name, though. So the question is about setting the bpx at the offset relative to the module's base address.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

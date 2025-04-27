@@ -1,0 +1,51 @@
+{
+  "title": "How to inject some code to ARM .so files permanently?",
+  "link": "https://reverseengineering.stackexchange.com/questions/21473/how-to-inject-some-code-to-arm-so-files-permanently",
+  "content": "I am trying to figure out how to solve the following. I have two ARM .SO libraries (32 bit and 64 bit) with the same functions. There is a method which returns const char* , it looks like this in ARM32:\n\n```\n.text:0006F264                 PUSH            {LR}\n.text:0006F266                 SUB             SP, SP, #0xC\n.text:0006F268                 STR             R0, [SP,#0x10+var_C]\n.text:0006F26A                 LDR             R3, =(dword_9A030 - 0x6F270)\n.text:0006F26C                 ADD             R3, PC  ; dword_9A030\n.text:0006F26E                 LDR.W           R3, [R3,#(dword_9A250 - 0x9A030)]\n.text:0006F272                 LDR             R0, [SP,#0x10+var_C]\n.text:0006F274                 BLX             R3\n.text:0006F276                 MOV             R3, R0\n.text:0006F278                 NOP\n.text:0006F27A                 MOV             R0, R3\n.text:0006F27C                 ADD             SP, SP, #0xC\n.text:0006F27E                 LDR.W           PC, [SP+4+var_4],#4\n\n```\nAnd here in ARM64:\n\n```\n.text:0000000000079CAC                 SUB             SP, SP, #0x20\n.text:0000000000079CB0                 STR             X30, [SP,#0x20+var_20]\n.text:0000000000079CB4                 STR             X0, [SP,#0x20+var_8]\n.text:0000000000079CB8                 ADRP            X0, #dword_DE080@PAGE\n.text:0000000000079CBC                 ADD             X0, X0, #dword_DE080@PAGEOFF\n.text:0000000000079CC0                 LDR             X1, [X0,#(qword_DE4C0 - 0xDE080)]\n.text:0000000000079CC4                 LDR             X0, [SP,#0x20+var_8]\n.text:0000000000079CC8                 BLR             X1\n.text:0000000000079CCC                 NOP\n.text:0000000000079CD0                 LDR             X30, [SP,#0x20+var_20]\n.text:0000000000079CD4                 ADD             SP, SP, #0x20\n.text:0000000000079CD8                 RET\n\n```\nThis is the ASM code of a function\n\n```\nconst char* GetStatus ( const DetailsHandle obj )\n\n```\nThis function can return one of 3 string values \"abcd\", \"kowewqzb\", or \"jvbrnbfghert\" (as char*). I want it to return always \"kowewqzb\" regardless of the call happening within this function, which leads to an entire bunch of dynamically loaded functions. So how could I:\n\n1) write the code for making it always return the address of \"kowewqzb\" (which needs to be put somewhere into memory first) and don't do any other calls (so basically the entire instruction set besides of SP manipulations could be replaced with other instructions\n\n2) if there is not enough space for making it work directly there, how could I inject some new code without destroying existing code, are there any suitable places for that in the .SO library? E.g. putting BL to some unused areas (how to get them?) and having there further code pieces.\n\nIdeally if this could be outlined for both ARM32 and ARM64 I'd be more than happy. Huge thanks in advance!!!\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "742",
+  "tags": [
+    "arm",
+    "injection"
+  ],
+  "user": "ARMResearcher",
+  "time": "Jun 12, 2019 at 20:47",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "As I understand, you want to replace the function with code such that it returns a pointer to the ASCII string \"kowewqzb\". \n\nSince the function in question is quite long you have sufficient space to write an inline patch both for ARM32 and ARM64.\n\nFor ARM32, you can use the following piece of code\n\n```\n.global main\n.text\n.thumb_func\n\nmain:\nadr r0, str\nbx lr\n\nstr:\n.asciz \"kowewqzb\"\n\n```\nNote that this is 16-bit Thumb code instead of 32-bit ARM as even the disassembly you posted uses Thumb instructions. After assembling and objdump this yields\n\n```\n$ arm-linux-gnueabi-objdump -d arm32.o\n\narm32.o:     file format elf32-littlearm\n\n\nDisassembly of section .text:\n\n00000000 <main>:\n   0:   a000        add r0, pc, #0  ; (adr r0, 4 <str>)\n   2:   4770        bx  lr\n\n00000004 <str>:\n   4:   65776f6b    .word   0x65776f6b\n   8:   627a7177    .word   0x627a7177\n\n```\nFor ARM64,\n\n```\n.global main\n.text    \nmain:\nadr x0, str\nret\n\nstr:\n.asciz \"kowewqzb\"\n\n```\nwhich yields\n\n```\n$ aarch64-linux-gnu-objdump -d aarch64.o\n\naarch64.o:     file format elf64-littleaarch64\n\n\nDisassembly of section .text:\n\n0000000000000000 <main>:\n   0:   10000040        adr     x0, 8 <str>\n   4:   d65f03c0        ret\n\n0000000000000008 <str>:\n   8:   65776f6b        .word   0x65776f6b\n   c:   627a7177        .word   0x627a7177\n\n```\nAnd finally, be sure to add a zero byte at the end to make it a proper null terminated ASCII string.\n\nEDIT:\n\nAs said below in the comments you do not need to edit .rodata or any other section in the binary. The string is included as a part of the code bytes with which you are going to overwrite the GetStatus function.\n\nFor example, for ARM 32, \n\n```\nmain:\nadr r0, str\nbx lr\n\nstr:\n.asciz \"kowewqzb\"\n\n```\nThe adr r0, str instruction loads the address of string which is immediately located after it. The adr instruction is actually a pseudo-instruction and  assembles to add r0, pc, #0. It calculates the address of the string by adding 0 to the current Program Counter (PC). In ARM, the PC always points to two instructions ahead of the currently executing instruction. That's why we add 0 since it already points to str when executing the adr r0, str instruction.\n\nObtaining the address of the string this way is called PC relative addressing. This makes it possible to avoid hard coding the address of the string in the patched code.\n\nYou can use this online arm assembler to see the bytes corresponding to the instructions.\n\n\n\nYou need to overwrite the function with the bytes shown on the left panel. No other modifications are necessary.\n\n",
+      "votes": "2",
+      "user": "0xec",
+      "time": "Jun 14, 2019 at 6:44",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ARMResearcher",
+          "text": "Many thanks for your reply! But the problem here is that there is no predefined \"kowewqzb\" string and I need to modify an existing .so file. What would you recommend? Just modify any unimportant string there to become this string and set the pointer to it? Are there any more elegant solutions? E.g. by creating this string on the fly and returning it? Thank you! P.S. Obviously I don't have an access to the source code, just using IDA Pro on it.",
+          "time": null
+        },
+        {
+          "user": "0xec",
+          "text": "@ARMResearcher The string is included in the assembly code itself (str). It uses PC relative addressing to access it. You just have to overwrite function with the assembled bytes  (like a0 00 47 70 65 77 6f 6b 62 7a 71 77 for ARM32).",
+          "time": null
+        },
+        {
+          "user": "ARMResearcher",
+          "text": "I have now modified a string in a .rodata section, changing to the string I wanted (it was just some kind of an informational text, which I can safely ignore for my purposes), now I put in IDA Pro the following code for ARM32 thumb:      LDR    r0, =0x0008BD4C;     BX     lr  Is it correct or do I need to add: ADD             R0, PC  before leaving the function? I am not sure if I need to add the PC value here. Thank you!!!",
+          "time": null
+        },
+        {
+          "user": "0xec",
+          "text": "@ARMResearcher You cannot hardcode the address like that. It depends on where the .so will be loaded.",
+          "time": null
+        },
+        {
+          "user": "0xec",
+          "text": "@ARMResearcher Also you are not getting the point of my answer. You don't have to edit .rodata or any other section. The string is included in the patched bytes after the  adr r0, str; bx lr instructions.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

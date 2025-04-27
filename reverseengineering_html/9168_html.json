@@ -1,0 +1,36 @@
+{
+    "title": "Reversing encryption by analysing executable",
+    "link": "https://reverseengineering.stackexchange.com/questions/9168/reversing-encryption-by-analysing-executable",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a program that reads data from a file, parses/organizes it, and spits it out as an encrypted XML. The application can also take an encrypted XML and spit out the original file. My objective at this point would be to access the clear-text XML (I'm not interested in the clear text original file as it's not XML organized)\n </p>\n <p>\n  I have no idea what the encryption is yet although one guy on a forum said it was AES-128 (not sure how he got to that conclusion).\n </p>\n <p>\n  I ran PEiD with the KANAL plugin on the application, it doesn't detect any encryption signatures.\n </p>\n <p>\n  Because I have access to the program and some past some experience with exploiting BO on WinXP with some knowledge of ASM, I figured I could give it a try using a debugger.\n </p>\n <p>\n  In a nutshell, what are the general steps I should be following to figure this out? In this situation would it be best to start looking for the encryption key itself, or find a way to use the application's encrypt/decrypt functions to my advantage?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "encryption"
+    ],
+    "user": "Juicy",
+    "time": "Jun 17, 2015 at 22:03",
+    "comments": [
+        {
+            "user": "Abr001am",
+            "text": "<html><body><span class=\"comment-copy\">\n we need to know more informations , that may help to trace AES process\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  There are typically many ways to start, and which one you want to use depends on your experience. Also, what works for one target might fail on another, and vice versa. What i'd start with is:\n </p>\n <ul>\n  <li>\n   Use signsrch to check if the executable has a standard encryption algorithm linked in. Note that this might yield false positives (if the application links openssl, for example, you might find signatures of many algorithms even if only one or two of them get used)\n  </li>\n  <li>\n   Check for strings in the file that relate to encryption, and google for them. Maybe this helps to find which encryption library was used. For example, the string\n   <code>\n    SHA-%d test #%d:\n   </code>\n   quickly leads to the\n   <code>\n    polarssl\n   </code>\n   source code.\n  </li>\n  <li>\n   Trace the application while running procmon. You will probably find a sequence of\n   <code>\n    CreateFile\n   </code>\n   , multiple\n   <code>\n    WriteFile\n   </code>\n   and a\n   <code>\n    CloseFile\n   </code>\n   call, when writing the encrypted file, and the same with\n   <code>\n    ReadFile\n   </code>\n   when reading the encrypted file. In some cases, the parameters of these calls give you a hint already; for example, if the first\n   <code>\n    WriteFile\n   </code>\n   has a byte count of 32, and every following call 4096, this could be a hint that the first 32 bytes are a 256-bit key.\n  </li>\n  <li>\n   Check the stack when a call to\n   <code>\n    ReadFile\n   </code>\n   or\n   <code>\n    WriteFile\n   </code>\n   happens, You can do this by placing a breakpoint there while running the application under a debugger, or (much easier imho) look at the stack for several of the\n   <code>\n    procmon\n   </code>\n   calls. This gives you a hint of which chain of functions encrypts the file and writes it.\n  </li>\n  <li>\n   <p>\n    Pay attention to the stack differences in the\n    <code>\n     CreateFile\n    </code>\n    ,\n    <code>\n     WriteFile\n    </code>\n    on the encrypted file, and possibly\n    <code>\n     WriteFile\n    </code>\n    on something else. These might as well give you hint which is your encryption function. For example:\n   </p>\n   <ul>\n    <li>\n     The\n     <code>\n      CreateFile\n     </code>\n     for the encrypted file has the stack\n     <code>\n      ABCDEFGH\n     </code>\n    </li>\n    <li>\n     The\n     <code>\n      WriteFile\n     </code>\n     for the encrypted file has the stack\n     <code>\n      ABCIJKLM\n     </code>\n    </li>\n    <li>\n     The\n     <code>\n      WriteFile\n     </code>\n     for something else has the stack\n     <code>\n      ABNOPKLM\n     </code>\n    </li>\n   </ul>\n   <p>\n    where each letter is one stack entry. In this case, i'd assume\n    <code>\n     KLM\n    </code>\n    to be part of the runtime library (\n    <code>\n     fwrite\n    </code>\n    ,\n    <code>\n     write\n    </code>\n    , ....), since unrelated\n    <code>\n     WriteFile\n    </code>\n    s share it,\n    <code>\n     C\n    </code>\n    to be the main writer function (as it's the last to call\n    <code>\n     CreateFile\n    </code>\n    and\n    <code>\n     WriteFile\n    </code>\n    ), and\n    <code>\n     I\n    </code>\n    and\n    <code>\n     J\n    </code>\n    the functions that encrypt and write.\n   </p>\n  </li>\n  <li>\n   Load the file into IDA, or OllyDbg, and have a closer look at\n   <code>\n    C\n   </code>\n   ,\n   <code>\n    I\n   </code>\n   and\n   <code>\n    J\n   </code>\n   . Which other functions do they call? Are some of these functions the same ones you identified with signsrch earlier?\n  </li>\n  <li>\n   Run the file under the control of IDA, or OllyDbg, and place breakpoints on\n   <code>\n    C\n   </code>\n   ,\n   <code>\n    I\n   </code>\n   ,\n   <code>\n    J\n   </code>\n   , and maybe some of the functions you found with signsrch. Check the parameters on entry and exit from these functions. Do some of them ring a bell? Does one of the functions has a parameter that is a pointer to a buffer which looks like XML before the function is called, and garbage after it's called? Or vice versa when reading? Congrats, you've just found the function that does the encryption.\n  </li>\n  <li>\n   When you found the function that does the encryption, instead of figuring out how it works, it\n   <em>\n    might\n   </em>\n   just be easier to replace the call to it with a series of\n   <code>\n    NOP\n   </code>\n   s (beware of return codes though, maybe you need to set\n   <code>\n    eax\n   </code>\n   to something). Bingo, you have a program that writes plain XML instead of encrypted XML now, without ever figuring out the details of the encryption and having to write one single line of code (unless you consider a series of\n   <code>\n    NOP\n   </code>\n   s code, that is).\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Guntram Blohm",
+            "time": "Jun 18, 2015 at 7:27",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Abr001am",
+                    "text": "<span class=\"comment-copy\">you forget to tell how to remove junk that obfuscates encryption stages</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

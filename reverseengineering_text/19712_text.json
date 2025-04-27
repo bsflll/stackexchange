@@ -1,0 +1,78 @@
+{
+    "title": "Reverse engineering Windows Defender's signature for Metasploit Framework's metsrv.dll",
+    "link": "https://reverseengineering.stackexchange.com/questions/19712/reverse-engineering-windows-defenders-signature-for-metasploit-frameworks-mets",
+    "content": "As a pentester for a consulting agency, it is part of our job to \"evade\" antivirus after gaining code execution on information systems. It is indeed necessary to prove exploitation of vulnerabilities, as opposed to simply reporting them. If an AV detects the tools we use, clients often will disregard the vulnerability because they are not convinced by the risk it causes.\nWe noticed that Windows Defender detects the metsrv.dll from Metasploit Framework in memory and kills our shell. The detection is done by mpengine.dll and is either done by some kind of criteria on the emulated binary or is a pattern of bytes in the DLL.\nNow that the context of the question is clear, here is the actual question: how could I proceed to pin point exactly what the signature for this file is ?\nBefore your answer, here are the conclusions I have already come to:\n\nWindows Defender's scanning engine detects metsrv.dll from Metasploit at the moment it is loaded into memory.\nI can use Taviso's loadlibrary to reproduce the detection statically on GNU/Linux, using the following command:\n\n<pre><code>\n./mpclient metsrv.x64.dll\nmain(): Scanning metsrv.x64.dll...\nEngineScanCallback(): Scanning input\nEngineScanCallback(): Threat HackTool:Win64/Meterpreter.A!dll identified.\n</code></pre>\n\nI have reduced the sample size down from 200 kb to 13 kb using the GNU split utility and a \"binary search\" approach: the sample is split in two parts, both are fed to Windows Defender and the part that is detected is then split in two more parts. Repeat until it is possible, so as to minimize the test case.\nDisassembling mpengine.dll is not very helpful, because there are more than 30k functions found by IDA Pro in it.\nCode coverage analysis with Pin allows to reduce this set to 3k functions, which is still too much to analyze statically.\nmpengine.dll can be debugged in gdb. I put a watch point on the string \"Win64/Meterpreter.A!dll\" to see if I could find an interesting function that would read at this location, maybe at a time close to the verdict's time. Still lost because of the size of the code, even though the watch point is triggered two times.\nA script on GitHub called avwhy.py allows to infer signatures from AVs by changing one byte at a time and memorizing the ones that impact the AV's verdict. After running more than 16 hours, the tool returned me the whole file as part of the signature, which looks like a wrong result: it is improbable that using the split utility I have found the exact signature, because I expect to either have too much bytes or having removed useful bytes from the signature.\n\nAs you can see, I have spent numeral hours on this. The goal is to find the exact signature, not to evade it by applying some kind of transformation on metsrv.dll. I think it is a fun reverse engineering challenge but I am stuck for now. \nWhat are the steps that I need to take in order to accomplish my goal?\nEdit: In order to clarify what I'm trying to do, here is a self-published paper from Tavis Ormandy: Sophail: A Critical Analysis of Sophos Antivirus\nAt page 3, he shows the signature for the file \"Attention 629\". I am trying to achieve the same result. Of course I can attack the 3k functions and work from here, but I suppose Tavis had a more intelligent approach, and that is the type of answers I'm looking for.\n",
+    "votes": "7",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "debugging",
+        "binary-analysis",
+        "gdb",
+        "disassemblers"
+    ],
+    "user": "plowsec",
+    "time": "Oct 26, 2018 at 7:11",
+    "comments": [
+        {
+            "user": "user22970",
+            "text": "Wlcome to SE RE. what part of the binary are those 13K? code? data? header data?\n",
+            "time": null
+        },
+        {
+            "user": "plowsec",
+            "text": "You're right, I forgot to mention that those 13K are the PE header and a part of the .text section.\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "Have you looked at Alexei Bulazel's Windows Defender research?  <pre><code>mpengine.dll</code></pre> has already been analyzed to some extent. You don't have to start from scratch. His tools are here: github.com/0xAlexei/WindowsDefenderTools\n",
+            "time": null
+        },
+        {
+            "user": "plowsec",
+            "text": "Yes I have. However Alexei only released a small part of his research, like most BlackHat talkers do. If you dig his repo, you will find that he kept the essential code and tooling as \"exercices for the reader\". Furthermore, he benefited from mpengine.dll's debugging symbols, which I couldn't get my hands on. Also, I don't want to evade the emulator, but to find the static signature / detection pattern.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "I think you’re asking a wrong question. Sure, you can spend half a year reversing the detection like Alex did. But then you’ll be back to the original problem: how to evade the detection. And in fact you can probably achieve the second without knowing the exact answer to the first (even though it could give you some hints), so I personally would start on the evasion directly.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "One approach you might consider involves compiling different versions of <pre><code>metsrv.dll</code></pre> from source and then observing which ones are detected and which ones are not. For instance:\n\nComment out half the code in <pre><code>main</code></pre> and check if the resulting DLL is detected. As your goal is to evade static detection, it does not matter for now that the DLL is not fully functional.\nIf undetected, uncomment the first half of the code that was commented the first time and recheck the detection. Otherwise, comment out the second half of the code used in the previous step and recheck the detection.\nRepeat this binary search approach until you have narrowed it down to a particular function that causes the detection. \nRepeat steps 1-3 for code for that function and any further nested function calls. Eventually you should reach a point where there are no further function calls and where commenting out a single line of code gives changes the detection status of the file.\nCheck the pattern of bytes (machine code) corresponding to this last line of code and experiment with mutating it to test the robustness of <pre><code>mpengine</code></pre>'s detection criteria. \n\nYou might also consider different compiler or build options (e.g. compile with debug symbols or different optimization level) with the original code to see if that makes the detection go away. If so, comparing the two binaries with <pre><code>fc</code></pre> or some other tool might point to the cause of detection.\n",
+            "votes": "5",
+            "user": "Lisbeth",
+            "time": "Oct 25, 2018 at 9:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@UnitedCoconut Your objections to this answer are made on irrelevant grounds. Scalability and access to source code are clearly not an issue in this case because we are dealing with a single open-source binary. Furthermore, your concerns here were not mentioned in your question. Please refrain from being rude. Regardless, I am not sure what you are expecting. There are no magic tricks or secret techniques here - there is no way around reversing mpengine.dll.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Samantha",
+                    "text": "<span class=\"comment-copy\">@United Coconut If you're not even willing to fiddle around with a few lines of source code to find an answer when source is available, what hope do you have of finding an answer when it isn't?</span>",
+                    "time": null
+                },
+                {
+                    "user": "plowsec",
+                    "text": "<span class=\"comment-copy\">@SYS_V Apologies if I sounded rude, rest assured it wasn't my intention. Scability is an issue because I would prefer having lasting results due to the amount of time required to get these results, and my insctinct tells me mpengine.dll found several signatures in metsrv.dll. Samantha: I am willing to fiddle around with the code, but in a way that renders my work reusable and long-term resilient. I will clarify my answer based on your remarks.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I found all the signatures by performing an Out-of-Band attack on the engine and with the help of a huge set of mutated files. Lots of reverse-engineering as well. I had to triage a lot of false positives and it required manual work, so this is still not the ideal approach, but clearly more scalable than the other suggested ones.\nI have shared some of the findings with the rapid7 team as you can see here: https://github.com/rapid7/metasploit-framework/issues/10815\nBelow is copy-paste for compliance with this forum's rules:\nLet's say you have a FUD stager and that you encode the STAGES. Windows Defender can still detect your meterpreter session because it has a kernel-land callback to detect when images are loaded into memory (like every competitive AV). This is done with PsSetLoadImageNotifyRoutine &co.\nUpon these events, Windows Defender performs a scan on the memory region where the image is loaded and search for STATIC signatures (far from machine learning and behavioural analysis...)\nCommon detected artifacts are:\n\nConstants such as strings (\"[*] Attempting to add user %s to group %s on domain controller %s\") => such a high score that it is almost an EICAR test, although WD checks that it belongs in a file that follows the PE format.\nLarge integer (for instance 0x6A4ABC5B in ReflectiveLoader.h, which is a rot13 hash used to locate APIs that everyone copy pasted around for years);\nPieces of hard-coded shellcode (each one in base_inject.c, for instance x48\\xC1\\xE8\\x20);\nDLL exports (for instance the export \"ReflectiveLoader\" is searched both by WD and Kaspersky).\n\nSome strings have a very low score but still matter in the verdict. If you have any of the elements above you will get flagged for sure, and removing the low scores ones won't have any impact. An example of such string is \"scheduler_insert_waitable\".\nAll in all, \"hide yo wife hide your strings\"...\n",
+            "votes": "3",
+            "user": "plowsec",
+            "time": "Dec 13, 2018 at 21:43",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

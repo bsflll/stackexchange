@@ -1,0 +1,57 @@
+{
+    "title": "How to Modify this Branch in ARM64?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18839/how-to-modify-this-branch-in-arm64",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I try to modify the branch of this disassembly in a binary:\n </p>\n <pre><code>SUB             SP, SP, #0x60\nSTP             X26, X25, [SP,#0x50+var_40]\nSTP             X24, X23, [SP,#0x50+var_30]\nSTP             X22, X21, [SP,#0x50+var_20]\nSTP             X20, X19, [SP,#0x50+var_10]\nSTP             X29, X30, [SP,#0x50+var_s0]\nADD             X29, SP, #0x50\nMOV             X20, X0\nMOV             X0, X2\nBL              _objc_retain\nMOV             X19, X0\nADRP            X8, #selRef_shouldCheckForUpdate@PAGE\nLDR             X1, [X8,#selRef_shouldCheckForUpdate@PAGEOFF] ; char *\nMOV             X0, X20 ; void *\nBL              _objc_msgSend\nCBZ             W0, loc_ADCC\n</code></pre>\n <p>\n  Basically, the binary are checking for update and will prompt if it should, and for the sake of learning, I wanted to achieve on how to:\n </p>\n <ol>\n  <li>\n   <p>\n    Always go to loc_ADCC and;\n   </p>\n  </li>\n  <li>\n   <p>\n    Always ignore loc_ADCC (Skip from going to loc_ADCC)\n   </p>\n  </li>\n </ol>\n <p>\n  This ARM64 really got me confused, I could however understand it in 32bit, but not in 64bit. It's like a new world. You could see the screenshot\n  <a href=\"https://i.sstatic.net/jmibr.jpg\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  for a better visualization.\n </p>\n <p>\n  Thanks in advance!\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "arm"
+    ],
+    "user": "Gregor Isack",
+    "time": "Jul 20, 2018 at 4:29",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n what does \"Always ignore loc_ADCC\" mean?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Elian Kamal",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky I suppose it implies \"always skip branching to loc_ADCC\" (and the compare before it I think)\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Gregor Isack",
+            "text": "<html><body><span class=\"comment-copy\">\n You're right @ElianKamal\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "<html><body><span class=\"comment-copy\">\n Just for reference:\n <a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0489c/Cjaghefc.html\" rel=\"nofollow noreferrer\">\n  infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0489c/…\n </a>\n - CBZ and CBNZ definition. Just NOP it out (put NOP(s) of the same size instead of it) to avoid jump.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n by the way, thank you for putting disassembly as text and not just a screenshot! I hope those who downvoted the question leave a comment why they did it so it can be improved.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So, there are these  options:\n </p>\n <ol>\n  <li>\n   to always take the branch, you need to convert\n   <code>\n    CBZ\n   </code>\n   (compare and branch if zero) to simple\n   <code>\n    B\n   </code>\n   (branch always). Let's have a look at the encodings of both:\n  </li>\n </ol>\n <p>\n  <a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/b\" rel=\"noreferrer\">\n   B:\n  </a>\n  <code>\n   31 30  29  28  27  26   25 .. 0\n     0  0  0   1   0   1    imm26\n  </code>\n </p>\n <p>\n  <a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/cbz\" rel=\"noreferrer\">\n   CBZ:\n  </a>\n </p>\n <p>\n  <code>\n   31  30  29  28  27  26  25  24  23..5 4..0\nsf  0   1   1   0   1   0   0   imm19 Rt\n  </code>\n </p>\n <p>\n  To convert\n  <code>\n   CBZ\n  </code>\n  to\n  <code>\n   B\n  </code>\n  , you need to patch the opcode part (bits 31..26) and move the\n  <code>\n   imm19\n  </code>\n  field (branch offset) to the\n  <code>\n   imm26\n  </code>\n  field of the\n  <code>\n   B\n  </code>\n  opcode (bits 25..0). Since both opcodes interpret the offset in the same way (multiply by 4 and add to PC), you don't need to do any conversion besides sign extension.\n </p>\n <p>\n  For example, let's take this instruction from a random sample I had:\n </p>\n <pre><code>05088 E0 01 00 34  CBZ W0, loc_50C4\n</code></pre>\n <p>\n  Opcode as a 32-bit value:\n  <code>\n   0x340001E0\n  </code>\n  (AArch64 always uses little-endian instructions)\n </p>\n <p>\n  In binary:\n  <code>\n   00110100000000000000000111100000\n  </code>\n  .\n </p>\n <p>\n  Split by fields:\n </p>\n <p>\n  <code>\n   0  0110100 0000000000000001111 00000\nsf op     imm19               Rt\n   \n\n  </code>\n </p>\n <p>\n  Let's assemble the\n  <code>\n   B\n  </code>\n  opcode (sign-extending imm19 to 26 bits):\n </p>\n <p>\n  <code>\n   000101  00000000000000000000001111\nop      imm26\n  </code>\n </p>\n <p>\n  Or, as hex: 0x1400000F\n </p>\n <p>\n  After patching:\n </p>\n <pre><code>5088 0F 00 00 14                 B               loc_50C4\n</code></pre>\n <ol start=\"2\">\n  <li>\n   To skip the branch, you can patch\n   <code>\n    CBZ\n   </code>\n   to a\n   <code>\n    NOP\n   </code>\n   (no operation). The\n   <code>\n    NOP\n   </code>\n   encoding for ARM64 is 0xD503201F or\n   <a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/nop\" rel=\"noreferrer\">\n    <code>\n     1F 20 03 D5\n    </code>\n   </a>\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Igor Skochinsky",
+            "time": "Jul 19, 2018 at 8:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Gregor Isack",
+                    "text": "<span class=\"comment-copy\">Thank you for the very detailed answer! It helps a lot! If you don't mind, I would like to read more about the explanation you did in 'Split by fields and assemble' section, could you point me a good learning head-start (basically how you split it and sign-extending)? :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

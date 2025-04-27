@@ -1,0 +1,63 @@
+{
+    "title": "Strange instructions pattern (lw) in MIPS binary",
+    "link": "https://reverseengineering.stackexchange.com/questions/17023/strange-instructions-pattern-lw-in-mips-binary",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to reverse a binary and I'm having trouble understanding a pattern that keeps showing in almost half of the functions in the binary.\n </p>\n <p>\n  This is how one particular function looks like:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/fqwHz.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/fqwHz.png\"/>\n  </a>\n </p>\n <p>\n  Why is\n  <code>\n   rsl_setNetCfgObj\n  </code>\n  being loaded in\n  <code>\n   $v1\n  </code>\n  and not \"used\" (being called) anywhere? I see that the next opcode sets\n  <code>\n   $a1\n  </code>\n  to an offset of\n  <code>\n   $v1\n  </code>\n  , but those addresses aren't pointing to anything meaningful.\nThis pattern is repeated in a lot of the functions that I'm analysing, and I'm not sure if that's some bug in Binary Ninja and IDA Pro (as they both show the same), or if I'm missing something.\n </p>\n <p>\n  If that is not a bug, what exactly is\n  <code>\n   rol_setNetCfgObj\n  </code>\n  supposed to do?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "805",
+    "tags": [
+        "disassembly",
+        "binary-analysis",
+        "mips"
+    ],
+    "user": "alexandernst",
+    "time": "Dec 20, 2017 at 13:20",
+    "comments": [
+        {
+            "user": "Graham Best",
+            "text": "<html><body><span class=\"comment-copy\">\n looks to me like obfuscation\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "alexandernst",
+            "text": "<html><body><span class=\"comment-copy\">\n Can you elaborate a little bit further? How would I proceed if that was the case?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Graham Best",
+            "text": "<html><body><span class=\"comment-copy\">\n My bad, normally stuff like this is placed inside a function when obfuscation happens (which means that its probably packed?), I can't provide you a full answer, I don't have enough info, are the imports bad? Check that, also,\n <a href=\"https://en.wikipedia.org/wiki/Obfuscation_(software)\" rel=\"nofollow noreferrer\">\n  en.wikipedia.org/wiki/Obfuscation_(software)\n </a>\n What you're going to have to do if it is packed, is to unpack it, I recommend reading:\n <a href=\"https://reverseengineering.stackexchange.com/questions/72/unpacking-binaries-in-a-generic-way/91#91\" title=\"unpacking binaries in a generic way\">\n  reverseengineering.stackexchange.com/questions/72/…\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Graham Best",
+            "text": "<html><body><span class=\"comment-copy\">\n I just re-read your post, yes, I'm 90% sure its packed / obfuscated, if thats showing up in half of the functions.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "alexandernst",
+            "text": "<html><body><span class=\"comment-copy\">\n @GrahamBest that \"lw\" shows up in pretty much every function I open, sometimes more than once in a single stub. And yet it feels \"too little\" to be an obfuscation technique. Is there a tool or some way I can tell with certainty that the binary is obfuscated?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Like many RISC implementations, MIPS instruction set uses fixed-width 32-bit instructions, and instructions have only 16 bits for the offset field, meaning you can use only 16-bit constants, giving you 64KB of addressing. However, the actual address space of a MIPS CPU is 4GB (32-bit address size), so how can you access all that? Well, there is the  option of using partial 16-bit moves to build a 32-bit address in a register and then use an indirect load/store to access it. It usually looks similar to:\n </p>\n <pre><code>lui  $r1, 0x0123\naddi $r1, $r1, 0xabcd\n</code></pre>\n <p>\n  or\n </p>\n <pre><code>lui  $r1, 0x0123\nori  $r1, $r1, 0xabcd\n</code></pre>\n <p>\n  Both of these load\n  <code>\n   0x0123abcd\n  </code>\n  into\n  <code>\n   r1\n  </code>\n  aka\n  <code>\n   at\n  </code>\n  (see\n  <a href=\"https://www.cs.umd.edu/class/sum2003/cmsc311/Notes/Mips/load32.html\" rel=\"noreferrer\">\n   here\n  </a>\n  ).\n </p>\n <p>\n  However, this requires knowledge of the address at compile- (or at least link-) time. In case our binary needs to be loaded at a different address (as often the case with shared libraries), it will have to be relocated (instructions would need to be patched). Patching takes time, prevents code page sharing and increases memory consumption, that's why position-independent code (PIC) is preferred to fixed-address.\n </p>\n <p>\n  So, how we can perform the address calculation independent from the load address? Well, we just need to take our execution address and add a fixed delta to it (usually binaries are loaded as one chunk to memory, so offsets from one part of it to another are fixed).  The MIPS ABI states that for public functions, the value of\n  <code>\n   $t9\n  </code>\n  at the function entry should be equal to its runtime address, and we can see the code using this fact:\n </p>\n <pre><code>109BC: li $gp, 0x830e4\n109C4: addu $gp, $gp, $t9\n</code></pre>\n <p>\n  If we assume that\n  <code>\n   $t9\n  </code>\n  is equal to\n  <code>\n   0x109BC\n  </code>\n  , we get :\n </p>\n <pre><code>gp = 0x830e4 + 0x109BC = 0x93AA0\n</code></pre>\n <p>\n  <code>\n   gp\n  </code>\n  stands for \"global pointer\" and is not supposed to change during the execution of the function (often it is assumed to have the same value in\n  <em>\n   all\n  </em>\n  functions of the program). This fact may be used by the compiler in all other calculations involving program addresses. For example, looking at the highlighted area:\n </p>\n <pre><code>lw $v1, -0x7fd4($gp) \n</code></pre>\n <p>\n  <code>\n   0x93AA0-0x7fd4 = 0x8BACC\n  </code>\n  , and apparently the program stores\n  <code>\n   0x70000\n  </code>\n  at that address, which is used in the next instruction to load\n  <code>\n   $a1\n  </code>\n  :\n </p>\n <pre><code>lw $a1, -0x1b4c($v1)\n</code></pre>\n <p>\n  Calculating it:\n  <code>\n   -0x1b4c+0x70000=0x6E4B4\n  </code>\n  (helpfully shown by the disassembler).\n </p>\n <p>\n  So,\n  <code>\n   $v1\n  </code>\n  (and\n  <code>\n   v0\n  </code>\n  later) here is just an intermediate variable used for the address calculation (usually\n  <code>\n   $at\n  </code>\n  is reserved for this purpose but reusing it all the time may lead to slower code).\n </p>\n <p>\n  By the way,\n  <code>\n   0x70000\n  </code>\n  has all zeroes in the low 16 bits, and it's not an accident. It may happen to point to\n  <code>\n   rsl_setNetCfgObj\n  </code>\n  but it's just a red herring.\n </p>\n <p>\n  If you go to the .got section of the binary, you will usually see something like this:\n </p>\n <pre><code>.got:00515B40      .word 0\n.got:00515B44      .word 0x80000000\n.got:00515B48      .word 0x510000\n.got:00515B4C      .word 0x4D0000\n.got:00515B50      .word 0x420000\n.got:00515B54      .word 0x4C0000\n.got:00515B58      .word 0x520000\n.got:00515B5C      .word 0x430000\n.got:00515B60      .word 0x440000\n.got:00515B64      .word 0x450000\n.got:00515B68      .word 0x460000\n.got:00515B6C      .word 0x470000\n.got:00515B70      .word 0x480000\n.got:00515B74      .word 0x490000\n.got:00515B78      .word 0x4A0000\n.got:00515B7C      .word 0x530000\n.got:00515B80      .word 0x4B0000\n.got:00515B84      .word 0\n.got:00515B88      .word 0\n.got:00515B8C      .word 0\n</code></pre>\n <p>\n  These are so-called\n  <em>\n   local\n  </em>\n  GOT entries, and are used by the compiler purely for address calculations inside the binary and not as pointers to external symbols. The compiler allocates enough different addresses there so it can reach any required address in the local binary with just a 16-bit (signed) offset. The\n  <code>\n   gp\n  </code>\n  itself is usually set to GOT+\n  <code>\n   7FF0\n  </code>\n  which allows the compiler to load any GOT entry (either external symbol or a local address for further calculation) in one instruction (assuming that GOT does not exceed 64KB).\n </p>\n <hr/>\n <p>\n  So, in summary: what you have here is\n  <em>\n   not\n  </em>\n  obfuscation or a disassembler bug but\n  <strong>\n   normal code\n  </strong>\n  demonstrating limitations of the MIPS instruction set and its calling conventions.\n </p>\n <hr/>\n <p>\n  BTW, IDA knows about these things and by default represents most such references using final addresses. E.g., from a sample binary:\n </p>\n <pre><code>.text:0042C34C   la      $v0, dword_520000\n.text:0042C350   lbu     $v0, (byte_5193CD - 0x520000)($v0)\n.text:0042C354   beqz    $v0, loc_42C36C\n.text:0042C358   li      $v1, 8\n.text:0042C35C   li      $v1, 9\n.text:0042C360   la      $v0, dword_520000\n.text:0042C364   b       loc_42C380\n.text:0042C368   sb      $v1, (sLastPayedFileInfo - 0x520000)($v0)\n</code></pre>\n <p>\n  And with simplifications turned off:\n </p>\n <pre><code>.text:0042C34C   lw      $v0, -0x7FD8($gp)\n.text:0042C350   lbu     $v0, (byte_5193CD - 0x520000)($v0)\n.text:0042C354   beq     $v0, $zero, loc_42C36C\n.text:0042C358   addiu   $v1, $zero, 8\n.text:0042C35C   addiu   $v1, $zero, 9\n.text:0042C360   lw      $v0, -0x7FD8($gp)\n.text:0042C364   beq     $zero, $zero, loc_42C380\n.text:0042C368   sb      $v1, (sLastPayedFileInfo - 0x520000)($v0)\n</code></pre>\n <p>\n  While you can still somewhat see what's going on, I personally prefer the first one.\n </p>\n <p>\n  For more info on MIPS I would recommend the\n  <em>\n   See MIPS Run\n  </em>\n  book by Sweetman, as well as the MIPS ABI specifications (see\n  <a href=\"https://www.linux-mips.org/wiki/MIPS_ABI_History\" rel=\"noreferrer\">\n   here\n  </a>\n  for a start). Or just go through the code instruction by instruction and try to figure out what they do.\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "perror",
+            "time": "Dec 20, 2017 at 17:38",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "alexandernst",
+                    "text": "<span class=\"comment-copy\">Just so I can make sure I understand everything you wrote: you mean that what <code>lw $a1, -0x1b4c($v1)</code> is actually doing is loading whatever 4 bytes there are at the address <code>0x6E4B4</code>. If so, according to IDA, <code>$a = 0xDCD73AA5</code>. I can upload the binary somewhere, so you can check it, if you want me to do so.</span>",
+                    "time": null
+                },
+                {
+                    "user": "alexandernst",
+                    "text": "<span class=\"comment-copy\">Nevermind, I just confirmed my assumptions by successfully reversing the stub that I was interested in. Thank you and kudos for the great explanation!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

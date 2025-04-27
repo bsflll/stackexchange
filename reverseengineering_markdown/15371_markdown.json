@@ -1,0 +1,53 @@
+{
+  "title": "newbie trying to understand disassembled code",
+  "link": "https://reverseengineering.stackexchange.com/questions/15371/newbie-trying-to-understand-disassembled-code",
+  "content": "I have been writing small C programs and then disassembling them to try to understand what is actually happening under the hood.\n\nI am using mingw-w64 on Windows 7 for my work, and I have run into a question about why certain amounts of space are being allocated on the stack.\n\nprogram1:\n\n```\nint main()\n{\n  int i,j;\n  return 0;\n}\n\n```\nThe start of the disassembled code for the main function is:\n\n```\n00000000004015b0 <main>:\n  4015b0:   55                      push   %rbp\n  4015b1:   48 89 e5                mov    %rsp,%rbp\n  4015b4:   48 83 ec 20             sub    $0x20,%rsp\n\n```\nThe last line looks like it is allocating 32 bytes on teh stack.\n\nProgram 2:\nThe same program except it assigns values to the two variables and returns the sum of the variables.\n\n```\nint main()\n{\n  int i,j;\n  i = 5;\n  j = 6;\n  return i+j;\n}\n\n```\nStart of disassembled code:\n\n```\n00000000004015b0 <main>:\n  4015b0:   55                      push   %rbp\n  4015b1:   48 89 e5                mov    %rsp,%rbp\n  4015b4:   48 83 ec 30             sub    $0x30,%rsp\n\n```\nWhy does this program allocate 48 bytes instead of the 32 bytes from the first program?  \n\nIn both cases i and j are stored at %rbp-4 and %rbp-8 respectively, and the math done in the second program is all done in the registers.\n\nNote I am using gcc 6.3.0 to compile the code and objdump 2.28 to disassemble it.\n\nAll code can be seen in my github repository\nhttp://github.com/draikes/rev-eng\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "windows",
+    "binary-analysis",
+    "objdump",
+    "gcc"
+  ],
+  "user": "dnraikes",
+  "time": "Jun 22, 2017 at 0:49",
+  "comments": [
+    {
+      "user": "dnraikes",
+      "text": "Sorry I haven't figured out how to markup code blocks so the code doesn't look nice.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This is not correct: space on the stack is not allocated for a function's code (or any other kind of code). Instead, the stack is used as storage space for variables used by functions. When a function is called, a space on the stack called a stack frame is created to accommodate the arguments passed to that function as well as local variables declared in the function. This space is created by decrementing the stack pointer, %rsp. Here is a visual depiction of 2 stack frames:\n\n\n\nThere are 2 frames depicted here:\n\nNote that code resides in a different region in the virtual memory address space than the stack (picture is of Win32 processes but applies to PE32+ process address space as well, except the address space is much larger):\n\n\n\nIn order to fully appreciate the situation, the full disassembly of both functions in question should be included, especially since in this case the disassembly is conveniently small.\n\nFull disassembly of main() from prog1:\n\n```\n00000000004015b0 <main>:\n  4015b0:   55                      push   %rbp           // save caller's frame base address\n  4015b1:   48 89 e5                mov    %rsp,%rbp      // current top of stack becomes base of caller's frame\n  4015b4:   48 83 ec 20             sub    $0x20,%rsp     // allocate space for new stack frame\n  4015b8:   e8 93 01 00 00          callq  401750 <__main>\n  4015bd:   b8 00 00 00 00          mov    $0x0,%eax\n  4015c2:   48 83 c4 20             add    $0x20,%rsp     // callee stack frame now out of scope\n  4015c6:   5d                      pop    %rbp           // restore caller's base frame pointer\n  4015c7:   c3                      retq   \n  4015c8:   90                      nop\n  4015c9:   90                      nop\n  4015ca:   90                      nop\n  4015cb:   90                      nop\n  4015cc:   90                      nop\n  4015cd:   90                      nop\n  4015ce:   90                      nop\n  4015cf:   90                      nop\n\n```\nFull disassembly of main() from prog2:\n\n```\n00000000004015b0 <main>:\n  4015b0:   55                      push   %rbp\n  4015b1:   48 89 e5                mov    %rsp,%rbp\n  4015b4:   48 83 ec 30             sub    $0x30,%rsp\n  4015b8:   e8 a3 01 00 00          callq  401760 <__main>\n  4015bd:   c7 45 fc 05 00 00 00    movl   $0x5,-0x4(%rbp)\n  4015c4:   c7 45 f8 06 00 00 00    movl   $0x6,-0x8(%rbp)\n  4015cb:   8b 55 fc                mov    -0x4(%rbp),%edx\n  4015ce:   8b 45 f8                mov    -0x8(%rbp),%eax\n  4015d1:   01 d0                   add    %edx,%eax\n  4015d3:   48 83 c4 30             add    $0x30,%rsp\n  4015d7:   5d                      pop    %rbp\n  4015d8:   c3                      retq   \n  4015d9:   90                      nop\n  4015da:   90                      nop\n  4015db:   90                      nop\n  4015dc:   90                      nop\n  4015dd:   90                      nop\n  4015de:   90                      nop\n  4015df:   90                      nop\n\n```\nThis code is unoptimized, which makes interpretation significantly easier and allows us to clearly discern the calling convention being followed. \n\nAccording to Microsoft's documentation on function types,\n\nThe functions above both call __main, so they would be considered frame functions. Thus, a stack frame is allocated for main in both cases, as we can see from the disassembly above. \n\nAccording to Microsoft's documentation on stack allocation,\n\nThis brings us to the original question:\n\nIt is not easy to answer this directly. The short answer is stack frame alignment + vagaries of the compiler.\n\nThe compiler is responsible for stack memory allocation (except when alloca is used at runtime to dynamically allocate memory on the stack, but that does not apply to the disassembly in question). It should be noted that in the disassembly of main() in program 1, nothing is saved in the created stack frame (except %rip, which gets pushed onto the stack 32-byte stack frame when __main is called) but 32 bytes are allocated anyway.\n\nIn program 2, __main is also called, and in addition 2 4-byte integer values are written to the stack frame created for main().\n\nThis allocation of \"extra\" memory is commonly done by GCC - stack frames are not allocated as compactly as possible in 64-bit and 32-bit runtime environments. A clue as to why this is the case is provided in the System V ABI AMD64 Architecture Processor Supplement Draft Version 0.99.7 section 3.2.1 \"Registers and the Stack Frame\":\n\n\n\nSpecifically, the \"clue\" is the \"unspecified\" area in the current stack frame. This area is not discussed further in the AMD64 ABI, but it is discussed in the System V ABI, Intel386 Architecture Processor Supplement section 3 \"Low Level System Information\", page 37:\n\nIf this extends to AMD64 architecture as well, it means that memory can be allocated by the compiler in the area of a function's stack frame between the function stack frame base pointer %rbp and the \"red zone\" in a way determined by the compiler itself, so long as the stack is properly aligned to a 16-byte boundary. In other words, memory allocation for this area is compiler-dependent. MSVC may allocate memory for this area of stack frames differently, for example. More specifically, a different compiler may not allocate 48 bytes for program 2's main() function like GCC did.\n\nUpdate (thank you to Igor Skochinksy for pointing this out):\n\nIn addition to this, there are some important differences between the AMD64 ABI and the Windows x64 ABI:\n\nAll these points are important, but the reason I have added emphasis to the first sentence of point 3 is that it pertains specifically to our discussion of why space is allocated to stack frames the way they are by the compiler.\n\nmain() in program 1 has no locals or arguments passed to it, but it does indeed have a 32-byte (4 registers * 8 bytes) register parameter area.\n\nmain() in program 2 uses 8 bytes of space for locals, so 16 bytes of space is allocated for its stack frame plus the 32-byte register parameter area. 16 bytes are allocated for the local variables in order to maintain alignment to a 16-byte boundary. \n\nThis accounts for the size difference between the stack frames created for main() in program 1 and program 2.  \n\n",
+      "votes": "2",
+      "user": "julian",
+      "time": "Jun 22, 2017 at 15:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "The MS doc is not totally correct; leaf function is a function which does not call other functions (=it's a leaf on the function call graph); it may or may not use a stack frame (in MS ABI it doesn't but that's not necessarily the case elsewhere).",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I figured it out.  It looks like the sub statement is allocating space for the entire program  rounded to the nearest qword.\nProgram 1 requires only 0x17 bytes 23 bytes of code while program 2 requires 0x28 or 40 bytes of space.\n\n",
+      "votes": "0",
+      "user": "dnraikes",
+      "time": "May 18, 2017 at 23:57",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Kerim Can Kalıpcıoğlu",
+          "text": "It is GCC memory alignment. More on here: stackoverflow.com/questions/1061818/…",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+    "title": "Exports that redirects to other library",
+    "link": "https://reverseengineering.stackexchange.com/questions/16023/exports-that-redirects-to-other-library",
+    "content": "I'm writing an analog of <pre><code>GetProcAddress</code></pre> function. When looking inside the export table I see the exports like this in advapi32.dll for example:\n<pre><code>.text:4C362BAA aEventregister  db 'EventRegister',0    ; DATA XREF: .text:off_4C35FE10o\n.text:4C362BB8                                         ; Exported entry 1290. EventRegister\n.text:4C362BB8                 public EventRegister\n.text:4C362BB8 EventRegister   db 'ntdll.EtwEventRegister', 0\n</code></pre>\nSo it is like a redirect to ntdll function. How to process these entries and how to detect if they lead to another library call?\nCurrently I just find the function ordinal by name and get its address, but for exports like this addresses are invalid (inside the address there is junk code).\nDo I need to just read the string <pre><code>ntdll.EtwEventRegister</code></pre> at the ordinal address, split it by dot and get dll/function names?\nIf this is the case, how do I detect that the export address is just a string with this dll/function name? I need to somehow check if there is a valid string there, there should be other way, like some flag etc.\n",
+    "votes": "3",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "c",
+        "pe",
+        "executable"
+    ],
+    "user": "CrispyCrunchyStuff",
+    "time": "Aug 7, 2017 at 13:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This is called export forwarding and you can explore it here with nice explanation:\nThe PE file format\n\nThe next 32-bit-value 'AddressOfFunctions' is a RVA to the list of\n  exported items. It points to an array of 'NumberOfFunctions'\n  32-bit-values, each being a RVA to the exported function or variable.\nThere are 2 quirks about this list: First, such an exported RVA may be\n  0, in which case it is unused. Second, if the RVA points into the\n  section containing the export directory, this is a forwarded export. A\n  forwarded export is a pointer to an export in another binary; if it is\n  used, the pointed-to export in the other binary is used instead. The\n  RVA in this case points, as mentioned, into the export directory's\n  section, to a zero-terminated string comprising the name of the\n  pointed-to DLL and the export name separated by a dot, like\n  \"otherdll.exportname\", or the DLL's name and the export ordinal, like\n  \"otherdll.#19\".\n",
+            "votes": "4",
+            "user": "PhoeniX",
+            "time": "Aug 6, 2017 at 22:37",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user2347953",
+                    "text": "<span class=\"comment-copy\">This solution doesn't work with all DLLs. See my answer for the proper way of identifying forwarded exports.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "The other two answers are wrong.\nI reversed <pre><code>link.exe</code></pre> and the way it works is that if the “function” points into the export directory\n<pre><code>(NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress <= func_ptr < NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress + NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size)\n</code></pre>\nit is a forwarded export (i.e. you will find a string there).\nThe method from the other two answers used to work because the linker used to put the export directory as well as the forward strings into the <pre><code>.data</code></pre> section, but that is no longer the case. Newer linkers put the export directory and the forward strings into the <pre><code>.text</code></pre> section (where all the “actual” functions reside as well), so checking whether the “function” is in the same section as the export directory will no longer work.\n",
+            "votes": "2",
+            "user": "winapiadmin",
+            "time": "Nov 8, 2023 at 23:15",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Short answer: No, you don't have to guess it's a string. There's a 'trick'.\nBut first, some background: export forwarding is a legitimate and useful functionality piece. There are a handful of documentation describing how imports are loaded by the PE loader unfortunately export forwarding documentation is a little harder to  come by and most of articles only mention export forwarding.\nThe key to identifying if you're processing an export forward is, a described here:\n\nForwarding is achieved by making an RVA in the AddressOfFunctions array point into the section which contains the export directory, something that normal exports should not do. At that location, there should be a zero terminated ASCII string of format \"LibraryName.ExportName\" for the appropriate place to forward this export to.\n\nIf the RVA in the AddressOfFunctions array points to the exports section, that function is forwarded and can't be located in the DLL being loaded. Instead, the value pointed should be interpreted as a null-terminated string, another module should be loaded and the loading process should be repeated.\nIn case the dot is followed by the hash sign, the forward entry points to an export by ordinal, not name, and the digits following the hash sign are the ordinal number of target function.\nPlease note an API may be forwarded multiple times before being reached.\nAdditionally, if you're handling bound imports you should make sure to treat <pre><code>ForwarderChain</code></pre> properly, see the following from the same article:\n\nBinding can of course be a problem if the bound library / module forwards its exports to another module. In these cases, the non-forwarded imports can be bound, but the values which get forwarded must be identified so the loader can resolve them. This is done through the ForwarderChain member of the import descriptor. The value of \"ForwarderChain\" is an index into the FirstThunk and OriginalFirstThunk arrays. The OriginalFirstThunk for that index identifies the IMAGE_IMPORT_BY_NAME structure for a import that needs to be resolved, and the FirstThunk for that index is the index of another entry that needs to be resolved. This continues until the FirstThunk value is -1, indicating no more forwarded values to import.\n\nFor additional reading about the PE format and imports in particular, I recommend this resource.\n",
+            "votes": "1",
+            "user": "NirIzr",
+            "time": "Aug 6, 2017 at 22:56",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

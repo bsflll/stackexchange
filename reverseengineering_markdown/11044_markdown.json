@@ -1,0 +1,53 @@
+{
+  "title": "IDAPython Strings constantly returns NoneType with str()",
+  "link": "https://reverseengineering.stackexchange.com/questions/11044/idapython-strings-constantly-returns-nonetype-with-str",
+  "content": "I'm trying to automate  disassembly of a firmware image using IDA Pro 6.5 and IDA Python. One of the process I want to implement is to locate strings and create a data segment around them.\n\nUsing the GUI, I have little issue doing so. However when using the idautils.Strings() API call, I can retrieve a list of StringItem objects, but I fail to access the actual string data with str() or unicode(). Below is the failing function, which is taken from IDA Python Google Code archive:\n\n```\ndef find_strings():\n    s = idautils.Strings(False)\n    s.setup(strtypes=Strings.STR_UNICODE | Strings.STR_C)\n    for i, v in enumerate(s):\n        if v is None:\n            print(\"Failed to retrieve string index %d\" % i)\n        else:\n            print(\"%x: len=%d type=%d index=%d-> '%s'\" % (v.ea, v.length, v.type, i, str(v)))\n\n```\nWhen ran into IDA, the following error is reported:\n\n```\nTraceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 8, in find_strings\nTypeError: 'StringItem' object is not callable\n\n```\nWhen replacing the str(v) argument with the constant aaa in the print function, I get a list of StringItem objects without any problem:\n\n```\nPython>find_strings()\n208e: len=8 type=3 index=0-> 'aaa'\n21b0: len=55 type=0 index=1-> 'aaa'\n229d: len=6 type=0 index=2-> 'aaa'\n22c5: len=5 type=0 index=3-> 'aaa'\n22d3: len=33 type=0 index=4-> 'aaa'\n...\n\n```\nIf I attempt to use the unicode() function instead, I get the following error:\n\n```\nPython>find_strings()\n208e: len=8 type=3 index=0-> '\nTraceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"<string>\", line 8, in find_strings\nTypeError: coercing to Unicode: need string or buffer, NoneType found\n\n```\nFrom my understanding, it seems that the StringItem contains no strings for an unknown reason (or an issue with the plugin, specific version of Python maybe?), however they are displayed in the GUI.\n\nI'm seeking advice on either what I'm doing wrong, or an alternative way to extract the strings using the IDApython plugin. Thanks\n\nThe code above appears valid after adding the missing parenthesis as mentioned in the comments. However this was only a typo in the post and not the source of the issue. The find_strings worked fine in other typical binaries. Further proof is that by using the idc.GetString(self.ea, self.length, self.type) also returned NoneType.\n\nDiff mentioned that the get_ascii_contents2 is failing and thus returning null, which is very likely the cause. What is unclear is why the function is failing, while the GUI succeeds in locating most of the strings.\n\nThe first string at 0x208E is a trash Unicode string. The string at 0x21B0 is an actual ASCII string composed of 37 chars. I cannot post the complete string due to disclosure/legal issues. Notice that when displayed in the hex editor, the byte order of the ASCII view is inverted for an unknown reason. The bitness of the overall firmware is 16bit.\n\n434F 5059 5249 4748 5420 A920 ... 4544 2000 0000 : OCYPIRHG T ¬ ... DE.\n\nFinally, note that the function MakeStr works without any issue. I have the following code, when used at 0x21B0, will successfully create a string within a data segment:\n\n```\ndef create_string(self, _startea, _endea, _segname=\".const\", _unicode=False):\n        \n        if (SegStart(_startea) == idc.BADADDR):\n            self.create_data_segment(_startea, _endea, \".const\")\n        else:\n            segtype = GetSegmentAttr(_startea, SEGATTR_TYPE)\n            if (segtype != IDAEngine.SEG_TYPE_DATA):\n                DelSeg(_startea, 0)\n                self.create_data_segment(_startea, _endea, _segname)\n        \n        result = MakeStr(_startea, _endea)\n        if (result == IDAEngine.FAIL):\n            print \"[-] Failed to create a string at 0x{:x} to 0x{:x}.\".format(_startea, _endea)\n\n```\nAt this point, I believe the structure of the firmware is to blame (combination of bitness, lack of symbols and an obsolete but supported microprocessor), however I couldn't pinpoint the exact issue. For now, since I can use find_strings() to retrieve the offsets and then use MakeStr on strings with a certain length and the manually vetting the \"real\" strings.\n\nFor posterity, I never really solved the issue, however I can confirm the underlying binary file was responsible for raising an exception in get_ascii_contents2. I've reloaded the same file, however as a raw binary file in one large segment and the function worked flawlessly.\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "ida",
+    "idapython",
+    "ida-plugin"
+  ],
+  "user": "InfectedPacket",
+  "time": "Jun 17, 2020 at 9:54",
+  "comments": [
+    {
+      "user": "diff",
+      "text": "You're missing a ) in the last line of code, the fixed version would be; print(\"%x: len=%d type=%d index=%d-> '%s'\" % (v.ea, v.length, v.type, i, str(v)))  With that fix the script works fine on my machine. Is this not the issue?",
+      "time": null
+    },
+    {
+      "user": "InfectedPacket",
+      "text": "Unfortunately, it appears the missing parenthesis was due to a bad copy-paste. My code actually contains the extra parenthesis. Additionally, I've been trying to use idc.GetString(self.ea, self.length, self.type) with the same result. I suspect the format of the binary file is somehow to blame. The firmware I'm looking at is not a well known architecture (not Intel, ARM or MIPS...)",
+      "time": null
+    },
+    {
+      "user": "tmr232",
+      "text": "This does not reproduce for me. Are you using latest IDAPython?",
+      "time": null
+    },
+    {
+      "user": "diff",
+      "text": "Agreed, after fixing the typo the code worked fine as well.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This took some digging, however it appears you're hitting an interesting edge case that the original author of the scripts didn't consider.\n\nstr(StringItem) calls the following code inside idautils.py;\n\n```\n    def __str__(self):\n        return self._toseq(False)\n\n```\nWhich leads to _toseq in idautils.py;\n\n```\n    def _toseq(self, as_unicode):\n        if self.is_2_bytes_encoding():\n            conv = idaapi.ACFOPT_UTF16\n            pyenc = \"utf-16\"\n        elif self.is_4_bytes_encoding():\n            conv = idaapi.ACFOPT_UTF8\n            pyenc = \"utf-8\"\n        else:\n            conv = idaapi.ACFOPT_ASCII\n            pyenc = 'ascii'\n        strbytes = idaapi.get_ascii_contents2(self.ea, self.length, self.type, conv)\n        return unicode(strbytes, pyenc, 'replace') if as_unicode else strbytes\n\n```\nIf we dig into the get_ascii_contents2 inside py_bytes.hpp method we see that this method could actually return a NoneType if get_ascii_contents2 fails;\n\n```\nif ( !get_ascii_contents2(ea, len, type, buf, len+1, &used_size, flags) )\n{\n  qfree(buf);\n  Py_RETURN_NONE;\n}\n\n```\nEssentially, the code is fine, however you should add a check or exception handling if a str(StringItem) returns the with a TypeNone since it is possible for this type of value to be returned.\n\nYou could help debug further by providing what the hex data is at ea of 0x208e with the length of 8 as shown in your output;\n\n```\n208e: len=8 type=3 index=0->\n\n```\n",
+      "votes": "2",
+      "user": "diff",
+      "time": "Oct 14, 2015 at 18:31",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "InfectedPacket",
+          "text": "Your description is likely what is happening, i.e. get_ascii_contents2 is failing. The find_strings function worked in other files, I therefore suspect the cause is the way words are ordered within the firmware, despite finding the strings correctly using the GUI. I'll post some examples of hex words in my post.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+    "title": "How to decrypt ZTE F670 router's encrypted config.bin with payload type 5 with telnet access?",
+    "link": "https://reverseengineering.stackexchange.com/questions/33339/how-to-decrypt-zte-f670-routers-encrypted-config-bin-with-payload-type-5-with-t",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I’m from Indonesia.</p>\n<p>I have a ZTE F670 (Software Version V6.0.10) router provided by my ISP, and I'm trying to retrieve certain credentials stored in the configuration.</p>\n<p>Previously, with a different router, I could download the config.xml file directly from the web interface and extract the needed information. However, with this new router, the backup file is in an encrypted config.bin format.</p>\n<p>So far, I've tried the following:</p>\n<p>Downloaded the config.bin file from the router's web interface. Used tools like the ZTE config utility, but the router appears to use a newer encryption algorithm (payload type 5), which isn't supported by the tools I've found.\nI tried to use the serial number as an encryption key, without success.\nThen I tried using <a href=\"https://github.com/mkst/zte-config-utility\" rel=\"nofollow noreferrer\">https://github.com/mkst/zte-config-utility</a> but no success.\nTelnet are open and I can access root user. I can download telnet file like cspd, dataprotocol and etc… but don’t know to use it.</p>\n<p>Can someone help me decrypt the config.bin file, or suggest any tools that work with newer ZTE models?</p>\n<p>this my file on telnet</p>\n<p><a href=\"https://drive.google.com/drive/folders/1GyQrkNc6WXQoICSP4wMUzigPTtmn4fpW?usp=sharing\" rel=\"nofollow noreferrer\">https://drive.google.com/drive/folders/1GyQrkNc6WXQoICSP4wMUzigPTtmn4fpW?usp=sharing</a></p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "221",
+    "tags": [
+        "decryption",
+        "router"
+    ],
+    "user": "Lukman Lantowa",
+    "time": "Dec 13, 2024 at 7:11",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So there was a rabbithole I had to go through.</p>\n<p>Step 1: Download the firmware - <a href=\"https://www.tripleoxygen.net/files/devices/zte/f670l/v1/firmware/stock/?SD\" rel=\"nofollow noreferrer\">https://www.tripleoxygen.net/files/devices/zte/f670l/v1/firmware/stock/?SD</a></p>\n<p>Step 2: Extract with <code>binwalk</code> - it has a <code>jffs2-root</code> of the file system</p>\n<p>Step 3: Interact with the file system enough to see the <code>httpd</code> service - js files associated and the <code>httpd</code> ELF file that is the server binary</p>\n<p>Step 4: load <code>httpd</code> into IDA - See that it uses <code>libdb.so</code> to manage the database. Load <code>libdb.so</code> into IDA - it uses <code>libharcode.so</code></p>\n<p>Step 5: <code>libhardcode.so</code> uses <code>/etc/hardcode</code> as input to decrypt files in <code>/etc/hardcodefile</code> - See <code>CspHardCodeParamGet</code> - both key and IV are derived from SHA256 of parts of <code>/etc/hardcodefile</code></p>\n<p>Step 6: RE the implementation to decrypt the file <code>/etc/hardcodefile/dataprotocol</code> to reveal</p>\n<pre><code>DefAESCBCKey=L04&amp;Product@5A238dc79b15726d5c06\nDefAESCBCIV=ZTE%FN$GponNJ025678b02a85c63c706\nAESENCRYKey=\nuserkey=608158c36497b00221db14afb845c9e3\n</code></pre>\n<p>for the files attached in the question</p>\n<p>Step 7: With - <a href=\"https://github.com/mkst/zte-config-utility\" rel=\"nofollow noreferrer\">https://github.com/mkst/zte-config-utility</a></p>\n<pre class=\"lang-none prettyprint-override\"><code>$ python examples/auto.py --key \"L04&amp;Product@5A238dc79b15726d5c06\" --iv 'ZTE%FN$GponNJ025678b02a85c63c706' /tmp/f670/user_cfg.bin /tmp/f670/some.xml\n</code></pre>\n<p>and voila you can decrypt the file too</p>\n<p>Script to decrypt the harcodefiles</p>\n<pre class=\"lang-py prettyprint-override\"><code>from struct import unpack\nimport glob\n\nfrom Crypto.Cipher import AES\nfrom Crypto.Hash import SHA256\n\n\ndef decrypt():\n    key_file = \"./etc/hardcode\"\n    config_paths = glob.glob(\"./etc/hardcodefile/*\")\n\n    with open(key_file, \"rb\") as f:\n        key_data = f.readline().strip()\n    offset_bytes = lambda data, offset: bytes(b + offset for b in data)\n\n    key = SHA256.new(offset_bytes(key_data[5:21], 3) + key_data[64:]).digest()\n    iv = SHA256.new(offset_bytes(key_data[7:39], 1)).digest()[:16]\n\n    for path in config_paths:\n        cipher = AES.new(key, AES.MODE_CBC, iv)\n        try:\n            with open(path, \"rb\") as config:\n                print(f\"Decrypting {path}\")\n                header = config.read(8)\n                magic1, magic2 = unpack(\"&gt;II\", header)\n                if magic1 != 0x01020304 or magic2 != 0x00000003:\n                    print(f\"{path} is not a valid config file, skipping\")\n                    continue\n                config.read(52)\n                with open(f\"{path}.decrypted.txt\", \"wb\") as output:\n                    while True:\n                        chunk_header = config.read(12)\n                        if not chunk_header:\n                            break\n                        plain_len, cipher_len, eof = unpack(\"&gt;III\", chunk_header)\n                        plaintext = cipher.decrypt(config.read(cipher_len))[:plain_len]\n                        output.write(plaintext)\n                        if not eof:\n                            break\n        except FileNotFoundError:\n            print(f\"File {path} not found, skipping\")\n\nif __name__ == \"__main__\":\n    decrypt()\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "hold-me",
+            "time": "Dec 13, 2024 at 18:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello its work!!!</span>",
+                    "time": null
+                },
+                {
+                    "user": "hold-me",
+                    "text": "<span class=\"comment-copy\">You can accept the answer if it works</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello, I'm willing for you to make a donation to your PayPal as a thank you for your time and effort to help</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lukman Lantowa",
+                    "text": "<span class=\"comment-copy\">Hello okay I have reply your email Thank you friend</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

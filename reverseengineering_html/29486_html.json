@@ -1,0 +1,55 @@
+{
+    "title": "How to reverse engineer a setjmp/longjmp sequence?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29486/how-to-reverse-engineer-a-setjmp-longjmp-sequence",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to reverse engineer the GNU libc x86 (32 bit) setjmp / longjmp (re a vuln which may allow arbitrary overwrite of the\n  <code>\n   jmp_buf env\n  </code>\n  .\n </p>\n <p>\n  There's a\n  <a href=\"https://offlinemark.com/2016/02/09/lets-understand-setjmp-longjmp/\" rel=\"nofollow noreferrer\">\n   great writeup of the musl setjmp\n  </a>\n  but I can find almost nothing online about the GNU. I've tried to navigate the source, but it's a spaghetti ball of macros, probably due to being so sys dependent. The asm is unusual, using things like:\n </p>\n <pre><code>CALL       dword ptr GS :[0x10 ]\n</code></pre>\n <p>\n  which I don't fully understand (I thought segments were for 16 bit 8088 code! What is the\n  <code>\n   GS:\n  </code>\n  ?).\n </p>\n <p>\n  A priori, I would expect that setjmp would simply save a few registers, but it seems much more complicated.  I've found posts claiming GNU intentionally obfuscates it, either to prevent programmers from relying on internals, or for some security purpose, both of which I'm skeptical of.\n </p>\n <p>\n  Experimenting with a debugger has shown one thing: the\n  <code>\n   jmp_buf env\n  </code>\n  changes with each invocation, such as that even the same program, with the same params, and the same stack pointers, if you're using a debugger to load the\n  <code>\n   jmp_buf\n  </code>\n  from one invocation into another you get a SIGV.  The contents are clearly not a pure function of the program and stack, but somehow change (randomly?) with each invocation.\n </p>\n <p>\n  Are any of the crack REs here able to penetrate\n  <code>\n   setjmp\n  </code>\n  ?\n </p>\n</div>\n</body></html>",
+    "votes": "5",
+    "answers": 1,
+    "views": "363",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "x86",
+        "memory",
+        "operating-systems"
+    ],
+    "user": "SRobertJames",
+    "time": "Nov 10, 2021 at 10:21",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n Check out\n <a href=\"https://en.wikipedia.org/wiki/X86_memory_segmentation#Later_developments\" rel=\"nofollow noreferrer\">\n  Later developments\n </a>\n . A few of the segment selectors have been repurposed to hold base addresses to specific pieces of data. In Windows, for example\n <code>\n  fs\n </code>\n plays a role in retrieving the TIB/TEB pointer and ultimately the PEB pointer, but also when setting up SEH in a function. Specific to your question\n <a href=\"https://stackoverflow.com/a/6617004/476371\">\n  read this\n </a>\n .\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'll start with answering a few basic questions, some of which you didn't even ask!\n </p>\n <h5>\n  What are segment registers doing in modern code?\n </h5>\n <p>\n  It's been a while since we've needed extra registers to address a memory region. 32, and especially 64, bits are more than enough. OS developers took advantage of those unused registers and nowadays most modern OSes use at least some of the registers to hold OS related data. As mentioned in the comments, on amd64 processors segment registers cannot be used for segmentation but OSes have been doing it on 32 bit processors as well.\n </p>\n <p>\n  You can read more about it\n  <a href=\"https://reverseengineering.stackexchange.com/questions/2006/how-are-the-segment-registers-fs-gs-cs-ss-ds-es-used-in-linux\">\n   here\n  </a>\n  regarding linux,\n  <a href=\"https://reverseengineering.stackexchange.com/questions/16336/where-es-gs-fs-are-pointing-to\">\n   here\n  </a>\n  and\n  <a href=\"https://en.wikipedia.org/wiki/Win32_Thread_Information_Block\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  regarding windows, etcetera.\n </p>\n <h5>\n  Why can't I restore data from a previous execution of a program\n </h5>\n <p>\n  Although you may control some variables of a program's execution (parameters, stack addresses, process loading addresses and heap location) you're still not controlling all variables (locations of specifica allocations, values returned from \"external\" sources such as the kernel and as we'll see soon, anti-exploitation mitigations might interfere with that sort of thing too).\n </p>\n <p>\n  Generally, you should never expect such a thing to work without taking the necessary adjustments. Let alone in something as low-level and nuanced as setjmp/longjmp.\n </p>\n <h5>\n  Why isn't the setjmp/longjmp implementation documented?\n </h5>\n <p>\n  Firstly, we're in a reverse engineering community, avoiding documentation does not guarantee confidentiality. Secondly,\n  <em>\n   documentation is in the code\n  </em>\n  :)\n </p>\n <p>\n  I would imagine documentation is rather difficult for such low-level details that may change frequently and are\n  <em>\n   very architecture specific\n  </em>\n  . Which leads us to your next question -\n </p>\n <h4>\n  Why is setump/longjmp architecture-dependent?\n </h4>\n <p>\n  Obviously, this goes without saying, but for completeness I thought it'd be better to be explicit here. Here are some reason this has to be done on an per-architecture level:\n </p>\n <ol>\n  <li>\n   As these functions touch the some of a CPU's ABI (specifically the\n   <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions\" rel=\"nofollow noreferrer\">\n    calling convention\n   </a>\n   ), the code has to follow a different conventions.\n  </li>\n  <li>\n   Accessing registers by name, for their specific purpose is abstracted in C.\n  </li>\n  <li>\n   C is a\n   <a href=\"https://en.wikipedia.org/wiki/Procedural_programming\" rel=\"nofollow noreferrer\">\n    procedural language\n   </a>\n   , therefore setjmp/longjmp in their core are direct contradiction to the nature of C since it breaks the boundaries of procedures (functions).\n  </li>\n  <li>\n   Additional architecture-specific features (that are implemented differently,\n   <a href=\"https://sourceware.org/pipermail/libc-alpha/2017-December/089675.html\" rel=\"nofollow noreferrer\">\n    shadow stack\n   </a>\n   and\n   <a href=\"https://sourceware.org/glibc/wiki/PointerEncryption\" rel=\"nofollow noreferrer\">\n    pointer guard\n   </a>\n   are such examples) might change how setjmp/longjmp need to handle specific cases.\n  </li>\n </ol>\n <p>\n  I'll discuss amd64 from now on.\n </p>\n <h4>\n  How is setjump implemented\n </h4>\n <p>\n  Now, although this isn't C (and isn't the most readable assembly either), the code for setjmp on amd64 can be found in\n  <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/setjmp.S\" rel=\"nofollow noreferrer\">\n   setjmp.S\n  </a>\n  , longjmp is\n  <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/__longjmp.S\" rel=\"nofollow noreferrer\">\n   __longjmp.S\n  </a>\n  . It's even quite commented and the code is pretty straight forward!\n </p>\n <p>\n  You can clearly see the registers as they're saved onto the structure (For example,\n  <code>\n   movq %r12, (JB_R12*8)(%rdi)\n  </code>\n  ). You can see\n  <code>\n   PTR_MANGLE\n  </code>\n  is called if the aformentinoed pointer guard feature is enabled.\n </p>\n <p>\n  Because your question mostly revolved around\n  <em>\n   finding\n  </em>\n  the code and not\n  <em>\n   reading\n  </em>\n  the code and since the code is quite straight-forward, I'll leave reading the functions as an exercise for the reader for now. I'll come back and add more details later on, so feel free to ask follow-up questions.\n </p>\n <h5>\n  How is the\n  <code>\n   jmp_buf\n  </code>\n  structure defined\n </h5>\n <p>\n  Since we're dealing with assembly we don't have structures. Instead, there are several\n  <code>\n   #define\n  </code>\n  preprocessor directives to define the\n  <code>\n   jmp_buf\n  </code>\n  structure. Those are located in a dedicated header:\n  <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/x86_64/jmpbuf-offsets.h\" rel=\"nofollow noreferrer\">\n   jmpbuf-offsets.h\n  </a>\n </p>\n <h5>\n  Where are those files located? Where can I find different architecture implementations?\n </h5>\n <p>\n  These files are located in the\n  <a href=\"https://sourceware.org/git/?p=glibc.git;a=tree;f=sysdeps\" rel=\"nofollow noreferrer\">\n   <code>\n    sysdep\n   </code>\n  </a>\n  module, which holds subdirectories for each supported architecture-specific components.\n  <code>\n   aarch64\n  </code>\n  stands for arm 64-bit,\n  <code>\n   x86\n  </code>\n  for 32-bit intel 8086 compatible processors,\n  <code>\n   86_64\n  </code>\n  for 64 bit intel 8086 CPUs, etcetera.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "NirIzr",
+            "time": "Nov 3, 2021 at 8:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "SRobertJames",
+                    "text": "<span class=\"comment-copy\">Superb answer.  Where is <code>PTR_MANGLE</code> defined? gdb suggests it does two things: rol and xor.  What is the point of the rotation? It doesn't add any true encryption, of course.</span>",
+                    "time": null
+                },
+                {
+                    "user": "SRobertJames",
+                    "text": "<span class=\"comment-copy\">Is definition on Intel x64 different than AMD? Or is it just called AMD since they were first? Where is x86-32 bit defined? What is the scheme / layout to find these files?</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Intel x64, x86_64 and amd64 are practically the same. amd64 indeed comes from amd being the \"first\". <code>PTR_MANGLE</code> is a MACRO used for Linux's \"pointer guard\" feature I mentioned in the answer. The <code>SHADOW_STACK_</code> MACROs (also used by setjmp) are used for the \"Shadow stack\" feature (also mentioned above).</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\"><code>PTR_MANGLE</code> is defined in the architecture's <code>sysdep.h</code>. <a href=\"https://sourceware.org/git/?p=glibc.git;a=blob_plain;f=sysdeps/unix/sysv/linux/x86_64/sysdep.h\" rel=\"nofollow noreferrer\">x86_64</a> for example. You can browse for them <a href=\"https://sourceware.org/git/?p=glibc.git;a=tree;f=sysdeps/unix/sysv/linux\" rel=\"nofollow noreferrer\">here</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

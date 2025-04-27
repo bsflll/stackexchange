@@ -1,0 +1,39 @@
+{
+    "title": "Is there an easy way to detect if the SSDT has been patched from a memory dump?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1461/is-there-an-easy-way-to-detect-if-the-ssdt-has-been-patched-from-a-memory-dump",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The <a href=\"http://en.wikipedia.org/wiki/System_Service_Dispatch_Table\">SSDT</a> is a dispatch table inside the Windows NT kernel, and it is used for handling calls to various internal kernel APIs. Often malware will change addresses in the SSDT in order to hook certain kernel functions. Spotting this kind of thing in a memory dump would be awesome, because it would allow me to identify potential rootkits. Is there a way to reliably detect them? What kind of memory dump is required?</p>\n</div>",
+    "votes": "10",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "malware"
+    ],
+    "user": "Polynomial",
+    "time": "Apr 1, 2013 at 21:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>No <em>absolutely reliable</em> way, no.</p>\n<p>Either way you'll need a full dump, but the problem is that malware could even hook the responsible functions inside the kernel and modify <em>what</em> gets dumped. There are several things that have to be considered here.</p>\n<p>You <em>can</em> detect it if the malware used a trivial method for hooking in the first place. Let's assume the address was replaced by one to a trampoline or to inside another loaded image (or even outside one just in nonpaged pool), then you can <em>easily detect</em> it. You can simply enumerate all the modules and attempt to find the one inside which the address from inside the SSDT points. In case of a trampoline you'll have to disassemble the instructions there to see where it jumps/calls. There are plenty of libraries out there for the purpose, such as <a href=\"http://udis86.sourceforge.net/\"><code>udis86</code></a>.</p>\n<p>However, if a malware is sneaky, it could use the natural gaps inside an executable (such as the kernel) when loaded into memory. As you probably know, the way a PE file (such as <code>ntoskrnl.exe</code> and friends) is represented differently on disk and in memory. The on-disk file format is more terse. Loaded into memory, the sections are aligned in a particular way described in the PE header. This way gaps will likely exist between the real size of a section (end) and the properly aligned section size (\"padding\"). This leaves place to <em>hide</em> something like a trampoline or even more shell code than a simple trampoline. So a naive check such as the above - i.e. enumerating modules and checking whether the SSDT functions point inside the kernel image - will not work. It would get bypassed by malware sophisticated enough to do what I just described.</p>\n<p>As you can imagine, this means that things - as all things malware/anti-malware - quickly becomes an arms race. What I would strongly suggest is that you attach a kernel debugger (<code>WinDbg</code> via Firewire comes to mind) and keep the infected (or allegedly infected) machine in limbo while you investigate. While you are connected and broke into the debugger, the debuggee can't do anything. This can be used to debug a system live and - assuming the malware wasn't sneaky enough to also manipulate <code>kdcom</code> - to gain valuable metrics - it can also be used to create a crashdump directly (see WinDbg help). If you have conclusive evidence that a machine is infected, due to symptoms it exhibits, odds are the malware isn't all too sophisticated and you will not have to care about the special case I outlined. However, keep in mind that this special case can only be considered <em>one</em> out of many conceivable cases used to hide. So long story short: there is no <em>absolutely reliable</em> way to do what you want.</p>\n<p>It has sometimes been said - and it's true - that the attacker just needs to find one out of an infinite number of attack vectors, whereas the defender can only defend a finite number of <em>known</em> attack vectors. The lesson from this should be that we - as anti-malware industry (in which I work) - can always claim that <em>we</em> didn't find anything on the system, but that it is wrong to claim that the system is clean.</p>\n<hr/>\n<h2>How to deliberately cause a BSOD</h2>\n<p>The keyboard driver(s) can be told to cause a BSOD:</p>\n<pre><code>HKLM\\CurrentControlSet\\Services\\kbdhid\\Parameters\n</code></pre>\n<p>or (for older PS/2 keyboards)</p>\n<pre><code>HKLM\\SYSTEM\\CurrentControlSet\\Services\\i8042prt\\Parameters\n</code></pre>\n<p>And there set a <code>REG_DWORD</code> named <code>CrashOnCtrlScroll</code> to <code>1</code>.</p>\n<p>After the next reboot you can force the blue screen by <kbd>Ctrl</kbd>+<kbd>ScrollLk</kbd>+<kbd>ScrollLk</kbd>. The bug check code will in this case be <code>0xE2</code> (<code>MANUALLY_INITIATED_CRASH</code>).</p>\n<hr/>\n<p>Side-note: I have also read, but never seen it in a kernel debugging session myself or in any kind of FLOSS implementation, that some method tries to re-load the kernel from the image on disk and run it through the early initialization steps, thereby creating a \"shadow\" SSDT. This one would then be pristine and could be used to \"unhook\" everything in one fell swoop from the original SSDT. Again, haven't seen this implemented, but from my knowledge of the internals it seems a possibility. Of course this plays more with the idea of detecting/unhooking a rootkit's functions than it does with your original intention of getting a memory dump of an infected system.</p>\n</div>",
+            "votes": "9",
+            "user": "0xC0000022L",
+            "time": "Apr 2, 2013 at 0:45",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><a href=\"https://code.google.com/p/volatility/\">Volatility</a> can detect such hooks based on a memory image in any of its <a href=\"https://code.google.com/p/volatility/wiki/AddressSpaceReference\">supported formats</a>.</p>\n<p>In particular, the <a href=\"https://code.google.com/p/volatility/wiki/CommandReferenceMal23#threads\">threads</a> plugin will tag any thread with SSDT hooks as <code>HookedSSDT</code>, and the <a href=\"https://code.google.com/p/volatility/wiki/CommandReference23#ssdt\">ssdt</a> plugin will dump out all functions in the SSDT and give the name of the kernel module that contains each function.</p>\n<p>Another method, which may detect more subtle kinds of corruption, would be to use WinDbg (either on a live system or on a crash dump), and use the <code>chkimg</code> command to audit each kernel module, e.g.:</p>\n<pre><code>chkimg -d nt\n</code></pre>\n<p>This downloads a pristine copy of the kernel from the MS Symbol server and reports any differences from the in-memory version. Note that this probably wouldn't detect any hooks placed in a per-thread SSDT.</p>\n</div>",
+            "votes": "6",
+            "user": "Brendan Dolan-Gavitt",
+            "time": "Apr 2, 2013 at 1:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Brendan Dolan-Gavitt",
+                    "text": "<span class=\"comment-copy\">Whoops, thanks for the catch @0xC0000022L. Fixed.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,38 @@
+{
+    "title": "Angr - Solve for function return value",
+    "link": "https://reverseengineering.stackexchange.com/questions/20570/angr-solve-for-function-return-value",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to create an angr script to solve this test program:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n#include &lt;string.h&gt;\n\nint main(int argc, char *argv[])\n{\n    int value = atoi(argv[1]);\n    char* foo = \"foobar\";\n    int sum = 0;\n    for (int i = 0; i &lt; strlen(foo); ++i)\n    {\n        sum += foo[i];\n    }\n    return (sum == value);\n}\n</code></pre>\n<p>I'm trying to find out what value needs to be passed to the program in order for it to return True. This is turning out to be less trivial than anticipated.</p>\n<p>The return value is set in the basic block:</p>\n<p><a href=\"https://i.sstatic.net/BFjIr.png\" rel=\"nofollow noreferrer\"><img alt=\"last block\" src=\"https://i.sstatic.net/BFjIr.png\"/></a></p>\n<p>As you can see, <code>al</code> is set if the values used in the <code>cmp</code> are equal. </p>\n<p>Most angr solutions I have seen are based on a path that is taken if a certain condition is met. Given the address of that path, it is possible to solve the constraints required to get to the address of that path. This will not work in my case.</p>\n<p>I have been scouring the angr examples for a way to solve a symbolic variable for a function return value, but this doesn't seem to be possible.</p>\n<p>I'm currently trying to use <code>run</code> or <code>execute</code> with the <code>find</code> or <code>until</code> args to say: execute until <code>rip == &lt;end of function&gt; and eax == 1</code>.</p>\n<p>Currently I have this:</p>\n<pre><code>import angr\nimport claripy\n\ndef bv_to_int(bv):\n    return claripy.backends.concrete.convert(bv).value\n\ndef main():\n    p = angr.Project('angr_test')\n    arg = claripy.BVS('arg', 4*8)\n\n    st = p.factory.entry_state(args=[p.filename, arg])\n    sm = p.factory.simulation_manager(st)\n\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) &gt;= 0x400708 and bv_to_int(_s.regs.al) == 1)\n\n    print(sm.found[0].solver.eval(arg, cast_to=bytes))\n\nif __name__ == \"__main__\":\n    main()\n</code></pre>\n<p>Which is currently throwing:</p>\n<pre><code>Traceback (most recent call last):\n  File \"angr_test.py\", line 19, in &lt;module&gt;\n    main()\n  File \"angr_test.py\", line 14, in main\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) &gt;= 0x400708 and bv_to_int(_s.regs.al) == 1)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 237, in explore\n    self.run(stash=stash, n=n, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 259, in run\n    self.step(stash=stash, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 75, in __call__\n    result = current_hook(self.func.__self__, *args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 96, in step\n    return simgr.step(stash=stash, extra_stop_points=base_extra_stop_points | self._extra_stop_points, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 80, in __call__\n    return self.func(*args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/sim_manager.py\", line 330, in step\n    goto = self.filter(state, filter_func=filter_func)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/misc/hookset.py\", line 75, in __call__\n    result = current_hook(self.func.__self__, *args, **kwargs)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 113, in filter\n    stash = self._filter_inner(state)\n  File \"/home/ben/.local/lib/python3.6/site-packages/angr/exploration_techniques/explorer.py\", line 124, in _filter_inner\n    findable = self.find(state)\n  File \"angr_test.py\", line 14, in &lt;lambda&gt;\n    sm.explore(find=lambda _s: bv_to_int(_s.regs.rip) &gt;= 0x400708 and bv_to_int(_s.regs.al) == 1)\n  File \"angr_test.py\", line 5, in bv_to_int\n    return claripy.backends.concrete.convert(bv).value\n  File \"/home/ben/.local/lib/python3.6/site-packages/claripy/backends/__init__.py\", line 160, in convert\n    \"conversion on a child node\" % (self, ast.op, ast.__class__.__name__))\nclaripy.errors.BackendError: &lt;claripy.backends.backend_concrete.BackendConcrete object at 0x7f47a92c05f8&gt; can't handle operation Extract (BV) due to a failed conversion on a child node\n</code></pre>\n<p>Any help would be greatly appreciated.</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "angr"
+    ],
+    "user": "ben_re",
+    "time": "Feb 7, 2019 at 14:04",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Ok, I've figured it out. </p>\n<p>First of all, the <code>run</code> command should be used. This will run for all paths. </p>\n<p>After the run the value of <code>eax</code> will actually contain two possible values (one for <code>eax == 0</code>, and another for <code>eax == 1</code>. The solver needs to be told to solve <code>arg</code> where <code>eax == 1</code>.</p>\n<p>This script will give the correct output:</p>\n<pre><code>import angr\nimport claripy\n\ndef main():\n    p = angr.Project('angr_test')\n    arg = claripy.BVS('arg', 3*8)\n\n    st = p.factory.entry_state(args=[p.filename, arg])\n    sm = p.factory.simulation_manager(st)\n\n    sm.run()\n\n    sm.deadended[0].solver.add(sm.deadended[0].regs.eax == 1)\n\n    print(sm.deadended[0].solver.eval(arg, cast_to=bytes))\n\nif __name__ == \"__main__\":\n    main()\n</code></pre>\n</div>",
+            "votes": "4",
+            "user": "ben_re",
+            "time": "Feb 8, 2019 at 12:59",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Right from the <a href=\"http://angr.io/api-doc/angr.html#module-angr.sim_manager\" rel=\"nofollow noreferrer\">documentation</a>:</p>\n<pre><code>&gt; explore(stash='active', n=None, find=None, avoid=None,\n&gt; find_stash='found', avoid_stash='avoid', cfg=None, num_find=1, **kwargs)\n</code></pre>\n<blockquote>\n<p>The “find” and “avoid” parameters may be any of:</p>\n<p>An address to find A set or list of addresses to find A function that\n  takes a state and returns whether or not it matches.</p>\n</blockquote>\n<p>Basically, you will have to implement a function accepting a state to decide whether you are in the desired state. You can also just implement a function for the failed state if you'd like.</p>\n<p>Maybe something easy can help you, such as</p>\n<p><code>find=lambda x: x.regs.eax == 1 &amp;&amp; x.regs.rip &gt;= 0x708</code></p>\n</div>",
+            "votes": "2",
+            "user": "Nordwald",
+            "time": "Feb 7, 2019 at 11:56",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "ben_re",
+                    "text": "<span class=\"comment-copy\">I have actually tried using <code>explore</code>, and <code>run(until=&lt;stuff&gt;)</code>. I'll my current script to the question to illustrate.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

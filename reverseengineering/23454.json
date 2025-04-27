@@ -1,0 +1,69 @@
+{
+    "title": "Reverse engineer Listen to this device on Windows - Reverse engineer Windows when there's no API",
+    "link": "https://reverseengineering.stackexchange.com/questions/23454/reverse-engineer-listen-to-this-device-on-windows-reverse-engineer-windows-whe",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm writing an <strong>Autohotkey</strong> script to toggle <code>Listen to this device</code> for my microphone, without interacting with a GUI.</p>\n<p><a href=\"https://i.sstatic.net/cn4PP.png\" rel=\"noreferrer\"><img alt=\"listen to this device\" src=\"https://i.sstatic.net/cn4PP.png\"/></a></p>\n<p>I thought it would be a simple registry key being modified so I used <strong>RegShot</strong> to find the key:</p>\n<pre><code>Computer\\HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Capture\\{My-Microphone's-UUID}\\Properties\n</code></pre>\n<p>The key is called <code>{24dbb0fc-9311-4b3d-9cf0-18ff155639d4},1</code> (On all computers).</p>\n<p>And the value when toggling the <code>Listen to this device</code> changes like this: (The <em>0</em>'s change to <em>f</em>'s)</p>\n<pre><code>xxxxxxxxxxxxxxxx0000xxxx\nxxxxxxxxxxxxxxxxffffxxxx\n</code></pre>\n<p>But when I check the GUI, I see that the <code>Listen to this device</code> tick-box has been ticked but I can't actually hear anything from my mic, when I un-tick it, click apply, re-tick it and apply again, I hear my mic. So I thought I might need <strong>DllCall</strong> or <strong>PostMessage</strong> here, like what message was sent or what <em>dll</em> was called when I click <code>apply</code> but I couldn't find anything on it on the Internet. I don't know how to make Windows understand that this setting has changed.</p>\n<p><strong>Please teach me how to reverse engineer this with x64dbg.</strong></p>\n</div>",
+    "votes": "6",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "dll",
+        "x64dbg",
+        "windows-10"
+    ],
+    "user": "Shayan",
+    "time": "May 28, 2020 at 17:04",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "<span class=\"comment-copy\">If I search for the identified registry key <code>24dbb0fc-9311-4b3d-9cf0-18ff155639d4</code> I am getting some interesting results pointing to the <code>MMDevice API</code>. See for example <a href=\"https://alax.info/blog/1279\" rel=\"nofollow noreferrer\">here</a>.</span>",
+            "time": null
+        },
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\">Apparently multimediasoft offers a library (paid) <a href=\"https://www.multimediasoft.com/asrecnet/help/index.html?wasapi_listeninputdevicestart.htm\" rel=\"nofollow noreferrer\">Audio Sound Recorder for .NET</a> which \"emulates\" this feature.</span>",
+            "time": null
+        },
+        {
+            "user": "c00000fd",
+            "text": "<span class=\"comment-copy\">What I would do is this: 1. See what process that UI resides in (use <code>Spy++</code> for that to get PID from the HWND you showed.) I'd guess that it'd be one of rundll32 procs. 2. Then use a debugger (<code>x64Dbg</code> would work) and set a breakpoint on <code>ntdll.ZwSetValueKey</code> in that proc (before that UI is shown). You may want to make a conditional bp to catch when your registry value is written. It will be in a 2nd parameter as <code>UNICODE_STRING*</code>. 3. Run the proc until bp triggers. 4. After then just walk thru the code with your debugger and see what they are doing there. No guesswork needed.</span>",
+            "time": null
+        },
+        {
+            "user": "Remko",
+            "text": "<span class=\"comment-copy\">@c00000fd +1 or alternatively just use ProcMon (be sure to configure symbols) and filter on <code>RegSetValue</code> then doubleclick the entry and inspect the callstack which might be easier than using a debugger...</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">I first thought of <code>GetSystemMetrics</code>/<code>SystemParametersInfo</code>/<code>WM_SETTINGSCHANGE</code>, but it turns out those are not used for what you want/need. What I am wondering is whether you are actually interested in achieving that functionality or whether it's important to you how to <i>reverse engineer</i> such stuff?! Given we're on RE.SE I'd assume it's the latter, but I'd like to know as I think that in this case it might be possible to substitute reverse engineering with knowledge about Win32 programming. It would be normal, at least, for that configuration change to be broadcast somehow.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>AFAIK, knowing what registry keys are used is not always enough, because the registry is just a place to store things like preferences. Setting a registry value may not have any immediate effect on a device. The real source of truth of how a device is configured is the device itself.</p>\n<p>From my experience control panels tend to be lightweight GUIs hosted by the OS, and the process that does any real work is the daemon that the GUI talks to over IPC. </p>\n<p>Looking over the recorded API calls in API Monitor we can see that the control panel sends RPC messages to the AudioSrv service. Using <code>sc queryex</code> in Command Prompt, you can find the PID of the svchost (service host) that's hosting the instance of this service.</p>\n<p>From there, doing a string search in IDA, we find the string \"ListenTo\" being used by some of the AudioSrv code. It could be a string used for debugging, but that would be my first place to do some static analysis in IDA or set a breakpoint on with my debugger.</p>\n<p>There are some tools that can help with figuring out which code is run when you perform some action. Ultimap in CheatEngine comes to mind, you can find tutorials for it online. You can also perform tracing of the process in x64dbg and look for any syscalls, which is generally interesting because it indicates that the process is asking the kernel for something (e.g. control a device).</p>\n<p>Ultimately, this is probably a lot of work just to get to a hacky solution, so you might explore alternatives e.g. creating a virtual device driver.</p>\n</div>",
+            "votes": "3",
+            "user": "P. Private",
+            "time": "May 5, 2020 at 9:28",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Unfortunately I cannot answer how to find this information using x64dbg. However this question has been asked multiple times over the years and never got a definitive answer, so here's a solution anyway:</p>\n<p>This can be done by acquiring the device via <a href=\"https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdevice\" rel=\"nofollow noreferrer\">IMMDeviceEnumerator::GetDevice</a>\nand opening &amp; editing the <a href=\"https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-openpropertystore\" rel=\"nofollow noreferrer\">IMMDevice:PropertyStore</a> directly.</p>\n<p>In my experience, <a href=\"https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/bb761475(v=vs.85)\" rel=\"nofollow noreferrer\">IPropertyStore::SetValue</a> will take care of notifying the <code>AudioSrv</code> as well. <code>IPropertyStore::Commit</code> is seemingly not required for events to fire.</p>\n<p>Here is a Python sample using comtypes and <a href=\"https://github.com/AndreMiras/pycaw\" rel=\"nofollow noreferrer\">pycaw</a>:</p>\n<pre class=\"lang-py prettyprint-override\"><code>from comtypes.automation import VT_BOOL\nfrom comtypes.persist import STGM_READWRITE\n\nfrom pycaw.api.mmdeviceapi.depend import PROPVARIANT\nfrom pycaw.utils import AudioUtilities\n\nCHECKBOX_GUID = \"{24DBB0FC-9311-4B3D-9CF0-18FF155639D4}\"\nCHECKBOX_PID = 1\n\n# Can be found in the registry\nDEVICE_GUID = \"{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}\"\n\nif __name__ == \"__main__\":\n    enumerator = AudioUtilities.GetDeviceEnumerator()\n    dev = enumerator.GetDevice(f\"{{0.0.1.00000000}}.{DEVICE_GUID}\")\n\n    store = dev.OpenPropertyStore(STGM_READWRITE)\n    if store is None:\n        print(\"failed to open property store\")\n        exit(1)\n\n    for j in range(store.GetCount()):\n        pk = store.GetAt(j)\n        if str(pk.fmtid) != CHECKBOX_GUID or pk.pid != CHECKBOX_PID:\n            continue\n\n        new_input = PROPVARIANT(VT_BOOL)\n        new_input.union.boolVal = True\n        store.SetValue(pk, new_input)\n        break\n</code></pre>\n</div>",
+            "votes": "0",
+            "user": "nvs",
+            "time": "May 14, 2023 at 13:56",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Using nvs' answer as a starting point, I was able to figure out how to also set the device that should be listening to the input.</p>\n<p>Here's my code, also using pycaw:</p>\n<pre class=\"lang-py prettyprint-override\"><code>from typing import Optional\nfrom comtypes import GUID\nfrom comtypes.automation import VT_BOOL, VT_LPWSTR, VT_EMPTY\nfrom comtypes.persist import STGM_READWRITE\nfrom pycaw.api.mmdeviceapi import PROPERTYKEY\n\nfrom pycaw.api.mmdeviceapi.depend import PROPVARIANT\nfrom pycaw.utils import AudioUtilities\n\n#Hardcoded values\nLISTEN_SETTING_GUID = \"{24DBB0FC-9311-4B3D-9CF0-18FF155639D4}\"\nCHECKBOX_PID = 1\nLISTENING_DEVICE_PID = 0\n\n#Values you can change:\nmicrophone_name = 'Microphone (USB-MIC)'\nlistening_device_name = 'Speakers (5- GSA 70 Main Audio)'   #Set to None to use the default playback device\nenable_listening = False\n\ndef main():\n    store = get_device_store(microphone_name)\n    if store is None:\n        print(\"failed to open property store\")\n        exit(1)\n\n    set_listening_checkbox(store, enable_listening)\n    set_listening_device(store, listening_device_name)\n\n#Write to the checkbox property\ndef set_listening_checkbox(property_store, value:bool):\n    checkbox_pk = PROPERTYKEY()\n    checkbox_pk.fmtid = GUID(LISTEN_SETTING_GUID)\n    checkbox_pk.pid = CHECKBOX_PID\n\n    new_value = PROPVARIANT(VT_BOOL)\n    new_value.union.boolVal = value\n    property_store.SetValue(checkbox_pk, new_value)\n\n#Write to the device property\ndef set_listening_device(property_store, output_device_name:Optional[str]):\n    if output_device_name is not None:\n        listening_device_guid = get_GUID_from_name(output_device_name)\n    else:\n        listening_device_guid = None\n\n    device_pk = PROPERTYKEY()\n    device_pk.fmtid = GUID(LISTEN_SETTING_GUID)\n    device_pk.pid = LISTENING_DEVICE_PID\n\n    if listening_device_guid is not None:\n        new_value = PROPVARIANT(VT_LPWSTR)\n        new_value.union.pwszVal = listening_device_guid\n    else:\n        new_value = PROPVARIANT(VT_EMPTY)\n\n    property_store.SetValue(device_pk, new_value)\n\n#Gets the device store from the device name\ndef get_device_store(device_name:str):\n    device_guid = get_GUID_from_name(device_name)\n    enumerator = AudioUtilities.GetDeviceEnumerator()\n    dev = enumerator.GetDevice(device_guid)\n\n    store = dev.OpenPropertyStore(STGM_READWRITE)\n    return store\n\n#This is just a helper method to turn a device name into a GUID.\ndef get_GUID_from_name(device_name:str) -&gt; str:\n    input_devices = get_list_of_active_coreaudio_devices(\"input\")\n    for device in input_devices:\n        if device.FriendlyName == device_name:\n            return device.id\n    output_devices = get_list_of_active_coreaudio_devices(\"output\")\n    for device in output_devices:\n        if device.FriendlyName == device_name:\n            return device.id\n    raise ValueError(\"Device not found!\")\n\n#Helper method to get all (active) devices\ndef get_list_of_active_coreaudio_devices(device_type:str) -&gt; list:\n    import comtypes\n    from pycaw.pycaw import AudioUtilities, IMMDeviceEnumerator, EDataFlow, DEVICE_STATE\n    from pycaw.constants import CLSID_MMDeviceEnumerator\n\n    if device_type != \"output\" and device_type != \"input\":\n        raise ValueError(\"Invalid audio device type.\")\n\n    if device_type == \"output\":\n        EDataFlowValue = EDataFlow.eRender.value\n    else:\n        EDataFlowValue = EDataFlow.eCapture.value\n    # Code to enumerate devices adapted from https://github.com/AndreMiras/pycaw/issues/50#issuecomment-981069603\n\n    devices = list()\n    device_enumerator = comtypes.CoCreateInstance(\n        CLSID_MMDeviceEnumerator,\n        IMMDeviceEnumerator,\n        comtypes.CLSCTX_INPROC_SERVER)\n    if device_enumerator is None:\n        raise ValueError(\"Couldn't find any devices.\")\n    collection = device_enumerator.EnumAudioEndpoints(EDataFlowValue, DEVICE_STATE.ACTIVE.value)\n    if collection is None:\n        raise ValueError(\"Couldn't find any devices.\")\n\n    count = collection.GetCount()\n    for i in range(count):\n        dev = collection.Item(i)\n        if dev is not None:\n            if not \": None\" in str(AudioUtilities.CreateDevice(dev)):\n                devices.append(AudioUtilities.CreateDevice(dev))\n\n    return devices\n\nif __name__ == \"__main__\":\n    main()\n</code></pre>\n</div>",
+            "votes": "0",
+            "user": "lugia19",
+            "time": "Oct 27, 2023 at 14:07",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,54 @@
+{
+  "title": "Questions about reversing object oriented code(initializing vtables in ctors)",
+  "link": "https://reverseengineering.stackexchange.com/questions/5849/questions-about-reversing-object-oriented-codeinitializing-vtables-in-ctors",
+  "content": "I was reversing some C++ code and encountered following function.\n\n```\nsub_106C0A0 proc near\n\nvar_10= dword ptr -10h\nvar_C= dword ptr -0Ch\nvar_4= dword ptr -4\n\npush    0FFFFFFFFh\npush    offset SEH_106C0A0\nmov     eax, large fs:0\npush    eax\nmov     large fs:0, esp\npush    ecx\npush    esi\nmov     esi, ecx\npush    edi\nlea     edi, [esi+4]\npush    30h\nmov     ecx, edi\nmov     [esp+1Ch+var_10], esi\nmov     dword ptr [esi], offset off_12C0680\ncall    struc_13_ctor\nmov     dword ptr [edi], offset off_12C057C ; another vtable init ?\n\n```\nThis function passes this pointer of some object (struc_13), which is esi+4, to the struc_13_ctor. Inside the struc_13_ctor function, it initializes the vtable pointer and other member variables. \n\n```\n; int __thiscall struc_13_ctor(struc_13 *this, __int16 a2)\nstruc_13_ctor proc near\n\narg_0= word ptr  4\n\nmov     dx, [esp+arg_0]\nmov     eax, ecx\nxor     ecx, ecx\nmov     dword ptr [eax], offset struc_13_vtable\nmov     [eax+4], ecx\nmov     [eax+8], ecx\nmov     [eax+0Ch], dx\nmov     [eax+0Eh], cx\nmov     [eax+14h], ecx\nmov     [eax+10h], ecx\nretn    4\nstruc_13_ctor endp\n\n```\nHowever after returning from struc_13_ctor, it overwrites the vtable pointer with the new value, which is off_12C057C in this case. \n\n```\ncall    struc_13_ctor\nmov     dword ptr [edi], offset off_12C057C ; another vtable init ?\n\n```\nI have seen this kind of behaviors a lot while looking at ctor functions, but never understood why this happens. \n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "537",
+  "tags": [
+    "c++"
+  ],
+  "user": "Jaewon Min",
+  "time": "Jul 14, 2014 at 5:55",
+  "comments": [
+    {
+      "user": "see ya",
+      "text": "Seems like assembly code, that you've pasted, does everything ok. What is exactly overwritten(edi?), when return value is in eax? If I remember correctly, return value may use in any future instruction and, as soon as you pasted only one instruction after function return, I can not say exactly what is happening then.",
+      "time": null
+    },
+    {
+      "user": "Jaewon Min",
+      "text": "my question is that although ctor func initializes the vtable ptr of the struc_13, after returning vtable ptr of the struc_13 is re-initialized to a different value. edi points to the vtable ptr inside the struc_13 in the caller func",
+      "time": null
+    },
+    {
+      "user": "Guntram Blohm",
+      "text": "@seeya: The value of edi in the main function gets moved to ecx, then moved to eax in the struc_13_ctor function. So the mov dword ptr [eax], offset struc_13_vtable in the called function and the mov dword ptr [edi], offset off_12C057C access the same memory address. The OP's question was, why does the outer function overwrite the vtable?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I think the c++ code would look something like this:\n\n```\n// has vtbl struc_13_vtable\n// has constructor struc_13_ctor\nstruct struc_13 {\n    int  a,b;\n    short c,d;\n    int e,f;\n\n    struc_13(short x)\n       : a(0), b(0), c(x), d(0), e(0), f(0)\n    { }\n\n    virtual void someotherfn();\n};\n\n// has vtbl off_12C057C\n// has inlined constructor\nstruct derivedmember : struc_13 {\n    derivedmember() : struc_13(0x30)\n    { }\n    virtual void someotherfn();\n};\n\n// has vtbl off_12C0680\n// has constructor sub_106C0A0\nstruct A {\n    derivedmember  member;\n    virtual void somefn();\n};\n\n```\n",
+      "votes": "0",
+      "user": "Willem Hengeveld",
+      "time": "Jul 14, 2014 at 19:00",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "The class of which sub_106C0A0 is a member function contains another class as a member. Assuming ecx is the class pointer, then it's ecx+4, not ecx, that gets passed to the inner constructor. So the inner class pointer is behind the vtable pointer of the outer class, which suggests something like:\n\n```\nclass a {\n    int i1, i2;\n    short s1, s2;\n    int i3, i4;\n\n    a::a(int x) {\n        i1=0; i2=0;\n        s1=x;\n        s2=0; i3=0; i4=0;\n    } \n}\n\nclass b : public a {\n    // whatever;\n}\n\nclass outer {\n    class b someelement;\n    // more variables;\n\n    outer::outer() {\n        someelement=(b) new a(48);\n    }\n}\n\n```\nI'd assume the sub_106C0A0 function allocates a class instance, then casts that to another class. The cast to the other class makes the compiler replace a's vtable with b's vtable. However, i'm not 100% sure how that makes sense - if b is a real superclass of a, then casting a to b isn't safe, because the additional members aren't there; if b is a subclass of a, then there's no reason to replace the vtable when casting.\n\nLooking at the size and entries of the vtables might help - maybe the programmer used some weird method of abstract classes and implementation classes, where the class members of one class are the abstract classes (b), but what gets instantiated by new() are the implementations (a). (That still wouldn't be a good reason to replace the implementation vtable with the abstract class vtable, however).\n\n",
+      "votes": "1",
+      "user": "Guntram Blohm",
+      "time": "Jul 14, 2014 at 18:08",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Willem Hengeveld",
+          "text": "sub_106C0A0 does not allocate, it constructs.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+    "title": "What is the first argument (rdi) to operator+ on x86_64 SystemV?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27199/what-is-the-first-argument-rdi-to-operator-on-x86-64-systemv",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm looking through a block of disassembled C++ which works with several <code>std::string</code> instances. I had been confused by several calls to various versions of <code>std::operator+</code>, but this call seems completely wrong (by my understanding anyway):</p>\n<pre><code>mov        rax, qword [rbp-0xb8]\nlea        rbx, qword [rax+0xa0]\nlea        rax, qword [rbp-0x60]\nmov        edx, 0x880d32  ; \"/store/\"\nmov        rsi, rax\nmov        rdi, rbx\n           ; std::string std::operator+(std::string &amp;&amp;, char const *),\ncall       _ZStplIcSt11char_traitsIcESaIcEENSt7__cxx1112basic_stringIT_T0_T1_EEOS8_PKS5_\nlea        rax, qword [rbp-0x60]\n</code></pre>\n<p>From context, I have determined that the stack values referenced are:</p>\n<ul>\n<li><strong><code>rbp-0x60</code></strong>: An <code>std::string</code> on the stack, constructed with <code>std::string(char const *, std::allocator&lt;char&gt; &amp;)</code>.</li>\n<li><strong><code>rbp-0xb8</code></strong>: A pointer to <code>this</code>.</li>\n</ul>\n<p>From the <code>.comment</code> section, I can see the compiler used was GCC 5.4.0, from which I retrieved this implementation of the <code>operator+</code> call above (in <code>namespace std { ... }</code>):</p>\n<pre><code>template&lt;typename _CharT, typename _Traits, typename _Alloc&gt;\ninline\nbasic_string&lt;_CharT, _Traits, _Alloc&gt;\noperator+(\n    basic_string&lt;_CharT, _Traits, _Alloc&gt; &amp;&amp;__lhs,\n    const _CharT *__rhs)\n{\n    return std::move(__lhs.append(__rhs));\n}\n</code></pre>\n<p>I can understand the return value being optimized away since <code>__lhs</code> is modified by <code>operator+</code>, but the parameters don't seem to match. <code>edx</code> referring to the only <code>char *</code> suggests an additional first parameter before those declared in the source. If this was a member function, I would expect that (<code>rdi</code> being <code>this</code>), but <code>operator+</code> is implemented as a non-member.</p>\n<p>Am I missing something from the calling convention here?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "318",
+    "tags": [
+        "disassembly",
+        "c++",
+        "gcc"
+    ],
+    "user": "MTCoster",
+    "time": "Mar 9, 2021 at 16:42",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>std::operator+ takes two arguments<br/>\nboth pointers to std::string<br/>\nlike std::operator+(_lhs , _rhs );\nand returns back _Ans a pointer to concatenated result of_lhs &amp; _rhs<br/>\nsince you are using gcc the first three register that apply are rdi,rsi and rdx</p>\n<p>rdi is usually _Ans the resultant std::string address\nrsi is usually _lhs\nrdx is usually _rhs</p>\n<p>in your disassembly<br/>\n<strong>rdi = rbx--&gt;   [rax+0xa0]</strong><br/>\n<strong>rsi = rax--&gt;   [rbp-0x60]</strong><br/>\n<strong>rdx = edx-&gt;    0x880d32</strong> moving a const to edx zeroes the upper part of rdx</p>\n<p>see result of using unicorn for emulating mov rdx,0xffffffffffffffff,mov edx,1</p>\n<pre><code>from __future__ import print_function\nfrom unicorn import *\nfrom unicorn.x86_const import *\n# code to be emulated mov rdx,0xffffffffffffffff; mov edx,1\nX86_CODE64 = b\"\\x48\\xc7\\xc2\\xff\\xff\\xff\\xff\\xba\\x01\\x00\\x00\\x00\" \nADDRESS = 0x1000000000\ntry:\n    mu = Uc(UC_ARCH_X86, UC_MODE_64)\n    mu.mem_map(ADDRESS, 2 * 1024 * 1024)\n    mu.mem_write(ADDRESS, X86_CODE64)\n    mu.emu_start(ADDRESS, ADDRESS + 7)    \n    print(\"&gt;&gt;&gt; RDX = 0x%x\" %mu.reg_read(UC_X86_REG_RDX))\n    mu.emu_start(ADDRESS+7, ADDRESS + 12)    \n    print(\"&gt;&gt;&gt; RDX = 0x%x\" %mu.reg_read(UC_X86_REG_RDX))\n    \nexcept UcError as e:\n    print(\"ERROR: %s\" % e)\n</code></pre>\n<p>result of register rdx after each step</p>\n<pre><code>:\\&gt;python test1.py\n&gt;&gt;&gt; RDX = 0xffffffffffffffff\n&gt;&gt;&gt; RDX = 0x1\n</code></pre>\n<p>for better understanding you can try the code below with compiler of your choice at <a href=\"https://godbolt.org\" rel=\"nofollow noreferrer\">compiler explorer</a></p>\n<pre><code>#include &lt;iostream&gt;\n#include &lt;string&gt;\nstd::string conc(std::string first,std::string second)\n{\n    return std::operator+(first,second);\n}\nint main()\n{  \n    std::string result =  conc(\"hello \",\"world\\n\"); \n    std::cout &lt;&lt; result;\n}\n</code></pre>\n<p>compiling for gcc 5.4 disassembly of conc() is as follows</p>\n<pre><code>conc(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;):\n  push rbp\n  mov rbp, rsp\n  sub rsp, 32\n  mov QWORD PTR [rbp-8], rdi\n  mov QWORD PTR [rbp-16], rsi\n  mov QWORD PTR [rbp-24], rdx\n  mov rax, QWORD PTR [rbp-8]\n  mov rdx, QWORD PTR [rbp-24]\n  mov rcx, QWORD PTR [rbp-16]\n  mov rsi, rcx\n  mov rdi, rax\n  call std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)\n  mov rax, QWORD PTR [rbp-8]\n  leave\n  ret\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Mar 9, 2021 at 21:24",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "MTCoster",
+                    "text": "<span class=\"comment-copy\"><i>rdi is usually _Ans the resultant std::string address rsi is usually _lhs rdx is usually _rhs</i> – My understanding was that in the SystemV calling convention, <code>rax</code> is used for return values, and <code>rdi</code> is the first parameter. Why is that different here?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">Yes rax is used for return  but this is not return. It is an auto argument sent by caller like foo(auto,def,def) look at main and at the prologue upon entry where rdi is saved retrieved manipulated and returned back</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">in laymans terms maybe you need to ask yourself if i am sending in two predefined,preallocated,presized,unchangeable buffer pointers how a new object that is a size of sum of input buffers at-least will be returned back? where does the memory to hold the resultant come from it either must be dynamically allocated and returned back for the caller to free() after use or must be destructible and preallocated by the caller and passed on</span>",
+                    "time": null
+                },
+                {
+                    "user": "MTCoster",
+                    "text": "<span class=\"comment-copy\">Thank you for this explanation! I found the reference I was looking for in the SystemV ABI document under 3.2.3§Return Values</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>since this is tangentially related to query<br/>\nI am adding this as another answer instead of editing the first answer<br/>\nit appears the code in question possibly ignores compiler warnings</p>\n<pre><code>&lt;source&gt;: In function 'int main()':\n&lt;source&gt;:11:40: warning: ISO C++ forbids converting a string constant to 'char*' [-Wwrite-strings]\n   11 |     std::cout &lt;&lt; foo(std::string(\"H\"), \"ello World!\\n\");\n      |                                        ^~~~~~~~~~~~~~~\nCompiler returned: 0\n</code></pre>\n<p>so a 32 bit address like 0x880d32 is passed as an argument to a 64 bit program</p>\n<p>i was wondering under what circumstances edx would be passed instead of rdx<br/>\nso i <a href=\"http://demangler.com/\" rel=\"nofollow noreferrer\">demangled</a> the</p>\n<pre><code> _ZStplIcSt11char_traitsIcESaIcEENSt7__cxx1112basic_stringIT_T0_T1_EEOS8_PKS5_  \n</code></pre>\n<p>which resulted in</p>\n<pre><code>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&amp;, char const*) \n</code></pre>\n<p>so the code in question actually uses an <strong>Rvalue Reference Declaration</strong></p>\n<p><strong>c++11 feature <a href=\"https://en.wikipedia.org/wiki/C%2B%2B11#Rvalue_references_and_move_constructors\" rel=\"nofollow noreferrer\">gccrvalueref</a> , <a href=\"https://docs.microsoft.com/en-us/cpp/cpp/rvalue-reference-declarator-amp-amp?view=msvc-160\" rel=\"nofollow noreferrer\">msvcrvalueref</a></strong><br/>\nand instead of passing a reference uses an explicit char*<br/>\nthe construction can be ascertained by compiling the code below and looking at disassembly.</p>\n<p>code for test</p>\n<pre><code>#include &lt;iostream&gt;\n#include &lt;string&gt;\nstd::string foo(std::string _lhs,char *_rhs)\n{\n    return std::operator+(_lhs , _rhs);\n}\nint main()\n{\n    char rval[] = {\"ello World!\\n\"};\n    std::cout &lt;&lt; foo(std::string(\"H\"), rval);\n    std::cout &lt;&lt; foo(std::string(\"H\"), \"ello World!\\n\");\n    \n}\n</code></pre>\n<p>disassembly of first call to foo() uses proper 64 bit rdx</p>\n<pre><code>  lea rax, [rbp-176]\n  lea rdx, [rbp-189]\n  lea rcx, [rbp-144]\n  mov rsi, rcx\n  mov rdi, rax\n  call foo(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, char*)\n</code></pre>\n<p>disassembly of second call to foo() uses a 32 bit offset edx</p>\n<pre><code>  lea rax, [rbp-96]\n  lea rcx, [rbp-64]\n  mov edx, OFFSET FLAT:.LC1 and if linked mov edx,0x402007 a 32 bit address\n  mov rsi, rcx\n  mov rdi, rax\n  call foo(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, char*)\n.LC1:\n  .string \"ello World!\\n\"\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Mar 10, 2021 at 7:31",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

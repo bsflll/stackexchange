@@ -1,0 +1,39 @@
+{
+  "title": "Manual Segmentation of Objects in non-Intel Firmware",
+  "link": "https://reverseengineering.stackexchange.com/questions/11491/manual-segmentation-of-objects-in-non-intel-firmware",
+  "content": "I am currently working on reversing a firmware file for the older TMS320C5 16-bit microprocessor. I'm using IDA pro to do so and I need to manually create segments for each object contained in the file. I'm asking for a step-by-step procedure to do so. Below is more information on why/what.\n\nThe TMS320C5, like many other processors, access an internal cache, called the \"Fast Memory\" which is a single 64K page. It loads this memory from the contents of an outside, bigger and slower memory.\n\nThe firmware file contains a memory image, which is written directly to the slow memory of the device. It operates using a multi-tasking RTOS. Each tasks/process is stored at different locations in the binary file and do not appear to be in any particular order. From my understanding, each task within the file is preceded by 4 words, one of them indicating the base address where the current task will be loaded in fast memory. In some cases, 2 or 3 tasks can be loaded at the same base address in fast memory.\n\nIt seems that each branch/call instruction within a task uses a direct address within the current page (see figure 3). So they are not relative to the PC (Program Counter) or the contents of some other register. \n\nOf course, I'd now like that branching and calling instructions be aligned with the proper functions and sections within their segment. While I do not have a strong grasp on segmentation in IDA, I read some other thread such as How to deal with code that change its address among different execution, IDA segmentation problem and Segments in IDA. How to overcome NONAME problem, but none offer a complete solution to what I need, as I do not believe CS/DS and other Intel segments apply here. I could not find any really useful in the IDA PRO book either.\n\nSo far, it seems I have accomplish 50% of what I need by doing the following:\n\nAs an example, there is a task within the firmware which starts at linear address 0xCAEFD. This tasks is loaded at 0x2C00 in fast memory. As such, I'd like to create a segment containing this task and for which the base address is 0x2C00. While I changed the segment of the block using the procedure above, the offset starts at 0x9EF02 (see figure 2). I expected it to starts at 0x0.\n\nFigure 1: \n\n\nFigure 2:\n\n\nI suspect I somewhat need to change the offset somehow. I'm aware of the Move Segment option, but it seems it \"physically\" change the segment to the address, which I do not want since some tasks share the same base address in fast memory (or are close to each other and will overwrite another task). What are the steps I need to complete in order to isolate each task into its own segment so that branches and calls align? For example, in figure 3, I would like IDA to link the BCND 2C1Dh, geq to the corresponding 0x2C1D location within the segment, rather than the corresponding linear address.\n\nFigure 3:\n\n\nThanks for any help\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "457",
+  "tags": [
+    "ida",
+    "disassembly",
+    "firmware",
+    "segmentation"
+  ],
+  "user": "InfectedPacket",
+  "time": "Apr 13, 2017 at 12:49",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "this may be of help, especially the examples.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Not an answer, really, but too long for a comment; also, i know the x86 architecture well, but have no idea about the TMS320C5, so please take this with a grain of salt.\n\nI'm afraid that what you're trying to do doesn't match well with how IDA segmentation works, which basically stems from the 80x86 way of doing things. Which means that segment registers contain the upper 16 bit of the 20 bit address, offsets contain the lower 16 bit; and to calculate the physical address, you'd do segment<<4 | offset.\n\nThat means that an address like, say, 1234:0020 is equivalent to 1236:0000 - both map to the physical address of 12360. Now if your binary gets loaded at segment 1234 - physical address 12340 - there is no \"intrinsic\" way of telling what the offset of 12360 is; it could be 0020 within the 1234 segment, or 0000 in the 1236 segment. IDA segmentation will just tell the disassembler that a new segment starts at the 12360 physical address, so if the ds register is set to that segment, then ds:0 accesses the variable thats defined at that12360` address.\n\nThis is different to your processor insofar that code will never be swapped in or out, code regions never overlap in physical memory, and offsets within segments always start at 0000. Even if, in pathological cases, the metainfo .EXE file states to load a segment to offset 0200, the loader will generate a new segment, fill the first 0x200 bytes with 00, and load the contents from the .EXE file behind this zero'd out block.\n\nWhat IDA can't do - as far as i know - is something like \"make 0000-CAEFD one segment; then start another segment at C82FD in which the address CAEFD has an offset of 2C00, because that would make the meaning of the file part between C82FD and CAEFD ambigous, you wouldn't know which segment it belongs to.\n\nIn your case, when you said the base address should be 2C00, you told IDA that address 2C00 in the file should equal address 0000 in the segment. This is why it was showing offset 9EF02; if 2C00 (file position) corresponds to 0000 (segment start), then CAEFD-2C00=9EF02 (file position) corresponds to 9EF02 (position within segment). Try using 9EF02 as segment start; the byte at CAEFD is 2C00 bytes into that segment so it has an offset of 2C00.\n\nIf that doesn't work for you, i'd do the following:\n\nDoing this, you'll get a file that has one big block that contains the original firmware, and multiple 64-KB-blocks that contain just one task and a bunch of zeroes each.\n\nNow, when you load that file, define one segment for the first big block, and one segment for each of the appended 64 KB chunks. That way, you can have one segment per task; segments are easy to define since each of them starts at a multiple of 10000 and all but the first are exactly 10000 bytes in size, and you have a 1:1 relation between file byte and memory byte which should make IDA happy.\n\n",
+      "votes": "3",
+      "user": "Guntram Blohm",
+      "time": "Dec 10, 2015 at 8:36",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "InfectedPacket",
+          "text": "Hello. So I finally made it happen. I noticed that the firmware appears to be a live snapshot of the memory, as such, I noticed heap management blocks reoccurring around each 1K. Each block contained a value indicating where exactly in the page the next instruction was. Combined with your proposition and IDAPython I was able to cut the file using these blocks. I wrote an empty 64K page, then using this \"bookmark\" and the file.seek(), I wrote the blocks in the 64k file. Everything aligns perfectly now. Thanks!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

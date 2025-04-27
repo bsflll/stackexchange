@@ -1,0 +1,50 @@
+{
+    "title": "Reverse engineering RS-232 motor controller",
+    "link": "https://reverseengineering.stackexchange.com/questions/32863/reverse-engineering-rs-232-motor-controller",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a motor controller and I'd like to communicate with it using Arduino. I can communicate with the controller using a software and I used it to sniff some data from RS-232 commnunication and thoses are the data I received:\n </p>\n <pre><code> 3A 30 38 35 30 46 45 31 36 42 31 43 44 3B  -> :0850FE16B1CD;\n\n 3A 30 45 30 30 46 46 30 30 30 30 30 30 42 38 43\n 43 37 45 3B -> :0E00FF000000B8CC7E;\n\n 3A 30 45 36 30 A2 6F 01 B6 34 C1 B0 C1 2E B4 35\n 81 35 45 3B -> :0E60T.Áï./å&.AAD0;\n\n 3A 30 45 31 30 AA 74 71 34 01 41 01 34 63 4F 11\n 98 39 34 3B -> :0E10ªtq4.A.4cO.˜94;\n</code></pre>\n <p>\n  Each package corresponds to values displayed by the software:\n </p>\n <pre><code>:0850FE16B1CD; -> 16B1 = 5809 - Corresponds to controller hour meter\n\n:0E00FF300032FEA07A; -> 30 and 32 corresponds to 48V 50A\n\n:0E60T.Áï./å&.AAD0; -> probably the fault code\n\n:0E10ªtq4.A.4cO.˜94; -> probably the type of controller\n</code></pre>\n <p>\n  <strong>\n   Update\n  </strong>\n </p>\n <p>\n  I tried to simulate different fault codes:\n </p>\n <pre><code>3A 30 45 36 30 54 11 C1 EF 01 2F E5 26 01 41 41 81 44 30 3B   ->> 230 ON NODE 5\n\n3A 30 45 36 30 54 11 C1 EF 01 2F E5 26 01 41 01 C1 44 30 3B   ->> 230 ON NODE 2\n\n3A 30 45 36 30 54 12 C1 EF 01 2F E5 26 01 41 01 C1 43 46 3B   ->> 231 ON NODE 2\n\n3A 30 45 36 30 56 12 C1 EF 01 2F E5 26 01 41 41 81 43 44 3B   ->> 251 ON NODE 5\n\n3A 30 45 36 30 56 12 C1 EF 01 2F E5 26 01 41 01 C1 43 44 3B   ->> 251 ON NODE 2\n               ^^ ^^                               ^^ ^^    ->> change according to the number of the fault code\n                                             01 C1          ->> (Appears when node is 2)\n                                             41 81          ->> (Appears when node is 5)\n</code></pre>\n <p>\n  <em>\n   Different pattern:\n  </em>\n </p>\n <pre><code>3A 30 45 36 30 55 81 30 81 EF F0 A6 41 53 01 01 41 34 31 3B ->> 74 ON NODE 2\n\n3A 30 45 36 30 51 41 30 81 EF F0 A6 41 56 01 01 41 38 32 3B ->> 30 ON NODE 5\n\n3A 30 45 36 30 57 41 F0 81 EF F0 A6 41 53 01 01 41 42 46 3B  ->> 66 ON NODE 2\n</code></pre>\n <p>\n  <strong>\n   Question:\n  </strong>\n </p>\n <p>\n  Is it possible to reverse engineer those packages?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "199",
+    "tags": [
+        "serial-communication"
+    ],
+    "user": "Jdx",
+    "time": "Apr 8, 2024 at 19:08",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Yes, it is possible.\n </p>\n <p>\n  One approach is, as you are doing, monitor the traffic until you identify enough correlations, but this isn't gauranteed when the contents of transmissions doesn't change.\n </p>\n <p>\n  A second approach is to pretend to be the motor controller and see how the software interprets what you send to it (e.g. use com0com to create a virtual serial port pair and develop your own motor controller emulating application to open one port whilst the software opens the other). You will need to have worked out the packet structure so that what you send is valid (e.g. it looks like each starts with a colon and ends with a semicolon, and there may be a checksum or similar), otherwise the software will probably discard anything you send to it.\n </p>\n <p>\n  A third approach is to use IDA or similar (e.g. Ghidra) to see how the software works. Sometimes this is easy, sometimes it is very challenging. If it is .NET, then you can use ILSpy, and it is very easy.\n </p>\n <p>\n  Going to this effort presumes the manufacturer of the motor controller doesn't publish how to communicate with it, and that they have refused to provide the information when requested, both of which are extremely rare.\n </p>\n <p>\n  Update 1: It appears that the packets use a combination of binary values and ASCII encoded hex, which is interesting. I think I've worked out the checksum: Ignore the : and the ; at the start and end of each message, then the last two bytes are the ASCII encoded hex checksum, which is equal to 255 minus the sum of the remaining bytes in the message (discarding overflow bits). The way I solved this was I noticed the difference in the top two packets in your update corresponds to two bits in separate bytes and that those bits undergo opposite changes, yet the bytes at the end don't change, suggesting those final bytes may be a checksum computed using either XOR or sum complement, and from there I just played a bit. I tested this with several of your other packets and it looks good.\n </p>\n <p>\n  Update 2: Tentatively the second two bytes are the ASCII encoded hex data length, which is equal to the entire packet length minus 6. All packets are the same length except the first you posted, so I can't be too certain, but it would be a strategy for allowing the terminating character (;) to appear in the data section. This suggests the following structure:\n </p>\n <pre><code>:<two bytes ASCII encoded hex data length><data><two bytes ASCII encoded hex checksum>;\n</code></pre>\n <p>\n  The data part appears to start with two bytes ASCII encoded hex, which I suspect may indicate the type of data, but that is pure speculation, yet something like that would be required if packets are unsolicited.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Stephen",
+            "time": "Apr 16, 2024 at 22:17",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jdx",
+                    "text": "<span class=\"comment-copy\">Thank you so much for your help! I'm trying Ghidra, as you said. I've updated my post with some different data packets, btw.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Stephen",
+                    "text": "<span class=\"comment-copy\">What is the motor controller model and who manufactured it? What software are you using to interface with it and is it freely downloadable?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jdx",
+                    "text": "<span class=\"comment-copy\">It's a Zapi Controller, model ACE2. The software I'm using is not freely downloadable. Actually, I have two different softwares which I can use to interface with the controller.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jdx",
+                    "text": "<span class=\"comment-copy\">Good Job! I've tested your approach on the checksum and it works!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Stephen",
+                    "text": "<span class=\"comment-copy\">The Zapi ACE2 user manual shows there are a large number of parameters that may be read and/or written, which you'll have to methodically work through. One aspect is the alarm code differs depending on the interface, which suggests the possibility that the alarm code shown in the Zapi software may not equal the alarm code in the RS232 packet.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

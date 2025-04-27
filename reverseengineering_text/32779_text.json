@@ -1,0 +1,54 @@
+{
+    "title": "Hooking a function",
+    "link": "https://reverseengineering.stackexchange.com/questions/32779/hooking-a-function",
+    "content": "So, I'm attempting to create a mod for an older game, Fable: The Lost Chapters.  I was able to find the MacOS release of the game, which contains symbols, and I was also able to find a leaked debug build for windows, which also contains symbols.  Both have made the modding process far easier, however this function specifically I have been unable to call or hook.\nHere's what the function looks like within IDA when demangled.\nMacOS\n<pre><code>CThingCreatureBase::SetCurrentAction(CCreatureActionBase const&)</code></pre>\nWindows Debug Build\n<pre><code>bool __thiscall CThingCreatureBase::SetCurrentAction(CThingCreatureBase *this, const CCreatureActionBase *action)</code></pre>\nAnd here's how I'm hooking the function.\n<pre><code>typedef bool (__thiscall* tSetCurrentAction)(CThingCreatureBase*, CCreatureActionBase const &);\n\ntSetCurrentAction oSetCurrentAction;\n\nbool __fastcall hSetCurrentAction(CThingCreatureBase* This, CCreatureActionBase const & action)\n{\n    return oSetCurrentAction(This, action);\n}\n\nif (MH_Initialize() == MH_OK)\n    std::cout << \"MinHook Initialized\" << std::endl; \n\nif(MH_CreateHook((LPVOID)0x6644F0, &hSetCurrentAction, reinterpret_cast<void**>(&oSetCurrentAction)) == MH_OK)\n        std::cout << \"SetCurrentAction Hooked\" << std::endl;\n\n    if (MH_EnableHook((LPVOID)0x6644F0) == MH_OK)\n        std::cout << \"SetCurrentAction Enabled\" << std::endl;\n</code></pre>\nThough for some reason, the game crashes whenever <pre><code>oSetCurrentAction</code></pre> is called.\nHere's the exception when debugging <pre><code>Exception thrown at 0x00692F03 in Fable.exe: 0xC0000005: Access violation reading location 0xCCCCCCD0.</code></pre>\nI'm hopeful that I'm just missing something obvious, what someone will easily spot, but that's probably not the case.  Any help would be greatly appreciated.\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "149",
+    "tags": [
+        "ida",
+        "disassembly",
+        "c++",
+        "dll",
+        "hooking"
+    ],
+    "user": "Reaper",
+    "time": "Mar 2, 2024 at 13:46",
+    "comments": [
+        {
+            "user": "Yotamz",
+            "text": "Could you add the crash information? A debugger output maybe. Looking at your code, in <pre><code>MH_CreateHook(...)</code></pre> you use an absolute address: <pre><code>0x6644F0</code></pre>. If it is taken from the symbols table offsets, it is an offset from the ImageBase that you need to calculate to the correct virtual address.\n",
+            "time": null
+        },
+        {
+            "user": "Reaper",
+            "text": "The address is not taken from a symbols table, all I'm doing is comparing what the function looks like in the debug build of the game, and finding is location in release.  Also, the function hooks, with the correct arguments being passed through.  I've added the debugger output as well.\n",
+            "time": null
+        },
+        {
+            "user": "Yotamz",
+            "text": "In the first line you define the original function pointer <pre><code>tSetCurrentAction()</code></pre> as a <pre><code>__thiscall</code></pre>. Your hook function, <pre><code>hSetCurrentAction</code></pre> is declared as <pre><code>__fastcall</code></pre>. The hook function will take the <pre><code>action</code></pre> argument from <pre><code>EDX</code></pre> which is undefined. The original function, trying to access the <pre><code>action</code></pre> argument will most likely end up reading some arbitrary memory address and crash.\n",
+            "time": null
+        },
+        {
+            "user": "Reaper",
+            "text": "How would I go about hooking a __thiscall function, with minhook it looked like the hooked function had to be static.\n",
+            "time": null
+        },
+        {
+            "user": "Yotamz",
+            "text": "<pre><code>__thiscall</code></pre> is just a calling convention. Changing the pointer to that should work. Your function is called by the game as <pre><code>__thiscall</code></pre> with a <pre><code>this *</code></pre> in ECX (same as a <pre><code>__fastcall</code></pre>) and <pre><code>action</code></pre> on the stack. Translated to <pre><code>__fastcall</code></pre> terms, the <pre><code>action</code></pre> argument is the third arg passed to your hook function. If you add an unused second arg to your hook function then you can leave the content as is.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "In the first line you define the original function pointer <pre><code>tSetCurrentAction()</code></pre> as a __thiscall.\nYour hook function, <pre><code>hSetCurrentAction</code></pre> is declared as <pre><code>__fastcall</code></pre>.\nThe hook function will take the <pre><code>action</code></pre> argument from <pre><code>EDX</code></pre> which is undefined. The original function, trying to access the <pre><code>action</code></pre> argument will most likely end up reading some arbitrary memory address and crash.\n<pre><code>__thiscall</code></pre> is just a calling convention, changing the pointer to that type should work:\nYour function is called by the game as <pre><code>__thiscall</code></pre> with a <pre><code>this *</code></pre> in <pre><code>ECX</code></pre> (same as a <pre><code>__fastcall</code></pre>) and <pre><code>action</code></pre> on the stack. Translated to <pre><code>__fastcall</code></pre> terms, the <pre><code>action</code></pre> argument is the third arg passed to your hook function.\nIf you add an unused second arg to your hook function then you can leave the content as is.\nA less important note:\nIn many debug builds, the space between functions is filled by the compiler with <pre><code>0xCC</code></pre> bytes. The access violation reading from <pre><code>0xCCCCCCD0</code></pre> suggests that the original function tried to dereference the undefined space pointed to by <pre><code>EDX</code></pre>, got <pre><code>0xCCCCCCCC</code></pre>, added the offset to method or data in the \"object\" (<pre><code>0xC</code></pre>) and then read or called it at <pre><code>0xCCCCCCD0</code></pre>.\n",
+            "votes": "1",
+            "user": "Yotamz",
+            "time": "Mar 7, 2024 at 7:09",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

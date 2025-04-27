@@ -1,0 +1,48 @@
+{
+    "title": "What is this hidden stack used by syscalls on Windows?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14848/what-is-this-hidden-stack-used-by-syscalls-on-windows",
+    "content": "I've noticed there is a memory region in user mode on Windows 7 x64 WOW64 that changes during syscalls. It is located quite low in the address space and has the characteristics of a stack, i.e. it starts with a big reserved region, a page guard, and a few pages of R/W. There is only one thread running, and it has its own stack, so I don't think it's connected.\nIf I call, say, NtQueryVirtualMemory, a rather constant syscall in that it should only fill a struct and not modify anything else of the address space, even then the memory region gets updated with some changes scattered here and there. Has anyone got any information about what this is? Is it some sort of scratch space for the kernel in user mode?\nI also noticed that when there are two threads, there will be another such hidden region, so it probably is per thread.\nAny documentation at all of Windows's standard memory layout would be great.\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "memory",
+        "memory-dump",
+        "system-call",
+        "virtual-memory"
+    ],
+    "user": "Mikubyte",
+    "time": "Mar 8, 2017 at 5:14",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "Could you perhaps be more specific?  How did you see it? what's the content? how is it changed? Can you perhaps include an image with some kind of memory map?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This doesn't happen during the system call. It happens in user-mode.\nWOW64 processes have two user-mode stacks - a 32-bit stack, which is the one you normally use, and a 64-bit stack. The WOW64 ntdll does not make system calls. Where the native 32-bit ntdll would <pre><code>sysenter</code></pre> (via an indirect call to <pre><code>SharedUserData!SystemCallStub</code></pre>) the WOW64 ntdll has an indirect call to <pre><code>wow64cpu!X86SwitchTo64BitMode</code></pre> (<pre><code>call dword ptr fs:[0C0h]</code></pre>).\nThis function makes a far jump with a special selector that causes the switch from 32-bit mode to 64-bit mode. Then the WOW64 layer makes copies of the arguments, widening whatever is necessary, etc. and proceeds to make the real system call.\nI'm willing to bet you used a 32-bit debugger to debug your WOW64 process, and a 32-bit debugger doesn't show the mode transition. It can't. But that still happened in user-mode.\nAny most basic source on WOW64 would tell you that, and you should be able to guess that on your own. It's far more reasonable for a user-mode component to take care of the mode transitions and keep the kernel 64-bit only rather than have the kernel handle system calls from both 32-bit and 64-bit modes.\nThe MSDN page WOW64 Implementation Details practically says both these things:\n\nInstead of using the x86 system-service call sequence, 32-bit binaries that make system calls are rebuilt to use a custom calling sequence. This calling sequence is inexpensive for WOW64 to intercept because it remains entirely in user mode. When the custom calling sequence is detected, the WOW64 CPU transitions back to native 64-bit mode and calls into Wow64.dll. Thunking is done in user mode to reduce the impact on the 64-bit kernel and to reduce the risk of a bug in the thunk that might cause a kernel-mode crash, data corruption, or a security hole. The thunks extract arguments from the 32-bit stack, extend them to 64 bits, then make the native system call.\n\nEmphasis on the last sentence is mine. It doesn't explicitly say that the extraction and expansion of arguments is done on a separate stack, but it's not a wild guess to make.\n",
+            "votes": "7",
+            "user": "conio",
+            "time": "Mar 10, 2017 at 3:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Mikubyte",
+                    "text": "<span class=\"comment-copy\">Yes, I was using a 32-bit debugger. I had always assumed the WOW64 switch was a very thin wrapper, so the concept of it having a 64-bit stack seemed foreign, but apparently there's way more to it. I've verified with a 64-bit debugger now and your advice was spot on. Thanks, it was really helpful!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "You can use a kernel debugger and set a hardware breakpoint on that region to catch accesses to it (accesses by the kernel can't be trapped by a usermode debugger). Hopefully that will give you some clues.\n",
+            "votes": "-1",
+            "user": "Igor Skochinsky",
+            "time": "Mar 9, 2017 at 15:58",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

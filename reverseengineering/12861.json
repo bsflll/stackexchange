@@ -1,0 +1,42 @@
+{
+    "title": "CreateProcess - First thread routine - where is the memory allocated for the thread?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12861/createprocess-first-thread-routine-where-is-the-memory-allocated-for-the-thr",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When calling <code>CreateProcess</code> internally it will call (obviously <code>ZwCreateProcessEx</code> and then) <code>ZwCreateThread</code> with a <code>CreateSuspended</code> set to <code>True</code>, then i assume final initialization is taking place. Afterwards it is calling <code>ZwResumeThread</code> and then everything is working as it should.</p>\n<p>My question is focused on the <code>ZwCreateThread</code> function:\n<a href=\"http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtCreateThread.html\" rel=\"noreferrer\">http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtCreateThread.html</a></p>\n<p>Where exactly in this whole <code>CreateProcess</code> Routine, it is allocating the memory in the remote process for the <code>ThreadStartRoutine</code> Parameter, which in the ZwCreateThread, is the parameter <code>ThreadContext-&gt;EAX</code>, i have seen a couple of NtAllocateVirtualMemory with <code>Protect</code> of value <code>PAGE_EXECUTE_READWRITE - 0x40</code> but none of them is allocating the memory for the <code>NewThreadRoutine</code>.. so where exactly the Thread entrypoint is being allocated?</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "memory",
+        "winapi",
+        "thread",
+        "process"
+    ],
+    "user": "0xAK",
+    "time": "Jun 16, 2016 at 12:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Disclaimer:  The implementation of these APIs is likely to change between versions of Windows.  I will be referencing 32-bit Windows XP SP3 in my answer.  Your results may vary.</p>\n<h2>How thread creation works</h2>\n<p>There are three structures that must be initialized before calling <a href=\"http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtCreateThread.html\" rel=\"noreferrer\"><code>NtCreateThread</code></a>:</p>\n<ol>\n<li><a href=\"http://processhacker.sourceforge.net/doc/struct___i_n_i_t_i_a_l___t_e_b.html\" rel=\"noreferrer\"><code>INITIAL_TEB</code></a>: Contains pointers to the stack region</li>\n<li><a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms679284(v=vs.85).aspx\" rel=\"noreferrer\"><code>CONTEXT</code></a>: Contains the register state</li>\n<li><a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff557749(v=vs.85).aspx\" rel=\"noreferrer\"><code>OBJECT_ATTRIBUTES</code></a>: Contains security attributes for the thread</li>\n</ol>\n<p>In my implementation, there are dedicated functions that handle each of these tasks: <code>BaseCreateStack</code>, <code>BaseInitializeContext</code>, and <code>BaseFormatObjectAttributes</code>, respectively.</p>\n<p>The <code>BaseInitializeContext</code> function is the one you're interested in, however, since the new thread will begin at <code>CONTEXT.Eip</code>.</p>\n<p>Interestingly, <code>BaseInitializeContext</code> instead puts the thread's start address (i.e. the entry point of the new process) in <code>CONTEXT.Eax</code>.  And <code>CONTEXT.Eip</code> is set to the address of <code>BaseProcessStartThunk</code>.  (Since <code>kernel32</code> is mapped at the same address in every process, we know this will also be the address of <code>BaseProcessStartThunk</code> in the other process)</p>\n<p>So when we call <code>NtCreateThread</code>, we start a new thread in the other process at <code>BaseProcessStartThunk</code> with <code>eax</code> equal to the entry point.</p>\n<p><code>BaseProcessStartThunk</code> saves the start address from register <code>eax</code>. It sets the start address internally by calling <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff567101(v=vs.85).aspx\" rel=\"noreferrer\"><code>NtSetInformationThread</code></a> with a <code>ThreadInformationClass</code> of <code>ThreadQuerySetWin32StartAddress</code> (see <code>ntddk.h</code>).  It then calls the start address.  Finally, when the thread returns, it calls <code>ExitThread</code>.</p>\n<h2>How the executable image is mapped into the new process</h2>\n<p>If you want to know the process was created in the first place, we have to go back a few steps.</p>\n<p>First, a handle to the new process executable is opened via <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff567011(v=vs.85).aspx\" rel=\"noreferrer\"><code>NtOpenFile</code></a>.</p>\n<p>The file handle is used to create a <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff563684(v=vs.85).aspx\" rel=\"noreferrer\">section</a> object via <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff566428(v=vs.85).aspx\" rel=\"noreferrer\"><code>NtCreateSection</code></a>.</p>\n<p>A call to <a href=\"http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FSection%2FNtQuerySection.html\" rel=\"noreferrer\"><code>NtQuerySection</code></a> with <code>InformationClass</code> set to <code>SectionImageInformation</code> is made.  This parses the the section object and fills out a <a href=\"http://undocumented.ntinternals.net/index.html?page=UserMode%2FStructures%2FSECTION_IMAGE_INFORMATION.html\" rel=\"noreferrer\"><code>SECTION_IMAGE_INFORMATION</code></a> structure, which most notably includes fields the <code>EntryPoint</code> field.  This is how the entry point of the new process is determined.</p>\n<p>Eventually, <a href=\"https://doxygen.reactos.org/d2/d9f/ntoskrnl_2ps_2process_8c_source.html\" rel=\"noreferrer\"><code>NtCreateProcessEx</code></a> is called, given the section handle from <code>NtCreateSection</code> as a parameter.  This is what actually creates the new process and maps the executable image into the new process' address space, among many other things.  <code>NtCreateProcessEx</code> also provides the process handle that we pass to <code>NtCreateThread</code> to create the new thread.</p>\n</div>",
+            "votes": "4",
+            "user": "user1354557",
+            "time": "Jun 16, 2016 at 16:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xAK",
+                    "text": "<span class=\"comment-copy\">this is hilarious, microsoft were the first to implement injection methods ;)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Ok so ZwCreateThread has it in the context structure (PCONTEXT + 0xB0)</p>\n<p>The api calls to receive the address are like this:\n<code>CreateSection(..SectionInformation..)</code> - Probably to create to initial address</p>\n<p><code>NtQuerySection(Handle, x, SectionInformation, x, x)</code></p>\n<p>This SectionInformation is containing the address of the EntryPoint of the remote process, later initializing the <code>ThreadContext</code> with the function <code>_BaseInitializeContext@20</code> and then using <code>ZwCreateThread</code>...</p>\n<p>This was all checked under windows xp, hopefully it will be of use for someone</p>\n</div>",
+            "votes": "2",
+            "user": "0xAK",
+            "time": "Jun 16, 2016 at 15:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

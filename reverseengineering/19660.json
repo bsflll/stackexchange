@@ -1,0 +1,86 @@
+{
+    "title": "Is there any way to get my own image base without calling any WinAPI functions, such as GetModuleHandle?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19660/is-there-any-way-to-get-my-own-image-base-without-calling-any-winapi-functions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Is there any way to get the image base of an <code>.exe</code> without calling WinAPI functions (i.e. imported functions) so that it can't be easily viewed in a disassembler/debugger?</p>\n<p>I've been thinking of declaring a global variable anywhere in code and reading its address in a loop backwards until e.g.<code>MZ</code> is found (obviously checking for <code>NULL</code> in the meantime). However, there may be a section which isn't readable, a string in <code>.rdata</code> which contains the <code>MZ</code> characters or some value (especially a function address or generally pointers) that contains the <code>MZ</code> bytes (<code>0x4D</code>, <code>0x5A</code>) (and probably a few more \"situations\").</p>\n<p>Have you any idea how to achieve that? Is it even possible?</p>\n</div>",
+    "votes": "11",
+    "answers": 3,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "pe",
+        "executable",
+        "exe"
+    ],
+    "user": "Jason",
+    "time": "Oct 19, 2018 at 1:06",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I can think of a couple of ways of doing that</p>\n<h3>Scanning memory from EIP</h3>\n<p>You could easily get the <code>EIP</code> of your own code without calling any APIs. There are a few ways to achieve that using inline assembly, but the most common one is to include the following two instructions:</p>\n<pre><code>call $+5\npop eax\n</code></pre>\n<p>This works because <code>call</code> will push the next address (where <code>pop eax</code> is onto the stack) and then execute the instruction right after it (again, our <code>pop eax</code>). When <code>pop eax</code> is executed, it'll pop the address just pushed by <code>call $+5</code> into a register.</p>\n<p>After you got your <code>EIP</code> value you can easily scan backwards as you thought of doing, but this time starting at a position a lot closer to your image base.</p>\n<p>Keeping in mind image bases are aligned to page boundaries, you can scan in <code>PAGE_SIZE</code> (4096 bytes) intervals.</p>\n<h3>Reading loaded modules from PEB</h3>\n<p>The <a href=\"https://en.wikipedia.org/wiki/Process_Environment_Block\" rel=\"nofollow noreferrer\">Process Environment Block</a> (also <a href=\"https://www.geoffchappell.com/studies/windows/win32/ntdll/structs/peb/\" rel=\"nofollow noreferrer\">here</a>) structure is accessible using a designated segment register (<code>fs</code> on 32 bit systems and <code>gs</code> on 64 bit systems) which stores the address of the <a href=\"https://en.wikipedia.org/wiki/Win32_Thread_Information_Block\" rel=\"nofollow noreferrer\">Thread Information Block</a> from which the PEB is reachable. Although most of the PEB is undocumented, in it is a lot of data relating to the operational aspects of the currently running process.</p>\n<p>One such piece of information is the <code>ImageBaseAddress</code>, an undocumented (but consistent) field that holds the process's image base. If you're interested in the <code>.exe</code>'s image base (opposed to a loaded DLLs image base), this will do.</p>\n<p>If you want something more reliable you could use the <code>Ldr</code> member, which points to a <a href=\"https://docs.microsoft.com/en-us/windows/desktop/api/winternl/ns-winternl-_peb_ldr_data\" rel=\"nofollow noreferrer\"><code>PEB_LDR_DATA</code></a> structure which points to a linked list of <a href=\"https://docs.microsoft.com/en-us/windows/desktop/api/winternl/ns-winternl-_peb_ldr_data\" rel=\"nofollow noreferrer\"><code>LDR_DATA_TABLE_ENTRY</code></a>s, which lists all loaded modules, their addresses and a lot of other information about each loaded module. Your executable's image base is the <code>DllBase</code> field.</p>\n</div>",
+            "votes": "8",
+            "user": "0xC0000022L",
+            "time": "Oct 20, 2018 at 22:43",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "josh poley",
+                    "text": "<span class=\"comment-copy\"><code>PEB.ImageBaseAddress</code> will be easier than walking the Ldr structures.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason",
+                    "text": "<span class=\"comment-copy\">@Nirlzr Thank you very much, that's a great idea!   I can't however understand why I can read the <code>eip</code> in <code>0x1000</code> intervals. If you meant something like: <code>while(*(WORD*)eip != 'ZM') (DWORD)eip -= PAGE_SIZE;</code>, then what if the image base actually was <code>0x400000</code> and the <code>eip</code> was, say, <code>0x400ABC</code>? Am I missing something?</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@joshpoley Cool. I thought there must be something like that but couldn't find it when skimming for it. I'll add that!</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@Jason You can easily align the address to a 4k boundary by performing <code>eip &amp; ~(4096-1)</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason",
+                    "text": "<span class=\"comment-copy\">@Nirlzr Alright, I've already seen this technique with virtual addresses, just misunderstood you.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you use Visual C++, you can use the special symbol <code>__ImageBase</code> which points to image base of the current module. For example, here's code from VS2010 CRT source (<code>pesect.c</code>):</p>\n<pre><code>BOOL __cdecl _IsNonwritableInCurrentImage(\n    PBYTE pTarget\n    )\n{\n    PBYTE                 pImageBase;\n    DWORD_PTR             rvaTarget;\n    PIMAGE_SECTION_HEADER pSection;\n\n    pImageBase = (PBYTE)&amp;__ImageBase;\n\n    __try {\n        //\n        // Make sure __ImageBase does address a PE image.  This is likely an\n        // unnecessary check, since we should be running from a normal image,\n        // but it is fast, this routine is rarely called, and the normal call\n        // is for security purposes.  If we don't have a PE image, return\n        // failure.\n        //\n        if (!_ValidateImageBase(pImageBase))\n        {\n            return FALSE;\n        }\n\n        //\n        // Convert the targetaddress to a Relative Virtual Address (RVA) within\n        // the image, and find the corresponding PE section.  Return failure if\n        // the target address is not found within the current image.\n        //\n        rvaTarget = pTarget - pImageBase;\n        pSection = _FindPESection(pImageBase, rvaTarget);\n        if (pSection == NULL)\n        {\n            return FALSE;\n        }\n\n        //\n        // Check the section characteristics to see if the target address is\n        // located within a writable section, returning a failure if yes.\n        //\n        return (pSection-&gt;Characteristics &amp; IMAGE_SCN_MEM_WRITE) == 0;\n    }\n    __except (GetExceptionCode() == STATUS_ACCESS_VIOLATION)\n    {\n        //\n        // Just return failure if the PE image is corrupted in any way that\n        // triggers an AV.\n        //\n        return FALSE;\n    }\n}\n</code></pre>\n<p>At the top of the file there is code declaring this variable as <code>extern</code>:</p>\n<pre><code>#if defined (_WIN64) &amp;&amp; defined (_M_IA64)\n#pragma section(\".base\", long, read)\n__declspec(allocate(\".base\"))\nextern IMAGE_DOS_HEADER __ImageBase;\n#else  /* defined (_WIN64) &amp;&amp; defined (_M_IA64) */\nextern IMAGE_DOS_HEADER __ImageBase;\n#endif  /* defined (_WIN64) &amp;&amp; defined (_M_IA64) */\n</code></pre>\n<p>So it may be that the key is the <code>.base</code> section and not the variable name by itself.</p>\n</div>",
+            "votes": "5",
+            "user": "Igor Skochinsky",
+            "time": "Oct 18, 2018 at 21:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">+1 Cool! I couldn't find any official documentation, the closest thing was this: <a href=\"https://blogs.msdn.microsoft.com/oldnewthing/20041025-00/?p=37483/\" rel=\"nofollow noreferrer\">blogs.msdn.microsoft.com/oldnewthing/20041025-00/?p=37483</a> Too bad it's Visual C specific!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To get your own image base in 32-bit code, you can do this:</p>\n<pre><code>mov eax, fs:[30h]\nmov eax, [eax+8]</code></pre>\n<p>which you can obviously obfuscate in multiple ways, such as by moving fs: into ds: temporarily, calculating \"30h\" and \"8\" by multiplying, etc.</p>\n<p>64-bit code is gs:[60h] and +10h instead.</p>\n</div>",
+            "votes": "4",
+            "user": "peter ferrie",
+            "time": "Oct 20, 2018 at 22:23",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Might wanna mention that this is effectively the <a href=\"https://www.geoffchappell.com/studies/windows/win32/ntdll/structs/peb/\" rel=\"nofollow noreferrer\">PEB</a>/<a href=\"https://www.geoffchappell.com/studies/windows/win32/ntdll/structs/teb/\" rel=\"nofollow noreferrer\">TEB</a> method discussed in the accepted answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Definitely a more to-the-point and a practical take on that, though! +1</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

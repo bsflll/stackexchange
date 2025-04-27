@@ -1,0 +1,109 @@
+{
+    "title": "Purpose of OR EAX,0xFFFFFFFF",
+    "link": "https://reverseengineering.stackexchange.com/questions/4609/purpose-of-or-eax-0xffffffff",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have read the assembly line </p>\n<pre><code>OR EAX, 0xFFFFFFFF\n</code></pre>\n<p>and in the register <code>EAX</code> the program has stored a string. I have problems to understand how we can make a comparison with a string and a value like that.\nAfter performing that instruction, <code>EAX</code> has the value <code>0xFFFFFFFF</code>.</p>\n<p>Can someone tell me which purpose that operation has ? Is it a line which comes frequently in an assembly code ? (for example the line <code>XOR EAX, EAX</code> which is an efficient way to make <code>EAX = 0</code> ? Is it something like that ?)</p>\n</div>",
+    "votes": "16",
+    "answers": 3,
+    "views": "9k",
+    "tags": [
+        "assembly"
+    ],
+    "user": "user3097712",
+    "time": "Jun 17, 2014 at 7:21",
+    "comments": [
+        {
+            "user": "user13267",
+            "text": "<span class=\"comment-copy\">could have been done to affect flags. Data move instructions don't generally affect flags</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I think that in order to understand why the compiler does this, study the following disassembly:</p>\n<pre><code>B8 FF FF FF FF                          mov     eax, 0FFFFFFFFh\n83 C8 FF                                or      eax, 0FFFFFFFFh\n</code></pre>\n<p>What the compiler is trying to accomplish is probably to set the <code>eax</code> register to -1 using as few bytes as possible in order to be cache friendly. <code>OR</code> also has about twice the throughput of the <code>MOV</code> instruction as long as you don't mind messing up the flags. </p>\n<p>This is probably a variable being initialized to -1.</p>\n</div>",
+            "votes": "23",
+            "user": "Peter Andersson",
+            "time": "Jun 13, 2014 at 19:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Peter Andersson",
+                    "text": "<span class=\"comment-copy\">It's quite common to use -1 to indicate an error or some other special reserved value if 0 is considered a valid value in the range. I'm speculating of course.</span>",
+                    "time": null
+                },
+                {
+                    "user": "DCoder",
+                    "text": "<span class=\"comment-copy\">Since the OP mentioned strings, it is also feasible that <code>strcmp</code> or its brethren is involved, and -1 could be an ordinary return value in that case. But I agree, it's impossible to give a non-speculative answer to \"<i>why</i>\" without seeing what input generates this result, and how that result is used later in the code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Andersson",
+                    "text": "<span class=\"comment-copy\">@DCoder very true. It could be a completely normal return value from a comparison function with -1 (&lt;0) as less, 0 as equal and 1 (&gt;0) as greater which wouldn't be uncommon either.</span>",
+                    "time": null
+                },
+                {
+                    "user": "glglgl",
+                    "text": "<span class=\"comment-copy\">@user3097712 <code>-1</code> is expressed as <code>0xFFFFFFFF</code> (all bits set) in a 2-complement way.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Cody Gray",
+                    "text": "<span class=\"comment-copy\"><i>\"OR also has about twice the throughput of the MOV instruction as long as you don't mind messing up the flags.\"</i> Well, no, that's not true. As far as the CPU is concerned, <code>or eax, -1</code> depends on the previous value of the <code>eax</code> register, which lengthens the code's dependency chain and will significantly decrease performance compared to if you had used a <code>mov</code>. There <i>is</i> a code size reduction, as you demonstrated, but there is a very significant speed reduction. It is almost never worth the 2 bytes. (Yes, chips <i>could</i> conceivably special-case an OR with all bits set, but they don't.)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Sorry, I can't post this as a comment but a couple of quick (and non-exhaustive) tests show the following:</p>\n<ul>\n<li>gcc (4.6.3) uses <code>or</code> instead of <code>mov</code> when optimising for size (<code>/Os</code>)</li>\n<li>msvc (13) uses <code>or</code> instead of <code>mov</code> whatever the optimisation setting (including disabled)</li>\n<li>clang (3.0) uses <code>mov</code> whatever the optimisation setting</li>\n</ul>\n<p>gcc's behaviour, in particular, supports Peter Andersson's answer.</p>\n</div>",
+            "votes": "6",
+            "user": "phuclv",
+            "time": "Apr 28, 2017 at 6:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">Thanks!  I hadn't thought to use <code>/Os</code> with gcc, but of course that makes perfect sense.</span>",
+                    "time": null
+                },
+                {
+                    "user": "phuclv",
+                    "text": "<span class=\"comment-copy\">Surprising results: <a href=\"https://godbolt.org/g/H1rDWO\" rel=\"nofollow noreferrer\">MSVC CL19 emits <code>or</code> with <code>/O2</code> but <code>mov</code> with <code>/Os</code>. ICC 17 and Clang 4.0 use <code>xor eax, eax, dec eax</code> when optimizing for size</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Cody Gray",
+                    "text": "<span class=\"comment-copy\">@LưuVĩnhPhúc The surprise is because <code>/Os</code> (like its cousin, <code>/Ot</code>) must be combined with <code>/Og</code> to enable optimization in MSVC. Otherwise, it's completely ignored. :-) And your example is not a particularly good test case. Under normal circumstances, when -1 is needed in a register within a larger block of code, <code>/O1</code> will cause MSVC to emit an <code>OR</code>, whereas <code>/O2</code> will cause MSVC to emit a <code>MOV</code>. I can only assume it always uses <code>OR</code> here because it's not worried about any sort of data dependency on <code>EAX</code> slowing down performance, considering the relative overhead of a function call.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This will always result in setting the <code>EAX</code> register equal to 0xFFFFFFFF and will also have the side effect of setting the flags appropriately (that is N=1, Z=0, etc.).  It is not a common idiom.</p>\n</div>",
+            "votes": "5",
+            "user": "Edward",
+            "time": "Jun 13, 2014 at 19:08",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "jww",
+                    "text": "<span class=\"comment-copy\">What is the <code>N</code> flag (Carry, Overflow, Zero, etc are expected, but what does N represent)?</span>",
+                    "time": null
+                },
+                {
+                    "user": "jww",
+                    "text": "<span class=\"comment-copy\">\"... it is not a common idiom\" - its actually quite common, especially in older software. The <code>OR</code> instruction is smaller than the <code>MOV</code> instruction. A machine with 640K or 1MB or memory needed the savings (yep, it dates back that far). And <code>XOR</code> was (and still is) used to zero a register for the same reason.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">@jww: Sorry, I work with a lot of different processors. I meant the SF (sign flag) which is what Intel calls it; other manufacturers call it N for Negative.  It might be useful to the OP if you could specify compilers which generate that sequence.  None of the ones I have handy do so.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">@jww: thanks for your explanation. I did not know the fact that OR is smaller than MOV. Now i know it. Thanks! From this posting, I have learn a lot.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

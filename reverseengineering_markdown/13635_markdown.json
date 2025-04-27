@@ -1,0 +1,40 @@
+{
+  "title": "IDA python, get address range of specific dll",
+  "link": "https://reverseengineering.stackexchange.com/questions/13635/ida-python-get-address-range-of-specific-dll",
+  "content": "I have the following IDA Python script. It is intended to break on first instruction of imported function when call comes from the module of interest:\n\n```\nlist = []\n\ndef set_cb(ea, name, ord):\n    global list\n    actual_ea = Dword(ea)\n    AddBpt(actual_ea)\n    list.append(actual_ea)\n        return True\n\ndef set_breakpoints():\n    global list\n    del list[:]\n    nimps = idaapi.get_import_module_qty()\n    for i in xrange(0, nimps):\n        idaapi.enum_import_names(i, set_cb)\n\ndef rem_cb(ea, name, ord):\n    actual_ea = Dword(ea)\n    DelBpt(actual_ea)\n        return True\n\ndef rem_breakpoints():\n    global list\n    del list[:]\n    nimps = idaapi.get_import_module_qty()\n    for i in xrange(0, nimps):\n        idaapi.enum_import_names(i, rem_cb)\n\ndef step_cb():\n    global list\n    minea = MinEA()\n    maxea = MaxEA()\n    while GetDebuggerEvent(WFNE_SUSP | WFNE_CONT, -1) > 0:\n        r_eip = GetRegValue(\"EIP\")\n        if r_eip in list:\n            r_esp = GetRegValue(\"ESP\")\n            caller = Dword(r_esp)\n            if (caller >= minea) and (caller < maxea):\n                break\n        else:\n            break\n\nidaapi.add_hotkey(\"F3\", set_breakpoints)\nidaapi.add_hotkey(\"F5\", rem_breakpoints)\nidaapi.add_hotkey(\"F10\", step_cb)\n\n```\nI debug dll and I need to break only on win api calls that are made directly from this dll, not from C runtime library. However MinEA and MaxEA functions return minimum and maximum addresses used in entire program. What I need is something like this:\n\n```\nea = GetModuleByName(\"some.dll\")\nminea = ModuleStart(ea)\nmaxea = ModuleEnd(ea)\n\n```\nDo you know such api? Thanks.\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "ida",
+    "idapython",
+    "dll"
+  ],
+  "user": "igntec",
+  "time": "Oct 2, 2016 at 16:10",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "There's no GetModuleByName in IDA, instead, using the EIP register value (which you already fetch) you could use SegStart and SegEnd.\n\nYour code should look something like:\n\n```\ndef step_cb():\n    global list\n    while GetDebuggerEvent(WFNE_SUSP | WFNE_CONT, -1) > 0:\n        r_eip = GetRegValue(\"EIP\")\n        if r_eip in list:\n            r_esp = GetRegValue(\"ESP\")\n            caller = Dword(r_esp)\n            if (caller >= SegStart(r_eip)) and (caller < SegEnd(r_eip)):\n                break\n        else:\n            break\n\n```\n",
+      "votes": "1",
+      "user": "NirIzr",
+      "time": "Oct 3, 2016 at 17:48",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "The final version of script in case someone else needs it. What you need to do:\n\n```\n1) set breakpoint and wait until debugger hits it\n2) load script (file -> script file)\n3) open breakpoints window (to see whether breakpoints were added)\n4) press \"F3\", breakpoints will be added automatically (you can also add another breakpoints by hand)\n5) press \"F10\", debugger will stop on breakpoints added by hand or on API calls that were made directly from module being examined (calls from library functions are skipped)\n6) you can examine stack now and follow pushed EIP in disassembly view\n7) when suspended you can delete breakpoints that were added by script (with \"F5\"), add them again, and so on (it is useful when you want to quickly disable breakpoints to follow usual execution flow)\n8) also notice the condition in 'set_cb' callback (you can filter out some well-known functions)\n\nlist = []   #global list to hold EIP values\n\ndef set_cb(ea, name, ord):\n    global list\n    if (name != 'lstrcpynA') and (name != 'lstrcmpA') and (name != 'lstrcpyA') and (name != 'lstrcatA') and (name != 'lstrcmpiA') and (name != 'lstrlenA') and (name != 'wsprintfA') and (name != 'DefWindowProcA') and (name != 'PeekMessageA') and (name != 'TranslateMessage') and (name != 'DispatchMessageA') and (name != 'IsDBCSLeadByte') and (name != 'CharNextA'):\n        actual_ea = Dword(ea)\n        AddBpt(actual_ea)\n        list.append(actual_ea)\n        return True\n\ndef set_breakpoints():\n    global list\n    del list[:]\n    nimps = idaapi.get_import_module_qty()\n    for i in xrange(0, nimps):\n        idaapi.enum_import_names(i, set_cb)\n\ndef rem_cb(ea, name, ord):\n    actual_ea = Dword(ea)\n    DelBpt(actual_ea)\n        return True\n\ndef rem_breakpoints():\n    global list\n    del list[:]\n    nimps = idaapi.get_import_module_qty()\n    for i in xrange(0, nimps):\n        idaapi.enum_import_names(i, rem_cb)\n\ndef step_cb():\n    global list\n    minea = idaapi.get_imagebase()\n    maxea = minea + 0x98000     #image size retrieved by WIN API (from C++ program)\n    while GetDebuggerEvent(WFNE_SUSP | WFNE_CONT, -1) > 0:\n        r_eip = GetRegValue(\"EIP\")\n        if r_eip in list:\n            r_esp = GetRegValue(\"ESP\")\n            caller = Dword(r_esp)\n            if (caller >= minea) and (caller < maxea):\n                if not(GetFunctionFlags(caller) & FUNC_LIB):\n                    break\n        else:\n            break\n\nidaapi.add_hotkey(\"F3\", set_breakpoints)\nidaapi.add_hotkey(\"F5\", rem_breakpoints)\nidaapi.add_hotkey(\"F10\", step_cb)\n\n```\n",
+      "votes": "0",
+      "user": "igntec",
+      "time": "Oct 4, 2016 at 11:58",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "NirIzr",
+          "text": "Is there any perticular reason you chose not to use the solution I suggested?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

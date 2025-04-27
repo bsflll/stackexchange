@@ -1,0 +1,43 @@
+{
+  "title": "Analyse a piece of code using FloatingPoint instructions and calculations",
+  "link": "https://reverseengineering.stackexchange.com/questions/11289/analyse-a-piece-of-code-using-floatingpoint-instructions-and-calculations",
+  "content": "i'm reversing this function doing this floating point calculations which eventually leads to a crucial compare. I need to understand what exactly are the calculations that are made and i want to re-write them in python. \n\nBasically i need to rewrite this whole piece of code because the calculations that happen later on are some sort of key generation, but i cant understand what is the calculation done in here.. I was hoping someone could help me figure this out, while i give all the information i already understand.\n\nThe piece of code:\n\n```\nsub     esp, 8\nmovsd   xmm0, ds:MEMORY1 ; mov 128-bit memory    \nmovsd   [esp+1437Ch+var_1437C], xmm0    \nmov     eax, [ebp+ItirationCounter_var_60]\nmov     [ebp+CurrentCounter_var_A8], eax    \ncvtsi2sd xmm0, [ebp+CurrentCounter_var_A8] ; Convert to floating point into xmm0    \nmov     ecx, [ebp+CurrentCounter_var_A8] ; 32    \nshr     ecx, 1Fh        ; 0    \naddsd   xmm0, ds:MEMORY2[ecx*8] ; adds 0    \nsub     esp, 8    \nmovsd   [esp+14384h+var_14384], xmm0    \ncall    msvcrt.fmod            ; returns A / B floating point remainer    \nadd     esp, 10h    \nfstp    [ebp+var_F8]    ; Store ST0 in memory    \nmovsd   xmm0, [ebp+var_F8]    \nucomisd xmm0, ds:MEMORY3 ; always zero    \nlahf                    ; load AH Flag register    \ntest    ah, 44h    \njp      short CrucialFunction\n\n```\nOk, so the op-codes \\ pieces of code i dont understand are: addsd   xmm0, ds:MEMORY2[ecx*8], call fmod and the ucomisd xmm0, [MEMORY1] .\n\nhere is my so-far python implementation i made for this little piece of code (it runs in a loop which is missing for the code-snap i gave, so bare with me please)\n\n```\nMEMORY1 = 0x4024000000000000 #qword_7600D600\nMEMORY2 = [0x0, 0x41F0000000000000] #qword_7600D620\nMEMORY3 = 0x0\n\ndef ToDoublePrecision(value):\n    # cvtsi2sd xmm0, value\n    return hex(struct.unpack('<Q', struct.pack('<d', value))[0])\n\ndef KeyGeneration():\n    counter = 0\n    while 1:\n        counter &= 0xFFFFFFFF # Sanity - maintain 32 bit\n        xmm0 += MEMORY2[(counter) >> 0x1F] # This is wrong.. ---- addsd   xmm0, ds:MEMORY2[ecx*8] \n        if(1 == (0x80000000 & counter)):\n            pass # I dont know what is going on in here..\n        else:\n            xmm0 = ToDoublePrecision(counter) # This is a little hack.. the value at MEMORY[0] is 0x0.. so i just decided this should happen\n\n        # This calculation is inaccurate for some reason, and differs a lot from the output on register ST0    \n        result = math.fmod(MEMORY1, xmm0)\n        ....\n        ....\n\n        \"\"\"\n        ZeroFlag = 1, well if the last calculatio is set to zero\n        ParityFlag = 1, is set if the last calculation amount of set bits ('1' - ones) is odd\n        \"\"\"\n\n```\nI'm just stuck on these opcodes for quite some time.. if anyone can give me a good reference on the internet which explains how they work or what they do.. That could be super helpful.\n\nAn example of an fmod call and its arguments:\nJust before the CALL msvcrt.fmod instruction, ESP looks like that:\n\n```\nEBP-14384 012FBC30   00000000\nEBP-14380 012FBC34   40438000\nEBP-1437C 012FBC38   00000000\nEBP-14378 012FBC3C   40240000\n\n```\nmy ItirationCounter is set to 0x27\n\nand the result of the msvcrt.fmod function into ST0 is\nFloat 9.0000000000000000000, Hex 4002 90000000 00000000\n\nGoing to 'var_F8' after the opcode fstp    [ebp+var_F8], the value is a QUAD_WORD of 0x40220000 00000000 (Ordered)\n\nAfter all that, LAHF changes AX to the value 0x220, which means AH is 0x02. \nthe jump is taken.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "419",
+  "tags": [
+    "assembly",
+    "x86",
+    "python",
+    "float"
+  ],
+  "user": "0xAK",
+  "time": "Nov 10, 2015 at 7:48",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "sub     esp, 8\nmovsd   xmm0, ds:MEMORY1 ; mov 128-bit memory\nmovsd   [esp], xmm0\n\nFetch MEMORY1.  This will be our denominator in fmod().\n\nmov     eax, [ebp+ItirationCounter_var_60]\nmov     [ebp+CurrentCounter_var_A8], eax\ncvtsi2sd xmm0, [ebp+CurrentCounter_var_A8] ; Convert to floating point into xmm0\n\nFetch Counter as a floating-point number.  This will be our numerator in fmod().\n\nmov     ecx, [ebp+CurrentCounter_var_A8] ; 32\nshr     ecx, 1Fh        ; 0\naddsd   xmm0, ds:MEMORY2[ecx*8] ; adds 0\n\nThis part is adjusting for negative numbers.  I doubt that the counter will ever be so large, so it is not interesting.\n\nsub     esp, 8\nmovsd   [esp], xmm0\ncall    msvcrt.fmod            ; returns A / B floating point remainer\nadd     esp, 10h\n\nSo fmod(counter, memory1).\n\nfstp    [ebp+var_F8]    ; Store ST0 in memory\nmovsd   xmm0, [ebp+var_F8]\nucomisd xmm0, ds:qword_7600D5E8 ; always zero\nlahf                    ; load AH Flag register\ntest    ah, 44h\njp      short CrucialFunction\n\nThe JP branch will be taken only in two cases: that AH is 44h or AH is 00h.\nThe first case happens when the values are equal (i.e. the return from fmod() is zero).\nThe second one happens when the return from fmod() has an odd number of bits set, so 1 2 4 7 8 11...\n\nYour Python version has reversed the numerator and denominator parameters.\n\n",
+      "votes": "1",
+      "user": "peter ferrie",
+      "time": "Nov 9, 2015 at 17:46",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xAK",
+          "text": "Thanks you very much for your response! but the fmod switched parameters is not the case, i tried all kinds of versions with it but it just failed every time..  Ill check our your answer regardless tomorrow, and see if it works as expected.. but still when the code runs in the assembly in the remote program.. the fmod return values are very different than mine",
+          "time": null
+        },
+        {
+          "user": "0xAK",
+          "text": "what about the addsd   xmm0, ds:MEMORY2[ecx*8] opcode. things dont add up. my python version with your suggestions still dont fit the original executable version.   Are you sure its fmod(counter, MEMORY1) ? I forgot to add the information that MEMORY1 values (and MEMORY2) both are QUAD_WORDS: MEMORY1 = 0x4024000000000000 MEMORY2 = [0x0, 0x41F0000000000000]",
+          "time": null
+        },
+        {
+          "user": "peter ferrie",
+          "text": "python is probably trying to convert your hex values to floating-point values, not realizing that they are floating-point already.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "title": "Finding RegisterNatives function calls in JNI_OnLoad's assembly code",
+  "link": "https://reverseengineering.stackexchange.com/questions/19024/finding-registernatives-function-calls-in-jni-onloads-assembly-code",
+  "content": "My goal is to see what a native method m does. It doesn't have a direct counterpart in the so file, but I've found the JNI_OnLoad function's ARM assembly code. It starts with\n\n```\nAAAAAAAA <JNI_OnLoad@@Base>:\n\n```\nwhere AAAAAAAA is some hex number. (Correct me if I'm wrong.) I want to find calls to the RegisterNatives function. I've seen some function calls, like\n\n```\nbl AAAA <JNI_OnLoad@@Base+0xBB>\n\n```\nwhere AAAA and BB are hex numbers. (Are these function calls indeed?) I can't determine which, if any, are calls to RegisterNatives. How do I go about finding one, or determine that none exists?\n\nEDIT\n\nOh, it's possible that JNI_OnLoad calls func1, and func1 calls func2, and so on, and only at the very end RegisterNatives gets called.\n\nI have obtained the C code, using the Hopper Disassembler. Is there something distinctive about the RegisterNatives function? I find a tree of functions to explore.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "arm",
+    "functions"
+  ],
+  "user": "Zirui Wang",
+  "time": "Aug 11, 2018 at 6:46",
+  "comments": [
+    {
+      "user": "sudhackar",
+      "text": "It may be possible that the code is packed/encrypted and gets unpacked/decrypted in JNI_OnLoad. Apt recent blackhat talk : i.blackhat.com/us-18/Thu-August-9/…",
+      "time": null
+    },
+    {
+      "user": "Zirui Wang",
+      "text": "@sudhackar: Is there anything new in the PPT?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "RegisterNatives is not a function that you find in the binary you're analyzing. It is implemented in the system Java runtime and is called indirectly by a pointer. The JNI_OnLoad function has the folliwing prototype (from jni.h):\n\n```\nJNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved);\n\n```\nWhere vm is a pointer to a function table:\n\n```\n/*\n * JNI invocation interface.\n */\nstruct JNIInvokeInterface {\n    void*       reserved0;\n    void*       reserved1;\n    void*       reserved2;\n\n    jint        (*DestroyJavaVM)(JavaVM*);\n    jint        (*AttachCurrentThread)(JavaVM*, JNIEnv**, void*);\n    jint        (*DetachCurrentThread)(JavaVM*);\n    jint        (*GetEnv)(JavaVM*, void**, jint);\n    jint        (*AttachCurrentThreadAsDaemon)(JavaVM*, JNIEnv**, void*);\n};\ntypedef const struct JNIInvokeInterface* JavaVM;\n\n```\nHowever, RegisterNatives itself is a method in another function table:\n\n```\nstruct JNINativeInterface {\n    void*       reserved0;\n    void*       reserved1;\n    void*       reserved2;\n    void*       reserved3;\n\n    jint        (*GetVersion)(JNIEnv *);\n\n    jclass      (*DefineClass)(JNIEnv*, const char*, jobject, const jbyte*,\n                        jsize);\n    jclass      (*FindClass)(JNIEnv*, const char*);\n\n   /*<skipped> */\n\n    jint        (*RegisterNatives)(JNIEnv*, jclass, const JNINativeMethod*,\n                        jint);\n    jint        (*UnregisterNatives)(JNIEnv*, jclass);\n\n   /*<skipped> */\n};\n\n```\nThe typical way of calling RegisterNatives from JNI_OnLoad would be to retrieve a pointer to a JNIEnv by calling vm->GetEnv(), then calling the RegisterNatives pointer in the JNIEnv struct, e.g.:\n\n(*vm)->GetEnv(vm, (void **)&env, 0x10004);\n  class = (*env)->FindClass(env, \"org/gaeproxy/Exec\");\n  (*env_)->RegisterNatives(env, class, &methods, 4);\n\nwhere methods is an array of JNINativeMethod structs describing names, prototypes, and pointers to native implementations of the methods.\n\n```\nJNINativeMethod methods[] =\n{\n  {\n    \"createSubprocess\",\n    \"(ILjava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[I)Ljava/io/FileDescriptor;\",\n    (void*)&Exec_createSubprocess\n  },\n  { \"waitFor\", \"(I)I\", (void *)&Exec_waitFor },\n  { \"close\", \"(Ljava/io/FileDescriptor;)V\", (void *)&Exec_close },\n  { \"hangupProcessGroup\", \"(I)V\", (void *)&Exec_hangupProcessGroup }\n};\n\n```\nThere is no sure-fire indicator that immediately point out this call in disassembly, but here are some hints for ARM 32-bit:\n\nFor example, here is the call site of the above snippet:\n\n```\n LDR     R0, [R5] ; <- dereferencing env from a previous GetEnv call\n LDR     R2, =(methods - 0x15AC)\n MOVS    R3, #0x35C ; <- offset 0x35C\n LDR     R4, [R0,R3] ; load RegisterNatives pointer\n ADD     R2, PC          ; methods\n MOVS    R0, R5 ; env\n MOVS    R3, #4 ; number of methods\n BLX     R4       ;<- call\n CMP     R0, #0 ; check return value\n\n```\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Aug 13, 2018 at 16:15",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "James W.",
+          "text": "Man, You deserve a beer. This happens when compiling with fvisibility=hidden, right ?  any IDA plugin known to map method+signature to address ?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@IddoE visibility has nothing to do with this since the target function is not linked by name. Not sure what you mean by the second question, maybe ask a new one with details.",
+          "time": null
+        },
+        {
+          "user": "James W.",
+          "text": "stackoverflow.com/questions/51811348/… should I open one here ?",
+          "time": null
+        },
+        {
+          "user": "Zirui Wang",
+          "text": "@IgorSkochinsky: No, it doesn't have 0x35c. That's what I said: \"a tree of functions to explore.\" Plus encryption maybe?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "I do mention possibility of obfuscation in case you did not notice. My answer is for the general case, not your specific sample (which I don’t have)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

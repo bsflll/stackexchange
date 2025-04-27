@@ -1,0 +1,62 @@
+{
+    "title": "Debugging a deadlock when the mutex owner thread is dead?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16460/debugging-a-deadlock-when-the-mutex-owner-thread-is-dead",
+    "content": "Intro\nI'm facing a peculiar deadlock scenario I never saw before.\nI'm trying to debug this deadlock from 3 days and couldn't find how to fix it in a proper way. Hopefully someone would help me out.\nWe don't have the application's source code so this deadlock must be fixed patching the asm code (no problems patching the binary though).\nThe scenario\nThe application is a x86 old online game which uses directx 9 to render graphics (d3d9.dll). From what I could analyse there are 3 threads related to this deadlock. To name, thread #1 is the main thread (which render every frame), thread #2 seems to be a d3d9 worker thread that queue some async resource loading to be processed and drawn out by the thread #1, and then we have the mysterious thread #3 which is related to a feature of the game that basically make a http request to a server and download a texture to display in the game on-the-fly; every time this texture have to be drawn, the main thread creates this thread #3 to process the I/O to download the texture, which will be passed to the thread #2 (d3d9 worker thread) to be finally async processed by the thread #1 (game loop).\nAfter thread #3 gives to thread #2 the texture resources, thread #3 shutdowns itself. This thread #3 is created from crt!_beginthread and shutdown with crt!_endthread.\nThe deadlock\nTo sumup: thread #1 (game loop), thread #2 (d3d9 worker thread), thread #3 (downloads texture from http).\nThe problem occurs when (for some unknown reason) thread #3 is ended without freeing a lock which is being awaited by thread #2. Thread #1 in turn is waiting for thread #2 to acquire the resources to be drawn.\nThis is different from all other deadlocks I have faced with because the thread that seems to be causing the deadlock doesn't exist anymore when the deadlock occurs. All the other deadlocks I have debugged was pretty much straight forward to find the source of the problem because when isolating the threads in deadlock I simply had to analyse the call stack from each thread to know exactly what was happening. The big problem here is that as thread #3 is dead I don't have its call stack to see the moment it creates the deadlock. So the big question is: how can I find what is happening inside this thread #3 if I can't even see the call stack?\nSome WinDbg analysis output after deadlocks occur\n0:001> !locks\n<pre><code>CritSec +935a060 at 0935a060\nWaiterWoken        No\nLockCount          2\nRecursionCount     1\nOwningThread       34fc\nEntryCount         0\nContentionCount    21a\n*** Locked\n\nScanned 27 critical sections\n</code></pre>\n0:001> !runaway\n<pre><code>  User Mode Time   Thread       Time\n   0:2888      0 days 0:00:15.234\n  11:2210      0 days 0:00:02.796\n  20:15f0      0 days 0:00:01.656\n  17:584       0 days 0:00:00.453\n  21:2860      0 days 0:00:00.140\n  13:8cc       0 days 0:00:00.031\n   7:1a70      0 days 0:00:00.031\n  23:373c      0 days 0:00:00.015\n  14:2fe0      0 days 0:00:00.015\n  22:1bf4      0 days 0:00:00.000\n  19:3a50      0 days 0:00:00.000\n  18:2980      0 days 0:00:00.000\n  16:1e0c      0 days 0:00:00.000\n  15:2768      0 days 0:00:00.000\n  12:3154      0 days 0:00:00.000\n  10:2cfc      0 days 0:00:00.000\n   9:1e40      0 days 0:00:00.000\n   8:1ea8      0 days 0:00:00.000\n   5:2b64      0 days 0:00:00.000\n   4:338c      0 days 0:00:00.000\n   1:3be8      0 days 0:00:00.000\n</code></pre>\n0:001> ~0 kb\n<pre><code> # ChildEBP RetAddr  Args to Child              \n00 0019f640 75f48869 000006c0 00000000 0019f688 ntdll!NtWaitForSingleObject+0xc\n01 0019f6b4 75f487c2 000006c0 000003e8 00000000 KERNELBASE!WaitForSingleObjectEx+0x99\n02 0019f6c8 68bbac92 000006c0 000003e8 0935a040 KERNELBASE!WaitForSingleObject+0x12\n03 0019f6dc 68b7d6e4 88760870 0935a040 015c6e38 d3d9!CBatchFilterI::WaitForBatchWorkerThread+0x23\n04 0019f6ec 68c403d1 04f0de60 68c403b0 c9e02d57 d3d9!CBatchFilterI::FlushBatchWorkerThread+0xc\n05 0019f700 68b78522 0935a040 00000000 00011001 d3d9!CBatchFilterI::LHBatchFlush1+0x21\n06 0019f718 68b99daa 04f0de60 68b54020 04f0dd00 d3d9!Flush+0x36\n07 0019f9bc 68b6a661 04f0de60 04f0b634 04f08ac0 d3d9!DdBltLH+0x45d8a\n08 0019fa94 68be9fcc 00000000 00000000 00000000 d3d9!CSwapChain::PresentMain+0x3a7\n09 0019fabc 68be9e57 00000000 00000000 00000000 d3d9!CBaseDevice::PresentMain+0x68\n0a 0019faf4 10109099 04f08ac0 00000000 00000000 d3d9!CBaseDevice::Present+0x57\n0b 0019fc10 10107a15 04f08ac0 00000000 00000000 DoNPatch!fIDirect3Device9::fPresent+0x2e9\n0c 0019fc58 005495e0 00000001 03440be8 03448a70 DoNPatch!NKD_IDirect3DDevice_Present+0x5\n0d 0019fc7c 00549367 00000000 03440be8 00000000 SD_Asgard!loc_5494D7+0x109\n0e 0019fcc4 0054b7a1 0105a000 03440be8 00b200b0 SD_Asgard!loc_549367\n0f 0019fef4 005bb824 00400000 00000000 01503b2d SD_Asgard!loc_54B784+0x1d\n10 0019ff80 76d28744 00302000 76d28720 34573170 SD_Asgard!loc_5BB812+0x12\n11 0019ff94 76f8582d 00302000 03e96be8 00000000 KERNEL32!BaseThreadInitThunk+0x24\n12 0019ffdc 76f857fd ffffffff 76fa6389 00000000 ntdll!__RtlUserThreadStart+0x2f\n13 0019ffec 00000000 005cc46f 00302000 00000000 ntdll!_RtlUserThreadStart+0x1b\n</code></pre>\n0:001> ~11 kb\n<pre><code> # ChildEBP RetAddr  Args to Child              \n00 04c2fe58 76f4c07a 0935a064 00000000 00000000 ntdll!NtWaitForAlertByThreadId+0xc\n01 04c2fe78 76f4bfbe 00000000 00000000 ffffffff ntdll!RtlpWaitOnAddressWithTimeout+0x33\n02 04c2febc 76f4beb5 00000004 00000000 00000000 ntdll!RtlpWaitOnAddress+0xa5\n03 04c2fefc 76f6b3f1 0935a040 0935a040 00000004 ntdll!RtlpWaitOnCriticalSection+0xb7\n04 04c2ff1c 76f6b315 0935a040 04c2ff38 68b7d1e8 ntdll!RtlpEnterCriticalSectionContended+0xd1\n05 04c2ff28 68b7d1e8 0935a060 0941a324 04c2ff60 ntdll!RtlEnterCriticalSection+0x45\n06 04c2ff38 68b80753 00000001 0935a040 00000001 d3d9!CBatchFilterI::AcquireSynchronization+0x28\n07 04c2ff60 68c42021 0941a320 00000001 68c41760 d3d9!CBatchFilterI::ProcessBatch+0x14b\n08 04c2ff78 68c4176d 04c2ff94 76d28744 0935a040 d3d9!CBatchFilterI::WorkerThread+0x2d\n09 04c2ff80 76d28744 0935a040 76d28720 308c3170 d3d9!CBatchFilterI::LHBatchWorkerThread+0xd\n0a 04c2ff94 76f8582d 0935a040 07326be8 00000000 KERNEL32!BaseThreadInitThunk+0x24\n0b 04c2ffdc 76f857fd ffffffff 76fa6389 00000000 ntdll!__RtlUserThreadStart+0x2f\n0c 04c2ffec 00000000 68c41760 0935a040 00000000 ntdll!_RtlUserThreadStart+0x1b\n</code></pre>\nConclusion\nIn the outputs above, the thread id owning the locked critical section (34fc) is the thread #3 (makes the http request), which isn't presented in the !runaway list. In the !runaway list, the thread number 0 is the #1 (game loop) and the thread number 11 is the #2 (d3d9 batch worker). If you need any other data I can gather just ask for it. In this analysis I used IDA Pro 6.9 and WinDbg, but I can get other tool if available.\nTo end up, sorry for the long text and thanks in advance.\n",
+    "votes": "6",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "windbg"
+    ],
+    "user": "André Oliveira",
+    "time": "Oct 1, 2017 at 15:35",
+    "comments": [
+        {
+            "user": "André Oliveira",
+            "text": "Hi @blabb thanks for answering. Don't you think your idea is too risky in a production phase? I can think of so many things that can go wrong doing this kind of patch. It seems to me to be more like a palliative than a real fix to the problem.\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "i don't know so  deleted the comment\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This is more of a SW dev problem than RE, but you can try using <pre><code>!htrace</code></pre> to find out where the mutex was originally allocated (creation stack trace). \nAlternatively, try to figure why the thread #3 exits without releasing the lock.\nThis may be a bit tricky, but if you can repro the two scenartios (with and without releasing the lock), differential debugging may be useful to figure out where the code paths diverge.\n",
+            "votes": "8",
+            "user": "Igor Skochinsky",
+            "time": "Oct 2, 2017 at 13:39",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "André Oliveira",
+                    "text": "<span class=\"comment-copy\">Hi @Igor thanks for the answer and sorry for the late response. I forgot to mention in the text but I already did !htrace to see if tracking the allocation of the mutex was useful in this context, but I couldn't get nothing from there. Do you know if instead there is a way to trace the critical section lock/unlock? If it could be done I think I can track down exactly where thread #3 is acquiring the lock and trace the code from there to see why it is not being freed.</span>",
+                    "time": null
+                },
+                {
+                    "user": "André Oliveira",
+                    "text": "<span class=\"comment-copy\">About the ExitThread analysis I already did it too. I traced the execution flow from thread #3 when it causes the deadlock and at least for a upper frame count perspective there is nothing unusual happening, the thread executes its code as any other thread that doesn't generates the deadlock. The problem is probably in the end of the call stack of the thread and I dont have any idea how to trace it down once it has around 300k instructions executed in the threads life time (got it by \"wt\" command).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">well, then try to find why it's not freeing the lock in this exit path. Anyway, it's not really an RE issue so I'm not sure what else to suggest.</span>",
+                    "time": null
+                },
+                {
+                    "user": "André Oliveira",
+                    "text": "<span class=\"comment-copy\">You know how I could analyse an code flow from around 300k instructions in a practical manner? I mean, if I had to trace into every function I will end up quickly analysing the inner works of d3d9.dll and its faults. I thought that if I could somehow while reproducing the deadlock save each thread #3 execution flow, I could then compare where exactly the execution flow from the faulty thread differs from the others. Do you know a way to accomplish this? (or think it could show the problem?)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">no specific tool, but check <a href=\"https://reverseengineering.stackexchange.com/a/2567/60\">reverseengineering.stackexchange.com/a/2567/60</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

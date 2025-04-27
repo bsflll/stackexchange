@@ -1,0 +1,67 @@
+{
+    "title": "Using ECX after being modified by a function call",
+    "link": "https://reverseengineering.stackexchange.com/questions/19202/using-ecx-after-being-modified-by-a-function-call",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a peculiar snippet of code which I cannot wrap my head around:</p>\n<pre><code>push 0xC           ; arg1 for call\nmov ecx,edi        ; set the this pointer for call\ncall sdk.100039F0  ; make the call (internally calls DeviceIOControl)\npush ecx           ; ECX now points to a function within kernelbase.dll\nmov ecx,edi        ; set the this pointer for call\ncall sdk.10003BD0  ; make the call\n</code></pre>\n<p>A call to <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/aa363216(v=vs.85).aspx\" rel=\"nofollow noreferrer\"><code>DeviceIoControl</code></a> within the first function call modifies ECX. Why is it pushed as an argument to the second call? The second call itself does NOT accept arguments, it does not reference <code>[ebp + n]</code> at all, yet it still concludes with a <code>ret 4</code>.</p>\n<p>Directly after this is a third call, which also internally uses <code>DeviceIOControl</code> then the function returns. This third call does not have the mysterious push before it. All these functions, including the container, make use of <code>thiscall</code>.</p>\n<p>Just in case I missed something, this is the body of the second call:</p>\n<pre><code>push ebp\nmov ebp,esp\nsub esp,0x30\npush ebx\npush esi\nmov eax,ecx\nxor esi,esi\npush edi\nmov edi,dword ptr ds:[&lt;&amp;DeviceIoControl&gt;]\nmov ecx,sdk.10002690\nmov dword ptr ss:[ebp-0x8],eax\nmov edx,0x8000\ntest ecx,ecx\nje aura_sdk.10003C35\nmov ax,word ptr ds:[eax+0x4]\npush 0x0\nmov word ptr ss:[ebp-0x20],ax\nlea eax,dword ptr ss:[ebp-0x14]\npush eax\npush 0x4\nlea eax,dword ptr ss:[ebp-0x4]\nmov dword ptr ss:[ebp-0x4],0x0\npush eax\npush 0x7\nlea eax,dword ptr ss:[ebp-0x20]\nmov byte ptr ss:[ebp-0x1A],0x1\npush eax\npush 0x80102050\npush dword ptr ds:[0x100375C0]\ncall edi\nmov bl,byte ptr ss:[ebp-0x4]\nmov ecx,sdk.10002690\nmov edx,0x8000\njmp sdk.10003C37\nxor bl,bl\ntest bl,0x9E\njne sdk.10003C8A\ntest ecx,ecx\nje sdk.10003C7D\npush 0x0\nmov eax,0xED\nmov dword ptr ss:[ebp-0xC],0x0\nmov word ptr ss:[ebp-0x28],ax\nlea eax,dword ptr ss:[ebp-0x18]\npush eax\npush 0x4\nlea eax,dword ptr ss:[ebp-0xC]\nmov byte ptr ss:[ebp-0x22],0x1\npush eax\npush 0x7\nlea eax,dword ptr ss:[ebp-0x28]\npush eax\npush 0x80102050\npush dword ptr ds:[0x100375C0]\ncall edi\nmov ecx,sdk.10002690\nmov edx,0x8000\nmov eax,dword ptr ss:[ebp-0x8]\ninc esi\ncmp si,dx\njb sdk.10003BF0\ntest bl,0x82\nje sdk.10003CA3\npop edi\ntest bl,0x1C\nmov eax,0x0\npop esi\nsete al\npop ebx\nmov esp,ebp\npop ebp\nret 0x4\n</code></pre>\n<p>Is this a case of the compiler correcting itself or is there a purpose?</p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "587",
+    "tags": [
+        "x86",
+        "assembly"
+    ],
+    "user": "Twifty",
+    "time": "Aug 31, 2018 at 8:31",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">I would imagine <code>ecx</code> is saved and restored in the first call, and parhaps being used as an argument to a third function? We'll need to see more of the code I guess...</span>",
+            "time": null
+        },
+        {
+            "user": "Twifty",
+            "text": "<span class=\"comment-copy\">@NirIzr The first function call is almost exactly the same except it make more calls to DeviceIOControl. ECX is used within to calculate a few variables based on arg1, but ultimately the final DeviceIOControl call is setting it to a kernelbase.dll function pointer. Please don't let my low score give the impression that I'm a total newbie ;) If you want the fist function code I will post it, but trust me, ECX is the this pointer for the call, which is copied to EDI before allowing ECX to be used as a normal register.</span>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">Sorry if my comment came of as disrespecting, that was definitely not my intention! The point I was trying to make is that it feels like code around <code>ecx</code> is somewhat lacking, and that I'm guessing that we'll need to see more code to reach an answer.</span>",
+            "time": null
+        },
+        {
+            "user": "Twifty",
+            "text": "<span class=\"comment-copy\">As you know, ASM can take up quite a lot of lines. So I try to keep it to the necessities. I just find it strange that a register, which shouldn't contain any meaningful value after a call, is being pushed only for the next call to clean up the stack without even looking at the value. I guess the compiler was having a blonde moment.</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">@Twifty welcome to RE.SE! Well the compiler may decide calling conventions, if parts were written in assembly, all bets are off. What would be interesting is what's in <code>edi</code> and what comes after the second <code>call</code>. What we can tell, though, is that the second call makes use of the <code>ecx</code> value, which is similar to what we'd see in a <code>thiscall</code> (except it doesn't look like a vtable access). But what comes after the second call? Was the program perhaps really just trying to save the register value and pops it later on?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This looks like the result of compiler optimization. The second callee (a <code>fastcall</code> function) takes an argument it obviously doesn't use. The compiler is in a situation where it is unable to modify the calling convention of the second call, so it still has to take the one argument and remove it from the stack. Most likely, the compiler can not prove that the function is not called by external code it can not adjust. But the compiler can use the knownledge that the function does not use its argument when compiling callers to it, by removing the code that calculates the argument and pushing a dummy argument instead. <code>push ecx</code> is a one-byte instruction and thus a very efficient way to provide the required dummy argument.</p>\n<p>In the case of Visual C++ in release mode, you should be aware that by default <em>link-time code generation</em> is enabled. If both the application and the SDK are compiled with link-time code generation, the \"object files\" in fact contain some abstract intermediate representation of the code and the actual transformation to binary code happens at link time when all libraries with link-time code generation enabled and the application are combined. This enables argument elision even if the object files or static libraries were generated independent of each other.</p>\n</div>",
+            "votes": "2",
+            "user": "Michael Karcher",
+            "time": "Aug 31, 2018 at 18:29",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">I find it quite odd that a compiler will use the information a variable is unused inside a function it did not compile.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Michael Karcher",
+                    "text": "<span class=\"comment-copy\">@NirIzr Good point. Perhaps it can be explained by my addition to the answer. Also, I don't think we know whether the caller is also part of the SDK, in which case the compiler might actually have compiled all three functions at the same time</span>",
+                    "time": null
+                },
+                {
+                    "user": "Twifty",
+                    "text": "<span class=\"comment-copy\">Given that all four function use <code>thiscall</code>, and relatively small, I would say that they were all compiled from the same source file. The SDK is public code if anybody want to look at it themselves.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

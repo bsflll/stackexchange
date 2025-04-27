@@ -1,0 +1,36 @@
+{
+    "title": "JAVA Decryption - Reverse engineering an Android application",
+    "link": "https://reverseengineering.stackexchange.com/questions/18235/java-decryption-reverse-engineering-an-android-application",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am trying to decrypt an encrypted string, but I am stuck in\n  <code>\n   Ciper.doFinal()\n  </code>\n  where the decryption throws a\n  <code>\n   BadPaddingException\n  </code>\n  .\nThe string in question is\n  <strong>\n   3qBogw/PIqpErH/DyEHLTQ==\n  </strong>\n  . One thing I know is that the string when decrypted contains a number (It is used in\n  <code>\n   Integer.valueOf()\n  </code>\n  )\n </p>\n <p>\n  First, the following method is called;\n </p>\n <pre><code>public static String getRandom() {\n    String str1 = UUID.randomUUID().toString();\n    String str2 = dCpw^jDyaip^Hfy]XgdRbp_imwbheJCFxTF^ligkteDEdrbtsu\\yIV[;\n    StringBuilder localStringBuilder = new StringBuilder();\n    localStringBuilder.append(str1);\n    localStringBuilder.append(str2);\n    return StringUtils.replaceEachRepeatedly(localStringBuilder.toString(), new String[] { \"dCp\" }, new String[] { \"gPs\" });\n}\n</code></pre>\n <p>\n  Nothing too fancy here just creates a UUID and concats it with a constant string and also uses Apache StringUtils to replace all occurances of dCp to gPs - (not sure why that is required)\n </p>\n <pre><code>public static String decrypt(String str) {\n   try {\n      String random = getRandom();\n      byte[] decode = Base64.decode(str, 0);\n      byte[] array = convertToArray(random);\n      return new String(ciperDecrypt(decode, array, array), \"UTF-8\");\n   } catch (Exception e) {\n      e.printStackTrace();\n      return \"\";\n   }\n}\n</code></pre>\n <p>\n  Here in the decrypt method, the generated random value is passed to a method in order to convert it to a byte array. \nFollowing is that method,\n </p>\n <pre><code>private static byte[] convertToArray(String str) throws UnsupportedEncodingException {\n    byte[] obj = new byte[16];\n    byte[] bytes = str.getBytes(\"UTF-8\");\n    int length = str.length();\n    System.arraycopy(bytes, 0, obj, 0, Math.min(bytes.length, obj.length));\n    return obj;\n}\n</code></pre>\n <p>\n  There is nothing fancy here too, just returns a byte array obtained from\n  <code>\n   String.getBytes()\n  </code>\n  methods. But what is interesting is that only first 16 bytes are used. This is what worries me, if you look at this carefully, in the\n  <code>\n   getRandom()\n  </code>\n  method they concat a\n  <code>\n   UUID\n  </code>\n  string and another constant string. But once the same string is passed to this method, the rest of the string is ignored.\n </p>\n <p>\n  And then finally ciperDecrypt method uses a\n  <code>\n   Ciper\n  </code>\n  to decrypt the string.\n </p>\n <pre><code>public static byte[] ciperDecrypt(byte[] paramArrayOfByte1, byte[] paramArrayOfByte2, byte[] paramArrayOfByte3) {\n    try {\n        Cipher localCipher = Cipher.getInstance(\"AES/CBC/PKCS5Padding\");\n        SecretKeySpec secret = new SecretKeySpec(paramArrayOfByte2, \"AES\");\n        IvParameterSpec param = new IvParameterSpec(paramArrayOfByte3);\n        localCipher.init(2, secret, param);\n        return localCipher.doFinal(paramArrayOfByte1);\n    } catch (Exception e) {\n        e.printStackTrace();\n    }\n    return null;\n}\n</code></pre>\n <p>\n  This procedure looks fine, but when I try to execute it, I get a\n  <code>\n   BadPaddingException\n  </code>\n  when the\n  <code>\n   doFinal()\n  </code>\n  line is executed. What I suspect is in the creation of the\n  <code>\n   byte[]\n  </code>\n  where there is some data loss.\n </p>\n <p>\n  It would be really helpful if anyone can identify where I have gone wrong. \nI would really appreciate it, \nThanks!\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "480",
+    "tags": [
+        "android",
+        "java"
+    ],
+    "user": "Sudara",
+    "time": "May 11, 2018 at 22:50",
+    "comments": [
+        {
+            "user": "Johann Aydinbas",
+            "text": "<html><body><span class=\"comment-copy\">\n Adding to my answer - I guess the key really seems to be wrong because it makes no sense. It decrypts a fixed string with a random key (first 16 bytes of the UUID), I don't see how this would ever work without sheer luck.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Madushan",
+            "text": "<html><body><span class=\"comment-copy\">\n Instead of trying to reverse engineer the encryption algorithm, you can try hooking the original decryption function using frida (\n <a href=\"https://www.frida.re/docs/android/\" rel=\"nofollow noreferrer\">\n  frida.re/docs/android\n </a>\n )\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I\n  <em>\n   think\n  </em>\n  your decryption is wrong, possibly because you use a wrong key.\n </p>\n <p>\n  If I remember correctly, PKCS5 allows you to\n  <em>\n   kind of\n  </em>\n  detect faulty decrypts. The reason is that PKCS5 expects decrypted data to be in a special padding format. If your decryption fails, the padding format isn't adhered to and thus it complains about bad padding.\n </p>\n <p>\n  Without having looked it up, an example:\n </p>\n <p>\n  Say I use PKCS5 padding for my input (length 10 bytes) for a block size of 16 bytes. Properly padded it would look like this:\n </p>\n <pre><code>Data      xx xx xx xx xx xx xx xx xx xx 06 06 06 06 06 06\n</code></pre>\n <p>\n  The\n  <code>\n   06\n  </code>\n  bytes at the end are padding and their value must be how many padding bytes there are.\n </p>\n <p>\n  So if you decrypt something and the last\n  <code>\n   n\n  </code>\n  bytes (\n  <code>\n   n\n  </code>\n  = byte value of last byte) aren't\n  <code>\n   n\n  </code>\n  , PKCS5 will complain about bad padding.\n </p>\n <p>\n  In my experience that happens with faulty decryptions due to wrong key.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Johann Aydinbas",
+            "time": "May 15, 2018 at 3:26",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

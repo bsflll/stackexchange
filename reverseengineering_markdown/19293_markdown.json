@@ -1,0 +1,34 @@
+{
+  "title": "Heap Chunk Structure Does Not Contain Previous Section Info",
+  "link": "https://reverseengineering.stackexchange.com/questions/19293/heap-chunk-structure-does-not-contain-previous-section-info",
+  "content": "I'm reading Shellcoder's Handbook to learn more about exploitation and overflows. I reached the chapter on Heap Overflows. The book mentions that a heap is split into chunks where each chunk contains two important pieces of info: \n\nThe following image is taken from a Blackhat presentation\n\n\nI made a small demo to test this. Below is the code:\n\n```\n    1 #include <stdio.h>\n    2 #include <string.h>\n    3 #include <stdlib.h>\n    4\n    5 int\n    6 main (int argc, char *argv[]){\n    7     char *buf, *buf2;\n    8\n    9     buf = (char *) malloc(1024);\n   10     buf2 = (char *) malloc(1024);\n   11\n   12     printf(\"buf=%p  \n\", buf);\n   13     printf(\"buf2=%p  \n\", buf2);\n   14     strcpy(buf, argv[1]);\n   15     strcpy(buf2, argv[2]);\n   16     printf(\"buf=%s  \n\", buf);\n   17     printf(\"buf2=%s  \n\", buf2);\n   18     free(buf2);\n   19     return 0;\n   20 }\n\n```\nI've placed a breakpoint on line 18 and checked the memory. Here's the dump after running the following command:\n\n./basicheap $(python -c 'print(\"A\"*1000 + \" \" +\"XXXXABCDEFGH\")')\n\nThis is the memory dump of buf1:\n\n```\n[0x08048543]> pxw 0x50 @ [fcnvar.local_1ch]-8\n0x0804b158  0x00000000 0x00000411 0x41414141 0x41414141  ........AAAAAAAA\n0x0804b168  0x41414141 0x41414141 0x41414141 0x41414141  AAAAAAAAAAAAAAAA\n0x0804b178  0x41414141 0x41414141 0x41414141 0x41414141  AAAAAAAAAAAAAAAA\n0x0804b188  0x41414141 0x41414141 0x41414141 0x41414141  AAAAAAAAAAAAAAAA\n0x0804b198  0x41414141 0x41414141 0x41414141 0x41414141  AAAAAAAAAAAAAAAA\n\n```\nThis is the memory dump of buf2:\n\n```\n[0x08048543]> pxw 0x50 @ [fcnvar.local_20h]-8\n0x0804b568  0x00000000 0x00000411 0x58585858 0x44434241  ........XXXXABCD\n0x0804b578  0x48474645 0x00000000 0x00000000 0x00000000  EFGH............\n0x0804b588  0x00000000 0x00000000 0x00000000 0x00000000  ................\n0x0804b598  0x00000000 0x00000000 0x00000000 0x00000000  ................\n0x0804b5a8  0x00000000 0x00000000 0x00000000 0x00000000  ................\n\n```\nThe output shows 0x411 as the size of the both chunk, which is 1024 + 17 bits for whatever. This is the the first (and only) piece of information in the header for both chunks.\n\nHowever, I don't see any info relating to any previous chunks. In Shellcoder's, the author is trying to demonstrate how one can overflow buf1 to overwrite the header info of buf2.\n\nDid the writers of glibc forgo the size of previous chunk in the header info, or is it something I'm missing?\n\nP.S: The build command I used was gcc -no-pie -g basicheap.c -o basicheap\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "binary-analysis",
+    "radare2",
+    "exploit",
+    "shellcode",
+    "heap"
+  ],
+  "user": "Solidak",
+  "time": "Sep 8, 2018 at 16:18",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The diagram you linked to seems to be wrong. The size of the previous chunk is stored in the current chunk iff, the previous chunk is free.\n\nThis image is more appropriate of what an allocated heap chunk looks like.\n\n\n\nSource: https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/\n\nLets take the following code to demonstrate this.\n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main (int argc, char *argv[])\n{\n    char *buf1, *buf2, *buf3;\n    buf1 = (char *) malloc(1024);\n    buf2 = (char *) malloc(1024);\n    buf3 = (char *) malloc(1024);\n\n    printf(\"buf1=%p  \n\", buf1);\n    printf(\"buf2=%p  \n\", buf2);\n    printf(\"buf3=%p  \n\", buf3);\n\n    memset(buf1, 'A', 1024);\n    memset(buf2, 'B', 1024);\n    memset(buf3, 'C', 1024);\n\n    free(buf2);\n    return 0;\n}\n\n```\nNote: Instead of two chunks, I'm taking three chunks or otherwise freeing the first may coalesce it into the top chunk. We will free the middle chunk and examine the chunk contents before and after the free call is executed.\n\nThe binary was compiled with gcc -m32 -g ./heap.c. Debug the binary in gdb as you would normally and set a breakpoint on line 20 at the free(buf2) call.\n\n\n\nWhen the breakpoint hit, let's examine the three chunks.\n\n\n\nmalloc returns the pointer to chunk + 8, so we subtracted 8 from each of the addresses. Additionally, I've also highlighted the chunk sizes (2nd member of a heap chunk) in the above image.\n\nHowever the chunk sizes are not actually 0x409 . Glibc heap chunks are always aligned to 8 bytes which means the last three bits are always zero. Hence, these three bits are used for storing other information (A, M and P bits).\n\n0x409 when converted to binary comes out to be 100 0000 1001.\n\n\n\nTo get the true chunk size we have to discard the last three bits (A M P) i.e. we should consider only 100 0000 1000. When this is converted to decimal we get 1032.\n\n\n\nThe true chunk size is indeed 1032. 1024 bytes for our data and the other 8 for the first two members.\n\nComing back to gdb, lets step over the free call and examine the chunks once again.\n\n\n\nChunk 2 has been freed. Let's have a look at chunk 3 (buf3).\n\n\n\nThe first member of chunk 3 now contains 0x408 which is 1032 in decimal - this is the size of chunk 2. Thus the previous size is stored in chunk 3 only after chunk 2 has been freed, not when it is in-use. \n\nThe P bit I was referring before stands for PREV_INUSE. This bit is set when the previous chunk is in use. Since the previous chunk is now free this bit is set to 0. As a result the second member now also contains 0x408 (instead of 0x409) which equals 100 0000 1000.\n\n\n\nAs shown in the image above, the P bit is unset. Hope, this clears your understanding.\n\n",
+      "votes": "9",
+      "user": "0xec",
+      "time": "Sep 8, 2018 at 21:14",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Solidak",
+          "text": "This was superb! Thank you so much for the effort!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

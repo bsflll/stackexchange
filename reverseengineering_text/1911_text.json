@@ -1,0 +1,58 @@
+{
+    "title": "What's 'fs:[0]' doing and how can I execute it step by step?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1911/whats-fs0-doing-and-how-can-i-execute-it-step-by-step",
+    "content": "In a 32 bits Windows binary, I see this code:\n<pre><code>    push next\n    push fs:[0]\n    mov fs:[0], esp\n    int3\n    ...\nnext:\n</code></pre>\nI see that something happens on the <pre><code>int3</code></pre> (an error), but I don't understand why, and how to follow execution while keeping control.\n",
+    "votes": "24",
+    "answers": 1,
+    "views": "13k",
+    "tags": [
+        "windows",
+        "x86",
+        "seh"
+    ],
+    "user": "Ange",
+    "time": "Apr 23, 2013 at 12:31",
+    "comments": [
+        {
+            "user": "Ange",
+            "text": "SEH PoCs\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "TL;DR\n\nthe first 3 lines set an exception handler (an 'error catcher')\nthe <pre><code>int3</code></pre> generates an exception\nexecution resumes at <pre><code>next</code></pre>\n\n\nExplanation\nthis trick is (ab)using Structured Exception Handling, a mechanism to define exception handlers, typically by compilers when <pre><code>try</code></pre>/<pre><code>catch</code></pre> blocks are used.\nIn 32bits versions of Windows, they can be set on the fly, without any pre-requirement (unless the binary is compiled with /SafeSEH).\nThe first element of the exception handlers' chain is pointed by the first member of the Thread Information Block (TIB), in turn a member of the Thread Environment Block (TEB), which is pointed to by <pre><code>fs:0</code></pre> (which is also reachable 'directly' - via something like <pre><code>ds:7efdd00</code></pre>, depending on the OS version etc)\nSo here is what happens:\n\nthe first two <pre><code>push</code></pre> reserve stack space for the structure <pre><code>_EXCEPTION_REGISTRATION_RECORD</code></pre>.\n\nthe new top handler\nthe previous top handler, which was until now at <pre><code>fs:[0]</code></pre>\n\nthe <pre><code>mov</code></pre> sets the current stack position as the new structure. When an exception happens, <pre><code>next</code></pre> will be now the first called handler.\n<pre><code>int3</code></pre> triggers an exception instantaneously (there are many other kinds of exception triggers).\nas an exception is triggered, Windows dispatches the exception to the first handler, and the next one if it's not handled, until one of them has handled it.\n\n\nFollowing execution\nThis is done here under OllyDbg 1.10. YMMV.\nAs we want to go through exceptions ourselves, we have to ask OllyDbg not to handle them:\n\ngo to debugging options: Alt-O, tab <pre><code>Exceptions</code></pre>\nunselect <pre><code>INT3 breaks</code></pre>\n\nAnd when an exception is triggered, we have to enforce that execution is done via exceptions (see below).\nHere are 3 methods of increasing level to follow the exception handling execution safely:\nstep by step: set a breakpoint manually\nAs the handler has just been set on the stack, you can manually set a breakpoint then run.\n\nselect the new handler address on the stack\n\nRight-click or F10\n\nselect <pre><code>Follow in Dump</code></pre>\n\nin the dump window, open the menu (same shortcut)\n\nselect <pre><code>BreakPoint</code></pre>, then <pre><code>Hardware, on execution</code></pre>\n\nExecute: menu <pre><code>Debug/Run</code></pre> / shortcut F9 / command-line <pre><code>g</code></pre>\nExceptions will be triggered\nExecute with exception handling: shortcut Shift-F9 / command-line <pre><code>ge</code></pre>.\n\nshortcut: execute until exception handler via command-line\n\nas the address is on the stack, the easiest way is to type via the command line <pre><code>ge [esp+4]</code></pre>, which means, <pre><code>Go with Exceptions</code></pre>, until the 2nd address on the stack is encountered. Thus, no need to set and unset a breakpoint.\n\nin the case of a more complex example, where the address might not be obvious on the stack anymore, then the absolute formula would be <pre><code>ge ds:[fs:[0]+4]</code></pre>, which just gets the actual address from the TIB.\n\n\nkeeping full control: break on <pre><code>KiUserExceptionDispatcher</code></pre>\n<pre><code>KiUserExceptionDispatcher</code></pre> is the Windows API handling all user-mode exceptions. Setting a breakpoint there guarantees that you keep full control - but then, you're in the middle of a Windows API ;) \nIn this case, you can ask OllyDbg to skip exceptions, as you will still break execution manually in any cases. You might also want to combine that with a script.\nOf course, some advanced code might check that you set a breakpoint on it before triggering an exception.\n",
+            "votes": "38",
+            "user": "Gehock",
+            "time": "Apr 26, 2020 at 18:00",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">\"In 32bits versions of Windows, they can be set on the fly, without any pre-requirement.\" That's not quite correct, it depends on how the executable was compiled, e.g., if compiled with SafeSEH ntdll!RtlDispatchException (IIRC) will terminate your process if you registered an SEH handler on the fly.</span>",
+                    "time": null
+                },
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">Also, a pretty common obfuscation technique is to modify the instruction pointer of the CPU context that is passed to the SEH handler. So it's usually a good idea to place a breakpoint before the call to NtContinue inside KiUserExceptionDispatcher. IDAStealth can do this for you automatically btw.</span>",
+                    "time": null
+                },
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">Execution <i>does</i> resume at next and since the OS doesn't force you to return from the exception handler, that statement is technically correct. In fact, that's exactly how C++ exceptions are implemented in the CRT.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">don't forget that any Vectored Exception Handler which was registered already will receive control first.  The SEH might never execute at all.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">This is a really great write-up, I'd love to see SEHOP added to this sometime for the sake of completeness.  Also, just to be extremely nit-picky: when <code>int3</code> fires, an interrupt does occur and an interrupt handler invoked, right?  I understand that stepping through the kernel call would be impossible in ImmunityDebugger (and while kernel debugging with Windbg, IIRC), but I just wanted to clarify for my own understanding.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,54 @@
+{
+    "title": "Anti-debugging techniques - Preventing me from setting a memory and hardware breakpoint. How can I bypass that?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8442/anti-debugging-techniques-preventing-me-from-setting-a-memory-and-hardware-bre",
+    "content": "I'm debugging this process which has a lot of anti debugging techniques in it, and I faced something new which I don't know how to bypass yet.\nChanging the code dynamically causes exceptions to occur and the process to crash.\nSo setting <pre><code>INT 3</code></pre> breakpoints is not an option. The way I'm debugging the process is only with <pre><code>Hardware Breakpoints</code></pre>.\nNow I have found the function (at least one of them…) which reads portions of the memory and using some CheckSum function over that memory, and then it checks if the memory CheckSum is as it expected. If I changed one byte in the memory, the CheckSum would not be as expected, thus the process would crash. This is actually very simple and done like this in the code:\n<pre><code>CMP EAX,EDX                  ; Compare CheckSum\nJE __GoodCode                  ; jmp must be taken\nCALL <CrashProgram>\n__GoodCode: \nXOR EAX,EAX\n...\n</code></pre>\nThe hex value of <pre><code>JE short</code></pre> is <pre><code>0x74 0x0B</code></pre> and I want to change it to <pre><code>JMP short</code></pre> which is <pre><code>0xEB 0x0B</code></pre>. When I do that, the program would crash.\nI found out where the program is crashing using <pre><code>Memory breakpoints</code></pre> at different places of the code and then I found the function doing the CheckSum (it reads all the memory). But now I figured out there is another existing function which probably does something similar! causing the program to crash.\nBut this time when I put a <pre><code>Memory breakpoint</code></pre> on my 'changed' JE to JMP it never stops on the breakpoint.\nSo this is my first problem, another problem I had is that I had a function I suspected had something to do with the crashing when changing the code, but when I set a <pre><code>Hardware breakpoint</code></pre> on it, it didn't break. I know for sure that this function is being called and the code definitely runs. So I thought to myself there is probably something making sure my <pre><code>Memory & Hardware breakpoints</code></pre> won't work, some sort of anti-debugging mechanism.\nI read a little bit about it and found out about <pre><code>GetThreadContext</code></pre>, in my case it calls <pre><code>Wow64GetThreadContext</code></pre>. It receives a Context structure which holds most registers. Here is how the Context structure looks like:\n<pre><code>CONTEXT _X86_\n\ntypedef struct _CONTEXT {\nDWORD ContextFlags;\n/* ContextFlags contians CONTEXT_DEBUG_REGISTERS. */\nDWORD Dr0;\nDWORD Dr1;\nDWORD Dr2;\nDWORD Dr3;\nDWORD Dr6;\nDWORD Dr7;\n/* ContextFlags contians CONTEXT_FLOATING_POINT. */\nFLOATING_SAVE_AREA FloatSave;\n/* ContextFlags contians CONTEXT_SEGMENTS. */\nDWORD SegGs;\nDWORD SegFs;\nDWORD SegEs;\nDWORD SegDs;\n/* ContextFlags contians CONTEXT_INTEGER.*/\nDWORD Edi;\nDWORD Esi;\nDWORD Ebx;\nDWORD Edx;\nDWORD Ecx;\nDWORD Eax;\n/* ContextFlags contians CONTEXT_CONTROL */\nDWORD Ebp;\nDWORD Eip;\nDWORD SegCs; // MUST BE SANITIZED\nDWORD EFlags; // MUST BE SANITIZED\nDWORD Esp;\nDWORD SegSs;\n/* ContextFlags word contains CONTEXT_EXTENDED_REGISTERS */\nBYTE ExtendedRegisters[MAXIMUM_SUPPORTED_EXTENSION];\n} CONTEXT;\n</code></pre>\n\nhttps://msdn.microsoft.com/en-us/library/windows/desktop/ms679284(v=vs.85).aspx\n\nThe first parameters are my <pre><code>Hardware breakpoints</code></pre> and I can see them clearly, but it doesn't seem like it does something with their values. So I don't think it's this function which is causing the crash. Whenever it is called, it seems more like a debug code. Also, this function is never called regularly - only after the program is crashing.\nNow there is also <pre><code>ReadProcessMemory</code></pre> which I read it might bypass my <pre><code>Memory breakpoints</code></pre> for some reason. I set logging breakpoints on that function and it never seemed like it reads a <pre><code>Page</code></pre>(size 0x1000) close to the function I changed, and yes I checked the size it was reading as well.\nAlthough this function is called regularly it still doesn't seem like this is it.\nI have also heard about <pre><code>ZwProtectVirtualMemory</code></pre> functions to change the attributes of memory regions so that the <pre><code>Memory breakpoint</code></pre> 'exceptions' won't occur, and the debugger won't receive them. This function is being called out, but I'm not sure what is the usage, or what parameters are relevant to me in the memory.\nIs there anything else I might be missing?\nThe article I was reading which was helping me quite a lot, but did not help me find out what was causing the crash:\nhttp://waleedassar.blogspot.in/2012/11/defeating-memory-breakpoints.html\n\nI have changed my wording of this question. I hope it's clearer now.\n",
+    "votes": "10",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "windows",
+        "assembly",
+        "ollydbg",
+        "anti-debugging",
+        "winapi"
+    ],
+    "user": "0xAK",
+    "time": "Aug 8, 2021 at 11:31",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "Did you change the bytes on disk, or in memory only? The program might be reading its executable file. Also, some programs try to detect if they're running in a debugger. Did you install a Stealth plugin? Will the program work from Ollydbg if you don't patch anything? Or maybe the program detects memory breakpoints. Will the program work if you don't patch anything, but set a memory breakpoint anyway?\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "And you might be interested in this which links to this.\n",
+            "time": null
+        },
+        {
+            "user": "0xAK",
+            "text": "@GuntramBlohm I changed the byte dynamically only in the memory. not on the disk.  I am using a Stealth plugin, the program does check if its being debugged or not.  The program works good with a Stealth plugin in Olly and i can debug the program using Hardware Breakpoints (Normal breakpoints add Int 3)\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "At the end of the 2nd link, they say \"N.B. ReadProcessMemory has also been used as a stealthy way to read memory without triggering Hardware Breakpoints.\" I'd assume that ReadProcessMemory copies the memory using kernel ring 0 mode, so it avoids the page restrictions that apply to user mode. Can't hurt to check if ReadProcessMemory gets called somewhere.\n",
+            "time": null
+        },
+        {
+            "user": "0xAK",
+            "text": "@GuntramBlohm, Wow yeah, ReadProcessMemory does happen! i would have never guessed that this API bypasses olly's memory breakpoints.. Always good to learn new things!  Thought i have found that this API is called just before the crash happens in a new thread.. i logged all of the calls to <pre><code>ReadProcessMemory</code></pre> and the second parameter <pre><code>pBaseAddress</code></pre> is never even close to the memory i changed.. it must be something else or am i missing something?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Some possibilities (out of many):\n1.\nThe program may call <pre><code>SetThreadContext</code></pre>, or <pre><code>ZwContinue</code></pre> which sets all registers using a new CONTEXT.\nIf the DRx registers are reset then your hardware breakpoints are removed.\n2.\nThe program calls <pre><code>ZwSetInformationThread</code></pre> with the <pre><code>0x11</code></pre> (<pre><code>ThreadHideFromDebugger</code></pre>) parameter. If the thread is hidden from the debugger then breakpoint exceptions will not be caught by a debugger but will be passed to the program, if unhandled - it will crash.\n",
+            "votes": "2",
+            "user": "Yotamz",
+            "time": "Nov 18, 2019 at 10:23",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

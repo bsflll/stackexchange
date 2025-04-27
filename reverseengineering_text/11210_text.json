@@ -1,0 +1,61 @@
+{
+    "title": "How to find WndProc using x64dbg?",
+    "link": "https://reverseengineering.stackexchange.com/questions/11210/how-to-find-wndproc-using-x64dbg",
+    "content": "I'm trying to find a WndProc from explorer.exe that is handling these messages, I've found with Spy++:\n<pre><code><000001> 00000000000B01C8 P message:0xC02B [Registered:\"SHELLHOOK\"] wParam:00000025 lParam:000F0184\n<000002> 00000000000B01C8 P message:0xC02B [Registered:\"SHELLHOOK\"] wParam:00008006 lParam:000F0184\n</code></pre>\nI'm trying to prevent explorer.exe from flashing the task bar button, it's ruining my Windows 10 experience. In Windows 10 the flashing task bar buttons appear in all desktops, and it's just maddening when focusing on a work on another virtual desktop. Not a feature I want. The above messages are sent to Task switcher in explorer.exe, if I can prevent them being handled I can beat this.\nI've wealth of knowledge about the WndProc which I want to see, and modify from Spy++, following windows are Property Inspector of Spy++ (64 bit version):\n(Note: the 32bit version of Spy++ does not show Window Proc at all, just <pre><code>(Unavailable)(Unicode)</code></pre>\n\n\nAnd in x64dbg I have the thread open:\n\nBut I just can't figure out how can I find the Window Proc in x64dbg?\n",
+    "votes": "7",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "windows"
+    ],
+    "user": "Ciantic",
+    "time": "Oct 31, 2015 at 18:50",
+    "comments": [
+        {
+            "user": "T.Todua",
+            "text": "have you been able to find the answer for `x64dgb?\n",
+            "time": null
+        },
+        {
+            "user": "Ciantic",
+            "text": "@T.Todua yes, I have also written a AHK script that gets the WndProc address (see my script here it also does other things, but one part is WndProc). The correct solution below does work somewhat correctly.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The spy++ is showing the wndproc in your screen shot (it is probably subclassed; you may need to trace but wndproc is shown in your screenshot as <pre><code>361c9880</code></pre>  I don't know what the command is in x64 dbg but if you were on ollydbg you simply do ctrl+g (goto) key in the address as shown in spy++ and break and log the messages for filtering.\nA screen shot of calc.exe -> backspace button windows wndproc in comctl32.dll  (32 bits and 64 bits shouldn't matter much on concept level)\n\nAn entry by Raymond Chen talks about cookies being returned instead of wndproc.\nIf all else fails assemble GetWindowLongPtrW in place to fetch the actual WndProc\n\nsuspend the process (f12 or esc)\nuse ctrl+g to goto user32.GetWindowLongPtrW\nright click set new origin here   (save the rip prior this)\nsave the state of register somewhere\nmodify rcx and plop the handle into rcx (which was b01c8 in your screen shot)\nuse the latest window handle as shown by spy++\nfor the existing session do not put 0xb01c8\nmodify edx to hold -4 (index of GWLP_WNDPROC)\nstep through the Function\nbefore the function returns rax should hold the actual WndProc\nsave or set a bp on the Wndproc\nrestore registers and rip to pristine state and continue exploring\n\nI downloaded x64dbg and ran 64 bit calc.exe spy++ 32 bit doesn't show wndproc. I cooked a script to alloc a page in process memory of calc.exe and assembled a detour using the script language and fetched the actual WndProc.\nA screenshot below:\n\nThe debuggee must be in a paused state.\nThe script allocates memory in the debuggee's address space using alloc; after tabbing once the status bar should show the newly allocated address.\nAlso the variables $lastalloc $result should hold the newly allocated memory address; if you do <pre><code>d address</code></pre> a bunch of 00 00 should stare at you.\n\nconfirm the allocation\nif the memory is allocated tab one step in the script\npush rcx should be assembled in the newly allocated address\nuse d address or d $lastalloc to confirm\nlike wise assemble all the instruction\nuse the proper handle value in ecx (stale or reused window handles may provide incorrect information confirm you assemble mov rcx , HWND right\nnow you need to ensure you put the right address in eax  the address should be of user32.GetWindowLongPtrW\nassemble all the cleanup instructions\none you have done this\nsave the existing rip some where (write it down in a paper)\nright click and select the first instruction in the newly allocated address and set it as origin ( new origin here) the rip will be changed to the newly allocated address\nhit f8 and execute the instructions on by one\nwhen call eax is done eax will hold the Wndproc\nsave this (write it in paper)\nexecute the cleanup instruction\nhit ctrl+g and enter the old RIP\nright click -> new origin here ( RIP will now point to the old value when you paused the debuggee\n\nThat is it; now you have Wndproc in a paper and you have returned to the original state.\nThis  is a detour (making an intentional bypass in the code flow of debuggee to do some extra work and return back to the place where bypass was done as if nothing was done to continue the original flow).\nUse bp to set a breakpoint in the wndproc you have on paper.\n",
+            "votes": "6",
+            "user": "Glorfindel",
+            "time": "Jul 31, 2022 at 4:59",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ciantic",
+                    "text": "<span class=\"comment-copy\">Awesome! Thanks again. Got it working with the script now I get solid result even if I change instances which I think must mean it worked: 00007FF6361C9880. Before this I must have run the 'raw' GetWindowLogPtrW incorrectly all the time. Deleting the messages again.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i added details about how to use the script as a detour</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ciantic",
+                    "text": "<span class=\"comment-copy\">it's in the explorer.exe. And! I've first time prevented FlashWindow from doing it's evil thing in the Task Switcher! I just zeroed the message C02B each time it got there and boom! Now I'm investigating how to make  a memory patch I can run on my computer so I can live patch my explorer.exe</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ciantic",
+                    "text": "<span class=\"comment-copy\">FYI, I'm chronicling the creation of in-memory patch here: <a href=\"http://ciantic.blogspot.fi/2015/10/in-memory-patching-explorerexe-to.html\" rel=\"nofollow noreferrer\">ciantic.blogspot.fi/2015/10/…</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">nice entry yes you can dump the script and assemble anywhere in the module itself  if you don't need reuse</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

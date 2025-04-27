@@ -1,0 +1,39 @@
+{
+    "title": "How does Rohitab ApiMonitor capture API calls?",
+    "link": "https://reverseengineering.stackexchange.com/questions/32979/how-does-rohitab-apimonitor-capture-api-calls",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  When I use\n  <a href=\"https://easyhook.github.io\" rel=\"nofollow noreferrer\">\n   EasyHook\n  </a>\n  to hook API calls, the first bytes of the hooked API function are replaced with a so called \"trampoline\" which is a jump into EasyHook code.\n </p>\n <p>\n  For example this is\n  <code>\n   TextOutW\n  </code>\n  in Gdi32.dll disassembled:\n </p>\n <pre><code>Original code in Gdi32.dll for exported function TextOutW()   \n---------------------------------------------------------------\n7daceeb1 8b ff           MOV   EDI,EDI\n7daceeb3 55              PUSH  EBP\n7daceeb4 8b ec           MOV   EBP,ESP\n7daceeb6 53              PUSH  EBX\n7daceeb7 56              PUSH  ESI\n7daceeb8 57              PUSH  EDI\n7daceeb9 8b 7d 18        MOV   EDI,dword ptr [EBP + c]\n....\n\nCode modified by Easyhook:\n---------------------------------------------------------------\n7daceeb1 e9 82 2b 64 8d  JMP   LAB_0b111a38 \n7daceeb6 53              PUSH  EBX\n7daceeb7 56              PUSH  ESI\n7daceeb8 57              PUSH  EDI\n7daceeb9 8b 7d 18        MOV   EDI,dword ptr [EBP + c]\n....\n</code></pre>\n <p>\n  Here you see that the first 5 bytes of the code in Gdi32.dll have been replaced with a JMP instruction.\nEach time\n  <code>\n   TextOutW\n  </code>\n  is called, EasyHook will forward the call to my hook function.\n </p>\n <hr/>\n <p>\n  But when I use\n  <a href=\"http://www.rohitab.com/apimonitor\" rel=\"nofollow noreferrer\">\n   ApiMonitor\n  </a>\n  nothing in the code in Gdi32.dll is modified.\n </p>\n <p>\n  I found that ApiMonitor loads a DLL into the hooked process (Windows Calculator):\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/cWPGXDOg.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"ApiMontor hooking Windows Calculator\" src=\"https://i.sstatic.net/cWPGXDOg.png\"/>\n  </a>\n </p>\n <p>\n  The file\n  <strong>\n   apimonitor-drv-x86.sys\n  </strong>\n  has the wrong file extension. It is not a driver.\nI used the API\n  <code>\n   EnumDeviceDrivers()\n  </code>\n  to enumerate all drivers in the system, but apimonitor-drv-x86.sys is not listed as driver.\n </p>\n <p>\n  It is an ordinary DLL as I can prove by loading it into DependencyWalker:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/psPZp3fg.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"apimonitor-drv-x86.sys in DepedencyWalker\" src=\"https://i.sstatic.net/psPZp3fg.png\"/>\n  </a>\n </p>\n <p>\n  It has 4 exported functions with funny ordinals.\n </p>\n <p>\n  So my question is: How does ApiMonitor hook API calls without modifying the code in the hooked DLL? There must be any magic going on in apimonitor-drv-x86.sys\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "114",
+    "tags": [
+        "api",
+        "hooking"
+    ],
+    "user": "Elmue",
+    "time": "May 26, 2024 at 3:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It is likely that ApiMonitor does a EAT/IAT hook which wouldn't require to write to the function's code. If I were you, I would put a breakpoint in the WinApi function's code and I would inspect the callstack for an address in the ApiMonitor module. That way, it would be easy to understand how the flow is redirected.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Ariel Gadbois Roy",
+            "time": "May 29, 2024 at 4:30",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Elmue",
+                    "text": "<span class=\"comment-copy\">Your answer is correct. But it is only an assumption. What was missing is the proof. I added my own answer with the details that I would have expected from you.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I could confirm that the assumption of Ariel is correct.\nI wrote a small C++ Console application to prove that ApiMonitor manipulates the Import Address Table.\n </p>\n <pre><code>int _tmain(int argc, TCHAR* argv[], TCHAR* envp[])\n{\n    wprintf(L\"\nPress a key...\n\");\n    getch();\n\n    HMODULE h_Kernel    = GetModuleHandleA(\"Kernel32.dll\");\n    void* f_CreateFile  = GetProcAddress(h_Kernel, \"CreateFileW\");\n    void* f_GetProcAddr = GetProcAddress;\n    \n    wprintf(L\"Kernel32:    0x%X\n\", h_Kernel);\n    wprintf(L\"GetProcAddr: 0x%X\n\", f_GetProcAddr);\n    wprintf(L\"CreateFile:  0x%X\n\", f_CreateFile);\n\n    wprintf(L\"Press a key...\n\");\n    getch();\n    return 0;\n}\n</code></pre>\n <p>\n  When I execute this without ApiMonitor I get:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/pWzZeZfg.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"Without ApiMonitor\" src=\"https://i.sstatic.net/pWzZeZfg.png\"/>\n  </a>\n </p>\n <p>\n  You see that\n  <code>\n   GetProcAddress\n  </code>\n  is not inside Kernel32.dll. The  address 7400FFF6 is inside\n  <code>\n   C:\\Windows\\SysWow64\\AppHelp.dll\n  </code>\n  .\n </p>\n <p>\n  When I attach ApiMonitor with hooking for\n  <code>\n   CreateFileW\n  </code>\n  enabled after the first \"Press a key...\" I get this:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/jtQbiRAF.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"With ApiMonitor\" src=\"https://i.sstatic.net/jtQbiRAF.png\"/>\n  </a>\n </p>\n <p>\n  So he does not only patch the IAT for\n  <code>\n   CreateFileW\n  </code>\n  , but also for\n  <code>\n   GetProcAddress\n  </code>\n  , so he can manipulate the return value and even monitor API calls that are not stored in the IAT.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Elmue",
+            "time": "May 29, 2024 at 15:24",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

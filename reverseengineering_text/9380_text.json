@@ -1,0 +1,86 @@
+{
+    "title": "Putting an application in between client and server",
+    "link": "https://reverseengineering.stackexchange.com/questions/9380/putting-an-application-in-between-client-and-server",
+    "content": "I'm attempting to reverse engineer (without dissecting the source code, as my understanding is that reverse engineering by analyzing input and output and building something from scratch that fits is both far more legal and less monotonous/brain-dead than decompiling/de-obfuscating the program) a program that acts as client to a server, and one of the main systems I need to figure out is how they communicate (the exact meaning of each byte of data sent over the internet). The way I would like to go about doing this is by developing a program from scratch that attempts to imitate the client, but that acts as middle-man to both client and server so that I can easily see if the output my work-in-progress program would provide matches the actual client's output and how it differs.\nI'm not sure how to go about doing this, though. I think the site the client connects to is hard-coded into it; is there a way to make the client think that it is talking to the server, and the server to think that it is talking to the client, when in reality both are talking to my in-progress program? I would like for both my program and the client to be on the same (physical) system. I've been using a packet sniffer to monitor communication between the client and server, but it would be much simpler and convenient if I could have my program act as middle-man. \nI'm using a Lubuntu 15.04 system as my primary system currently, if that helps.\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "730",
+    "tags": [
+        "linux",
+        "networking"
+    ],
+    "user": "Reepca",
+    "time": "Jul 17, 2015 at 3:42",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "It very likely won't be possible to determine, in your words, \"the exact meaning of each byte of data sent over the internet\" via the dynamic analysis approach you're proposing. To fully determine \"the exact meaning of each byte of data sent over the internet\", you'll likely need to statically analyze the client.\n",
+            "time": null
+        },
+        {
+            "user": "Reepca",
+            "text": "The program is one where user input directly corresponds to information being sent over the internet; i.e. you can click a certain place and see output appear as a result of it in a packet sniffer. Also, correct me if I'm wrong, but doesn't static analysis usually involve looking at some form of source code? (I realize \"the exact meaning of each byte\" is probably not very realistic, but it's what the end goal is)\n",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "Static analysis means analyzing something without running it. In this context, yes, it would likely involve looking at the disassembled code or decompiled code. But as you suggested, depending on your needs, it may not be a requirement here.\n",
+            "time": null
+        },
+        {
+            "user": "joxeankoret",
+            "text": "Depending on the protocol's complexity, you might be lucky enough to decrypt most of the format by just using Wireshark or any other network sniffer. However, to actually determine each field, you really need to statically reverse engineer it.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "You may want to have a look at mitmproxy. This allows you to intercept and modify http(s) traffic, which may or may not be what you need, but it also has tools like mitmdump that just dump what's going over the connection.\nMitmproxy also has instructions about setting up the linux tcp stack using iptables to redirect connections. I guess this is the main part of what you're trying to achieve.\nIn your setup, the easiest thing you could do is probably create a virtual machine using virtualbox, running the client within the machine, using iptables inside the machine to redirect server connections to your host, and run the proxy on the host. \nThe advantage of using a virtual machine is that whatever you install/configure on your VM won't interfere with your host, where you may not want to mess with the network to reduce the risk of breaking other things, and you can create a snapshot and go back to it of you break something and don't remember what exactly you've done.\nThen, on the VM, do something like\n<pre><code>iptables -t nat -A OUTPUT -p tcp --dport 1234 -j DNAT --to-destination 1.2.3.4:1234\n</code></pre>\nto redirect all traffic from the client, independent from target ip, to the host (assuming the host is 1.2.3.4). The, on the host, write a program to listen on port 1234, dump all data, and pass through to real.server.ip:1234. This way, you don't have to mess with the IP configuration of the host.\nIf you don't want to use a VM, you could also use\n<pre><code>iptables -t nat -A OUTPUT -p tcp --dport 1234 -j DNAT --to-destination 127.0.0.1:1234\niptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination :1234\n</code></pre>\nand have your program listen on port 1234, and connect to 1235 on the real server. The second iptables entry will redirect this to 1234 again, and use the IP the program requested, since you just used a port without an IP in the <pre><code>--to-destination</code></pre> argument. Your client (that uses port 1234) always gets redirected to localhost, and the proxy, that connects to 1235, will get redirected to 1234. Obviously, the order of iptables commands is important here.\nYou can use the real server ip or name as well, of course:\n<pre><code>iptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination 192.168.17.135:1234\niptables -t nat -A OUTPUT -p tcp --dport 1235 -j DNAT --to-destination real.server.name:1234\n</code></pre>\nbut note that <pre><code>real.server.name</code></pre> gets resolved the moment you start the iptables command, not when the packet gets sent. So, if your real.server.address changes later, for example if it's behind a dynamic IP, you'll have to remove the iptables entry and create a new one.\nAnd to minimize impact on your machine, where you might have an unrelated program connect to an unrelated server on port 1235, you might want to restrict changing the port to one particular server only:\n<pre><code>iptables -t nat -A OUTPUT -p tcp --dest 192.168.17.135 --dport 1235 -j DNAT --to-destination 192.168.17.135:1234\n</code></pre>\n",
+            "votes": "1",
+            "user": "Guntram Blohm",
+            "time": "Jul 17, 2015 at 16:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Reepca",
+                    "text": "<span class=\"comment-copy\">iptables looks exactly like what I'm looking for, but the only problem I can think of is that if I make a rule that redirects all traffic from the port the client communicates on to my program, since my program also has to communicate on that port, it would get redirected to itself as well. Apologies if there's some obvious thing I'm missing, I don't understand NAT and stuff very well. Is that why you said I'd need a virtual machine?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Reepca",
+                    "text": "<span class=\"comment-copy\">Actually, couldn't I have the output from the client be redirected at OUTPUT and have the output from my program be redirected at POSTROUTING? So that for example I could say that all output on port X going through the OUTPUT chain is redirected to &lt;myapplication&gt; on 127.0.0.1, then when &lt;myapplication&gt; communicates with the server on port &lt;X +/- 1&gt; it can be translated to port X as it goes out?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">On the TCP level, you don't know which application a packet is coming from, so you can't say \"coming from the client\" except if your proxy uses a different port, just as you suggest. This is why i suggested a VM. (Another thing that is useful with a VM is i can make snapshots when i have a working state, for whichever definition of working, and can go back to that easily when i change a few things, break the client, and don't remember exactly what to change back).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">OUTPUT probably won't work, since you need the <code>nat</code> chain to make sure incoming answer packets get the appropriate reverse-natting to reach the source. But as POSTROUTING rules are processed in order, you'll probably be ok if you add a rule to redirect the client first (<code>--dest real.server.ip --dport 1234 --to localhost --to-port  proxy.port</code>), then the proxy to the real server (<code>--dest real.server.ip --dport 1235 --to-port 1234</code>) if the real client and server use port 1234, and your proxy connects to 1235.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Reepca",
+                    "text": "<span class=\"comment-copy\">quick question - can I use a name instead of an ip address (I forget the technical name for that) - where I could put \"server.companyname.com\" instead of an actual hard-coded ip address?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "first you need to determine the kind of communication between server and client like if it is TCP or UDP or whatever else\n\nin case of TCP\nI did something similar for TCP once so here some insights:\nFirst you need to know which ports are used. Good way for this is checking with your firewall or grab some monitoring utility for this. Once known the ports create an App that will act like bridge between Server and Client each communication channel must be covered (there can be multiple TCP server-client pairs each with its distinct Port or even IP in some cases).\nTo place a bridge between Server and client you need trick both sides to connect to your bridge instead of themselves. That is usually done by changing the IP address to which you are connecting. If you can change the Ports then you could do that on a single machine. So search for some config file or registry entry where you will see some IP <pre><code>address:port</code></pre> corresponding to your server. The Client address is obtained by the TCP Server automatically so unless that is locked on the Server side you should be fine. In some cases the Address is send by some packet along the time so check for that too.\nIf the <pre><code>address/port</code></pre> is not changeable then you need to make it by Hardware. I think some bridge or virtual network would do it but that is above my knowledge\nThe logging bridge app should look like this:\n\nNow you just listen on your TCP server and on any new connection create TCP Client and Connect to its real destination. After that  when any packet received by TCP Server then just log it to a file and forward it to TCP client. It is a good idea to log all channels to single file with [tags] from which channel it was send (or even with time stamp). This way you will see the messages in their order\nThis is example of log from mine logging app:\n<pre><code>[Connecting to Realmd]\n[->Realmd] 40 Bytes\n\n   txt: ..$.WoW....ž!68x.niW.SUne<...Ŕ¨...POLIKU\" \n\n   hex: 00 08 24 00 57 6F 57 00 02 04 03 9E 21 36 38 78 00 6E 69 57 00 53 55 6E 65 3C 00 00 00 C0 A8 06 0A 06 50 4F 4C 49 4B 55 \n\n[<-Realmd] 119 Bytes\n\n   txt: ...:.ZŮmý.;ö)<¨eĚ÷‹ŚAĹ¬ë”Ĺ.Ř=ţŘë.„.. ·›>*‡‚<«Ź^żżŽ±..SP.)‹[­˝[Sá‰^dK‰.¤Ëź’)Ą<\"«).~qí–!3Őś”:.Ŕ˘‰ľVĺw.†u±‹…»ň5›äÇSŰ\\*Ý.\" \n\n   hex: 00 00 00 3A 02 5A D9 6D FD 0C 3B 81 F6 29 3C A8 65 CC F7 8B 8C 41 C5 AC EB 94 C5 0E D8 3D FE D8 EB 1B 84 01 07 20 B7 9B \n        3E 2A 87 82 3C AB 8F 5E BF BF 8E B1 01 08 53 50 06 29 8B 5B AD BD 5B 53 E1 89 5E 64 4B 89 07 A4 CB 9F 92 29 A5 3C 22 AB \n        29 01 7E 71 ED 96 21 33 D5 9C 94 3A 09 C0 A2 89 BE 56 E5 77 09 86 75 B1 8B 88 85 BB F2 35 9B E4 C7 53 DB 5C 2A DD 00 \n\n[->Realmd] 75 Bytes\n\n   txt: .‹'c¬^C°‹ëŔ#¦š ]Ă¨‚.ÚGĄ™ZŻr–´>.ŻQtLµ*×•.Ĺ˘{H.3űdŚ‘ĺŢęX`‡.ř–=‡ŰÇÉĹ.ę×..\" \n\n   hex: 01 8B 27 63 98 AC 5E 43 B0 8B EB C0 23 A6 9A A0 5D C3 A8 82 88 09 DA 47 A5 99 5A AF 72 96 88 B4 3E 1B 98 AF 51 74 4C B5 \n        2A D7 95 03 C5 A2 7B 48 1C 33 FB 64 8C 91 E5 DE EA 58 98 60 87 1A F8 96 3D 87 DB C7 C9 C5 1B EA D7 00 00 \n\n[<-Realmd] 32 Bytes\n\n   txt: ..!\\öţWA-Qkś”)S—˘ČňóÚ..€.......\" \n\n   hex: 01 00 21 5C F6 98 FE 57 41 2D 51 6B 9C 94 29 53 97 A2 C8 F2 F3 DA 00 00 80 00 00 00 00 00 00 00 \n\n[->Realmd] 5 Bytes\n\n   txt: .....\" \n\n   hex: 10 00 00 00 00 \n</code></pre>\nit is log of SRP validation process between Mangos and its Client. It is a good idea to show the packets in booth hex and text to better see the contents and purpose of packet. For example if you look at the first packet you can clearly see the App signature (WoW) and SRP login name (<pre><code>POLIKU</code></pre>)\nDecoding\nonce app is running and the Server/Client is working it may lag a bit but should work as expected (if not then you are time outing or missing some communication channel or config packet if there is one .. for custom ip:port ...).\nThen you should log specific operations on the client side. Once some packets are identified you should add their identification and decoding to the log utility so you will see which packets are unknown and which are known\nHere example of partially decode log:\n<pre><code>[New connection to Realmd]\n\n[->Realmd] 40 Bytes\n\n   txt: ..$.WoW....ž!68x.niW.SUne<...A¨...POLIKU\" \n\n   hex: 00 08 24 00 57 6F 57 00 02 04 03 9E 21 36 38 78 00 6E 69 \n        57 00 53 55 6E 65 3C 00 00 00 C0 A8 06 0A 06 50 4F 4C 49 \n        4B 55 \n   Try to login: POLIKU\n\n[<-Realmd] 119 Bytes\n\n   txt: ...L¤/O.é.–AÝ¦oc^boTNi+yi??™PM–~ kd.. ‰Kd^‰áS[1­[‹).PS.\n        .±Ž??^?«<‚‡*>›·z]3n..?.o^é.ËE^—0)u.IrÂeA~/±Î¦7kK›b^ý^¸.\n        .â.$NÔa.\" \n\n   hex: 00 00 00 4C A4 2F 4F 06 E9 0C 96 C3 DD A6 BA A2 88 62 F8 \n        54 D1 EC 2B 79 EC 8D F0 99 50 4D 96 7E A0 6B 64 01 07 20 \n        89 4B 64 5E 89 E1 53 5B BD AD 5B 8B 29 06 50 53 08 01 B1 \n        8E BF BF 5E 8F AB 3C 82 87 2A 3E 9B B7 7A 5D B3 F1 0D 1D \n        8F 13 F8 88 E9 2E CB CA 88 97 30 29 FB 03 CF 72 C2 E8 C5 \n        98 2F B1 CE A6 37 6B 4B 9B 62 88 FD 88 B8 14 07 E2 11 24 \n        4E D4 E0 81 00 \n\n[->Realmd] 75 Bytes\n\n   txt: .u..9Š?5×n.€%XU.».â.N.]5Ös6joü€LRpeKŽHa.”>1a.M¸Au„ë...\n        ....................\" \n\n   hex: 01 F9 0F 0D 39 8A DE 35 D7 81 6E 1C 80 25 58 D9 11 BB 1C \n        E2 02 4E 04 5D 35 D6 73 36 6A 6F FC 80 4C 52 70 65 4B 8E \n        48 E0 08 94 3E BC E0 06 4D B8 C6 FB 84 EB 1C 00 00 00 00 \n        00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 \n   acc:POLIKU\n   psw:POLIKU\n     N:B79B3E2A87823CAB8F5EBFBF8EB10108535006298B5BADBD5B53E1895E644B89\n     g:7\n     k:3\n     b:8C08F2D3388C800AFE1FBCB1929D44366CA72032C157535E328DDED54F8F1B91\n     B:646BA07E964D5099F08DEC792BECD154F86288A2BAA6DDC3960CE9064F2FA44C\n     A:4C80FC6F6A3673D6355D044E02E21CBB11D95825801C6E81D735DE8A390D0FF9\n    M1:20A2FF67BC1229843486DFF2716AB2AA4EA4F89A\n   *M1:1CEB84FBC6B84D06E0BC3E9408E0488E4B657052\n    M2:E8D256A03DB20C253453EC2A0797A17929812722\n    sk:35E3759DAC4DF1457C5CE61CD4B31DCCAFFFB72147D81413DED7A3F01ACF034775550A1405EC915\n  salt:6B37A6CEB12F98C5E8C272CF03FB29309788CACB2EE988F8138F1D0DF1B35D7A\n  crcs:81E0D44E2411E20714B888FD88629B4B\n   Authentification failed!\n\n[<-Realmd] 4 Bytes\n\n   txt: ....\" \n\n   hex: 01 04 00 00 \n</code></pre>\n",
+            "votes": "1",
+            "user": "Spektre",
+            "time": "Apr 28, 2017 at 9:02",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Reepca",
+                    "text": "<span class=\"comment-copy\">\"I think some bridge or virtual network would do it but that is above my knowledge\" While your post is helpful, that knowledge is exactly what I'm looking for :/</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

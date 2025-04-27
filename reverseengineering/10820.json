@@ -1,0 +1,63 @@
+{
+    "title": "What is all this code for?",
+    "link": "https://reverseengineering.stackexchange.com/questions/10820/what-is-all-this-code-for",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In order to be able to effectively reverse assembly one needs to understand how different compilers work, and what are the common code generation patterns. If you do not know them, you spent much more time figuring out something that is simply an artifact of compiler code generation. </p>\n<p>Given the above, I'd like to understand meaning of the following code. It's from <a href=\"https://github.com/richgel999/lzham_codec\" rel=\"nofollow noreferrer\">lzham_codec</a> library but as you will see in a moment it's not specific to it. I clone this git repo and then I compile the code with VS2015. I set a breakpoint to <a href=\"https://github.com/richgel999/lzham_codec/blob/master/lzhamdll/lzham_api.cpp#L9\" rel=\"nofollow noreferrer\">lzham_codec\\lzhamdll\\lzham_api.cpp</a> (line 9)</p>\n<p>Then I run lzhamtest and the breakpoint hits. I open the Disassembly window, and here is what I see:</p>\n<p><a href=\"https://i.sstatic.net/RZal7.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/RZal7.png\"/></a></p>\n<p>This is an awful lot of code for a function that simply returns a constant. What is all this code for?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "687",
+    "tags": [
+        "assembly",
+        "c++",
+        "compilers"
+    ],
+    "user": "Andrew Savinykh",
+    "time": "Sep 9, 2015 at 4:47",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Try to provide the asm code in text characters when it is as short as your example, providing an image makes it non-machine readable and you cannot copy/paste it easily for further analysis.</span>",
+            "time": null
+        },
+        {
+            "user": "newgre",
+            "text": "<span class=\"comment-copy\">This is most likely a debug build as it fills the stack space with 0xCC and lacks some basic optimizations (e.g. removal of unnecessary push/pop sequences).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'll assume you have a general understanding of the x86 processor architecture, registers, and how the stack works. If you don't, there are a lot of introductions, tutorials, and books out there, which explain things much better than I could in this post.</p>\n<p>The first 2 and last 3 instructions are standard function entry/exit code:</p>\n<pre><code>push ebp\nmov ebp, esp\n....\nmov esp, ebp\npop ebp\nret\n</code></pre>\n<p>they set up the stack for the function, resp. undo this and return to the caller.</p>\n<pre><code>sub esp, 0C0h\n</code></pre>\n<p>makes space for 192 (0xC0) bytes of local variables on the stack.</p>\n<p>The <code>push</code> and <code>pop</code> instructions save registers to the stack that get clobbered by the function, and restore them afterwards:</p>\n<pre><code>push ebx\npush esi\npush edi\n...\npop edi\npop esi\npop ebx\n</code></pre>\n<p>Note that <code>ebx</code> and <code>esi</code> aren't even touched by the rest of the code. But it seems you compiled without optimizations; the abi states that these registers shouldn't be changed by procedures, so the compiler saves them, and without optimizations, it doesn't realize it doesn't need them later and doesn't remove the <code>push? /</code>pop` from the code.</p>\n<pre><code>lea edi, [ebp-0C0h]\nmov ecx, 30h\nmov eax, 0cccccccch\nrep stos dword ptr es:[edi]\n</code></pre>\n<p>This fills all local variables with <code>0xCCCCCCCC</code>, but your C code shows no reason for that. Maybe it has to do with some variable declarations that isn't shown in the code, or maybe the compiler just initializes local variables to <code>0xCCCCCCCC</code> to prevent \"uninitialized variables have undefined values, don't let the code assume they are zero\" errors.</p>\n<p>What remains is</p>\n<pre><code>mov eax,1010h\n</code></pre>\n<p>which is the return instruction - function results are generally returned in the <code>eax</code> register, and <code>0x1010</code> seems to be what <code>LZHAM_DLL_VERSION</code> is defined to.</p>\n</div>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Sep 9, 2015 at 6:27",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">I assume it was compiled with /RTCs which we produce code to initialize the stack.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Andrew Savinykh",
+                    "text": "<span class=\"comment-copy\">Thank you. Nope, no local variables. Do you know why it's 96 bytes and not say 72 or 144? Also do you know why only part of allocated stack memory is filled by <code>cccccccc</code> and not the whole space?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Andrew Savinykh",
+                    "text": "<span class=\"comment-copy\">And also, how <code>0C0h</code> from the code becomes 96 (0x60) in your answer? Is this a typo?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Sorry, this was due to not having had coffee yet this morning. It's <code>30h</code> (=48) times 4 bytes (dword), so it's <code>C0h</code> (=192) bytes, so it's all of the allocated stack.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">The 0xCCCCCCCC are, as @broadway rightfully pointed out, the result of the /RTC switch - which is a default for Debug builds, which also turn off optimizations.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

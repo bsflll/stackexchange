@@ -1,0 +1,37 @@
+{
+    "title": "Reverse engineering serial communication CRC algorithm",
+    "link": "https://reverseengineering.stackexchange.com/questions/13610/reverse-engineering-serial-communication-crc-algorithm",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm working on reverse engineering the serial communication protocol of an obsolete electronic control system, but I'm having trouble figuring out the CRC algorithm and polynomial.\n </p>\n <p>\n  I have reverse engineered another similar system made by the same company in the past. On that previous one I was able to dump the\n  <code>\n   8051\n  </code>\n  micro-controller program from the\n  <code>\n   EPROM\n  </code>\n  and disassemble it. Here is my working code in C, with the original\n  <code>\n   8051\n  </code>\n  disassembly in the comments:\n </p>\n <pre><code>unsigned char CalculateChecksum(void) {\n    unsigned char r1 = 0;               // MOV R1,#0\n    unsigned char r2, r3, c, a;\n\n    for (r2=1; r2<4; r2++) {    // MOV R2,#07\n        a = out_buffer[r2];     // MOV A,@R0\n\n        r3 = a;                 // XCH A,R1\n        a = r1;\n        r1 = r3;\n\n        c = 0;                  // CLR C\n\n        if (a & 0x80) {\n            c = 1;              // FAKE CARRY\n        }\n        a = a << 1;             // RLC A\n        if (c == 1) {           // JNC 0x03E8\n            a = a ^ 0x19;       // XRL A,#19\n        }\n        a = a ^ r1;             // XRL A,R1 (0x03E8)\n        r1 = a;                 // MOV R1,A\n        printf(\"%d: 0x%x \", r2, a);\n    }\n\n    return a;\n}\n</code></pre>\n <p>\n  The problem is that this function does not work on this newer system. I've tried all 255 possible polynomials, so it is unclear wether the algorithms are shared (perhaps with some modifications?) between the different systems, however I believe there is a relation between algorithms.\n </p>\n <p>\n  Here is a capture of some of the transmitted message from one unit:\n </p>\n <pre><code>7E 00 12 03 00 50 FB 01 60 \n7E 00 12 03 00 50 FB 01 60 \n7E 00 12 03 00 50 FB 01 60 \n7E 00 12 03 00 50 FB 01 60 \n7E 00 12 03 00 51 FB 01 61 \n7E 00 12 03 00 51 FB 01 61 \n7E 00 12 03 00 51 FB 01 61 \n7E 00 12 03 00 51 FF 01 65 \n7E 00 12 03 00 51 03 00 69 \n7E 00 12 03 00 51 09 00 6F\n</code></pre>\n <p>\n  0x7E appears to be a preamble, followed by 7 bytes of data, then the checksum byte. Can anyone figure it out?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "847",
+    "tags": [
+        "serial-communication",
+        "crc",
+        "binary-diagnosis"
+    ],
+    "user": "John Voltz",
+    "time": "Sep 28, 2016 at 23:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This question seems simpler than you might expect.\n </p>\n <p>\n  Since as OP noted, the code is irrelevant to validation mechanism used in the discussed system, I shall ignore it. It is indeed irrelevant as will be shown below.\n </p>\n <p>\n  as the first byte in each message indeed looks like a preamble, we'll ignore it. Our goal is to recover the function which, when applied to the given 1-8th bytes (i.e. all bytes except the first and last), provides the last byte.\n </p>\n <p>\n  Lets take the first message provided by OP:\n </p>\n <pre><code>00 12 03 00 50 FB 01 60\n</code></pre>\n <p>\n  Thus, we need to find\n  <code>\n   f\n  </code>\n  such that\n </p>\n <pre><code>f(00 12 03 00 50 FB 01) = 60\n</code></pre>\n <p>\n  The following 3 messages are identical. This is good, it uncovers the fact the validation byte is deterministic with regards to the message bytes, but otherwise useless.\n </p>\n <p>\n  We'll skip to the fifth message and compare it to the first:\n </p>\n <pre><code>f(00 12 03 00 50 FB 01) = 60\nf(00 12 03 00 51 FB 01) = 61\n</code></pre>\n <p>\n  This is nice, we know that a single bit incremental change in the 5th byte of the message causes the exact same change on the output. Adding one to the fifth byte increments the output by one as well.\n </p>\n <p>\n  The same happens for the last two messages:\n </p>\n <pre><code>f(00 12 03 00 51 03 00) = 69 \nf(00 12 03 00 51 09 00) = 6F\n\n9-3 = 6 = 6F-69\n</code></pre>\n <p>\n  Only this time with a different byte and a bigger increment.\n </p>\n <p>\n  We might be willing to assume this relationship is preserved for all bytes and all increments, and we'll be correct.\n </p>\n <p>\n  If it wasn't clear until now, the answer is quite in front of us: The last byte is the sum of all message bytes, modulo 257.\n </p>\n <p>\n  In python, given\n  <code>\n   m = ['00', '12', '03', '00', '51', '09', '00']\n  </code>\n  , the following code will provide the correct value of\n  <code>\n   0x6F\n  </code>\n  :\n </p>\n <pre><code>hex(sum(map(lambda x: int(x, 16), m))%257)\n</code></pre>\n <p>\n  This behaves properly for all provided inputs.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "NirIzr",
+            "time": "Sep 30, 2016 at 9:50",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "John Voltz",
+                    "text": "<span class=\"comment-copy\">Thanks for helping! I tried your Python code, and it works correctly for the data in your example, but if you use m = ['00', '12', '03', '00', '50', 'FB', '01'] the result is 0x61, where it should be 0x60. Am I doing something wrong here?</span>",
+                    "time": null
+                },
+                {
+                    "user": "John Voltz",
+                    "text": "<span class=\"comment-copy\">It actually works perfectly with all of the inputs using mod 257 instead of mod 256. Thanks for the help, I don't know if I would have ever figured that out.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

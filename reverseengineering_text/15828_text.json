@@ -1,0 +1,111 @@
+{
+    "title": "Is there a tool capable of reconstructing structured code from arbitrary assembly code?",
+    "link": "https://reverseengineering.stackexchange.com/questions/15828/is-there-a-tool-capable-of-reconstructing-structured-code-from-arbitrary-assembl",
+    "content": "Essentially, I'm looking for a tool that could reconstruct pseudocode with conditional operators, loops, break/continue, etc. from assembly language code for an arbitrary CPU, given only a limited understanding of the assembly constructs related to control flow, and taking anything that it doesn't understand as opaque blobs. Alternatively, it wouldn't need to understand any assembly if it could take pseudocode \"if (condition) goto label\" and \"goto label\" as basic block boundaries.\nFor example,\n<pre><code>    blob1\n    CMP A, B\n    BLE L1\n    blob2\n    CMP C, D\n    BEQ L2\nL1: \n    blob3\n    CMP E, F\n    BGT L3\nL2: \n    blob4\n    ...\n    B L4\nL3: \n    blob5\nL4: \n    blob6\n</code></pre>\nCould become either something like\n<pre><code>blob1;\nif ( A > B && { blob2; C == D } || {blob3; E <= F} ) { \n    blob4;\n} else {\n    blob5;\n}\nblob6;\n</code></pre>\nor a conventional tree of ifs, if <pre><code>blob2</code></pre> and <pre><code>blob3</code></pre> are \"too large\".\nAlso, the variables A to F don't have to follow any addressing mode conventions, they can be arbitrary strings, reproduced literally in the output.\nThe tool doesn't need to know anything but how the labels look like, and the style of the comparison operators and the branches (one comparison instruction produces condition codes consumed by various branch instructions, vs. various comparison instructions produce a true/false value in a register, consumed by \"branch if true\" and \"branch if false\" instructions, etc).\nThings become somewhat nontrivial when these structures are nested, labels are reused, break/continue were used in the source code, incidental non-structured control transfers may occur, and so on.\nSwitch/case statements are separate story. To recognize them adequately, \na deeper understanding of the underlying ISA is needed.\nIt appears that what I need is an implementation of the basic DREAM decompilation algorithm; I was unable to find a straightforward implementation that takes a CFG in a text format as input.\n",
+    "votes": "5",
+    "answers": 4,
+    "views": "2k",
+    "tags": [
+        "decompilation"
+    ],
+    "user": "Leo B.",
+    "time": "Jul 18, 2017 at 1:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Initial comments:\n\nThe process being described in the question is not decompilation\nThe definition associated with the \"decompilation\" tag is not correct\nNo tool in existence performs the described process, for several reasons:\n\nAny given assembly language is necessarily strongly related to the machine language of the target processor\nDue to the strong relationship between assembly code (text) and the object code (binary machine language) it is a symbolic representation of, it seems doubtful that the functional equivalent of a universal assembly language translator could exist in the first place \nPseudocode by definition does not conform to a language specification. This precludes lexical analysis, which is an essential step in text to text transformation\nDecompilers do not accept arbitrary text as input, because they create CFGs from parsed machine code. Additionally, approaches to CFG contstruction differ between decompilers, because the CFGs are used to create intermediate representations which vary across decompilers.\nSince decompilers use architecture-independent intermediate representations to perform machine code to HLL translation, the need to develop a tool that somehow parses arbitrary pseudo-assembly does not exist\n\nWhile assembly source text instructions generally have a 1-to-1 relationship with target machine language instructions, intermediate representations can be language- and architecture-independent. It depends on the choice of intermediate representation\n\nDecompilation\n1. It is important to be able to refer to a correct definition of decompilation in order to get some sense of what it entails\nAs stated previously, the definition associated with the \"decompilation\" tag is not correct. Here it is:\n\nProcess of translating assembly code extracted from a binary file in a structured programming language, such as C.\n\nWe can compare this definition to correct definitions offered in academic literature:\n\nA decompiler is a program that reads a program written in a machine language – the source language – and translates it into an equivalent program in a high-level language – the target language. A decompiler, or reverse compiler, attempts to reverse the process of a compiler which translates a high-level language program into a binary or executable program.1\n\nMore directly:\n\nAt its surface, decompilation is the recovery of a program’s source code given only its binary. Underneath, decompilation consists of a collection of abstraction recovery mechanisms such as indirect jump resolution, control flow structuring, and data type reconstruction, which recover\n  high-level abstractions that are not readily available in the binary form.2\n\nCertain inferences can be made based on the correct definitions:\n\nThe input to a decompiler is expected to be object code, not ASCII text or renditions of object code by way of mnemonics. To suggest - incorrectly - that assembly code (the symbolic language representation of machine code) is the expected input is a critical conceptual error. This is why the tag definition needs to be changed, as this error could lead to confusion or misunderstanding\nThe purpose of decompilation is to create a semantic approximation by way a high level language of the operations encoded in the binary as object code. In order to create such an approximation to an acceptable degree of accuracy, a variety of methods are necessary to compensate for information loss that occurs during the compilation process. In other words, the less principled one is regarding abstraction recovery, the less accurately the decompiled source text will be as an approximation of information encoded the object code of a binary\n\n2. Decompilation makes use of intermediate representations, not assembly language text, to create HLL output\nHere is an outline of what is generally involved:\n\nAnother example:\n\nControl Flow Graph Recovery  The first stage parses the input binary’s file format, disassembles the binary, and creates a control flow graph (CFG) for each function. At a high level, a control flow graph is a program representation in which vertices represent basic blocks, and edges\n  represent possible control flow transitions between blocks.(See §2.1 for more detail.) While precisely identifying binary code in an executable is known to be hard in the general case, current algorithms have been shown to work well in practice [4, 5, 24, 25]. There are mature platforms that already implement this step. We use the CMU Binary Analysis Platform\n  (BAP) [10]. BAP lifts sequential x86 assembly instructions in the CFG into an intermediate language called BIL, whose syntax is shown in Table 1 (see [10]). As we will see, the end goal of Phoenix is to decompile this language into the high-level language shown in Table 2.2\n\nThe order of steps taken by CMU's Phoenix decompiler is slightly different from the order depicted in the diagram from Cristina Cifuentes' \"Reverse Compilation Techniques\" (her decompiler was called dcc): Phoenix creates a CFG for the binary, then translates it into an intermediate language rather than the other way around.\nYet another example, from No More Gotos: Decompilation Using Pattern-Independent Control-Flow Structuring and Semantics-Preserving Transformations:\n\nAs is evident from the first sentence, the input to DREAM is a binary. Unlike Phoenix, which uses the BAP Intermediate Language as an intermediate representation, DREAM uses its own unspecified form of intermediate representation.\nFinal example - based on the dated discussion of the Hex-Rays decompiler from the Decompilers and beyond white paper, the general decompilation procedure looks like this:\n\nMicrocode generation\nThe local optimization\nGlobal optimization\nLocal variable allocation\nStructural analysis\nInitial pseudocode\nPseudocode transformations\nType analysis\n\nIn a nutshell, the Hex-Rays decompiler converts the object code from a binary to microcode, creates a CFG, uses the CFG to create psuedocode (some unspecified, probably proprietary, intermediate representation) and then outputs the transformed psuedocode.\nSome clear patterns emerge when these different decompilers are examined.\nThere are several good reasons that both compilers and decompilers use intermediate representation as part of the translation process. The main reason is that an IR can be both language- and architecture-independent while at the same time preserving the information encoded in the source language. This aspect of IR completely eliminates the need for the equivalent of a universal assembly language-to-pseudocode translator. The binary to CFG to IR approach is vastly superior and well established.\n\nSource: Princeton CS320 Intermediate Representation lecture notes\nResponses to assorted comments\n\nIt appears that what I need is an implementation of the basic DREAM decompilation algorithm; I was unable to find a straightforward implementation that takes a CFG in a text format as input.\n\nNo such implementation exists. As discussed previously, DREAM constructs a CFG from parsed object code contained in a binary file. \n\nI already have my own disassembler. Using a tool that takes binary as input would be a waste of effort.\n\nA tool that takes object code as input and produces assembly language ASCII text as output is irrelevant with respect to decompilation. Reinventing the wheel would be a waste of effort. Incidentally, all of the aforementioned decompilers take binary files as input.\n\nMy point is that reconstructing control flow structures is virtually independent on the architecture. I could bring the input one step higher: If one has a graph of opaque basic blocks connected by \"if (condition) goto\" and \"goto\", it should be possible to restore the original if-then-else statements and loops, and a tool that could do it won't need any disassembler capability\n\nCFGs are generated via object code analysis in order to preserve as much information as possible. More preserved information = more accurate decompilation. Object code format depends directly on the architecture.\n\n1. Reverse Compilation Techniques\n2. Native x86 Decompilation Using Semantics-Preserving Structural Analysis and Iterative Control-Flow Structuring\n",
+            "votes": "4",
+            "user": "julian",
+            "time": "Jul 19, 2017 at 3:24",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">What I'm asking for is a substantial subset of the actions performed by a decompiler, therefore the tag is appropriate;  the desired functionality is clearly defined: given a CFG as input, produce its reduction into loops and conditionals using break and continue when necessary, minimizing remaining unstructured gotos if the original CFG was irreducible. What exactly was your answer intended to serve?</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@LeoB. \"Is there a tool capable of reconstructing structured code from arbitrary assembly code?\" - No.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">A more useful answer could have been two orders of magnitude shorter : \"Represent your abstract assembly code as a C program with basic blocks as externally defined procedures, variables in conditions as externally defined functions, and as many gotos as you like, compile it to an optimized x86 binary, then pass it through an existing x86 decompiler.\" This is a little circuitous, but is likely to serve the purpose.</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@LeoB. This \"solution\" involves starting with some assembly language, representing  it as a HLL, compilation and then decompilation. After so many transformations it would be surprising if the decompiled code represents the original machine code well enough to be useful. It is unsurprising that this approach to binary analysis is never taken, given the existence of well-established methods that are more efficient and more accurate. Other than that I have nothing more to say.</span>",
+                    "time": null
+                },
+                {
+                    "user": "rocky",
+                    "text": "<span class=\"comment-copy\">@SYS_V The decompilation process you describe is slanted towards binary to a more statically typed and/or compiled language. For bytecode to dynamic language the terrain is a bit different. See <a href=\"http://rocky.github.io/Deparsing-Paper.pdf\" rel=\"nofollow noreferrer\">rocky.github.io/Deparsing-Paper.pdf</a> for my take on the latter.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "IDA Pro is the nearest I am aware of. Whilst it only has decompilers for I think x86 and PPC, it handles many more CPUs and appears to have a limited understanding of control flow as illustrated by viewing a function in graphical mode. Using IDA Python you can parse a function, follow control flow and output a text file easily, but it would only get you to blob trees linked by true/false branches.\nDisassembling my own and other microcontroller code leads me to conclude that a good decompiler needs specific information about the compiler and the CPU. Just following something manually can be difficult with structures of pointers, indirect addressing and limited type information.\n",
+            "votes": "1",
+            "user": "John Banks",
+            "time": "Jul 17, 2017 at 12:58",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">I already have my own disassembler. Using a tool that takes binary as input would be a waste of effort.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">Apparently I need the control flow structuring algorithm from the <a href=\"https://www.google.com/search?q=dream+decompiler\" rel=\"nofollow noreferrer\">dream decompiler</a>, but a few tools claiming to use it that I could find take x86 ELF as input.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "It's hard to say whether such a tool exists without knowing which CPU architecture you want to target. However, I would recommend radare2 for two reasons:\n\nit supports a lot of architectures, even exotic ones\nit's open source and extensible — in case your CPU isn't supported, you can integrate an existing disassembler implementation or write one by yourself.\n\nHowever, keep in mind that it will only produce flow control graph. Some data flow analysis may be available if the disassembler implements it.\n",
+            "votes": "1",
+            "user": "Vladislav Ivanov",
+            "time": "Jul 17, 2017 at 15:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">My point is that  reconstructing control flow structures is virtually independent on the architecture. I could bring the input one step higher: If one has a graph of opaque basic blocks connected by \"if (condition) goto\" and \"goto\", it should be possible to restore the original if-then-else statements and loops, and a tool that could do it won't need any disassembler capability.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Vladislav Ivanov",
+                    "text": "<span class=\"comment-copy\">@LeoB. radare2 has C-like output, but it's nowhere near usable. The problem with \"if condition goto\" is that restoring the original condition is hard and keeping conditions like <code>if (eax = 3)</code> is not really useful. What you asking for is probably a more generic decompiler framework with data flow analysis independent from architecture. One such tool is Retargetable Decompiler, but it's only available online and doesn't seem to be actively developed.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">My question is even narrower: I don't need a framework, I need a single tool with text input and text output.  Its complexity would likely be at the level of a research thesis rather than an industrial product.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">Looks like a need an implementation of the architecture-independent part of the DREAM algorithm.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Leo B.",
+                    "text": "<span class=\"comment-copy\">They will be useful for my purpose: I'm reversing a piece of retro-software (a Pascal compiler), compiled by itself with virtually no optimization.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I'm going to represent my abstract assembly code as a C program with basic blocks as externally defined procedures, variables in conditions as externally defined functions, etc. compile it to an optimized x86 binary, then pass it through an existing x86 decompiler.\nUsing an example from the question:\n<pre><code>extern void blob1(), blob2(), blob3(), blob4(), blob5(), blob6();\nextern int A(), B(), C(), D(), E(), F();\nmain() {\n    blob1();\n    if (A() < B()) goto L1;\n    blob2();\n    if (C() == D()) goto L2;\nL1: blob3();\n    if (E() > F()) goto L3;\nL2: blob4();\n    goto L4;\nL3: blob5();\nL4: blob6();\n}\n</code></pre>\nA decompiler produces:\n<pre><code>_blob1();\nint32_t v2 = _A();\nint32_t v3;\nif (v2 < _B()) {\n    _blob3();\n    v3 = _E();\n    if (v3 > _F()) {\n        _blob5();\n        _blob6();\n        return 0;\n    }\n    _blob4();\n    _blob6();\n    return 0;\n}\n_blob2();\nint32_t v4 = _C();\nif (v4 != _D()) {\n    _blob3();\n    v3 = _E();\n    if (v3 > _F()) {\n        _blob5();\n        _blob6();\n        return 0;\n    }\n}\n_blob4();\n_blob6();\n</code></pre>\nThat's not perfect, but it will do.\n",
+            "votes": "0",
+            "user": "Leo B.",
+            "time": "Jul 19, 2017 at 5:22",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+  "title": "How to breakpoint exe tcp packet",
+  "link": "https://reverseengineering.stackexchange.com/questions/18849/how-to-breakpoint-exe-tcp-packet",
+  "content": "I am debugging an executable in windows with IDA.\n\nMy exe sends a TCP packet and I want to see which function it uses to send the packets.\nI looked on the import tab and haven't found any function that had the strings tcp or send buffer in their names or something like this.\n\nHow can I find the function responsible for sending the TCP packet and how can I can see the buffer that is being sent (right before sending)?\n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "ida",
+    "windows",
+    "breakpoint",
+    "networking"
+  ],
+  "user": "Keystone",
+  "time": "Jul 22, 2018 at 12:47",
+  "comments": [
+    {
+      "user": "josh poley",
+      "text": "Look at the imports from ws2_32.dll (winsock library). send and WSASend are the common APIs for sending TCP packets. Note that some apps will import by ordinal, so you won't see the name in the import table.",
+      "time": null
+    },
+    {
+      "user": "Biswapriyo",
+      "text": "Possible method: 1. Find a subroutine that has WSAStartup() function. 2. Open that subroutine in graph mode. 3. Analyse that subroutine and it's child subroutines also in graph mode.",
+      "time": null
+    },
+    {
+      "user": "Keystone",
+      "text": "@Biswapriyo I don't have source code, only exe file",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "open procmon from sysinternals \n\nadd a filter with your process name \n\nand take a look at stack trace \n\nif you have configured symbols then you get a pretty good overview \n\na small python server and client  (mod from wiki.python)\n\n```\n:\\>cat server.py\nimport socket\ns = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\ns.bind(('127.0.0.1', 5005))\ns.listen(1)\n\nconn, addr = s.accept()\nprint 'Connection address:', addr\nwhile 1:\n    data = conn.recv(20)\n    if not data: break\n    print \"received data:\", data\n    conn.send(data)  # echo\nconn.close()\n\n\n:\\>cat client.py\nimport socket\ns = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\ns.connect(('127.0.0.1', 5005))\ns.send(\"Hello, World!\")\ndata = s.recv(1024)\ns.close()\nprint \"received data:\", data\n:\\>\n\n```\nprocmon filtering only network activity of python.exe \n\n\n\nexecuting the server and client \n\n\n\nprocmon captured these network events\n\n\n\nand here is the call stack for the First TcpConnectEvent\n\n```\nFrame,          Module,         Location\n00,         ntkrnlpa.exe,       EtwpTraceNetwork + 0x55\n01,         tcpip.sys,          TcpTraceConnectionEstablishment + 0xdc\n02,         tcpip.sys,          TcpCreateAndConnectTcbComplete + 0x576\n03,         tcpip.sys,          TcpSynchronizeTcbDelivery + 0x28\n04,         tcpip.sys,          TcpTcbCarefulDatagram + 0x47e\n05,         tcpip.sys,          TcpTcbReceive + 0x228\n06,         tcpip.sys,          TcpMatchReceive + 0x237\n07,         tcpip.sys,          TcpPreValidatedReceive + 0x293\n8,          tcpip.sys,          TcpReceive + 0x2d\n9,          tcpip.sys,          TcpNlClientReceiveDatagrams + 0x12\n10,         tcpip.sys,          IppDeliverListToProtocol + 0x49\n11,         tcpip.sys,          IppProcessDeliverList + 0x2a\n12,         tcpip.sys,          IppReceiveHeaderBatch + 0x1fb\n13,         tcpip.sys,          IppLoopbackTransmit + 0x226\n14,         tcpip.sys,          IppLoopbackEnqueue + 0x13d\n15,         tcpip.sys,          IppDispatchSendPacketHelper + 0xf6\n16,         tcpip.sys,          IppPacketizeDatagrams + 0x8d6\n17,         tcpip.sys,          IppSendDatagramsCommon + 0x652\n18,         tcpip.sys,          IpNlpSendDatagrams + 0x4b\n19,         tcpip.sys,          IppSlowSendDatagram + 0x31\n20,         tcpip.sys,          IpNlpFastSendDatagram + 0x1067\n21,         tcpip.sys,          TcpTcbSend + 0x787\n22,         tcpip.sys,          TcpCreateAndConnectTcbRateLimitComplete + 0x6d2\n23,         tcpip.sys,          TcpCreateAndConnectTcbInspectConnectComplete + 0x20d\n24,         tcpip.sys,          TcpContinueCreateAndConnect + 0x69b\n25,         tcpip.sys,          TcpCreateAndConnectTcbInspectConnectRequestComplete + 0xf8\n26,         tcpip.sys,          TcpCreateAndConnectTcbWorkQueueRoutine + 0x4df\n27,         tcpip.sys,          TcpCreateAndConnectTcb + 0x82a\n28,         afd.sys,            AfdConnect + 0x826\n29,         afd.sys,            AfdDispatchDeviceControl + 0x3b\n30,         ntkrnlpa.exe,       IofCallDriver + 0x63\n31,         aswArPot.sys,       aswArPot.sys + 0xfef3\n32,         ntkrnlpa.exe,       IofCallDriver + 0x63\n33,         ntkrnlpa.exe,       IopSynchronousServiceTail + 0x1f8\n34,         ntkrnlpa.exe,       IopXxxControlFile + 0x6aa\n35,         ntkrnlpa.exe,       NtDeviceIoControlFile + 0x2a\n36,         ntkrnlpa.exe,       KiSystemServicePostCall\n37,         ntdll.dll,          ZwDeviceIoControlFile + 0xc\n38,         mswsock.dll,        SockDoConnectReal + 0x29e\n39,         mswsock.dll,        SockDoConnect + 0x3a1\n40,         mswsock.dll,        WSPConnect + 0x1f <<------\n41,         ws2_32.dll,         connect + 0x52 <<<<----\n42,         _socket.pyd,        init_sockobject + 0xf78  <<--parent\n43,         _socket.pyd,        init_sockobject + 0x10f2\n44,         python27.dll,       PyCFunction_Call + 0xe3\n45,         python27.dll,       PyEval_GetFuncDesc + 0xb0a\n46,         python27.dll,       PyEval_EvalFrameEx + 0x247b\n47,         python27.dll,       PyEval_EvalCodeEx + 0x7dc\n48,         python27.dll,       PyFunction_SetClosure + 0x9a1\n49,         python27.dll,       PyObject_Call + 0x4c\n50,         python27.dll,       python27.dll + 0x7ac5\n51,         python27.dll,       PyObject_Call + 0x4c\n52,         python27.dll,       PyEval_GetFuncDesc + 0x834\n53,         python27.dll,       PyEval_GetFuncDesc + 0x3d5\n54,         python27.dll,       PyEval_EvalFrameEx + 0x23cf\n55,         python27.dll,       PyEval_EvalCodeEx + 0x7dc\n56,         python27.dll,       PyRun_FileExFlags + 0xcf\n57,         python27.dll,       PyRun_FileExFlags + 0x6e\n58,         python27.dll,       PyRun_SimpleFileExFlags + 0x201\n59,         python27.dll,       PyRun_AnyFileExFlags + 0x57\n60,         python27.dll,       Py_Main + 0xa4c\n61,         python.exe,         python.exe + 0x1180\n62,         kernel32.dll,       BaseThreadInitThunk + 0xe\n63,         ntdll.dll,          __RtlUserThreadStart + 0x70\n64,         ntdll.dll,          _RtlUserThreadStart + 0x1b\n\n```\n",
+      "votes": "2",
+      "user": "blabb",
+      "time": "Jul 21, 2018 at 21:59",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Keystone",
+          "text": "Take a look on stackTrace in ida?  If I running this process with ida debugger,and want to look on stackTrace I must click on suspend button, then I not see tcp tcp communication in stackTrace",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "There's a huge variary of windows API functions that let a program send TCP packets. Non of those (as far as I recall) contain the strings tcp or send buffer in their name.\n\nto reverse engineer network communication, you should start by gaining some knowledge on how packets are sent my programs, what are the relevant APIs and how they're used. This will most likely begin with reading the documentation over at MSDN.\n\nHere are some pointers:\n\n",
+      "votes": "1",
+      "user": "NirIzr",
+      "time": "Jul 22, 2018 at 12:45",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

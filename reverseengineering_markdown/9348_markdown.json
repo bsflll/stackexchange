@@ -1,0 +1,88 @@
+{
+  "title": "Why are PUSHF and POPF so slow?",
+  "link": "https://reverseengineering.stackexchange.com/questions/9348/why-are-pushf-and-popf-so-slow",
+  "content": "the experiment is on 32-bit x86 Linux.\n\nI am doing some static binary instrumentation work, and basically I am trying to insert some instructions below to the beginning of every basic block. \n\n```\nBB23 : push %eax\n\nmovl index,%eax\nmovl $0x80823d0,buf(,%eax,0x4)\nadd $0x1,%eax\ncmp $0x400000,%eax\njle BB_23_stub\nmovl $0x0,%eax\nBB_23_stub:movl %eax,index\n\npop %eax\n\n```\nNote that I need to use cmp instruction, and in order to guarantee that flags can restore to the original value, I use pushf and popf to store\\load flags on the stack. \n\nThen it becomes this:\n\n```\n BB_23 :    push %eax\n       pushf               \n       movl index,%eax\n       movl $0x17,buf(,%eax,0x4)\n       add $0x1,%eax\n       cmp $0x400000,%eax\n       jle BB_23_stub\n       movl $0x0,%eax\nBB_23_stub:movl %eax,index\n       popf             \n       pop %eax\n\n```\nI tested the performance with and without pushf and popf (I am using gzip and bzip). And to my surprise, performance penalty could increase  even 3 times after using the pushf and popf instructions!!\n\nHowever, without pushf and popf. The compression results of gzip and bzip are incorrect.\n\nSo here is my question:\n\nWhy pushf and popf so slow? Am I using it in a correct way?\n\nI cannot afford too much performance penalty introduced by pushf and popf. Is there any way I can avoid the high overhead and also keep the correct semantics? (protecting the value in flags, basically..)\n\nAm I clear enough? Could anyone give me some help?\n\n",
+  "votes": "5",
+  "answers": 4,
+  "views": "2k",
+  "tags": [
+    "binary-analysis",
+    "x86",
+    "instrumentation",
+    "binary"
+  ],
+  "user": "lllllllllllll",
+  "time": "Sep 19, 2015 at 2:49",
+  "comments": [
+    {
+      "user": "Guntram Blohm",
+      "text": "1) Just an idea without any claim to correctness: pushf might wreck havoc on the instruction pipeline, since it needs all flags valid, while most other instructions don't care about the flags. In the same way, the pipeline might get delayed by popf if an instruction that needs a flag follows. 2) I'd replace your add - cmp - jle - mov combo with inc %eax, and $0x3fffff, %eax which should speed up the code a bit since it avoids a branch. This won't help you with flags, however, I don't see a way to do this without touching flags.",
+      "time": null
+    },
+    {
+      "user": "Guntram Blohm",
+      "text": "Oh, and replacing inc %eax  with lea eax, [eax+1] (sorry, Intel Syntax, I don't really like AT&T syntax and don't know how to translate it right now) will avoid changing the flags like inc does. Now if i could just figure out how to do the and without changing flags and you could get rid of those pesky pushf and popf instructions ...",
+      "time": null
+    },
+    {
+      "user": "lllllllllllll",
+      "text": "@GuntramBlohm. Brilliant!! I really really appreciate your kind help! It really saves my ass..",
+      "time": null
+    },
+    {
+      "user": "Guntram Blohm",
+      "text": "You seem to be starting with index 0, incrementing up to 0x400000 and wrapping around there. If you can afford to do it the other way round, you could misuse the loop instruction which doesn't change flags. Initialize your index to 0x400000, use ecx instead of eax, and to decrement and re-init on zero, use loop forward, mov $0x400000, %ecx, forward: movl %ecx, index. Consider the loop a decrement and jump if not zero.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Clever (some would say incomprehensible) misuse of x86 features could do this for you. The loop instruction will decrement the ecx register, jump if it's nonzero, and not modify flags. You can use this as a jump forward instruction as well, like this:\n\n```\nBB23:      push %ecx\n           movl index, %ecx\n           movl $0x17, buf-4(,%ecx,4)\n           loop BB23_stub\n           movl $0x400000, %ecx\nBB23_stub: movl %ecx, index\n           pop %ecx\n\n```\nNote that ecx runs from 0x400000 to 1 here, not from 0 to 0x3fffff, so i had to subtract 4 from the address of buf, and you need to read the buffer top to bottom when analyzing it. Don't forget to initialize index to 0x400000 at the start of your code somewhere. You'll have to test how much the penalty of  branching in loop costs in comparison to how much removing pushf/popf gains.\n\n",
+      "votes": "9",
+      "user": "Guntram Blohm",
+      "time": "Jul 14, 2015 at 19:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Peter Cordes",
+          "text": "loop is really slow (7 uops, throughput of one per 5 cycles), but saving/restoring the flags is even slower.  (pushf = 3 uops, popf = 9).  (Intel SnB/Haswell).",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "Yes, it sounds like loop is your best option.  Just keep in mind, that one loop is taking more execution resources, and more space in the uop cache, than all 6 other instructions combined.  Hopefully it's still light-weight enough for your purposes.",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "Possibly faster: push %eax / lahf / use flags / sahf / pop %eax.  load/store AH from/to flags are single-uop, single-cycle-latency instructions on current Intel and AMD CPUs.  If you're instrumenting something that doesn't touch the MMX / x87 registers, you could use them for storing index, and maybe also for masking it after wraparound.  Oh, I see there was already an answer with this.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "If you look at lib/Target/X86/X86InstrInfo.cpp in the LLVM source code you can see that they prefer the LAHF and SAHF instructions to PUSHF and POPF for speed reasons.  These instructions don't deal with the overflow flag OF so this must be handled with separately.\n\n```\nalt_pushf:        seto %al                  ; save OF to AL\n                  lahf                      ; save other flags to AH\n                  push %eax                 ; push\n\nalt_popf:         pop %eax                  ; pop\n                  addb $127, %al            ; restore OF\n                  sahf                      ; restore other flags\n\n```\nI don't know if this will be any faster than @GuntramBlohm's clever LOOP option so it might be worth benchmarking.\n\n(Note that should you want to use this in future for 64-bit code you will need to check for the presence of the LAHF and SAHF instructions.)\n\n",
+      "votes": "4",
+      "user": "Ian Cook",
+      "time": "Jul 18, 2015 at 20:07",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Posting a 2nd answer for a different method, combining cmov to avoid a skip-1-instruction branch with @Ian Cook's nice lahf/sahf.\n\n```\n       push   %ecx\n       movl   index, %ecx\n\n       push   %eax\n       seto   %al            # save OF to AL\n       lahf                  # save other flags to AH\n\n       movl   $0x17,  buf(,%ecx,0x4)\n       dec    %ecx\n       cmovc  buflen, %ecx       # load buflen constant from memory on wraparound\n\n       addb $127, %al            # restore OF\n       sahf                      # restore other flags\n       pop %eax\n\n       movl   %ecx,index\n       pop %ecx\n\n```\nThis is 14 insns, all single-uop single cycle latency (on Intel).  So it's probably still slower than the LOOP version, except for not affecting the branch predictor if this code is duplicated all over the place.\n\nWith Intel ADX (add-with-carry using CF or OF, to allow two dep chains in parallel), you can avoid clobbering the overflow flag.  But it doesn't take an immediate arg, so you need a constant (-4) in memory.  You need to detect wrapping around zero, and avoid cmp.  This instruction set extension was first supported in Broadwell (barely available for desktops, and not even all currently-for-sale laptops have it.)\n\nAnyway, clc / adcx  minus_one, %ecx  instead of dec %ecx would save net instructions (one clc to save a seto and addb $127 to save/restore the overflow flag), which isn't much.  13 uops is still more than my other answer, using an MMX reg for sub/mask to avoid touching flags.\n\nAnother possibility is using lea, and zeroing the high bits with a non-flag-affecting left and right shift (BMI2 (Haswell) instruction set's SHLX / SHRX).  This avoids touching flags entirely:\n\n```\n       push   %ecx\n       movl   index, %ecx\n\n       movl   $0x17,  buf(,%ecx,0x4)\n       lea    -1(%ecx), %ecx\n       push   %eax\n       movl   $bit_count, %eax   # 32 - significant bits in buflen\n       shlx   %eax, %ecx, %ecx   # shift count has to be in a reg\n       shrx   %eax, %ecx, %ecx\n       pop    %eax\n\n       movl   %ecx,index\n       pop %ecx\n\n```\nWell crap, no-flag shifts are only available as (Intel syntax) shrx  r32a,  r/m32,  r32b, loading the the value to be shifted, not the shift count.  And an immediate shift count isn't available either, so I still needed to push/pop eax to get a 2nd register.\n\nSo this is 11 uops on Intel, all single-cycle latency.  It still doesn't beat the mmx version.\n\n",
+      "votes": "2",
+      "user": "Peter Cordes",
+      "time": "Jul 22, 2015 at 8:30",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "What if you have index count downward, and unconditionally mask it to handle wraparound, instead of a conditional?  Hmm, AND sets all the flags, including OF (which isn't saved/restored with lahf/safh).  You could use an MMX register, but PAND doesn't have an immediate form, so you'd need to have the constant in memory.\n\n```\nBB23:      push %ecx\n           ; movq %mm0, -8(%esp)   ; not safe if a signal handler fires while data is below the stack.\n            ;  x86 has no red-zone.  But we can't sub $16, %esp  without clobbering flags\n           movq   %mm0, save_mm0\n           movd   index, %mm0\n           psubd  one, %mm0      ;  mmx has no dec-by-one\n           pand   my_mask, %mm0   ; (0x400000-1).  0-max -> untouched.  all-1s after wraparound -> max\n           movd   %mm0, %ecx\n           movl   $0x17, buf(,%ecx,4)\n           ; movq   -8(%esp), %mm0\n           movq   save_mm0, %mm0\n           movl   %ecx, index\n           pop    %ecx\n\n```\nOn Intel, this is 10 uops, so it's potentially faster than the version using LOOP.  Or only 8, if the code you're instrumenting doesn't use MMX, or doesn't use SSE, so you could avoid saving / restoring a vector reg.  Jumps interrupt the flow of uops from the decoders or uop cache, so it has that going for it, too.\n\nIt needs another 8 bytes of constants.  If they're in the same cache-line as index, that's not a big deal.  It does take significantly more instruction bytes.  On the upside, it's branchless, so inserting it all over the place won't pollute the branch predictor with a lot of taken branches.  (Arranging branches so the non-taken case is the common one would be better.  The save/restore flags version could use a cmov from a zeroed memory location, instead of a branch.)\n\nOn SnB and newer, the scaled-offset version of store might not micro-fuse.   If the immediate data doesn't count as a 3rd input dependency, then it still can.  Otherwise, scale everything up by 4, including the constant for psubd, then the store is movl $0x17, buf(%ecx).\n\nMy first version was going to save %mm0 on the stack, but there's no push for MMX regs.  That would have made it 11 uops, counting the stack-engine synchronization uop inserted before the movq %mm0, -8(%rsp), since it follows a stack instruction (push).\n\n",
+      "votes": "1",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

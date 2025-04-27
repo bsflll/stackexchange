@@ -1,0 +1,53 @@
+{
+    "title": "reversing ios notes file format [closed]",
+    "link": "https://reverseengineering.stackexchange.com/questions/14387/reversing-ios-notes-file-format",
+    "content": "Closed. This question is off-topic. It is not currently accepting answers.\n                                \n                            \n\n\n\n\n\n\n\n\n\n\n\n Questions asking for help reverse-engineering a specific system are off-topic unless they demonstrate an understanding of the concepts involved and clearly identify a specific problem.\n\n\nClosed 8 years ago.\n\n\n\n\n\n\n\n                        Improve this question\n                    \n\n\n\nI am trying to understand how to read iOS notes files as they are saved in the NoteStore.sqlite database in the iOS backup.\nHere are some sample files. Each file is a different note. \nI want to get only the text out of it but can't figure out how. \nI already understand that the textual part of the note is seperate from other parts (like links, pictures etc.) Can't find the length field so I can get the textual part. \nWhen the note is shorter than 256 characters the 14th byte is the length.\nBut when it's longer, I can't figure it out. \nCan anyone reverse this?\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "534",
+    "tags": [
+        "file-format",
+        "ios",
+        "protocol"
+    ],
+    "user": "Nlandau",
+    "time": "8 years ago",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "Are you sure those are not just sqlite files? If they are, there are plenty of libraries to parse this file format and there's no need to reverse engineer it.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "You are right about the 14th byte being the length on (some) short notes, like your file <pre><code>4</code></pre>:\n<pre><code>00000000  08 00 12 d6 02 08 00 10 00 1a cf 02 12 1b 54 68   ..............Th\n00000010  69 73 20 6e 6f 74 65 20 69 73 20 74 68 65 20 66   is note is the f\n00000020  69 72 73 74 20 6f 6e 65 20 1a 10 0a 04 08 00 10   irst one .......\n00000030  00 10 00 1a 04 08 00 10 00 28 01 1a 10 0a 04 08   .........(......\n</code></pre>\nHowever, this is not always the case; in your file <pre><code>9</code></pre>, which is even shorter, the length, at first glance, is at position 26, with the text after that:\n<pre><code>00000000  08 00 12 81 01 08 00 10 00 1a 7b 12 17 d7 90 d7   ..........{.....\n00000010  91 d7 90 0a d7 92 d7 93 d7 94 0a 31 32 33 34 35   ...........12345\n00000020  36 37 38 39 1a 10 0a 04 08 00 10 00 10 00 1a 04   6789............\n</code></pre>\nand observing closely, you can see that in longer files, the text starts one byte behind that:\n<pre><code>00000000  08 00 12 c5 07 08 00 10 00 1a be 07 12 ac 02 49   ...............I\n00000010  6e 67 72 65 64 69 65 6e 74 73 20 0a 0a 32 20 63   ngredients ..2 c\n</code></pre>\nThe reason for this is that the length is coded in a special format: if the byte has its low order bit clear, then the byte is the length itself. If the high order bit is set, take only the low 7 bits, and prepend the next byte before that. For example, <pre><code>ac 02</code></pre>:\n<pre><code>1010 1100 0000 0011       => remove 1st bit from 1st byte and prepend 2nd byte\n0000 0011 010 1100        => fill a 0 bit from the left and write in standard nibble notation\n0000 0001 1010 1100       => this is 1AC hex, or 428 bytes, which is the length of the note\n</code></pre>\nIt seems that the length of the file (minus some header) is encoded in the same way starting at position 11. This explains why file <pre><code>9</code></pre> is different: it's the only one short enough to have a length < 0x80 (0x7b), so it needs only one byte here, so everything else is shifted left one byte.\nAnd actually, I guess that the \"first glance\" was wrong; the real length of note 9 is 23 (hex 17), and it consists of 2 lines of 3 unicode characters each (utf-8? This translates those bytes to hebrew characters, or maybe integers in the same encoding as above, yielding unicode code points), ended with a newline, and it's an unfortunate coincidence that the <pre><code>0a</code></pre> newline looks like the length byte for the numbers.\nSo, to extract the text, seek to position 11, read a number which can be 1 or 2 bytes according to above, skip one byte which should be <pre><code>12</code></pre>, read the length of 1 or 2 bytes, then read the text. Actually, i suspect that bytes 4 and 5 are some integer as well; so maybe you should start with byte 4 and adjust the offsets depending on whether it has bit 8 set or not.\n",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Jan 13, 2017 at 9:31",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nlandau",
+                    "text": "<span class=\"comment-copy\">can you check note 8. it should result with a length of 0x919 and by your way i get 0x999.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nlandau",
+                    "text": "<span class=\"comment-copy\">o.k first let me say: EXCELLENT WORK!  secondly, you have some typoes which caused me to make a bad calcullation. but now i've got it. thank you very much!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nlandau",
+                    "text": "<span class=\"comment-copy\">typeoes: \"if the byte has its low order bit clear\" should be \"high order bit clear\", instead of AC 02 you did AC 03.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nlandau",
+                    "text": "<span class=\"comment-copy\">BTW note 9 does have hebrew letters :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

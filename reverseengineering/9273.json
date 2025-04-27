@@ -1,0 +1,52 @@
+{
+    "title": "Why can I access FS:[0] in OllyDbg but not offsets to CS,DS,SS?",
+    "link": "https://reverseengineering.stackexchange.com/questions/9273/why-can-i-access-fs0-in-ollydbg-but-not-offsets-to-cs-ds-ss",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I can access the FS:[0h] which points to the SEH chain but cannot do the same for other segment registers.What is the reason for it ?</p>\n<p>Also,I was debugging an exe which has PTRD at 0x600 and AEP at 0x1000 (same as PTRD) but at offset 0x400 I see some instructions which I have seen in some other files too. In my sample it is unreachable code,but in one test exe which I wrote using WINASM/MASM it was same sequence of instructions just had a bit more instruction .If I change the AEP to 400 the assembly is as follows:</p>\n<pre><code>00400400    6A 00           PUSH 0  \n00400402    68 05304000     PUSH 00403005  \n00400407    68 00304000     PUSH 00403000  \n0040040C    6A 00           PUSH 0  \n0040040E    E8 17040000     CALL 0040082A  \n00400413    6A 00           PUSH 0  \n00400415    E8 16040000     CALL 00400830  \n0040041A    E8 17040000     CALL 00400836  \n0040041F    E8 1E040000     CALL 00400842  \n00400424    E8 13040000     CALL 0040083C  \n00400429    C3              RETN     \n</code></pre>\n<p>I wrote a Hello world program in MASM which had AEP at 0x1000 the code seems similar but  I can debug it  i.e it is not unreachable/dead code like previous one.It is as follows:</p>\n<pre><code>00401000    6A 00           PUSH 0                                   \n00401002    68 00304000     PUSH OFFSET 00403000                     \n00401007    68 06304000     PUSH OFFSET 00403006                     \n0040100C    6A 00           PUSH 0                                   \n0040100E    E8 0D000000     CALL &lt;JMP.&amp;user32.MessageBoxA&gt;           \n00401013    A3 14304000     MOV DWORD PTR DS:[403014],EAX\n00401018    33C0            XOR EAX,EAX\n0040101A    50              PUSH EAX                                 \n0040101B    E8 06000000     CALL &lt;JMP.&amp;kernel32.ExitProcess&gt;         \n00401020    FF25 08204000   JMP DWORD PTR DS:[&lt;&amp;user32.MessageBoxA&gt;]\n00401026    FF25 00204000   JMP DWORD PTR DS:[&lt;&amp;kernel32.ExitProcess \n</code></pre>\n<p>So my question is how come code is coming in my sample at offset 0x400,what is the use of this code ,is there some compiler which is putting it out there?  </p>\n<p>Note:Its a virus sample and I am a starter.Thanks for the answers in advance...</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ollydbg",
+        "malware",
+        "windbg",
+        "patch-reversing"
+    ],
+    "user": "rebel87",
+    "time": "Jul 2, 2015 at 6:33",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In Windows, the total space the process is intended to see is the same in the CS, DS, and SS registers. Windows makes the executable file, as well as any DLLs, open files, allocated memory segments, etc. into this address range, and you'll see the same memory - and the same contents - no matter if you access cs:[something], ds:[something] or ss:[something]*.</p>\n<p>On a 32 bit system, the reachable memory in this \"big space\" is 4 GB.</p>\n<p>FS is different; it's a separate part of memory outside your normal address space. You can't access that memory using either of the normal registers. And its size is only a few bytes - you can't access FS:[100000h], for example, as the PEB isn't that big.</p>\n<p>Back to the linear 4 GB space: the fact that 4 GB are \"reachable\" comes from 32 bit pointers (2^32); but it doesn't mean every address within that range is actually mapped to physical memory. Whenever windows needs a chunk of memory, it selects an address within that space, maps physical memory to it, and uses that memory. For example, when an executable gets loaded, windows will always** load it to <code>400000h</code> . This is why your program starts at <code>401000h</code> - your entry point of <code>1000h</code>  is relative to the load address, not to 0. Or, when windows loads a DLL, it will start with <code>80000000</code>, adjust that value down to below other DLLs, randomize it a bit (for ASLR), and use that address. If your DLL has an entry point at <code>1000h</code>, and gets loaded at <code>63000000h</code>, execution will start at <code>63001000h</code>.</p>\n<p>The fact you can't access cs:[0] or ds:[0] is on purpose - windows doesn't map anything to the first bytes of the address space to make your program crash (technically: throw an execption) if it tries to access memory through a NULL pointer. This is, as well, the reason why executables get loaded higher in memory, you don't want a null pointer access to ever succeed accidentally.</p>\n<p>The next thing to consider is <em>how</em> windows loads PE files - instead of parsing the file, and copying only the regions to memory that are actually used, it just slurps in the whole file to the start address***. Which means, the PE header gets loaded right to the load address. The pseudo code you've seen is just a part of the PE header that happens to be at offset <code>400h</code> in your PE file.</p>\n<p>To become familiar with memory layout of the \"big\" cs/ds/ss segment, i recommend the <code>vmmap</code> tool from the sysinternals collection; attach it to some running processes and check their memory map. The details will probably become much more clear from that than from any theoretical explanation.</p>\n<p>(*) However, depending on access rights, you may not be allowed to write to those parts of this space that are mapped to code, or execute those parts that are mapped to data.</p>\n<p>(**) for a somewhat fuzzy definition of always, the details aren't important right now</p>\n<p>(***) Technically, it memory maps the file and relies on the paging subsystem to read it from disk, but again, this isn't important right now.</p>\n</div>",
+            "votes": "5",
+            "user": "Guntram Blohm",
+            "time": "Jul 2, 2015 at 7:10",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Actually, you <i>can</i> access  the <code>TEB</code> using <code>ds</code>, you just need to know its linear address, which is stored in on one of the <code>TEB</code> fields (<code>fs:18h</code> IIRC). There is a separate <code>TEB</code> for each thread, so they may have different addresses, but they're all a part of the process' address space.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>executable code might start as low as base+0x2b0 if the linker switch /ALIGN:16 is used</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/VoTq4.png\"/></p>\n<h2>edit</h2>\n<p>the dead code could be a function that was compiled and linked but never called  if you modufy the src above like this and compile the first call to messagebox will be available in the binary but no one will be referring it </p>\n<pre><code>#include &lt;windows.h&gt;\n#pragma comment(lib , \"user32.lib\")\nvoid deadcode(void)\n{\n  MessageBox(0,\"iam dead\",\"yep deady dead deady dead\",0);\n}\nvoid main (void) {\n  MessageBoxA(0,\"disme to see me low\",\n  \"using align 16 and merge sections iam slim(e)y\",\n  0);\n} \n</code></pre>\n<p>this is the dead code that was never referenced but still exists </p>\n<pre><code>&gt;cdb -c \"x msgbox!*;q\" msgbox.exe | grep main\n004002d0 msgbox!main (void)\n\n&gt;cdb -c \"u msgbox+2d0-20;q\" msgbox.exe | grep -A 4 55\n004002b0 55              push    ebp\n004002b1 8bec            mov     ebp,esp\n004002b3 6a00            push    0\n004002b5 680c024000      push    offset msgbox!⌂USER32_NULL_THUNK_DATA+0x28 (004\n0020c)\n004002ba 6828024000      push    offset msgbox!⌂USER32_NULL_THUNK_DATA+0x44 (004\n00228)\n\n&gt;cdb -c \"da msgbox+20c;q\" msgbox.exe | grep dead\n0040020c  \"yep deady dead deady dead\"\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jul 3, 2015 at 4:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "rebel87",
+                    "text": "<span class=\"comment-copy\">Thank you for the answer, I used cdb for the first time bcos of your mentioning it,but my question was not from where executable code can start but how dead code comes there ...</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i edited my answer to add a plausible approach as to why what you refer to as dead code might be and why it might exist where you claim it exists</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

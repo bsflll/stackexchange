@@ -1,0 +1,52 @@
+{
+    "title": "Problem: Identifying the size of VirtualAllocEx",
+    "link": "https://reverseengineering.stackexchange.com/questions/6499/problem-identifying-the-size-of-virtualallocex",
+    "content": "I have the following lines:\n<pre><code> ... \n mov [ebp+nSize], offset nullsub_1\n ...\n sub [ebp+nSize], offset loc_402B58\n</code></pre>\nSo, nSize is then used for the call of VirtualAllocEx.\nAt nullsub_1, I have the follwoing(notice I use IDA PRO):\n<pre><code>nulsub_1 proc near\nretn\nnullsub_1 endp\n</code></pre>\nQuestion 1 : What is that ? Has somebody an idea what this can be ? I would say, it is a pointer to NULL but I am not sure. \nAt loc_402B58 I have the following(It is the same what I posted in another topic, I thought it would be helpful when I also post this Question about process injection): \n<pre><code>loc_402B58:\n  push esi\n  mov esi, [esp+8]\n  lea eax, [esi+14h]\n  push eax\n  call dword ptr[esi]\n  test eax, eax\n  mov [esi+10h], eax\n  jz short loc_402B80\n  lea ecx, [esi+46h]\n  push ecx\n  push eax\n  call dword ptr [esi+4]\n  test eax, eax\n  jz short_loc402B80\n  call eax\n  push 0\n  call eax\n  push 0\n  call dword ptr [esi+8]\n\n  loc_402B80:     \n   xor eax, eax\n   pop esi\n   retn 4\n</code></pre>\nHow can we subtract pieces of codes which is done at sub [ebp+nSize], offset loc_402B58 ?\nI have never seen a piece of code like nullsub_1 . So I hope somebody can tell me what is it but i understand what the code at loc_402B58 does.\n",
+    "votes": "2",
+    "answers": 3,
+    "views": "330",
+    "tags": [
+        "assembly"
+    ],
+    "user": "user3097712",
+    "time": "Oct 4, 2018 at 4:39",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Assume you're a C programmer who has written a malware subroutine, and you want to copy your subroutine to somewhere \"safe\" where it remains after your starter process terminates. Then you'd probably start with something like\n<pre><code>void malware(void) {\n    ......\n    helper1(...);\n    ......\n    helper2(...);\n    ......\n}\n\nvoid helper1(...) {\n    .....\n}\n\nvoid helper2(...) {\n    .....\n}\n</code></pre>\nNow, how can you copy the compiled code of these functions somewhere, especially to some memory block you got using VirtualAlloc(), and how do you know how much memory you need? That's exactly what your code does. At the end of the (one or more) functions that need to stay \"resident\" in memory, you place a function that does nothing, just to have a memory address.\n<pre><code>void end_of_malware(void) { /* do nothing, just return */ }\n</code></pre>\nThen, you know that the memory block from <pre><code>malware()</code></pre> to <pre><code>end_of_malware()</code></pre> contains the code you want to \"save\". The expression\n<pre><code>size_t size=((char *) end_of_malware - (char *)malware)\n</code></pre>\nis the number of bytes you need, and which you pass to <pre><code>VirtualAlloc</code></pre> and <pre><code>memcpy()</code></pre> (or whichever function you use to copy the memory). This is just what the <pre><code>mov [somewhere], offset end_of_malware</code></pre> and <pre><code>sub [somewhere], malware</code></pre> does. Except that IDA can't know the original names of the functions.\nIDA detects, however, that the <pre><code>end_of_malware</code></pre> function does nothing, so it names it <pre><code>nullsub</code></pre> - a \"null subroutine\". This helps a bit since, whenever you see a <pre><code>call nullsub_*</code></pre> in your disassembly. you know there's no reason to check what that function does.\n",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Oct 19, 2014 at 20:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">wow, thank you for your explanation. It helps a lot.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<pre><code> ... \n mov [ebp+nSize], offset nullsub_1\n ...\n sub [ebp+nSize], offset loc_402B58\n</code></pre>\nThe code above is effectively: <pre><code>nSize = address_of(nullsub_1) - address_of(loc_402B58)</code></pre>\nAssuming the function <pre><code>nullsub_1</code></pre> is immediately after <pre><code>loc_402B58</code></pre>, <pre><code>nSize</code></pre> is getting set to the length of the code at <pre><code>loc_402B58</code></pre>. This dynamic code length calculation is often used with <pre><code>VirtualAllocEx()</code></pre> so that the right amount of memory can be allocated in a remote process before the code is copied into that process.\n",
+            "votes": "0",
+            "user": "Jason Geffner",
+            "time": "Oct 19, 2014 at 14:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">thank you for your explanation. It is always good to learn new things.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "A bit of Trivia to add to Jason and Guntam's answers.\n<pre><code>Ida normally</code></pre> seems to name the function <pre><code>nullsub_XX</code></pre> only when the <pre><code>function body contains a single return</code></pre> and this single return cannot be achieved by <pre><code>normal programming</code></pre> style\nif you write a c program  like <pre><code>void foo(void){};</code></pre> this would create a <pre><code>prolog and epilog</code></pre> which Ida Would name <pre><code>sub_XXXXXXX</code></pre> not <pre><code>nullsub_XX</code></pre> most of the <pre><code>malwarion contructs</code></pre> use assembly programming so a single return can be assembled in place.\n<pre><code>if you want to think c style</code></pre> you may need to ensure <pre><code>no prolog and epilog are generated</code></pre> by using <pre><code>__declspec(naked)</code></pre> this invariably involves <pre><code>inline assembly and an embedded _retn</code></pre>.\na sample code below will generate nullsub_xx when compiled in msvc with the given commandline \n<pre><code>#include <windows.h>\nchar info[] = {\n    \"this is the func whose block size needs to be calculated since \"\n    \"the function is between two nullsub subtracting the address of \"\n    \"them gets the size of block but be aware compilers are clever  \"\n    \"and may do away all of this if compiled with optimsation /OXXX \"\n};\nchar buff[0x200] ={0};\n__declspec(naked) void startlabel(void) {__asm{retn}};\nvoid func2size(void) {\n    wsprintf(buff,\"%s\n\",info);\n    MessageBox(0,buff,\"whats nullsub demo\",0);\n    return;\n}\n__declspec(naked) void endlabel(void) {__asm{retn}};\nint WINAPI WinMain(HINSTANCE hi,HINSTANCE hpi,LPSTR cmd,int show) {\n    wsprintf(buff,\"blocksiz\\t0x%08x\n\",((char *)endlabel-(char *)startlabel));\n    MessageBoxA(0,buff,\"whats nullsub demo\",0);\n    ExitProcess(0);\n}\n</code></pre>\ncompiled and linked with \n<pre><code>cl /nologo dynsize.c user32.lib kernel32.lib /link /ENTRY:WinMain /SUBSYSTEM:Windows dynsize.c\n</code></pre>\nif <pre><code>optimizations are enabled</code></pre> compiler will discard func2size() because it is <pre><code>unreferenced</code></pre>\ncompiler will coalesce both the label functions into one single retn opcode because compiler will notice that both the function body are same only the names are differnt which doesnt make any difference in execution\n",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Oct 20, 2014 at 12:36",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

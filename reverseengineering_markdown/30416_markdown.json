@@ -1,0 +1,57 @@
+{
+  "title": "Help with Ghidra and rewriting assembly",
+  "link": "https://reverseengineering.stackexchange.com/questions/30416/help-with-ghidra-and-rewriting-assembly",
+  "content": "I'm learning reversing and for that I use Ghidra.\nThere is program I'm trying to modify so I can recompile it and make it work.\nI have a code that ghidra decompile like this: data=function(4)\nGoing inside the function I think to make it work I need to pass a zero.\nIn the assembly I can read:\n\n```\nPUSH RBP\nMOV RBP,RSP\nMOV EDI,0x4\nCALL function\nMOV qword ptr [data],RAX\n\n```\nWhat I understand from that (and I'm propably wrong)\nis that  the MOV EDI,0x4 is the 4 given in the function so I tried to rewrite it in Ghidra with 0x0 and it replace the:\n\n```\nbf 04 00 00 00 with bf 00 00 00 00\n\n```\nI thought it would be enough and I exported as an ELF but when I start the program I get a segmentation fault so I guess I'm doing something wrong with the memory.\n\n```\n    (gdb) x/10xi $rip\n=> 0x555555401888:      mov    (%rax),%rax\n   0x55555540188b:      test   %rax,%rax\n   0x55555540188e:      jne    0x55555540189a\n   0x555555401890:      mov    $0x0,%eax\n   0x555555401895:      jmp    0x55555540199d\n   0x55555540189a:      movq   $0x0,-0x50(%rbp)\n   0x5555554018a2:      mov    -0x60(%rbp),%rax\n   0x5555554018a6:      mov    %rax,%rdi\n   0x5555554018a9:      call   0x5555554008f0 <strlen@plt>\n   0x5555554018ae:      mov    %rax,-0x48(%rbp)\n\n```\nI would like some help to understand what I'm doing wrong.\n\nthanks\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "assembly",
+    "ghidra"
+  ],
+  "user": null,
+  "time": "Jul 20, 2022 at 8:43",
+  "comments": [
+    {
+      "user": "sudhackar",
+      "text": "Can you diff the two ELF files - before and after editing and post a diff here too? Also can you attach the ELF with gdb and post the crashing instruction?",
+      "time": null
+    },
+    {
+      "user": "user41095",
+      "text": "(gdb) run Results : Program received signal SIGSEGV, Segmentation fault. 0x0000555555401888 in ?? ()",
+      "time": null
+    },
+    {
+      "user": "user41095",
+      "text": "command : diff <(objdump -d elffile) <(objdump -d elffileWithZero ) Result : 2c2 < elffile: format de fichier elf64-x86-64 --- > elffileWithZero: format de fichier elf64-x86-64 222c222 < b50: bf 04 00 00 00 mov $0x4,%edi --- > b50: bf 00 00 00 00 mov $0x0,%edi –",
+      "time": null
+    },
+    {
+      "user": "sudhackar",
+      "text": "Also can you disassemble the bytes where the application crash? Or just attach the original ELF file?",
+      "time": null
+    },
+    {
+      "user": "user41095",
+      "text": "Bytes view in ghidra  c3 55 48 89 e5 bf 00 00 00 00 e8 19 0b 00 00 48 89 05 b7 24 20 00 48 8d 3d 82 ff ff ff",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You need to understand the consequences of patching an instruction. What gets changed by the instruction - both data and control flow.\nBased on the comments I think you are trying to patch this part\n\n```\n.text:0000000000000B4C                 push    rbp\n.text:0000000000000B4D                 mov     rbp, rsp\n.text:0000000000000B50                 mov     edi, 4\n.text:0000000000000B55                 call    sub_1673\n\n```\nto\n\n```\n.text:0000000000000B4C                 push    rbp\n.text:0000000000000B4D                 mov     rbp, rsp\n.text:0000000000000B50                 mov     edi, 0\n.text:0000000000000B55                 call    sub_1673\n\n```\nBased on this you can see what will change when sub_1673 gets executed.\n\n```\n...\n.text:000000000000167C                 mov     [rbp+nmemb], rdi\n.text:0000000000001680                 cmp     [rbp+nmemb], 0\n.text:0000000000001685                 jnz     short loc_1691\n.text:0000000000001687                 mov     eax, 0\n.text:000000000000168C                 jmp     loc_1736\n...\n.text:0000000000001736                 add     rsp, 28h\n.text:000000000000173A                 pop     rbx\n.text:000000000000173B                 pop     rbp\n.text:000000000000173C                 retn\n\n```\nBased on the calling convention 0 will be copied to rdi. It is then compared to 0 and then a jump is taken if its non zero. If its zero the function returns with a return value of zero. Something like\n\n```\nint sub_1673(size_t a1) {\n    if(!a1) return 0;\n    ....\n}\n\n```\nIf the value was non-zero some memory is allocated and the pointer is saved to some global variable. In your case - after the patch the variable stays 0 and the application crashes while read NULL(0) address.\n\n",
+      "votes": "1",
+      "user": "sudhackar",
+      "time": "May 23, 2022 at 4:40",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user41095",
+          "text": "thanks it clarified what is happening and what do to",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

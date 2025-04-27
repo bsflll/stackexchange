@@ -1,0 +1,24 @@
+{
+    "title": "How the author found the initialization vector for the AES CBC whatsapp CRYPT5 db uses?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4142/how-the-author-found-the-initialization-vector-for-the-aes-cbc-whatsapp-crypt5-d",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was going through <a href=\"http://www.securitybydefault.com/2014/03/descifrando-msgstoredbcrypt5-la-nueva.html\" rel=\"nofollow noreferrer\">DECIPHERING MSGSTORE.DB.CRYPT5, THE NEW DATABASE WHATSAPP</a>\n &amp; <a href=\"http://bas.bosschert.nl/steal-whatsapp-update/\" rel=\"nofollow noreferrer\">Steal WhatsApp update</a>.</p>\n<p>The author of the first link published a <a href=\"https://github.com/aramosf/pwncrypt5/blob/master/pwncrypt5.py\" rel=\"nofollow noreferrer\">decryptor</a> which sets the iv for the <code>aes_192_cbc</code> to </p>\n<pre><code>iv = bytearray([0x1E,0x39,0xF3,0x69,0xE9,0xD,0xB3,0x3A,0xA7,0x3B,0x44,0x2B,0xBB,0xB6,0xB0,0xB9])\n</code></pre>\n<p>Here is the full decryptor:</p>\n<pre><code>#!/usr/bin/python              \n\"\"\"\n48bits presents:\n8===============================================D~~~\nWhatsApp msgstore crypt5 decryptor by grbnz0 and nullsub\n8===============================================D~~~\n\n\"\"\"\n\nimport sys\nimport hashlib\nimport StringIO\nfrom M2Crypto import EVP\n\nkey = bytearray([141, 75, 21, 92, 201, 255, 129, 229, 203, 246, 250, 120, 25, 54, 106, 62, 198, 33, 166, 86, 65, 108, 215, 147])\niv = bytearray([0x1E,0x39,0xF3,0x69,0xE9,0xD,0xB3,0x3A,0xA7,0x3B,0x44,0x2B,0xBB,0xB6,0xB0,0xB9])\n\ndef decrypt(db,acc):\n  fh = file(db,'rb')\n  edb = fh.read()\n  fh.close()\n  m = hashlib.md5()\n  m.update(acc)\n  md5 = bytearray(m.digest())\n  for i in xrange(24): key[i] ^= md5[i&amp;0xF]\n  cipher = EVP.Cipher('aes_192_cbc', key=key, iv=iv, op=0)\n  sys.stdout.write(cipher.update(edb))\n  sys.stdout.write(cipher.final())\n\nif __name__ == '__main__':\n  if len(sys.argv) != 3:\n    print 'usage %s &lt;db&gt; &lt;accountname&gt; &gt; decrypted.db' % sys.argv[0]\n  else:\n    decrypt(sys.argv[1],sys.argv[2])\n</code></pre>\n<p>The only piece I miss is where did the IV came from ? I don't see it on the ida snapshot:</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/43t7L.png\"/></p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "572",
+    "tags": [
+        "cryptography"
+    ],
+    "user": "0x90",
+    "time": "Apr 20, 2014 at 21:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It doesn't seem to be on the IDA snapshot. You probably identified the right part of the program flow to set the initial <code>key</code> array. and assumed that the left part should have something to do with the <code>iv</code>, but that's not true. <code>iv</code> is 16 bytes, the left part of the IDA disassembly defines 24 bytes, which is the same length as <code>key</code>. Also, the very top of the image shows there's an if condition that branches either to setting up the key or setting up the left part, so these branches exclude each other.</p>\n<p>After the key initialization on the right part, the MD5 calculation is performed, then there's the call to <code>dword ptr eax+2AH</code> where <code>eax</code> is set up to <code>[ebp+0]</code>, and <code>ebp</code> itself being the top item on the stack. The parameters are put on the stack - <code>ebp</code> on top, then <code>edx=esp+40</code>, then <code>edx=esp+60</code>. <code>esp+60</code> is setup earlier to be the location of the result of the call that preludes <code>MD5_Init</code>, and obviously the string being MD5'ed <code>(MD5_Update(x, esp+60, strlen(esp+60))</code>. This pattern - <code>ebp</code> being a pointer to data and functions, with the first parameter of the functions being <code>ebp</code> - hints at <code>ebp</code> being a pointer to a C++ class.</p>\n<p>Overall, the right part sets up the key, calls a class method, does the MD5 stuff, and calls another class method. Comparing that to the python script, it seems like the first class method performs the python \"read from file\", the second the XOR-ing. The CVP.cipher call comes later, not shown on the IDA snapshot, so you can't see how iv is set up.</p>\n<p>The left part of the IDA snapshot is something else, maybe code for decrypting old versions of the database. The top of the IDA snapshot says \"perform the right part if something is equal to 5\"; this could be a version number, with lower versions branching to the left; however, the IDA disassemble doesn't show the conditions for the left side branch, so this is guesswork.</p>\n</div>",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Apr 25, 2014 at 18:10",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

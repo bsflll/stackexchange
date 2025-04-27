@@ -1,0 +1,92 @@
+{
+  "title": "convert this x86 ASM to C?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2096/convert-this-x86-asm-to-c",
+  "content": "How could this 32-bit x86 assembly be written in C?\n\n```\nloc_536FB0:\nmov cl, [eax]\ncmp cl, ' '\njb short loc_536FBC\ncmp cl, ','\njnz short loc_536FBF\n\nloc_536FBC:\nmov byte ptr [eax], ' '\n\nloc_536FBF\nmov cl, [eax+1]\ninc eax\ntest cl, cl\njnz short loc_536FB0\n\n```\nI have already figured out that it is a for loop that loops 23 times before exiting.\n\n",
+  "votes": "45",
+  "answers": 4,
+  "views": "23k",
+  "tags": [
+    "assembly",
+    "x86",
+    "c"
+  ],
+  "user": "user1365830",
+  "time": "Nov 28, 2014 at 15:57",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Such small snippets are not too hard to decompile manually. Let's try it.\n\nYou have already figured out that cl holds a character, this means that eax where it's read from is a pointer to a character array. Let's call it p. Now, let's do a dumb translation for every assembly statement to C:\n\n```\nl1:            ; l1:\nmov cl, [eax]  ;   cl = *p;\ncmp cl, ' '    ;   if ( cl < ' ' )\njb short l2    ;     goto l2\ncmp cl, ','    ;   if ( cl != ',' )\njnz short l3   ;     goto l3\n\nl2:                      ; l2:\nmov byte ptr [eax], ' '  ;   *p = ' '\n\nl3:                  ; l3:\nmov cl, [eax+1]      ; cl = *(p+1)\ninc eax              ; p = p + 1\ntest cl, cl          ; if ( cl != 0 )\njnz short l1         ;   goto l1\n\n```\nAnd cleaned up:\n\n```\nl1:               \n  cl = *p;\n  if ( cl < ' ' ) \n    goto l2;\n  if ( cl != ',' )\n    goto l3;       \nl2:       \n  *p = ' ';\nl3:           \n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n\n```\nNow, let's have a look at the second if. It has the following form:\n\n```\nif ( condition )\n  goto end_of_if;\n  <if body>\nend_of_if:\n\n```\nAnd here's how we can get rid of the goto:\n\n```\nif ( !condition )\n{\n  <if body>\n}\n\n```\nApplying it to our snippet:\n\n```\nl1:               \n  cl = *p;\n  if ( cl < ' ' ) \n    goto l2;\n  if ( cl == ',' )  {\nl2:       \n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n\n```\nNow, how we can get rid of goto l2? If you look at it carefully, you can see that the body at l2 will get executed if either cl < ' ' or cl == ','. So we can just combine the two conditions with a logical OR (||):\n\n```\nl1:               \n  cl = *p;\n  if ( cl < ' ' || cl == ',' ) {\n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n  if ( cl != 0 )\n    goto l1;\n\n```\nNow we have one goto left. We have: 1) label at the beginning of a statement block 2) check at the end of the block and 3) goto to the start of the block if the check succeeded. This is a typical pattern of a do-while loop, and we can easily convert it:\n\n```\ndo {\n  cl = *p;\n  if ( cl < ' ' || cl == ',' ) {\n    *p = ' ';\n  }\n  cl = *(p+1);\n  p = p + 1;     \n} while ( cl != 0 )\n\n```\nNow the code is almost nice and pretty, but we can compress it a bit more by substituting equivalent statements:\n\n```\ndo {\n  if ( *p < ' ' || *p == ',' )\n    *p = ' ';\n  cl = *++p;\n} while ( cl != 0 )\n\n```\nAnd, finally, the last assignment can be moved into the condition:\n\n```\ndo {\n  if ( *p < ' ' || *p == ',' )\n    *p = ' ';\n} while ( *++p != 0 )\n\n```\nNow it's obvious what the code is doing: it's going through the string, and replacing all special characters (those with codes less than 0x20 aka space) and commas with the spaces.\n\n",
+      "votes": "134",
+      "user": "Igor Skochinsky",
+      "time": "Jun 14, 2015 at 11:22",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Well, especially for that, Hex-Rays Decompiler was invented. It will decompile ASM code into pseudo-C, and from there You may write C-based logic of assembly code You have. \n\n",
+      "votes": "10",
+      "user": "Denis Laskov",
+      "time": "May 25, 2013 at 19:42",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user1365830",
+          "text": "solved this now",
+          "time": null
+        },
+        {
+          "user": "0xea",
+          "text": "not everybody have access to hex-rays tho... Igor's answer is far more thorough.",
+          "time": null
+        },
+        {
+          "user": "Denis Laskov",
+          "text": "Well, not everybody have small snippet of assembly, so answer should be wider than one specific case. And indeed thx Igor for spending his precious time for this specific piece of code.",
+          "time": null
+        },
+        {
+          "user": "Lightness Races in Orbit",
+          "text": "Nah, you didn't answer the question. If you want to link to a tool that makes the question obsolete, then do so in a comment on the question.",
+          "time": null
+        },
+        {
+          "user": "Arthur Dent",
+          "text": "I believe Igor is a developer for Hex-Rays.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Here's what it would have looked like in the source. Fastcall being a replacement for the custom leaf convention the compiler used when it was optimized.\n\n```\nvoid __fastcall __forceinline RemoveControlChars(char* szInput) {\n    int i;\n    for (i = 0; i < 23 && *szInput; ++i, ++szInput) {\n        if (*szInput < ' ' || *szInput == ',')\n            *szInput = ' ';\n    }\n}\n\n```\n",
+      "votes": "5",
+      "user": "Tox1k",
+      "time": "Jun 4, 2013 at 2:43",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user",
+          "text": "There is nothing that I can see in the original code to correspond to your i < 24 continuation condition. Starting at i=0 and looping while i<24 will also execute the loop 24 times, not 23 as stated by the OP.",
+          "time": null
+        },
+        {
+          "user": "Jonathon Reinhart",
+          "text": "fastcall and forceinline together don't make any sense. If it's inlined, there is no formal calling convention.",
+          "time": null
+        },
+        {
+          "user": "Tox1k",
+          "text": "__fastcall simply implies that args will be passed in registers instead of on the stack, which is assumed if inline, however the compiler may still push args onto the stack if there are not enough registers, making it sort of a hackish anti-optimization. According to msdn: Even with __forceinline, the compiler cannot inline code in all circumstances.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "You can use r2dec plugin on radare2 with command pdda\n\n```\n[0x08048060]> pdda\n; assembly                               | /* r2dec pseudo code output */\n                                         | /* ret @ 0x8048060 */\n                                         | #include <stdint.h>\n                                         |  \n; (fcn) entry0 ()                        | int32_t entry0 (void) {\n                                         |     do {\n                                         |         /* [01] -r-x section size 23 named .text */\n0x08048060 mov cl, byte [eax]            |         cl = *(eax);\n0x08048062 cmp cl, 0x20                  |         \n                                         |         if (cl >= 0x20) {\n0x08048065 jb 0x804806c                  |             \n0x08048067 cmp cl, 0x2c                  |             \n                                         |             if (cl != 0x2c) {\n0x0804806a jne 0x804806f                 |                 goto label_0;\n                                         |             }\n                                         |         }\n0x0804806c mov byte [eax], 0x20          |         *(eax) = 0x20;\n                                         | label_0:\n0x0804806f mov cl, byte [eax + 1]        |         cl = *((eax + 1));\n0x08048072 inc eax                       |         eax++;\n0x08048073 test cl, cl                   |         \n0x08048075 jne 0x8048060                 |         \n                                         |     } while (cl != 0);\n                                         | }\n[0x08048060]> \n\n```\n",
+      "votes": "2",
+      "user": "Febriyanto Nugroho",
+      "time": "Aug 29, 2020 at 11:17",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

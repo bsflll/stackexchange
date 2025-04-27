@@ -1,0 +1,72 @@
+{
+    "title": "Importing list of functions and addresses into WinDbg",
+    "link": "https://reverseengineering.stackexchange.com/questions/3850/importing-list-of-functions-and-addresses-into-windbg",
+    "content": "When I have a kernel module without symbols, I'd typically first open it in IDA and give names to some of the subroutines (those I'm interested in).\nSince I prefer my kernel debugging with plain WinDbg (and not the IDA-integrated WinDbg), I'd like WinDbg to recognize the names IDA (and me) gave to those addresses. That way, a) I could break on those functions by name, change variables by name, and b) WinDbg's output and views would read better (in stack traces etc.).\nUnfortunately, IDA has no \"create PDB\" feature, and I don't even see a non-PDB way of importing addresses into WinDbg.\nIdeas, anyone?\n",
+    "votes": "9",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "windbg",
+        "symbols"
+    ],
+    "user": "Ilya",
+    "time": "Mar 11, 2014 at 13:49",
+    "comments": [
+        {
+            "user": "OzgurH",
+            "text": "It's not quite suitable for adding a \"list\" of symbols, but (after seeing the reference to <pre><code>IDebugSymbols3::AddSyntheticSymbol</code></pre> in the extension mentioned below), I've researched a bit, and run into another extension (<pre><code>synexts</code></pre>) which allows adding a symbol through the command window: Blog (The blog also mentions that the method is exposed in <pre><code>pykd</code></pre> as well)\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This page contains an IDC script And a Windbg Extension  to dump the names and a WinDbg extension to load those names into WinDbg.\nEdit\nTo Address the comment by @OzgurH\nyes the idc as well as AddSyntheticSymbol are slow in fact getting  a list of Names along with the boundaries from idc is tedious\n(also it was done in idafree 5 which isn't available for some time now  only ida free7 is available which is only 64 bit\nso i havent checked it much\nbut i simply wrote another windbg extension and leveraged the windbg script execution command line to add correct name and sizes\nalso by using this method i can have a reusable database of reversed symbol\ni have put the source / compile settings / precompiled binary in github here\n",
+            "votes": "7",
+            "user": "blabb",
+            "time": "Sep 20, 2020 at 7:08",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">the idc script seems to work very very slow when the binary is above a few kilobytes can some one review it and comment on improving its speed or suggest alternative method to speed it up that results in same output format</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ilya",
+                    "text": "<span class=\"comment-copy\">In my case (kernel driver debugging), I have to set <code>tosubtract = FirstSeg()</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">a plugin that fetches the names in pretty fast (targeted to work in ida free 5 has been added to the thread using get_nlist_size(),name, functions it is  several magnitudes faster than the script take a look</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ilya",
+                    "text": "<span class=\"comment-copy\">I can't find it. btw, I've improved the code to include function sizes. Call stacks are very interesting to me, and they weren't displaying correctly when the size was always 4 -- here's the change, pretty trivial: <a href=\"https://gist.github.com/ikonst/ebae548dac7934dc0bdf\" rel=\"nofollow noreferrer\">gist.github.com/ikonst/ebae548dac7934dc0bdf</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">Thank You For The Comment i never had the necessity to Synthetically label such huge numbers so i never looked also running the idc and generating a map was also too slow so i resorted to writing a labeller extension and label the area manually using scriptfile $$&gt;a&lt; foo.wds where foo.wds contained a series of space delimited !label somename rva size base like !label _some_spooky_function 000a05a6 2e ntdll but that also used <a href=\"https://github.com/blabberer/windbg_labeller\" rel=\"nofollow noreferrer\">AddSyntheicSymbol</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "since this has nothing to do with original query and\nis an experiment of sorts with the labeller windbg extension that i edited in in my first answer\ni am adding this as a new answer and not editing my original answer\nsince the question of performance of AddSyntheticSymbol for bulk Addition Came up i cooked up a small 6 figure long windbg script file that i could use to test the performance\nit appears there is a logarithmic increase in the time required to add symbols\nif windbg could add 500 symbols in 11 seconds on the first round\nit would take 13 seconds for next 500 and\n16 seconds for the third round of 500 symbols\ni cut off the test when i added the 20 th round of symbols it took about 50 seconds to load the symbols 9500 to 10000\nhere is the small python script to cook up a windbg scriptfile\n<pre><code>buff = []\nj=0\nk=1\nfor i in range(0,100000,1):\n    j=j+1\n    buff.append(\"!label str_%s %08x 1 xul\n\" % ( str(i).rjust(8,'0') , i ) )\n    if(j == 500):\n        buff.append(\"%s %d symbols added\n\" % (\".echotime;.echo \",j*k))\n        j = 0\n        k = k+1\nwith open (\"lab100k.txt\",\"w\") as txt:\n    txt.writelines(buff) \n</code></pre>\nthis creates a file with 100200 windbg commands that uses !label extcmd\n<pre><code>wc -l lab100k.txt\n100200 lab100k.txt\n\ngrep -c echotime lab100k.txt\n200\n\ntail -n 3 lab100k.txt\n!label str_00099998 0001869e 1 xul\n!label str_00099999 0001869f 1 xul\n.echotime;.echo  100000 symbols added\n</code></pre>\nloaded the label extension and executed this windbg script and cut it off after labelling 10000 address the timeframe isas follows\n<pre><code>0:021> $$>a< lab100k.txt\nDebugger (not debuggee) time: Tue Sep 22 23:58:52.053 2020 \n500 symbols added\nDebugger (not debuggee) time: Tue Sep 22 23:59:03.468 2020 \n1000 symbols added\nDebugger (not debuggee) time: Tue Sep 22 23:59:16.983 2020 \n1500 symbols added\nDebugger (not debuggee) time: Tue Sep 22 23:59:32.546 2020 \n2000 symbols added\nDebugger (not debuggee) time: Tue Sep 22 23:59:50.225 2020 \n2500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:00:10.133 2020 \n3000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:00:32.502 2020 \n3500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:00:57.303 2020 \n4000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:01:23.955 2020 \n4500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:01:52.593 2020 \n5000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:02:22.930 2020 \n5500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:02:55.546 2020 \n6000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:03:30.068 2020 \n6500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:04:06.521 2020 \n7000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:04:45.134 2020 \n7500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:05:25.709 2020 \n8000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:06:08.456 2020 \n8500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:06:53.301 2020 \n9000 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:07:40.663 2020 \n9500 symbols added\nDebugger (not debuggee) time: Wed Sep 23 00:08:29.967 2020 \n10000 symbols added\n</code></pre>\nthe result of symbols are as follows\n<pre><code>0:021> x xul!str_000100*\n50462710          xul!str_00010000 = <no type information>\n50462711          xul!str_00010001 = <no type information>\n50462712          xul!str_00010002 = <no type information>\n50462713          xul!str_00010003 = <no type information>\n50462714          xul!str_00010004 = <no type information>\n50462715          xul!str_00010005 = <no type information>\n50462716          xul!str_00010006 = <no type information>\n50462717          xul!str_00010007 = <no type information>\n50462718          xul!str_00010008 = <no type information>\n50462719          xul!str_00010009 = <no type information>\n5046271a          xul!str_00010010 = <no type information>\n5046271b          xul!str_00010011 = <no type information>\n5046271c          xul!str_00010012 = <no type information>\n5046271d          xul!str_00010013 = <no type information>\n5046271e          xul!str_00010014 = <no type information>\n5046271f          xul!str_00010015 = <no type information>\n50462720          xul!str_00010016 = <no type information>\n50462721          xul!str_00010017 = <no type information>\n50462722          xul!str_00010018 = <no type information>\n50462723          xul!str_00010019 = <no type information>\n50462724          xul!str_00010020 = <no type information>\n50462725          xul!str_00010021 = <no type information>\n50462726          xul!str_00010022 = <no type information>\n50462727          xul!str_00010023 = <no type information>\n50462728          xul!str_00010024 = <no type information>\n50462729          xul!str_00010025 = <no type information>\n5046272a          xul!str_00010026 = <no type information>\n5046272b          xul!str_00010027 = <no type information>\n5046272c          xul!str_00010028 = <no type information>\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Sep 22, 2020 at 19:11",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "OzgurH",
+                    "text": "<span class=\"comment-copy\">Again, your efforts are very appreciated, thanks!.. Once I've noticed the slowness, I've attached another instance of WinDbg, to the one running the extension, and the call stack included a call from <code>dbghelp!vsAddSymbol</code> (eventually) to <code>ucrtbase!qsort</code>(<a href=\"https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/qsort?view=vs-2019\" rel=\"nofollow noreferrer\">ref</a>) (and it was doing this with a custom comparator passed in: <code>dbghelp!vsCompareAddrs</code>). So, it does make sense that Quick Sort has some <code>n . log(n)</code> kind of timing happening here.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

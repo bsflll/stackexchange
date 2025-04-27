@@ -1,0 +1,42 @@
+{
+    "title": "Basic `angr` framework question- is something wrong with my solver?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25738/basic-angr-framework-question-is-something-wrong-with-my-solver",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm new to reverse engineering and I've just recently learned about <code>angr</code>, a framework that uses symbolic execution to get the input for a given output. I'm trying to complete a <a href=\"https://crackmes.one/crackme/5e0fa43b33c5d419aa01351e\" rel=\"nofollow noreferrer\">crackme</a> using <code>angr</code>. My code so far is:</p>\n<pre><code>import angr\nimport claripy\n\nstrlen = 10\nbase_addr = 0x00000000\n\nflag_chars = [claripy.BVS('flag_%d' % i, 8) for i in range(strlen)]\nflag = claripy.Concat(*flag_chars)\n\nproj = angr.Project(\"./d4rkfl0w-Crackme-4\", main_opts={'base_addr': base_addr})\nstate = proj.factory.full_init_state(args=[\"./d4rkfl0w-Crackme-4\"], add_options=angr.options.unicorn, stdin=flag)\nstate.memory.store(state.regs.rbp-0x8, flag)\n\nfor k in flag_chars:\n    state.solver.add(k &gt; 0x20)\n    state.solver.add(k &lt; 0x7e)\n\nsm = proj.factory.simulation_manager(state)\nsm.run()\n\nfor de in sm.deadended:\n    print(de.posix.dumps(0), de.posix.dumps(1))\n</code></pre>\n<p>The output is:</p>\n<pre><code>&gt; python3 test.py \nWARNING | 2020-08-24 18:55:24,821 | angr.state_plugins.symbolic_memory | The program is accessing memory or registers with an unspecified value. This could indicate unwanted behavior.\nWARNING | 2020-08-24 18:55:24,822 | angr.state_plugins.symbolic_memory | angr will cope with this by generating an unconstrained symbolic variable and continuing. You can resolve this by:\nWARNING | 2020-08-24 18:55:24,822 | angr.state_plugins.symbolic_memory | 1) setting a value to the initial state\nWARNING | 2020-08-24 18:55:24,823 | angr.state_plugins.symbolic_memory | 2) adding the state option ZERO_FILL_UNCONSTRAINED_{MEMORY,REGISTERS}, to make unknown regions hold null\nWARNING | 2020-08-24 18:55:24,823 | angr.state_plugins.symbolic_memory | 3) adding the state option SYMBOL_FILL_UNCONSTRAINED_{MEMORY_REGISTERS}, to suppress these messages.\nWARNING | 2020-08-24 18:55:24,823 | angr.state_plugins.symbolic_memory | Filling memory at 0x7fffffffffefff8 with 64 unconstrained bytes referenced from 0x38e0d0 (strlen+0x0 in libc.so.6 (0x8e0d0))\nb'((0$0(0(0(' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\nb'0(0$0(:(((' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\nb'U($&gt;\"(:($(' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\nb'U(6&gt;$(:(0(' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\nb'U(6&gt;-(:($(' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\nb'U(6$-(:(Y(' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\n</code></pre>\n<p>This should be a relatively easy crackme (I had solved it with static analysis already and I want to get the flag a different way). Am I doing something wrong in the code?</p>\n<p>The actual flag should be:</p>\n<blockquote class=\"spoiler\">\n<p> U6-:YL.\"+</p>\n</blockquote>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "493",
+    "tags": [
+        "crackme",
+        "angr"
+    ],
+    "user": "V. Zed",
+    "time": "Aug 24, 2020 at 23:08",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">What I notice that <code>angr</code> is not the best at handling c++ objects like <code>cin</code> &amp; <code>cout</code> (esp. the former). I would expect that's the culprit for not finding the solution.</span>",
+            "time": null
+        },
+        {
+            "user": "V. Zed",
+            "text": "<span class=\"comment-copy\">I vaguely remember hearing that too... Thanks for the reminder- that might be a reason.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Looking at your solution, and your spoiler of the intended flag, it looks like you are halfway there (literally).</p>\n<p>angr is solving every other character and matching half of the flag, as if the flag is being treaded as a wide character string/utf16.  I modified your script slightly to have a 20 character string, with every other byte null, ending in a newline, and angr successfully found the flag.</p>\n<p>There are lots of other ways to do this with Angr, but this seemed close to how you were originally using it.</p>\n<p>Modified Angr script:</p>\n<pre><code>import angr\nimport claripy\n\nstrlen = 20\nbase_addr = 0x00000000\n\nflag_chars = [claripy.BVS('flag_%d' % i, 8) for i in range(strlen)]\nflag = claripy.Concat(*flag_chars)\n\nproj = angr.Project(\"./d4rkfl0w-Crackme-4\", main_opts={'base_addr': base_addr})\nstate = proj.factory.full_init_state(args=[\"./d4rkfl0w-Crackme-4\"], add_options=angr.options.unicorn, stdin=flag)\n# The script functions the same with or without this\n# Presumably symbolic stdin handles storing the flag \n# in memory for us\n# state.memory.store(state.regs.rbp-0x8, flag)\n\n# It seems like the program is reading in widechars/utf16\n# this code will constrain every other byte to be printable, \n# with zero bytes in between\nzero_char = False\nfor k in flag_chars[:-2]:\n    if not zero_char:\n        state.solver.add(k &gt; 0x20)\n        state.solver.add(k &lt; 0x7e)\n    else:\n        state.solver.add(k == 0x0)\n    zero_char = not zero_char\n\n# Flag ends in widechar newline (not strictly needed)\nstate.solver.add(flag_chars[-2] == 0xa)\nstate.solver.add(flag_chars[-1] == 0x00)\n\nsm = proj.factory.simulation_manager(state)\nsm.run()\n\nfor de in sm.deadended:\n    print(de.posix.dumps(0), de.posix.dumps(1))\n    print(\"UTF16 flag: %s\" % str(de.posix.dumps(0), encoding='utf=16'))\n~                                                                        \n</code></pre>\n<p>Truncated Output:</p>\n<blockquote class=\"spoiler\">\n<p>    b'U\\x006\\x00-\\x00:\\x00Y\\x00L\\x00.\\x00!\\x00+\\x00\\n\\x00' b'\\nPlease enter the password: \\nSorry that is incorrect.\\n'\n    UTF16 flag: U6-:YL.!+<br/>\n    b'U\\x006\\x00-\\x00:\\x00Y\\x00L\\x00.\\x00\"\\x00+\\x00\\n\\x00' b\"\\nPlease enter the password: \\nThat's CORRECT, Well Done.\\n\"\n     UTF16 flag: U6-:YL.\"+</p>\n</blockquote>\n</div>",
+            "votes": "1",
+            "user": "nopnopgoose",
+            "time": "Aug 31, 2020 at 0:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "V. Zed",
+                    "text": "<span class=\"comment-copy\">That's very interesting! Thank you! I'm not sure why <code>angr</code> is seeing the input as a wide character string. I'll be sure to try out different encoding next time I fall into this scenario. Thank you!!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

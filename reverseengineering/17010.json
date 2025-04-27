@@ -1,0 +1,77 @@
+{
+    "title": "How is CreateProcessAsUser impersonation implemented in Windows services?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17010/how-is-createprocessasuser-impersonation-implemented-in-windows-services",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><code>CreateProcessAsUser</code> is often used by Windows services in case an executable is started that the user has specified in order to run it with Medium Integrity Level to ensure privilege isolation.</p>\n<p><a href=\"https://i.sstatic.net/EXce3.png\" rel=\"nofollow noreferrer\"><img alt=\"CreateProcessAsUser stack trace\" src=\"https://i.sstatic.net/EXce3.png\"/></a></p>\n<p>Looking at the signature, a <code>hToken</code> has to be provided. From my observation, Windows services always pick the currently logged on user that performed this action.</p>\n<pre><code>BOOL WINAPI CreateProcessAsUser(\n  _In_opt_    HANDLE                hToken,\n  _In_opt_    LPCTSTR               lpApplicationName,\n  _Inout_opt_ LPTSTR                lpCommandLine,\n  _In_opt_    LPSECURITY_ATTRIBUTES lpProcessAttributes,\n  _In_opt_    LPSECURITY_ATTRIBUTES lpThreadAttributes,\n  _In_        BOOL                  bInheritHandles,\n  _In_        DWORD                 dwCreationFlags,\n  _In_opt_    LPVOID                lpEnvironment,\n  _In_opt_    LPCTSTR               lpCurrentDirectory,\n  _In_        LPSTARTUPINFO         lpStartupInfo,\n  _Out_       LPPROCESS_INFORMATION lpProcessInformation\n);\n</code></pre>\n<hr/>\n<p><strong>Q: What mechanism determines that \"current user\"?</strong></p>\n<p>I'm double quoting \"current user\", because it seems very vague to assume a single point of implementation. I currently assume that every function that calls <code>CreateProcessAsUser</code> has its own implementation of retrieving the \"current user\" in order to pass its token.</p>\n<p>I would like to understand what this logic looks like and on what criteria the <code>hToken</code> is selected. Since user mode process creation is performed by many Windows services, I would have to assume there is a common logic for it, but I don't see it in the stack traces (see image).</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "process"
+    ],
+    "user": "bytecode77",
+    "time": "Dec 19, 2017 at 22:14",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Well, one rather popular method underlying also several COM/RPC methods is to be found in <code>ImpersonateNamedPipeClient</code>. However, given that services run in the TCB they could just as easily \"steal\" an existing token from some process or forge their own token. Last but not least several internals have changed with Windows versions, so what version are <i>you</i> asking for? Oh and this may actually be better suited over on StackOverflow.</span>",
+            "time": null
+        },
+        {
+            "user": "bytecode77",
+            "text": "<span class=\"comment-copy\">I'm looking at the current version of Windows 10 x64. Sure, a <code>SYSTEM</code> process can take any token as it has sufficient privileges. But it picks the current user's token - based on [...] and this is what I'm particularly curious about. <i>On StackOverflow I think it would be offtopic, because it's not much about programming directly.</i></span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Well, the clue really <i>is</i> in the name. Any <i>service</i> doing a job for a user has some way of communicating with the user's security context. That way - at least in all instances I've investigated, be it COM, RPC or other - in the end turned out to be named pipes. So re-read my above comment. I simply don't have the time to go into more detail than this right now (hopefully someone else will). And regarding your other remark, perhaps. However, it's also not about RCE directly.</span>",
+            "time": null
+        },
+        {
+            "user": "bytecode77",
+            "text": "<span class=\"comment-copy\">One trigger I have found is a HWND broadcast <code>(0xffff, ...)</code> - When looking at that example, where is the pipe from the user to the service? Interestingly enough that UIPI doesn't block it.</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">This is not a predefined window message, so you'd have to figure out who looks for it and processes it (window hooks may come in handy as they run in the target process, mind the bitness, though). However, how do you know it's a <i>trigger</i> (correlation != causation).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>I currently assume that every function that calls CreateProcessAsUser has its own implementation of retrieving the \"current user\" in order to pass its token.  </p>\n<p>I would like to understand what this logic looks like and on what criteria the hToken is selected.</p>\n</blockquote>\n<p>A while back I wrote some Delphi code to do this when running a program as SYSTEM. Instead of a service, I was executing from a SYSTEM cmd prompt, which I invoked using psexec: <code>psexec -s -i -d cmd.exe</code>). Logic flowed like this:</p>\n<ol>\n<li>Call <a href=\"https://msdn.microsoft.com/en-us/library/aa383835(v=vs.85).aspx\" rel=\"nofollow noreferrer\">WTSGetActiveConsoleSessionID</a> to retrieve session ID of the session attached to the physical console (and therefore not term services session). <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L424\" rel=\"nofollow noreferrer\">code</a></li>\n<li><s>Can next call <a href=\"https://msdn.microsoft.com/en-us/library/aa383840(v=vs.85).aspx\" rel=\"nofollow noreferrer\">WTSQueryUserToken</a> to retrieve the token for that session</s> Obtain PID for a SYSTEM process, like <code>winlogon.exe</code></li>\n<li>Obtain a handle to this process by calling <code>OpenProcess</code> <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L431\" rel=\"nofollow noreferrer\">code</a></li>\n<li>Using this handle, call <code>OpenProcessToken</code> to obtain a handle to the process' access token <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L442\" rel=\"nofollow noreferrer\">code</a></li>\n<li>Call <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/aa446617(v=vs.85).aspx\" rel=\"nofollow noreferrer\">DuplicateTokenEx</a> specifying this handle and the user's session ID in order to create a copy of the token. <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L460\" rel=\"nofollow noreferrer\">code</a></li>\n<li>Call CreateProcessAsUser with this duplicated token. <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L485\" rel=\"nofollow noreferrer\">code</a></li>\n</ol>\n<p>Here's a <a href=\"https://www.codeproject.com/Articles/35773/Subverting-Vista-UAC-in-Both-and-bit-Archite\" rel=\"nofollow noreferrer\">similar example in C#</a>.</p>\n<p>You can use <a href=\"https://docs.microsoft.com/en-us/sysinternals/downloads/process-explorer\" rel=\"nofollow noreferrer\">Process Explorer</a> to view the session that process is being run within.\n<a href=\"https://i.sstatic.net/mlsTQ.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/mlsTQ.png\"/></a></p>\n</div>",
+            "votes": "4",
+            "user": "Mick",
+            "time": "Dec 28, 2017 at 16:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "bytecode77",
+                    "text": "<span class=\"comment-copy\">Ah, I see! And because the SessionID = 1, the user is me. What about processes that run in Session 0 - what will CreateProcessAsUser do? I'm aware this depends on the specific implementation. But if CreateProcessAsUser is called from a process in Session 0, will it spawn a SYSTEM process instead?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mick",
+                    "text": "<span class=\"comment-copy\">Well, you can create a process as any user, and choose the desktop it is shown on. In my Delphi code I linked above, I retrieve <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L417\" rel=\"nofollow noreferrer\">the logged-on user's token from the first explorer.exe I find</a>, and then I create a new process on the logged-on user's desktop by <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L429\" rel=\"nofollow noreferrer\">hardcoding the lpDesktop as Winsta0\\default</a>. So that means I have a new process created on the user's desktop, but launched with a merge of SYSTEM's token and the user's token.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Not a really good idea on a <b>multi-user</b> OS.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mick",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L - agree. In the specific use case I wrote the program for, this met the need and works consistently. However, the right way to do it is to call <a href=\"https://github.com/MicksMix/RunAsLou/blob/master/uWtsUtils.pas#L425\" rel=\"nofollow noreferrer\">WTSQueryUserToken, which I commented out in my program,</a> to retrieve the user's token.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Remko",
+                    "text": "<span class=\"comment-copy\">WTSQueryUserToken already returns the user's primary access token so it's not needed to duplicate it.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

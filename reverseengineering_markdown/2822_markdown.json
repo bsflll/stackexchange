@@ -1,0 +1,42 @@
+{
+  "title": "COM interface methods",
+  "link": "https://reverseengineering.stackexchange.com/questions/2822/com-interface-methods",
+  "content": "I'm reversing malware and it uses COM, which I evidently don't know. My question is how to find out what method is called using ppv (and objectstublessclient?)\n\n```\npush    offset ppv      ; Address of pointer variable that receives the interface pointer requested in riid\npush    offset IShellWindows \npush    7              \npush    0               \npush    offset rclsid   \ncall    ds:_CoCreateInstance\n\nmov     ebx, eax\nmov     eax, num4\nmovsx   edx, num8\nadd     eax, edx\nsub     eax, 0Ch\ncmp     ebx, eax        ; S_OK, operation successful\njnz     exit\n\nlea     eax, [ebp+var_C]    ;?\npush    eax\nmov     eax, ppv\npush    eax\nmov     edi, [eax]\ncall    dword ptr [edi+1Ch] ; ObjectStublessClient7\n\n```\nI guessed that the last called function is objectStublessClient7 given that there are three methods(queryinterface etc) and then objectStublessClient's (and code looks like it). (Is that right?)\n\nAccording to this Microsoft article:\n\nWhat does ObjectStublessClient actually do in simple words? Calls a method by its index? If so, then in my case it will be OnActivate of IShellWindows interface? It looks like the arguments don't match (does the first one look like this?)\n\n",
+  "votes": "17",
+  "answers": 1,
+  "views": "5k",
+  "tags": [
+    "disassembly",
+    "windows",
+    "com"
+  ],
+  "user": "astrophonic",
+  "time": "May 21, 2018 at 9:29",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Find the Interface Definition Language (IDL) file for the given interface. In your case, the interface is IShellWindows. According to the documentation for IShellWindows, its interface is defined in IDL file Exdisp.idl. That IDL file is included in the Windows SDK (downloadable for free), and will be installed to a location such as C:\\Program Files\\Microsoft SDKs\\Windows\\v7.1A\\Include\\Exdisp.idl. You can open that Exdisp.idl file with a text editor to see the Interface Definition of IShellWindows:\n\n```\n[\n    uuid(85CB6900-4D95-11CF-960C-0080C7F4EE85),     // IID_IShellWindows\n    helpstring(\"Definition of interface IShellWindows\"),\n    oleautomation,\n    dual,\n    odl,\n]\ninterface IShellWindows : IDispatch\n{\n    //Properties\n    [propget, helpstring(\"Get count of open Shell windows\")]\n    HRESULT Count([out, retval] long *Count);\n\n    //Methods\n    [id(0), helpstring(\"Return the shell window for the given index\")]\n    HRESULT Item([in,optional] VARIANT index, [out, retval]IDispatch **Folder);\n\n    [id(-4), helpstring(\"Enumerates the figures\")]\n    HRESULT _NewEnum([out, retval] IUnknown **ppunk);\n\n    // Some private hidden members to allow shell windows to add and\n    // remove themself from the list.  We mark them hidden to keep\n    // random VB apps from trying to Register...\n    [helpstring(\"Register a window with the list\"), hidden]\n    HRESULT Register([in] IDispatch *pid,\n                     [in] long hwnd,\n                     [in] int swClass,\n                     [out]long *plCookie);\n\n    [helpstring(\"Register a pending open with the list\"), hidden]\n    HRESULT RegisterPending([in] long lThreadId,\n                     [in] VARIANT* pvarloc,     // will hold pidl that is being opened.\n                     [in] VARIANT* pvarlocRoot, // Optional root pidl\n                     [in] int swClass,\n                     [out]long *plCookie);\n\n    [helpstring(\"Remove a window from the list\"), hidden]\n    HRESULT Revoke([in]long lCookie);\n    // As an optimization, each window notifies the new location\n    // only when\n    //  (1) it's being deactivated\n    //  (2) getFullName is called (we overload it to force update)\n    [helpstring(\"Notifies the new location\"), hidden]\n    HRESULT OnNavigate([in]long lCookie, [in] VARIANT* pvarLoc);\n    [helpstring(\"Notifies the activation\"), hidden]\n    HRESULT OnActivated([in]long lCookie, [in] VARIANT_BOOL fActive);\n    [helpstring(\"Find the window based on the location\"), hidden]\n    HRESULT FindWindowSW([in] VARIANT* pvarLoc,\n                         [in] VARIANT* pvarLocRoot, /* unused */\n                         [in] int swClass,\n                         [out] long * phwnd,\n                         [in] int swfwOptions,\n                         [out,retval] IDispatch** ppdispOut);\n    [helpstring(\"Notifies on creation and frame name set\"), hidden]\n    HRESULT OnCreated([in]long lCookie,[in] IUnknown *punk);\n\n    [helpstring(\"Used by IExplore to register different processes\"), hidden]\n    HRESULT ProcessAttachDetach([in] VARIANT_BOOL fAttach);\n}\n\n```\nWe can see that the IShellWindows interface has the following vtable entries:\n\n```\n- Count()\n- Item()\n- _NewEnum()\n- Register()\n- RegisterPending()\n- Revoke()\n- OnNavigate()\n- OnActivated()\n- FindWindowSW()\n- OnCreated()\n- ProcessAttachDetach()\n\n```\nHowever, you can also see in the IDL that the IShellWindows interface inherits from IDispatch. IDispatch has the following vtable entries (from OAIdl.idl):\n\n```\n- GetTypeInfoCount()\n- GetTypeInfo()\n- GetIDsOfNames()\n- Invoke()\n\n```\nThe IDL for IDispatch in OAIdl.idl also specifies that IDispatch inherits from IUnknown. IUnknown has the following vtable entries (from Unknwn.idl):\n\n```\n- QueryInterface()\n- AddRef()\n- Release()\n\n```\nSo now we know that IShellWindows inherits from IDispatch, which inherits from IUnknown. As such, the full layout of the vtable for IShellWindows is as follows:\n\n```\n*ppv+00h = QueryInterface()\n*ppv+04h = AddRef()\n*ppv+08h = Release()\n*ppv+0Ch = GetTypeInfoCount()\n*ppv+10h = GetTypeInfo()\n*ppv+14h = GetIDsOfNames()\n*ppv+18h = Invoke()\n*ppv+1Ch = Count()\n*ppv+20h = Item()\n*ppv+24h = _NewEnum()\n*ppv+28h = Register()\n...\n\n```\nLooking back at your code, we see a call to *ppv+1Ch, which we see from our constructed vtable above is a call to the function IShellWindows::Count(), and &var_C is the pointer to IShellWindows::Count()'s [out, retval]  long *Count parameter.\n\nRun your code above in a debugger, set a breakpoint on call    dword ptr [edi+1Ch], and see what function that instruction calls.\n\nUse COMView (wayback machine link to COMView) to inspect the IShellWindows interface:\n\n\n\nYou can see in the screenshot above that the function at vtable offset 28 (1Ch) is Count().\n\n",
+      "votes": "21",
+      "user": "Remko",
+      "time": "May 24, 2018 at 20:31",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Jason Geffner",
+          "text": "I forgot to mention, you also might be able to tell IDA to interpret ppv as an IShellWindows* variable, in which case IDA will show you that [ppv+1C] is a call to IShellWindows::Count().",
+          "time": null
+        },
+        {
+          "user": "Rolf Rolles",
+          "text": "Good answer!  As Jason stated in his comment, once you know the type name for some variable, IDA will often know about it if it's a standard Windows COM type.  In this case, you'd go to the ppv variable in the data section (highlight that token and press enter) and then press 'y' to enter the type IShellWindows *.  From there, IDA's parameter-tracking algorithms will pick up many of the references and automatically and fill them in for you.  (Those algorithms aren't perfect -- they can't be due to mathematical impossibility issues involved -- so you may still have to fill some in manually).",
+          "time": null
+        },
+        {
+          "user": "Nuzzolilo",
+          "text": "ComView doesn't seem to run. Can someone confirm if this works?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

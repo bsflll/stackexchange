@@ -1,0 +1,45 @@
+{
+    "title": "How to find CLSID from CoCreateInstance in IDA?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17685/how-to-find-clsid-from-cocreateinstance-in-ida",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've find a <code>CoCreateInstance()</code> in IDA disassembly (after <code>CoInitializeEx()</code>). Here are the assembly:</p>\n<pre><code>loc_18000499D:          ; pUnkOuter\nxor     edx, edx\nmov     [rsp+68h+ppv], rbx ; ppv\nlea     r9, riid        ; riid\nlea     rcx, rclsid     ; rclsid\nlea     r8d, [rdx+4]    ; dwClsContext\ncall    cs:CoCreateInstance\nmov     ebx, eax\nmov     eax, 8007019Eh\ncmp     ebx, 80040154h\ncmovz   ebx, eax\ntest    ebx, ebx\njns     short loc_1800049D7\n</code></pre>\n<p>And the pseudocode is:</p>\n<pre><code>CoCreateInstance(&amp;rclsid, 0i64, 4u, &amp;riid, v4 + 1);\n</code></pre>\n<p>When I click the <code>rclsid</code> it is redirected to read-only data segment. Here is the .rdata section:</p>\n<pre><code>.rdata:0000000180007930 ; IID rclsid\n.rdata:0000000180007930 rclsid          dd 4F476546h            ; Data1\n.rdata:0000000180007930                                         ; DATA XREF: f_CoInitialize+A7↑o\n.rdata:0000000180007930                 dw 0B412h               ; Data2\n.rdata:0000000180007930                 dw 4579h                ; Data3\n.rdata:0000000180007930                 db 0B6h, 4Ch, 12h, 3Dh, 0F3h, 31h, 0E3h, 0D6h; Data4\n.rdata:0000000180007940 ; IID riid\n.rdata:0000000180007940 riid            dd 536A6BCFh            ; Data1\n.rdata:0000000180007940                                         ; DATA XREF: f_CoInitialize+A0↑o\n.rdata:0000000180007940                 dw 0FE04h               ; Data2\n.rdata:0000000180007940                 dw 41D9h                ; Data3\n.rdata:0000000180007940                 db 0B9h, 78h, 0DCh, 0ACh, 2 dup(0A9h), 0B5h, 0B9h; Data4\n</code></pre>\n<p>So, How can I find the CLSID? I tried to change the data type with <code>D</code> key but can't understand it.</p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "disassembly"
+    ],
+    "user": "Biswapriyo",
+    "time": "Mar 13, 2018 at 16:13",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<span class=\"comment-copy\">clsid is guid  which is a structure either create the struct and apply it or create a 16 bytel long array with numpad * button</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>CLSID is a GUID and although a GUID can be represented as a string, it's really a struct that looks like this:</p>\n<pre><code>typedef struct _GUID {\n  DWORD Data1;\n  WORD  Data2;\n  WORD  Data3;\n  BYTE  Data4[8];\n} GUID;\n</code></pre>\n<p>Although there is no way to display the GUID as a string in Ida you can convert it to a struct like this:</p>\n<p>Select the 16 bytes that represent your CLSID, right click and select Structure from the Popup Menu. Then from the Sub menu select <code>_GUID</code>:\n<a href=\"https://i.sstatic.net/OhiOr.png\" rel=\"nofollow noreferrer\"><img alt=\"Structure Menu\" src=\"https://i.sstatic.net/OhiOr.png\"/></a></p>\n<p>This is the result showing the Data1, Data2, Data3 and Data4 members\n<a href=\"https://i.sstatic.net/0EJAs.png\" rel=\"nofollow noreferrer\"><img alt=\"Bytes converted to GUID struct\" src=\"https://i.sstatic.net/0EJAs.png\"/></a></p>\n<p>If you want to convert it to string you would need to create an idc script that does something like this: <code>sprintf(szGuid, \"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\", guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);</code></p>\n</div>",
+            "votes": "6",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Remko",
+                    "text": "<span class=\"comment-copy\">An IID is a globally unique identifier (GUID) value, so they are the same.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>From @Remko's idea, I made a IDC script to convert the GUID data to a sting. Here is the script:</p>\n<pre><code>#include &lt;idc.idc&gt;\n\nstatic MakeGuid(ea)\n{\n    auto string = sprintf(\"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}\\n\", \n        Dword(ea), Word(ea+4), Word(ea+6), Byte(ea+8), Byte(ea+9),\n        Byte(ea+10), Byte(ea+11), Byte(ea+12), Byte(ea+13), Byte(ea+14), Byte(ea+15)\n    Message(string);\n    return 0;\n}\n</code></pre>\n<h3>Instructions:</h3>\n<p>Make a text file in any text editor. Add .IDC extension. Paste the above code. Load the IDC script file in IDA with <kbd>Alt</kbd>+<kbd>F7</kbd> (or File &gt; Load Script menu). Open the output window with <kbd>Alt</kbd>+<kbd>0</kbd> (zero). Type <code>MakeGuid(variable_name);</code> below of that window and the GUID will be shown as string. For example, as in my question, type <code>MakeGuid(rclsid);</code>. Always put a semicolon after the function.</p>\n<h3>Sources:</h3>\n<ul>\n<li><a href=\"http://nah6.com/~itsme/cvs-xdadevtools/ida/idcscripts/formatdata.idc\" rel=\"nofollow noreferrer\">useful IDA idc scripts: formatdata.idc</a> </li>\n<li><a href=\"https://github.com/nihilus/IDA-IDC-Scripts/blob/master/Willem_Jan_Hengeveld/formatdata.idc\" rel=\"nofollow noreferrer\">GitHub: IDA-IDC-Scripts/formatdata.idc</a> </li>\n</ul>\n</div>",
+            "votes": "2",
+            "user": "Biswapriyo",
+            "time": "Sep 19, 2018 at 15:26",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

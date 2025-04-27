@@ -1,0 +1,72 @@
+{
+  "title": "Identify password generation algorithm",
+  "link": "https://reverseengineering.stackexchange.com/questions/16509/identify-password-generation-algorithm",
+  "content": "I'm a newbie who just started own way through reverse engineering so I apologize if my question is not appropriate.\nCurrently I'm going through different Crackme puzzles and now I'm stuck. I've spend a couple of days trying to solve it but I can't. \n\nWe enter a login and a password. Then we apply algorithm #1 on login. And algorithm #2 on password. In both cases we get a number as a result. And if the two numbers are equal, then the password is correct. I'm trying to find a way to generate a correct password for any given login.\n\nI've figured out both algorithms with IDA and wrote a program in C++ to test my solutions. \n\nLogin should be at least 4 chars.\n\n```\nlogin = \"Vasya_Pupkin\"\n\n```\n1) From login we get two first chars (\"Va\") and two last (\"in\") and write its ASCII-code into hex number:\n\n```\nV = 0x56, a = 0x61, i = 0x69, n = 0x6e\nhexVain = 0x5661696e\n\n```\n2) We go through the login string and add up all ASCII-codes:\n\n```\nfor (int j = 0; j < login.length(); j++)        \n    asciiSum += login[j];\n\n```\nFor Vasya_Pupkin we get \n    asciiSum = 0x4da\n\n3) We xor those values with some number 0xfec0135a:\n\n```\nhexVain ^ asciiSum ^ 0xfec0135a\nmagicValueLogin = 0xa8a17eee\n\n```\nPassword should be at least 12 chars and should contain only'a'-'f', 'A'-'F', '0'-'9'.\nWe enter password as string. Then we divide the length by 2.\n\n```\npassword_str = \"011c0d0f090e00\";\nn = password_str.length() / 2;  // n = 7\n\n```\nThen we convert string representation to hex and aplly this algorithm:\nWe go through every byte from left to right and calculate new magic value.\n\n```\npassword = 0x011c0d0f090e00;\nmagicValuePass = 0xadde;\nfor (int i = 0; i < n; i++)\n{\n    // we count bytes from left to right\n    passByte = getByte(password, i);    \n\n    // multiplication by 32 is left shift for 5 bytes\n    magicValuePass = passByte ^ (32 * magicValuePass + 1) ^ 0xdeadbeef;\n}\n\n```\nThe output of this function is following:\n\n```\nByte:  01\nMagic: deb8052f\n\nByte:  1c\nMagic: 9ad1b12\n\nByte:  0d\nMagic: eb0edca3\n\nByte:  0f\nMagic: bf762a81\n\nByte:  09\nMagic: 3068eec7\n\nByte:  0e\nMagic: d3b06600\n\nByte:  00\nMagic: a8a17eee\n\n```\nIn the end we get magicValuePass = 0xa8a17eee which is the same value we get for login so the password is correct.\n\nI thought about reversing magicValuePass generation but but came to conclusion that's a bad idea. \n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "encryption",
+    "decryption",
+    "xor"
+  ],
+  "user": "Neilana",
+  "time": "Oct 8, 2017 at 11:11",
+  "comments": [
+    {
+      "user": "Paweł Łukasik",
+      "text": "I guess instead of identifying the algorithm you want to RE to be able to write a keygen of some sort, right?",
+      "time": null
+    },
+    {
+      "user": "Neilana",
+      "text": "@PawełŁukasik Exactly! We have to figure out the correct password for a given login.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As you have just started into RE, try looking into SAT solvers. Z3 is a great tool that will help you in such simple tasks with APIs in all major languages. Here is a solution I tried in python.\n\n```\npassword = BitVec(\"password\",64)\nmagicValuePass = BitVec(\"magicValuePass\",64)\n\ns = Solver()\nidx = 7\nmagicValuePass =  (((password&(0xff<<(8*idx)))>>(8*idx))^ (32 * 0xadde + 1) ^ 0xdeadbeef) & 0xffffffff\nfor i in xrange(6,0,-1):\n    magicValuePass =  (((password&(0xff<<(8*i)))>>(8*i))^ (32 * magicValuePass + 1) ^ 0xdeadbeef) & 0xffffffff\n\ns.add(magicValuePass == magicValueLogin)\n\nif s.check() == sat:\n    print hex(s.model()[password].as_long())\n\n```\nFirst declare password to be a 64 bit variable. Then iterate byte by byte  calculating the intermediate values and finally set the magicValuePass equal to magicValueLogin. If a solution exists to such conditions Z3 will run for some time and give the solution which is printed.\nFull script here which on running gives such output\n\n```\n$ python test-so.py Vasya_Pupkin\n0x11c0d0f090e0000\n$ python test-so.py ABCD        \n0x1171f0902111a00\n$ python test-so.py DEfg\n0x1150f070b1a0500\n\n```\n",
+      "votes": "2",
+      "user": "sudhackar",
+      "time": "Oct 9, 2017 at 8:20",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "yaspr",
+          "text": "I agree, SAT Solvers are the mathematical way out. But, your examples aren't correct : login:ABCD has a magic number of 0xbf825114 and Password: 1171f0902111a00 has a magic number of 0x79660be7. No match!",
+          "time": null
+        },
+        {
+          "user": "sudhackar",
+          "text": "I think my assumptions might be flawed such as taking 64 bit passwords and operating only on the lower 56 bits, but once given the binary I can verify what I want and assume. I was just trying to give him some ways to try instead of giving a complete solution.",
+          "time": null
+        },
+        {
+          "user": "Neilana",
+          "text": "@sudhackar Wow, that worked! I've tried both of those examples in the crackme puzzle and it worked. Unfortunately I didn't have much time today to take a look on either SAT or Z3. So just for now I don't understand how it worked. I'll check it later and write back! Thank you for your answer.",
+          "time": null
+        },
+        {
+          "user": "Neilana",
+          "text": "@sudhackar Okay, I've just looked closer and now I can fully understand  what's going on in your script. I've also tested it on some other values and it works perfectly. Thanks, didn't know about existing of SAT solvers, will definitely keep that in mind. Now I have even harder crackme to solve (didn't look at it yet), I think I could apply my new knowledge there as well!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "How about generating many logins from a password?\n\nTo start, algorithm 1 looks like the weakest link. Algorithm 2 is a one directional hash function and there's no way you can extract the characters by only knowing the magic number and the password bias. It involves some advanced math work and time. I explain the process of breaking Algorithm 2 in the second section.\n\nSuppose :\n\nlog_bias  = 0xfec0135a\n\npass_bias = 0xdeadbeef\n\nLet's look at algorithm 1:\n\n1) log_chunk = 0xlogin(0)login(1)login(n - 2)login(n - 1);\n\n2) log_checksum = Sum(login, 0, n); \n\n3) log_magicnumber = log_chunk ^ log_checksum ^ log_bias;\n\nThis algorithm shows two potential weaknesses. One, if you take the magic number and xor it with the log_bias constant you obtain : \nlog_chunk ^ log_checksum.\nTwo, log_chunk is a concatenation in hex of the first two characters and the last two characters and it provides a frame for the login; therefore, we can generate our own characters and give that variable a value. \n\nAfter getting rid of the bias and choosing a value for the chunk, we can obtain a value for log_checksum.\n\nlog_checksum =  (log_magicnumber ^ log_bias) ^ log_chunk;\n\nWhat's left to do is to find a sequence of numbers representing characters which sum is the checksum.\n\nHow? \n\nWell, if you look at the ASCII table you'll see that printable characters go from 33 to 126. If we generate a random value b between 33 and 126 and subtract it from the checksum we obtain a character value b and  reduce the checksum value by b : log_checksum -= b. Repeat this operation until checksum value goes below 126 and only store characters which diff = (log_checksum - b) is greater or equal than 33. This way, all characters will be printable.   \n\nAfter filling the middle of the login string it can be represented as follows :\n\nlogin = A B b0 b1 b2 ... bj C D\n\nwith A, B, C, D the characters we chose, and bi the characters generated from the checksum. \n\nThis reverse engineering approach is a cheap smart hack that targets the weakest hash function of the process and it will definitely work and save you time. From one password you'll obtain multiple logins : this is called a hash collision. \n\nHere's an example output of this code:\n\n```\nLogin: Vasya_Pupkin\nPassword: 011c0d0f090e00\nLogin    check : 0xa8a17eee\nPassword check : 0xa8a17eee\nCheck success :)\nValid login for pass_magicnumber 0xa8a17eee: Va[JiIUpHBI]in, length = 14\nValid login for pass_magicnumber 0xa8a17eee: VaU[^OnyD^fin, length = 13\nValid login for pass_magicnumber 0xa8a17eee: Va|IkH`y`i2in, length = 13\nValid login for pass_magicnumber 0xa8a17eee: VaTziSl^oK>in, length = 13\nValid login for pass_magicnumber 0xa8a17eee: VawNzAOGWktin, length = 13\nValid login for pass_magicnumber 0xa8a17eee: Vaeh]bmzbwin, length = 12\nValid login for pass_magicnumber 0xa8a17eee: VaugjXcNEvBin, length = 13\nValid login for pass_magicnumber 0xa8a17eee: VaJoMwQ{p[8in, length = 13\nValid login for pass_magicnumber 0xa8a17eee: VatBZwR`R|Ein, length = 13\nValid login for pass_magicnumber 0xa8a17eee: VaIy[lkZQbKin, length = 13\n\n```\nAll the listed valid logins will work for the password \"011c0d0f090e00\".\nIf you alter the password a bit, say : \"011c0d0f090efe\", here's what you get : \n\n```\nLogin: VaNpNa^Twin \nPassword: 011c0d0f090efe\nLogin    check : 0xa8a17e10\nPassword check : 0xa8a17e10\nCheck success :)\nValid login for pass_magicnumber 0xa8a17e10: VaeOTUkOG8in, length = 12\nValid login for pass_magicnumber 0xa8a17e10: VaUDFEzBx>in, length = 12\nValid login for pass_magicnumber 0xa8a17e10: Va|gktoein, length = 10\nValid login for pass_magicnumber 0xa8a17e10: VaaPRTogiin, length = 11\nValid login for pass_magicnumber 0xa8a17e10: VaFEzBpktin, length = 11\nValid login for pass_magicnumber 0xa8a17e10: VafCCzmQrin, length = 11\nValid login for pass_magicnumber 0xa8a17e10: VaFDWMHSNC<in, length = 13\nValid login for pass_magicnumber 0xa8a17e10: VaSvoIgR\\in, length = 11\nValid login for pass_magicnumber 0xa8a17e10: Va[{eLdl?in, length = 11\nValid login for pass_magicnumber 0xa8a17e10: VaPaoDPXFDin, length = 12\n\n```\nNow, let's talk about generating passwords from a login magic number.\nYou'll have to attack this function :\n\nlog_magicnumber = b ^ ((log_magicnumber << 5) + 1) ^ pass_bias\n\nIf you look closely, you'll see that current log_magicnumber is computed using the previous log_magicnumber value transformed and mixed up with an unknown byte value and a known bias.\nIteratively, it looks like this:\n\nlog_magicnumber(i) = b ^ ((log_magicnumber(i - 1) << 5) + 1) ^ pass_bias\n\nIf we xor the pass_magicnumber and the pass_bias we're left with :\n\nb ^ ((log_magicnumber << 5) + 1)\n\nAfter generating all possible values of b (0-9 and a-f, 16 possibilities total) and deriving the corresponding value of log_magicnumber for each possible value of b, we apply the same step on these magic number values to obtain another value & we go on 8 times (the password string being a 64 bit value = 8 bytes with a minimum length of 6 bytes). We discard the two left-most bytes if set to zero and pack all the bytes into a password string; we then verify with the password magic number algorithm if the password's magic number matches the login's.     \n\nThis approach amounts to creating an 8 stage tree where each node has 16 children. This means that we'll have to generate 16 to the power of 8 characters : 16^8 = (2^4)^8 = 2^32 = 4.294.967.296 characters (4GB) and combine them in strings of 6 to 8 characters with each string being checked for validation. It was fun to code :) \n\n",
+      "votes": "1",
+      "user": "yaspr",
+      "time": "Oct 9, 2017 at 10:54",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Neilana",
+          "text": "Very interesting idea about generating logins from a password! That definitely works. I've spend many hours with that puzzle trying to came up with any algorithm that would generate any valid pair login\\pass. But the thing you propose didn't came into mind. I like it :)  Yes, I thought about implementing something like what you describing in the 2nd section but realized that's a pretty bad idea :D    I mark question as solved and choose the sudhackar's answer as solution because it provides way to generate pass from login (not vise versa).",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+    "title": "Offset calculation for branch instruction in ARM",
+    "link": "https://reverseengineering.stackexchange.com/questions/10659/how-to-modify-arm-so",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As the title says, how to calculate offsets for branch instructions?\nFor example i have following assembly code,\n </p>\n <pre><code>0x60ECE    B loc_60EE6\n;\n;\n;\n0x60EE6    LDR.W R2, #0x123\n</code></pre>\n <p>\n  Hex code for location\n  <code>\n   0x60ECE\n  </code>\n  is\n  <code>\n   0A E0\n  </code>\n  . i want to know how it is calculated. According to\n  <a href=\"https://stackoverflow.com/questions/6744661/understanding-arm-assembler-branch-offset-calculation\">\n   https://stackoverflow.com/questions/6744661/understanding-arm-assembler-branch-offset-calculation\n  </a>\n  , offset should be\n  <code>\n   04\n  </code>\n  instead of\n  <code>\n   0A\n  </code>\n  .\n </p>\n <p>\n  I'm working on android binary.\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 2,
+    "views": "11k",
+    "tags": [
+        "ida",
+        "android",
+        "arm",
+        "offset"
+    ],
+    "user": "kandi",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The instruction format is in little-endian, so bytes\n  <code>\n   0A E0\n  </code>\n  gets parsed as machine code\n  <code>\n   0xE00A\n  </code>\n  , or\n  <code>\n   1110000000001010b\n  </code>\n  in binary.\n </p>\n <p>\n  According to\n  <a href=\"https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf\" rel=\"noreferrer\">\n   the documentation for the THUMB Instruction Set\n  </a>\n  , the first 5 bits (\n  <code>\n   11100b\n  </code>\n  ) decode to an\n  <strong>\n   unconditional branch\n  </strong>\n  opcode, and the last 11 bits (\n  <code>\n   00000001010b\n  </code>\n  ) decode to\n  <strong>\n   Offset11\n  </strong>\n  :\n </p>\n <p>\n  <img alt=\"Unconditional branch\" src=\"https://i.sstatic.net/2acj0.png\"/>\n </p>\n <p>\n  As per the documentation above, the destination address is calculated as \"PC relative +/- Offset11 << 1\" plus 4 for the prefetch operation.\n </p>\n <p>\n  If we do the math, we see that everything works out:\n </p>\n <pre><code>   0x60ECE + (00000001010b << 1) + 0x4\n== 0x60ECE +       10100b        + 0x4\n== 0x60ECE +        0x14         + 0x4\n== 0x60EE6\n</code></pre>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Jason Geffner",
+            "time": "Jun 8, 2015 at 13:52",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You're missing the fact that you're working in THUMB mode, where you have two bytes per instruction (for most instructions at least), and that link describes ARM mode, where every instruction has 4 bytes.\n </p>\n <p>\n  (How do i know you're in THUMB mode? Apart from your last question, your\n  <code>\n   0x60ECE B loc_60EE6\n  </code>\n  isn't 4-byte aligned, so it must be THUMB).\n </p>\n <p>\n  If you add 4 bytes to the instruction at\n  <code>\n   loc_60ECE\n  </code>\n  , you get\n  <code>\n   0x60ED2\n  </code>\n  . Subtract this from\n  <code>\n   60EE6\n  </code>\n  to get\n  <code>\n   14\n  </code>\n  , or 20 decimal. Divide by 2 (2 byte instructions in THUMB mode) to get\n  <code>\n   10\n  </code>\n  decimal, or\n  <code>\n   0A\n  </code>\n  hex.\n </p>\n <p>\n  As calculating offsets can be hard and is error-prone, i let the gnu arm assembler handle it for me.  First write an assembly file, like this (named q.s, choose any name you want):\n </p>\n <pre><code>.thumb\n.arch armv7a\n.syntax unified\n.org 0x60ECE\n    B codecave\noriginal:\n.org 0x60EE6\ncodecave:\nmovw R2, #0x123\nB original\n</code></pre>\n <p>\n  then assemble it and check the result:\n </p>\n <pre><code>arm-linux-gnueabi-as q.s\narm-linux-gnueabi-objdump -s a.out | grep -v \"00000000 00000000 00000000 00000000\"\n\nContents of section .text:\n 60ec0 00000000 00000000 00000000 00000ae0  ................\n 60ee0 00000000 000040f2 2312f1e7           ......@.#...    \n</code></pre>\n <p>\n  You see your\n  <code>\n   0ae0\n  </code>\n  at\n  <code>\n   60ece\n  </code>\n  , and\n  <code>\n   40f22312f1e7\n  </code>\n  at\n  <code>\n   60ee6\n  </code>\n  . You can patch this in IDA directly, or use the\n  <a href=\"https://thesprawl.org/projects/ida-patcher/\" rel=\"nofollow\">\n   idapatcher plugin\n  </a>\n  to copy/paste the hex. I found this to be much easier than crafting the patched bytes manually.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Jun 8, 2015 at 13:56",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user2578525",
+                    "text": "<span class=\"comment-copy\">Thank you sir for pointing out this trick. It made everything a lot easier for me. Finally i was able to create codecave.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

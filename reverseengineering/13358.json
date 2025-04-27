@@ -1,0 +1,63 @@
+{
+    "title": "How to Find All Switch Jump Tables in IDAPython",
+    "link": "https://reverseengineering.stackexchange.com/questions/13358/how-to-find-all-switch-jump-tables-in-idapython",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm using IDAPython on IDA 6.5 and I'm trying to get all the switch jump tables in a DLL. Mainly I'm interested in jump tables that are jumped indirectly:</p>\n<pre><code>jmp     ds:off_65018790[ecx*4] ; switch jump\n</code></pre>\n<p>Basically, what interests me is:</p>\n<ul>\n<li>The address from where the jmp happens</li>\n<li>The list of the possible locations, for example - loc_65018723, loc_65018736...</li>\n</ul>\n<p>I already know how to get all the jmp addresses using IDAPython, but I don't know if it's a jmp to a jump table or just a normal jmp.</p>\n<p>In most cases, IDA knows to identify those jump tables, so is there a way to get that info from the API?</p>\n<p>Thanks a lot!</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ida",
+        "idapython",
+        "ida-plugin",
+        "disassemblers",
+        "idapro-sdk"
+    ],
+    "user": "Alex",
+    "time": "Aug 25, 2016 at 8:27",
+    "comments": [
+        {
+            "user": "w s",
+            "text": "<span class=\"comment-copy\">Unfortunately I don't have IDA 6.5 installed, but as far as I remember idaapi.get_switch_info_ex(ea) already was there. The simplest way to see reference usage of this function is searching python code with call to this function on github.</span>",
+            "time": null
+        },
+        {
+            "user": "Alex",
+            "text": "<span class=\"comment-copy\">Thanks a lot! It was exactly what I needed. If you post it as an answer, I will mark it as answered :)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Decided to add a small code snippet to show how to iterate through the .text segment, obtaining all the switch table locations and storing the jump targets in a dictionary.</p>\n<pre><code>text_seg = idaapi.get_segm_by_name('.text')\njump_table = dict()\n\n# iterate through all items within the segment\nfor head_ea in idautils.Heads(text_seg.startEA, text_seg.endEA):\n    if idc.isCode(idc.GetFlags(head_ea)):\n        switch_info = idaapi.get_switch_info_ex(head_ea)\n        if (switch_info and switch_info.jumps != 0):\n            loc = switch_info.jumps\n            jump_table[loc] = list()\n            element_num = switch_info.get_jtable_size()\n            element_size = switch_info.get_jtable_element_size()\n            for num in range(0, element_num):\n                table_entry = loc+num*element_size\n                jump_table[loc].append(idc.GetManyBytes(table_entry), element_size)\n</code></pre>\n<p><strong>Update</strong>: To build upon this for newer versions of IDA</p>\n<pre><code>def find_jumps(si: ida_nalt.switch_info_t) -&gt; list:\n    jtable = []\n    e_size = si.get_jtable_element_size()\n\n    for num in range(0, si.get_jtable_size()):\n        jtable.append(int.from_bytes(ida_bytes.get_bytes(si.jumps + (num * e_size), e_size), 'little') + si.elbase)\n\n    return jtable\n\nea = 0x0000000000000000 # some ea\nsi = ida_nalt.switch_info_t()\nif (ida_nalt.get_switch_info(si, ea) is not None): # jump table\n    jtable = find_jumps(si)\n</code></pre>\n<p>This resolves the offsets to the with respect to <code>elbase</code> of the <code>switch_info_t</code> structure which IDA provides if <code>get_switch_info</code> is succesful. See: <a href=\"https://hex-rays.com/products/ida/support/idapython_docs/ida_nalt.html#ida_nalt.switch_info_t.elbase\" rel=\"nofollow noreferrer\">https://hex-rays.com/products/ida/support/idapython_docs/ida_nalt.html#ida_nalt.switch_info_t.elbase</a> for more information, and cross reference this to the <code>c++</code> support if need-be at <a href=\"https://hex-rays.com/products/ida/support/sdkdoc/structswitch__info__t.html\" rel=\"nofollow noreferrer\">https://hex-rays.com/products/ida/support/sdkdoc/structswitch__info__t.html</a></p>\n</div>",
+            "votes": "2",
+            "user": "Supernovah",
+            "time": "Nov 21, 2021 at 3:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\"><code>getnseg</code> receives a segment number, while <code>SegByName</code> returns a segment selector, these are not the same thing. Your first line is erroneous.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Additionally, using <code>idc.Dword</code> feels insecure and assumes the switch code is indeed structured the way OP described, which isn't always the case.</span>",
+                    "time": null
+                },
+                {
+                    "user": "chuazl",
+                    "text": "<span class=\"comment-copy\">Thanks Nirlzr, the above snippet comes from my old script I used on ARM32 binaries to extract out jumptables in order to rewrite them. I've updated it to fix the mistakes you've pointed out.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>To safely get all references from a certain <code>EA</code>, there's <code>idc.XrefsFrom(ea, flags)</code>. You'll get an iterator for cross references from a certain <code>EA</code> (the switch-case's branch/jump instruction). switch-cases are easy to identify as they're always with more than two cross references targets.</p>\n<p>According to <a href=\"https://www.hex-rays.com/products/ida/support/idapython_docs/ida_xref-module.html\" rel=\"nofollow\">this</a> the <code>flags</code> parameter is one of the following:</p>\n<blockquote>\n<p>XREF_USER = 32<br/>\n  XREF_TAIL = 64<br/>\n  XREF_BASE = 128<br/>\n  XREF_MASK = 31<br/>\n  XREF_PASTEND = 256<br/>\n  XREF_ALL = 0<br/>\n  XREF_FAR = 1<br/>\n  XREF_DATA = 2</p>\n</blockquote>\n<p>The object you'll get from each iteration is an <code>ida_xref</code> object, exposing the following attributes:</p>\n<ol>\n<li><code>frm</code> - The source of the cross reference, the code that performs the jump in our case.</li>\n<li><code>to</code> - The target of the cross reference, the code that will be executed according to the jump table selector in our case.</li>\n<li><code>iscode</code> - Boolean, <code>True</code> if cross reference is a code cross reference, must be <code>True</code> in our case.</li>\n<li><code>type</code> - One of the available type values, see below. You could use <code>idautils.XrefTypeName(typecode)</code> to translate the integer you get here to a readable string.</li>\n<li><code>user</code> - Boolean, True if this cross reference was created by the user, opposed to being automatically created by IDA.</li>\n</ol>\n<p>The valid cross reference types are, according to <a href=\"https://github.com/idapython/src/blob/master/python/idautils.py#L119\" rel=\"nofollow\">this</a>:</p>\n<blockquote>\n<p>ref_types = {<br/>\n   0  : 'Data_Unknown',<br/>\n   1  : 'Data_Offset',<br/>\n   2  : 'Data_Write',<br/>\n   3  : 'Data_Read',<br/>\n   4  : 'Data_Text',<br/>\n   5  : 'Data_Informational',<br/>\n   16 : 'Code_Far_Call',<br/>\n   17 : 'Code_Near_Call',<br/>\n   18 : 'Code_Far_Jump',<br/>\n   19 : 'Code_Near_Jump',<br/>\n   20 : 'Code_User',<br/>\n   21 : 'Ordinary_Flow'<br/>\n  }</p>\n</blockquote>\n</div>",
+            "votes": "0",
+            "user": "NirIzr",
+            "time": "Sep 9, 2016 at 11:07",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

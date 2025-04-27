@@ -1,0 +1,79 @@
+{
+  "title": "Ida Pro: parsing complex operand expression using IDAPython",
+  "link": "https://reverseengineering.stackexchange.com/questions/9040/ida-pro-parsing-complex-operand-expression-using-idapython",
+  "content": "Say given the following line in Ida Pro:\n\n```\nmov     [rsp+3F8h+var_3F8], 0\n\n```\nHow can I parse and access the items inside the [ ]?\nWhat I tried:\n\nHow can I access the elements of the 'phrase', i.e. the rsp, 3F8h, and var_3F8? I am looking for something like this:\n\n```\nmy_op_phrase = idc.ParseOperandPhrase(ea, n)\nmy_op_phrase[0] #-> 'rsp'\nmy_op_phrase[0].type #-> idaapi.o_reg\n\nmy_op_phrase[1] #-> 0x3F8h\nmy_op_phrase[1].type #-> idaapi.o_imm\n\nmy_op_phrase[2] #-> 'var_3F8'\n…\n\n```\nIs this even possible or am I misunderstanding something?\n\n",
+  "votes": "6",
+  "answers": 3,
+  "views": "5k",
+  "tags": [
+    "ida",
+    "disassembly",
+    "idapython"
+  ],
+  "user": "langlauf.io",
+  "time": "Jun 29, 2023 at 21:29",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Note that the original assembly instruction was probably mov [rsp+4], 0(*). This is why idc.GetOperandValue returns 4.\n\nEspecially with older compilers, that used push and pop a lot, the value of rsp varies wildly during the execution of a function. What is esp+8 now would be esp+12 after a push; what would be rsp+8 now would be rsp after a pop. So, while reading a piece of (plain) assembly code it's very difficult to keep track of which stack location gets accessed when.\n\n(This has improveed recently; x64 abis use registers to pass parameters so the code doesn't push and pop as much anymore, and compilers like gcc make enough space on the stack and directly put parameters in addresses relative to esp even on 32 bit, so esp/rsp don't change that much anymore. But still, there's a lot of old code to reverse.)\n\nTo improve the situation, IDA assigns variable names to stack locations, like your var_3F8. Whenever an instruction does some sp relative addressing, IDA uses the variable name, and emits an additional offset to account for changes to the stack pointer since the function start. So if your original code looks like\n\n```\nmov [rsp+8], rax\nsub rsp, 128\nmov [rsp+136], rbx\npush rcx\nmov [rsp+144], rdx\n\n```\nit accesses the same memory address in every case. Ida converts this to\n\n```\nmov [rsp+0+var_8], rax\nsub rsp, 128\nmov [rsp+128+var_8], rbx\npush rcx\nmov [rsp+136+var_8], rdx\n\n```\nHowever, these changes are display only, they do not change your binary! Getting the operands will still return 8, 136 and 144, not the values ida displays to you.\n\nIf you want to analyze this automatically, you can either keep track of the stack pointer offset yourself, and adjust the result of GetOperandValue accordingly, or you'll have to use the python string functions on the output of GetOpnd, throw away the middle part, and compare the right part (the variable names).\n\n(*) which seems a bit strange now i think of it, since you're obviously using 64 bit, as your stack pointer is rsp, which would hint at 8 byte alignment.\n\n",
+      "votes": "4",
+      "user": "Guntram Blohm",
+      "time": "Jun 1, 2015 at 14:17",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Jongware",
+          "text": "Is this the \"current stack delta\" what you are referring to? It can be retrieved with GetSpd.",
+          "time": null
+        },
+        {
+          "user": "langlauf.io",
+          "text": "@Guntram Blohm: Are you sure about the reason why GetOperandValue() returns 4? The idc.py says: \"operand is a register phrase   => phrase number\". I understand this as: \"if there is a register 'phrase', GetOperandValue() returns the phrase number.\" I don't know though what is meant by this phrase number. What do you think?",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "I don't have access to my office computer at the moment, where IDA is installed, but i'd assume register phrase is almost the same as register name, so each processor register is assigned a number, and ida returns that number if the operand is a register name, or something similar denoting a register on exotic hardware.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Assuming addr is the EA of mov [rsp+3F8h+var_3F8], 0:\n\n```\nre.findall('\\[(.*)\\]', idc.GetDisasm(addr))[0].split('+')\n\n```\nyields the list\n\n```\n['rsp', '3F8h', 'var_3F8']\n\n```\n",
+      "votes": "3",
+      "user": "Jason Geffner",
+      "time": "Jun 1, 2015 at 14:22",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Polynomial",
+          "text": "This works until you hit a subtraction or multiplication, e.g. mov edx, [eax+ecx*4]. Regex is not really a great option here, but unfortunately it doesn't seem like IDA really gives us much of a choice.",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "\"This works until you hit a subtraction or multiplication\" -- Yes, but that's not what the question asked :)",
+          "time": null
+        },
+        {
+          "user": "Orwellophile",
+          "text": "@JasonGeffner (a) Easier to do regex GetOpnd(ea, 0) == [rsp+3F8h+var_3F8] (b) How to get the value of var_x (guessable) and arg_x (not su much) (c)  In cases such as these (*register + displacement) just GetOperandValue(ea, 1) if GetOpType(ea, 1) == o_displ else None == 48.",
+          "time": null
+        },
+        {
+          "user": "Orwellophile",
+          "text": "@Polynomial: that type of operand can be detected by GetOpnd(ea,1) == o_phrase  and is probably the only kind of operand you would use regex for, except maybe for o_displ.  Although, since you can't resolve it to an actual value, it's probably not likely to ever become an issue.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "If you want to avoid using a regular expression to extract the base, index, scale from that specific operand type, you can use the instruction.op function from the minsc plugin at https://github.com/arizvisa/ida-minsc. Disclaimer: I maintain the ida-minsc plugin.\n\n```\nPython>db.disasm()\n'1c00b2f7f: mov rcx, [rbp+57h+var_20]'\n\nPython>ins.op(1)\nSegmentOffsetBaseIndexScale(segment=%ss, offset=0x37, base=%rbp, index=None, scale=1)\n\n# If you need the symbols that compose the expression...\n# (although, it's not really that useful compared to a real symbolic language)\nPython>[item for item in ins.op(1).symbols]\n[<class 'register_t' index=31 dtype=dt_word name='ss' position=0+16>, <class 'register_t' index=5 dtype=dt_qword name='rbp' position=0+64>]\n\n# Translate the address if you need to.\nPython>ins.op(idc.here(), 1) + 0x1000\nSegmentOffsetBaseIndexScale(segment=%ss, offset=0x1037, base=%rbp, index=None, scale=1)\n\n```\n",
+      "votes": "0",
+      "user": "Ali Rizvi-Santiago",
+      "time": "Jul 21, 2024 at 7:12",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

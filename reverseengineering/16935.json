@@ -1,0 +1,55 @@
+{
+    "title": "Debugging Binary using Far Ret to switch Code Segment",
+    "link": "https://reverseengineering.stackexchange.com/questions/16935/debugging-binary-using-far-ret-to-switch-code-segment",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It appears that GDB is unable to handle binaries which switch code segments.</p>\n<p>Using <code>pwntools</code>*, it's trivial to generate a 32-bit intel binary which uses <code>retf</code> to switch to the 64-bit code segment.  Linux supports this, and everything \"works fine\".</p>\n<pre><code>&gt;&gt;&gt; print shellcraft.to_64bit()\n    push 0x33\n    jmp 2f\n1:\n    retf\n2:\n    call 1b\n\n&gt;&gt;&gt; print shellcraft.amd64.mov('rax', 0xdeadbeefcafebabe)\nmov rax, 0xdeadbeefcafebabe\n</code></pre>\n<p>We can assemble these to binary:</p>\n<pre><code>&gt;&gt;&gt; asm(shellcraft.to_64bit())\n'j3\\xeb\\x01\\xcb\\xe8\\xfa\\xff\\xff\\xff'\n\n&gt;&gt;&gt; asm(shellcraft.amd64.mov('rax', 0xdeadbeefcafebabe), arch='amd64')\n'H\\xb8\\xbe\\xba\\xfe\\xca\\xef\\xbe\\xad\\xde'\n</code></pre>\n<p>And stick it all into an ELF:</p>\n<pre><code>&gt;&gt;&gt; ELF.from_bytes('j3\\xeb\\x01\\xcb\\xe8\\xfa\\xff\\xff\\xff' + 'H\\xb8\\xbe\\xba\\xfe\\xca\\xef\\xbe\\xad\\xde')\n[*] '/var/folders/4h/rrwj8fpj1cqcfb83syr_f930008rd2/T/pwn-asm-NbnRYW/step3-elf'\n    Arch:     i386-32-little\n    RELRO:    No RELRO\n    Stack:    No canary found\n    NX:       NX disabled\n    PIE:      No PIE (0x8049000)\n    RWX:      Has RWX segments\n</code></pre>\n<p>For StackExchange users looking to reproduce this without installing <code>pwntools</code>, the full binary data is:</p>\n<pre><code>7f454c4601010100000000000000000002000300010000007490040834000000a000000000000000340020000200280003000200010000000000000000900408009004088900000089000000070000000010000051e57464000000000000000000000000000000000000000007000000100000006a33eb01cbe8faffffff48b8bebafecaefbeadde00002e7368737472746162002e7368656c6c636f64650000000000000000000000000000000000000000000000000000000000000000000000000000000000000b00000001000000070000007490040874000000150000000000000000000000010000000000000001000000030000000000000000000000890000001600000000000000000000000100000000000000\n</code></pre>\n<p>Now, when we run this under GDB, we end up with the register state we expect, but there's no way to see the extended registers, or convince it to switch architectures -- or display the correct disassembly!</p>\n<pre><code>$ gdb -q --nx --nh \"/home/user/step3-elf\"\nReading symbols from /home/user/step3-elf...(no debugging symbols found)...done.\n(gdb) x/5i 0x8049074\n   0x8049074:   push   $0x33\n   0x8049076:   jmp    0x8049079\n   0x8049078:   lret\n   0x8049079:   call   0x8049078\n   0x804907e:   dec    %eax\n(gdb) b *0x8049074\nBreakpoint 1 at 0x8049074\n(gdb) r\nStarting program: /home/user/step3-elf\n\nBreakpoint 1, 0x08049074 in ?? ()\n(gdb) si\n0x08049076 in ?? ()\n(gdb)\n0x08049079 in ?? ()\n(gdb)\n0x08049078 in ?? ()\n(gdb)\n0x0804907e in ?? ()\n(gdb) x/i $pc\n=&gt; 0x804907e:   dec    %eax\n(gdb) i r eax\neax            0x0  0\n(gdb) ni\n0x08049088 in ?? ()\n(gdb) i r eax\neax            0xcafebabe   -889275714\n(gdb) set arch i386:x86-64\nwarning: Selected architecture i386:x86-64 is not compatible with reported target architecture i386\nArchitecture `i386:x86-64' not recognized.\nThe target architecture is set automatically (currently i386)\n</code></pre>\n<p>How can I convince GDB to show the correct, 64-bit disassembly, when it refuses to switch architectures?  Even <code>info reg all</code> does not display all of the registers (e.g. RAX) correctly.</p>\n<blockquote>\n<p>*<em>to_64bit() is not in a released version of pwntools</em></p>\n</blockquote>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "679",
+    "tags": [
+        "gdb",
+        "elf",
+        "binary",
+        "shellcode",
+        "amd64"
+    ],
+    "user": "Zach Riggle",
+    "time": "Dec 7, 2017 at 22:55",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">What version of <code>gdb</code> are you using ? And, is it the multiarch version ?</span>",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "<span class=\"comment-copy\">During a ctf I faced the same problem. If you're okay with using another debugger, <a href=\"http://fdbg.x86asm.net\" rel=\"nofollow noreferrer\">fdbg</a> worked fine. But it has not that many significant features.</span>",
+            "time": null
+        },
+        {
+            "user": "Zach Riggle",
+            "text": "<span class=\"comment-copy\">GDB 7.12, multiarch isn't necessary since it's a host-architecture binary.  \"set arch\" shows \"i386:x86-64\" as a supported option.  I re-tried with gdb-multiarch with identical results.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>CPUs and OSes can support switching between 32 and 64 bit execution modes kind of easily thanks to how 32bit mode backwards compatibility was made in AMD64. This was kind of a requirement to avoid having the majority of system binaries duplicated on 64bit machines to execute 32bit code (which is still pretty common to be solely distributed).</p>\n<p>This isn't quite the case for debuggers and some process manipulation tools that in some cases are required to bundle 64bit helper processes or ship both 32 and 64 bit binaries. Switching between 32 and 64 bit execution modes is indeed only a far jump away, but supporting that by a debugger is a lot more complicated. Transition/translation functions must be provided for the debugger's internal states (not the the debugged process's state, some APIs simply cannot cross process bitness boundaries, etc.</p>\n<p>This is not to say it's impossible, merely to explain why this may not be available yet.</p>\n</div>",
+            "votes": "-1",
+            "user": "NirIzr",
+            "time": "Dec 9, 2017 at 18:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">GDB supports switching architectures at runtime via the \"set arch\" command. However, since GDB has access to the original file, it is preventing me from performing the switch.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@ZachRiggle <code>set architecture</code> is used to switch architectures while <i>GDB</i> is running, but not while a <i>debugged process</i> is running. Those are two totally different things.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

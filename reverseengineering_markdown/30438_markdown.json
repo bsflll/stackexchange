@@ -1,0 +1,52 @@
+{
+  "title": "Mov instruction from a pointed location at the beginning of a program",
+  "link": "https://reverseengineering.stackexchange.com/questions/30438/mov-instruction-from-a-pointed-location-at-the-beginning-of-a-program",
+  "content": "I am trying to learn how to read assembly code. So far I have understood the basic instructions. Now I am trying to see if I can understand a dissassembly from a linked executable. So this is an executable that I compiled on Windows (i.e. PE/COFF). This is the first part of the executable (starting from the very first line in dissassembly, in Intel syntax)\n\n```\n  0000000140001000: 48 83 EC 08        sub         rsp,8\n  0000000140001004: 48 BA FF 97 9D 18  mov         rdx,4189D97FFh\n                    04 00 00 00\n  000000014000100E: 48 8B 05 F3 9E 05  mov         rax,qword ptr [000000014005AF08h] <===\n                    00\n  0000000140001015: 48 23 C2           and         rax,rdx\n  0000000140001018: 48 3B C2           cmp         rax,rdx\n  000000014000101B: 75 09              jne         0000000140001026\n  000000014000101D: 48 83 C4 08        add         rsp,8\n  0000000140001021: E9 3A 00 00 00     jmp         0000000140001060\n  0000000140001026: 8B 05 DC 9E 05 00  mov         eax,dword ptr [000000014005AF08h]\n  000000014000102C: 25 FF 97 9D 00     and         eax,9D97FFh\n  0000000140001031: 3D FF 97 9D 00     cmp         eax,9D97FFh\n\n```\nI believe the proper program execution starts at the beginning of the program (I'm not sure this is correct). If that is the case, then how does the mov instruction in 3rd line work? (The line is highlighted above.)\n\nThe instruction seems to be moving the value in location 000000014005AF08h to rax. But where does the location 000000014005AF08h come from? Is it set by something else before that program execution begins? And I can't find anything around the line 000000014005AF08h because it is not shown in the dissassembly. Please help me because I feel as if I have misunderstood something here. The executable is available here.\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "359",
+  "tags": [
+    "disassembly",
+    "windows",
+    "assembly"
+  ],
+  "user": "S R Maiti",
+  "time": "May 25, 2022 at 18:36",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "In Intel assembly commonly a leading semi-colon (;) is used to introduce a comment. The comment then continues to the end of the line. The ; can also occur after an instruction, but not in its middle.\n\n```\nmov rax,qword ptr [000000014005AF08h]\n\n```\nFrankly, I have to guess here, because I don't know all the details about the binary. With the binary at hand my answer might be more precise.\n\nBut given the address (000000014005AF08h) it stands to reason that a QWORD (e.g. a pointer value or a 64-bit integer) exists at this location (mapped from the binary) at program start. Since this is a read this could be in .rdata (read-only data) or .data (read/write data) or really in any section of the binary that will be mapped while, during process creation, the binary image gets mapped into memory.\n\nAt this point I recommend you get yourself acquainted with the relevant binary format (e.g. PE, ELF ...) and how its on-disk file structure translates into the structure in memory.\n\nLet me give you an example. I am assuming PE (Portable Executable) now. An excellent overview is provided by Ange Albertini in his PE101 and PE102. PE101 is probably more interesting for this particular discussion, in particular the part about Loading (towards the bottom). Ange also covers other formats, including ELF.\n\nInside the headers of a PE file there are two members IMAGE_OPTIONAL_HEADER::SectionAlignment and IMAGE_OPTIONAL_HEADER::FileAlignment. This is the first puzzle piece. If the section (== in-memory) and file (== on-disk) alignment were the same, the image could mostly be copied verbatim into the space that was allocated for it. If they differ, which is the usual case (moreover file alignment is usually less than section alignment), each section from file will be read as per the file alignment, then zero-padded in memory up to the section alignment.\n\nFurthermore past the optional header there are the section headers (IMAGE_FILE_HEADER::NumberOfSections structs of type IMAGE_SECTION_HEADER). These can contain sections who have no \"physical\" counterpart in the image file. Instead the memory they encompass will be allocated (and depending on the section attributes initialized) at load time.\n\nIn terms of the Win32 API CreateFileMapping() the SEC_IMAGE flag is what makes the difference between creating a \"flat\" mapping of the file as it appears on disk and mapping it as it would be as executable or library.\n\nThis is why it is better to use a tool like Cutter, Ghidra, IDA (also available as freeware version) etc. which will usually also make those sections visible to you. Using objdump is certainly possible, but you need to fill in a lot of blanks yourself and it's generally a more blunt tool that - in absence of debug symbols - will fail more frequently at telling apart code and data (one of the big problems in reverse engineering).\n\n",
+      "votes": "1",
+      "user": "0xC0000022L",
+      "time": "May 25, 2022 at 10:07",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "S R Maiti",
+          "text": "Thanks! I have added a link to the binary executable in my question, if it can help in getting more insight about the instruction. I had never heard of Cutter, but it looks promising so I will try it.",
+          "time": null
+        },
+        {
+          "user": "S R Maiti",
+          "text": "Hi again, I have installed Cutter and I can run the debugger successfully, but how do I track the location 000000014005AF08h? And also, does the instruction take the value at location 000000014005AF08h, or the value pointed to by the pointer at location 000000014005AF08h?",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@SRMaiti it reads from the address. There are two ways: set an ordinary breakpoint on the instruction you identified already or set a hardware data breakpoint (read) on the address itself. Also be aware that the binary could well be relocated while getting mapped into memory. So its base address could be different from 0000000140000000h. Last but not least, there is a limit on the number of hardware breakpoints, which you can only sidestep if you use an emulator (which itself could change how the code gets executed, if it tries to evade analysis; malware, say ...).",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "Depends on what debugger you use. Okay, fair point. It depends what you want to achieve. mov rax,qword ptr [000000014005AF08h] reads an 8-byte memory location into register rax. So that read would be caught by a read breakpoint. If you want to find other code writing to that location you'd have to use a write breakpoint, correct.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@SRMaiti that will break if the location gets written to. It's as easy as that. Haven't tried debugging with Cutter, so no idea how to do it there.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

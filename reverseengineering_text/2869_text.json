@@ -1,0 +1,77 @@
+{
+    "title": "How to use sysenter under Linux?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2869/how-to-use-sysenter-under-linux",
+    "content": "I would like to know what are the different ways to perform a system\ncall in x86 assembler under Linux. But, with no cheating, only\nassembler must be used (i.e. compilation with <pre><code>gcc</code></pre> must be done with\n<pre><code>-nostdlib</code></pre>).\nI know four ways to perform a system calls, namely:\n\n<pre><code>int $0x80</code></pre>\n<pre><code>sysenter</code></pre> (i586)\n<pre><code>call *%gs:0x10</code></pre> (vdso trampoline)\n<pre><code>syscall</code></pre> (amd64)\n\nI am pretty good at using <pre><code>int $0x80</code></pre>, for example, here is a sample\ncode of a classic 'Hello World!' in assembler using <pre><code>int $0x80</code></pre> (compile it with <pre><code>gcc -nostdlib -o hello-int80 hello-int80.s</code></pre>):\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  int   $0x80\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  int   $0x80\n</code></pre>\nBut the <pre><code>sysenter</code></pre> is often ending with a segmentation fault error. Why ? And, how to use it right ?\nHere is an example with <pre><code>call *%gs:0x10</code></pre> (compiled with <pre><code>gcc -o hello-gs10 hello-gs10.s</code></pre>). Note that I need to go through the <pre><code>libc</code></pre> initialization before calling it properly (that is why I am using <pre><code>main</code></pre> and not anymore <pre><code>_start</code></pre> and, that is also why I removed the option <pre><code>-nostdlib</code></pre> from the compile line):\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\n\"\n  len = . - msg\n\n.text\n.globl main\n\nmain:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n  call  *%gs:0x10\n\n# and exit\n  movl  $0, %ebx\n  movl  $1, %eax\n  call  *%gs:0x10\n</code></pre>\nAlso, the <pre><code>syscall</code></pre> is working pretty well also if you know the syscall codes for this architecture (thanks to lfxgroove) (compiled with: <pre><code>gcc -m64 -nostdlib -o hello-syscall hello-syscall.s</code></pre>):\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movq  $len, %rdx\n  movq  $msg, %rsi\n  movq  $1, %rdi\n  movq  $1, %rax\n  syscall\n# and exit\n  movq  $0, %rdi\n  movq  $60, %rax\n  syscall\n</code></pre>\nSo, the only problem I have to trigger a system call is this <pre><code>sysenter</code></pre> way. Here is an example with <pre><code>sysenter</code></pre> ending with a segmentation fault (compiled with <pre><code>gcc -m32 -nostdlib -o hello-sysenter hello-sysenter.s</code></pre>):\n<pre><code>.data\nmsg:\n  .ascii \"Hello World!\n\"\n  len = . - msg\n\n.text\n.globl _start\n\n_start:\n# Write the string to stdout\n  movl  $len, %edx\n  movl  $msg, %ecx\n  movl  $1, %ebx\n  movl  $4, %eax\n\n  push    final\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n# and exit\nfinal:  \n  movl  $0, %ebx\n  movl  $1, %eax\n\n  sub $12, %esp\n  mov %esp, %ebp\n\n  sysenter\n</code></pre>\n",
+    "votes": "24",
+    "answers": 1,
+    "views": "10k",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "perror",
+    "time": "Sep 23, 2014 at 10:28",
+    "comments": [
+        {
+            "user": "lfxgroove",
+            "text": "A first guess for the syscall try is that you've got the wrong syscall numbers as it seems that for 64-bits mode (which it seems syscall is for) the numbers are all scrambled, ie: exit is 60 instead of what you're using right now, see lxr.linux.no/#linux+v2.6.32/arch/x86/include/asm/unistd_64.h for the numbers\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "Indeed, you are right. I was really puzzled but it seems that in my example it was the second <pre><code>syscall</code></pre> that was calling the <pre><code>write</code></pre> (and not the first one, as I was expecting).\n",
+            "time": null
+        },
+        {
+            "user": "k0ng0",
+            "text": "Rather than making another QA. @perror would you mind explaining <pre><code>len = . - msg</code></pre> - edit : I know of the purpose by obvious reasons but the semantics of it. - Thanks\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "The '<pre><code>.</code></pre>' in the gas syntax refer to the current address. So, <pre><code>len = . - msg</code></pre> is a way to store in <pre><code>len</code></pre> the size of the string <pre><code>msg</code></pre> (it computes the difference between the current address and the position of the <pre><code>msg</code></pre> label).\n",
+            "time": null
+        },
+        {
+            "user": "nh2",
+            "text": "Thank you so much, you have helped me figure out this systemd assertion failure on a bugged ChromiumOS kernel by layong out the different ways how syscalls can be made and the code example in the answer.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "System calls through <pre><code>sysenter</code></pre>\n<pre><code>sysenter</code></pre> is a i586 instruction, specifically tight to 32-bits\napplications. It has been subsumed by <pre><code>syscall</code></pre> on 64-bits plateforms.\nOne particularity of <pre><code>sysenter</code></pre> is that it does require, in addition\nto the usual register setting, a few manipulations on the stack before\ncalling it. This is because before leaving <pre><code>sysenter</code></pre>, the process\nwill go through the last part of the <pre><code>__kernel_vsyscall</code></pre> assembler\nsnippet (starting from <pre><code>0xf7ffd430</code></pre>):\n<pre><code>Dump of assembler code for function __kernel_vsyscall:\n   0xf7ffd420 <+0>:        push   %ecx\n   0xf7ffd421 <+1>:        push   %edx\n   0xf7ffd422 <+2>:        push   %ebp\n   0xf7ffd423 <+3>:        mov    %esp,%ebp\n   0xf7ffd425 <+5>:        sysenter \n   0xf7ffd427 <+7>:        nop\n   0xf7ffd428 <+8>:        nop\n   0xf7ffd429 <+9>:        nop\n   0xf7ffd42a <+10>:       nop\n   0xf7ffd42b <+11>:       nop\n   0xf7ffd42c <+12>:       nop\n   0xf7ffd42d <+13>:       nop\n   0xf7ffd42e <+14>:       int    $0x80\n=> 0xf7ffd430 <+16>:       pop    %ebp\n   0xf7ffd431 <+17>:       pop    %edx\n   0xf7ffd432 <+18>:       pop    %ecx\n   0xf7ffd433 <+19>:       ret    \nEnd of assembler dump.\n</code></pre>\nSo, the <pre><code>sysenter</code></pre> instruction expect to have the stack forged in that\nway:\n<pre><code>0x______0c  saved_eip   (ret)\n0x______08  saved_%ecx  (pop %ecx)\n0x______04  saved_%edx  (pop %edx)\n0x______00  saved_%ebp  (pop %ebp)\n</code></pre>\nThat's why, each time we need to call <pre><code>sysenter</code></pre>, we first have to\npush the values of the saved <pre><code>%eip</code></pre>, and the same with<pre><code>%ecx</code></pre>, <pre><code>%edx</code></pre>\nand <pre><code>%ebp</code></pre>. Which leads to:\n<pre><code>.data\nmsg:\n    .ascii \"Hello World!\n\"\n    len = . - msg\n\n.text\n.globl _start\n_start:\n    pushl  %ebp\n    movl   %esp, %ebp\n# Write the string to stdout\n    movl   $len, %edx\n    movl   $msg, %ecx\n    movl   $1, %ebx\n    movl   $4, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n# and exit\nsysenter_ret:    \n    movl   $0, %ebx\n    movl   $1, %eax\n# Setting the stack for the systenter\n    pushl  $sysenter_ret # Who cares, this is an exit !\n    pushl  %ecx\n    pushl  %edx\n    pushl  %ebp\n    movl   %esp,%ebp\n    sysenter\n</code></pre>\n",
+            "votes": "14",
+            "user": "perror",
+            "time": "Oct 6, 2013 at 18:05",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">I really do not know how the Linux kernel can re-route the result of the instruction <code>sysenter</code> to <code>__kernel_vsyscall+16</code>. If somebody can clarify this for me, I would be pleased.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sandun dhammika",
+                    "text": "<span class=\"comment-copy\">it's via the MSR called registers , <a href=\"http://x86.renejeschke.de/html/file_module_x86_id_313.html\" rel=\"nofollow noreferrer\">x86.renejeschke.de/html/file_module_x86_id_313.html</a> , in SYSEXIT they used those registers too. Don't know how they were setten up or what is the source files they were declared in.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">@perror in fact you don't have to push anything on the stack to exit, just make sure <code>ebp</code> has an accessible address, so that the kernel reads ahead the potential 6th syscall argument without #GP (the value doesn't have to mean anything, so no need to push <code>ebp</code> too). I. e. the exit call would reduce to <code>mov eax,1; xor ebx,ebx; mov ebp, esp; sysenter</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Aleksander Alekseev",
+                    "text": "<span class=\"comment-copy\">@Ruslan I'm afraid code you suggested just doesn't work - program terminates with segfault.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">@AleksanderAlekseev what Linux version are you using? And what do you have in <code>esp</code>?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

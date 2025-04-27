@@ -1,0 +1,48 @@
+{
+    "title": "__security_cookie for function pointers in Windows 10",
+    "link": "https://reverseengineering.stackexchange.com/questions/22182/security-cookie-for-function-pointers-in-windows-10",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm curious about this\n  <code>\n   __security_cookie\n  </code>\n  that I keep seeing all over the\n  <code>\n   msvcp140.dll\n  </code>\n  from my Windows 10 x64 (insider build.)\n </p>\n <p>\n  Here's an example:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/vDXie.png\" rel=\"noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/vDXie.png\"/>\n  </a>\n </p>\n <p>\n  Note that the address for indirect function call (or\n  <code>\n   qword_18009FBD0\n  </code>\n  ) is taken somewhere from the\n  <code>\n   .data\n  </code>\n  section:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/NaY3A.png\" rel=\"noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/NaY3A.png\"/>\n  </a>\n </p>\n <p>\n  Then it is XOR'ed with the\n  <code>\n   __security_cookie\n  </code>\n  :\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/gmHTE.png\" rel=\"noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/gmHTE.png\"/>\n  </a>\n </p>\n <p>\n  I thought that\n  <code>\n   __security_cookie\n  </code>\n  is something that is used on the stack to guard against buffer-overflows. So they must be using some new security technique. Any idea what that is?\n </p>\n <p>\n  And a follow up question. I'm trying to statically analyze this binary code with IDA and this\n  <code>\n   __security_cookie\n  </code>\n  makes it very difficult to see what function is actually being called. For instance, here's how\n  <code>\n   qword_18009FBD0\n  </code>\n  looks like:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/7eHIY.png\" rel=\"noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/7eHIY.png\"/>\n  </a>\n </p>\n <p>\n  Any idea how to make those function addresses more legible?\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "windows",
+        "security"
+    ],
+    "user": "c00000fd",
+    "time": "Sep 24, 2019 at 10:38",
+    "comments": [
+        {
+            "user": "Biswapriyo",
+            "text": "<html><body><span class=\"comment-copy\">\n Probably similar with\n <a href=\"https://reverseengineering.stackexchange.com/questions/16241/what-could-be-the-purpose-of-xoring-esp-with-a-global-variable-stack-canary-pr\">\n  this\n </a>\n .\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "c00000fd",
+            "text": "<html><body><span class=\"comment-copy\">\n @Biswapriyo no, it's not the \"GS cookie\", even though it uses the same global variable name. Look at it, it has nothing to do with stack canaries, or \"buffer overflows\".\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Limina102",
+            "text": "<html><body><span class=\"comment-copy\">\n a much easier approach: use visual studio cl.exe to compile a random c source, generating assembly listing with /Fa /FAs\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Look for the writes to the\n  <code>\n   qword_18009FBD0\n  </code>\n  to see where it's initialized.\n </p>\n <p>\n  Apparently it's a part of an array called\n  <code>\n   __encodedKERNEL32Functions\n  </code>\n  where various pointers to kernel32 functions are stored after being XORed with\n  <code>\n   __security_cookie\n  </code>\n  . You can rename the pointer to the kernel32 function's name to better see what is happening:\n </p>\n <pre><code>  ;(from initialize_pointers)\n  lea     rdx, aClosethreadpoo ; \"CloseThreadpoolTimer\"\n  mov     rcx, rbx        ; hModule\n  mov     cs:qword_180092498, rax\n  call    cs:__imp_GetProcAddress\n  xor     rax, cs:__security_cookie\n  lea     rdx, aCreatethreadpo_0 ; \"CreateThreadpoolWait\"\n  mov     rcx, rbx        ; hModule\n  mov     cs:pCloseThreadpoolTimer_xored, rax ;<- variable renamed\n\n__crtCloseThreadpoolTimer proc near \n                sub     rsp, 28h\n                mov     rax, cs:pCloseThreadpoolTimer_xored\n                xor     rax, cs:__security_cookie\n                jz      short loc_180036A8A\n                call    cs:__guard_dispatch_icall_fptr ; calls CloseThreadpoolTimer()\nloc_180036A8A:  \n                add     rsp, 28h\n                retn\n__crtCloseThreadpoolTimer endp\n</code></pre>\n <p>\n  This mitigation is not actually new and was already used in\n  <a href=\"https://github.com/adityaramesh/concurrency_runtime/blob/master/VS2013_SP2/crt/src/winapisupp.c\" rel=\"nofollow noreferrer\">\n   VS2013 CRT\n  </a>\n  although in a slightly different form. It is probably aimed at reducing the number of available API pointers in standard CRT DLLs to make exploitation harder.\n </p>\n <p>\n  Although\n  <code>\n   __security_cookie\n  </code>\n  is most commonly used for protecting data on the stack (GS and EH cookies), nothing prevents programmers from using it for other purposes as a simple source of entropy.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Sep 25, 2019 at 17:25",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Yeah, I saw that too. There's a large function that repeatedly calls <code>GetProcAddress</code> on various system functions and populates that array. Unfortunately <a href=\"https://reverseengineering.stackexchange.com/q/22181/14864\">I can't load symbols to see its name</a>. By the way, do you know the name of this security mitigation that they are using there? I haven't seen this before, although it uses the name of the stack canary cookie.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

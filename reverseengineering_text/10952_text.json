@@ -1,0 +1,39 @@
+{
+    "title": "How the dynamic linker determines which routine to call on Linux?",
+    "link": "https://reverseengineering.stackexchange.com/questions/10952/how-the-dynamic-linker-determines-which-routine-to-call-on-linux",
+    "content": "I have a question about dynamic linking on Linux. Consider the following disassembly of an ARM binary.\n<pre><code>8300 <printf@plt-0x40>:\n    ....\n8320:   e28fc600    add ip, pc, #0, 12\n8324:   e28cca08    add ip, ip, #8, 20  ; 0x8000\n8328:   e5bcf344    ldr pc, [ip, #836]! ; 0x344\n  ....\n83fc <main>:\n  ....\n8424:   ebffffbd   bl  8320 <_init+0x2c>\n</code></pre>\nthe <pre><code>main()</code></pre> function calls <pre><code>printf()</code></pre> at <pre><code>8424: bl 8320</code></pre>. Where <pre><code>8320</code></pre> is an address in the <pre><code>.plt</code></pre> shown above. Now, the code in <pre><code>.plt</code></pre> makes call to dynamic linker to invoke <pre><code>printf()</code></pre> routine. \nMy question is how the dynamic linker will be able to say that it is a call to <pre><code>printf()</code></pre>?\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "elf",
+        "dynamic-linking"
+    ],
+    "user": "user13659",
+    "time": "Sep 25, 2015 at 10:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The initial function being jumped to is the <pre><code>PLT0</code></pre> stub which calls the glibc's <pre><code>_dl_runtime_resolve</code></pre> via pointer in <pre><code>GOT[2]</code></pre> (pre-filled by the dynamic loader):\n<pre><code>.plt:00008530        STR             LR, [SP,#-4]!\n.plt:00008534        LDR             LR, =(_GLOBAL_OFFSET_TABLE_ - 0x8540)\n.plt:00008538        ADD             LR, PC, LR ; _GLOBAL_OFFSET_TABLE_\n.plt:0000853C        LDR             PC, [LR,#8]!\n</code></pre>\nRelevant parts from the source:\n<pre><code>    @ we get called with\n    @       stack[0] contains the return address from this call\n    @       ip contains &GOT[n+3] (pointer to function)\n    @       lr points to &GOT[2]\n    [...]\n    @ prepare to call _dl_fixup()\n    @ change &GOT[n+3] into 8*n        NOTE: reloc are 8 bytes each\n   sub     r1, ip, lr\n   sub     r1, r1, #4\n   add     r1, r1, r1\n\n   @ call fixup routine\n   bl      _dl_fixup\n</code></pre>\nSo, glibc knows which function to resolve from the fact that the GOT pointer is in <pre><code>ip</code></pre> (<pre><code>R12</code></pre>). This way it can convert the address into the relocation table offet, and then <pre><code>dl_fixup</code></pre> can look up the relevant symbol in the symbol table and resolve it. You can see the source of <pre><code>dl_fixup</code></pre> in <pre><code>dl-runtime.c</code></pre>\nAdditional reading:\n\nRuntime Dynamic Linking.\nPLT-GOT.\n",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Sep 27, 2021 at 22:20",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "This is done using the standard relocation methods which have been in ELF since long before the invention of the plt (procedure linking table).\nLong ago (for some definition of long), external functions were called directly from within code. Which means, if your program called <pre><code>printf</code></pre> from 1000 different places, each of these 1000 places had to be adjusted to the new dynamic location of <pre><code>printf</code></pre> everytime the program was started. Each of these 1000 places was added to the relocation table, and starting a program included walking the relocation table and adjusting every position referenced in it. Needless to say, this made starting programs take much more time, especially when the number of dynamic libraries used in programs increased. \nThe plt was invented to improve this - instead of producing a call to  <pre><code>printf</code></pre> directly, the program got a new <pre><code>plt</code></pre> section. Each call to <pre><code>printf</code></pre> would be converted to a call to <pre><code>printf@plt</code></pre> - which could be done at link time, so it wouldn't affect program loading - and <pre><code>printf@plt</code></pre> did nothing but jump to <pre><code>printf</code></pre>. This still needs a relocation entry for <pre><code>printf@plt</code></pre>, but it's much faster to do this single relocation at load time than many of them. And it doesn't affect execution much, because unconditional jumps can be handled by the processor pipeline quite efficiently.\nSo what happens in your case is: the <pre><code>printf@plt</code></pre> does not make a call to the dynamic linker. The <pre><code>printf@plt</code></pre> makes a jump to a static address, and the dynamic linker adjusts the target of this static address when it loads the program. It uses the relocation table to find out where to adjust things, and which target address to adjust them to.\nIn your case, the jump is implemented by taking the original pc, adding 12, adding 8000, then doing an indirect jump (<pre><code>ldr pc, ...</code></pre> instead of <pre><code>b</code></pre>). I'd assume that the 12 and the 8000 get adjusted to the load address of the .so that's loaded (libc.so), and libc.so contains a jump at offset <pre><code>0x344</code></pre> to the real printf function. (However, i might be wrong here, i'd have to test on a real system, which i can't do conveniently right now)\n",
+            "votes": "2",
+            "user": "Guntram Blohm",
+            "time": "Sep 25, 2015 at 8:19",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Vasant K",
+                    "text": "<span class=\"comment-copy\">Thanks for your lucid explanation about .plt, and relocation. This helped my understanding a lot. But when you say \"dynamic linker adjusts the target of this static address when it loads the program\", how does the dynamic linker knows it is printf routine not any other to adjust the address?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

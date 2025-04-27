@@ -1,0 +1,63 @@
+{
+    "title": "Thread EntryPoint in TLS callback as AntiDebug technique",
+    "link": "https://reverseengineering.stackexchange.com/questions/18830/thread-entrypoint-in-tls-callback-as-antidebug-technique",
+    "content": "I came across a document called The Ultimate Anti-Reversing Reference, which describes various Anti-Debugging techniques. in point 4.Thread Local Storage There is a mention \n\nThread Local Storage callbacks are called whenever a thread is created\n  or destroyed (unless the process calls the kernel32\n  DisableThreadLibraryCalls() or the ntdll\n  LdrDisableThreadCalloutsForDll() functions). That includes the thread\n  that is created by Windows when a debugger attaches to a process. The\n  debugger thread is special, in that its entrypoint does not point\n  inside the image. Instead, it points inside kernel32.dll. Thus, a\n  simple debugger detection method is to use a Thread Local Storage\n  callback to query the start address of each thread that is created.\n  The check can be made using this 32-bit code to examine the 32-bit\n  Windows environment on either the 32-bit or 64-bit versions of\n  Windows:\n\n<pre><code> push eax\n mov eax, esp\n push 0\n push 4\n push eax\n ;ThreadQuerySetWin32StartAddress\n push 9\n push -2 ;GetCurrentThread()\n call NtQueryInformationThread\n pop eax\n cmp eax, offset l1\n jnb being_debugged\n ...\n</code></pre>\nI wrote the c++ code as below \n<pre><code>bool fooBar()\n{\n    uintptr_t dwStartAddress;\n    TFNNtQueryInformationThread ntQueryInformationThread = (TFNNtQueryInformationThread)GetProcAddress(\n    GetModuleHandle(TEXT(\"ntdll.dll\")), \"NtQueryInformationThread\");\n\n    if (ntQueryInformationThread != 0) {\n\n        NTSTATUS status = ntQueryInformationThread(\n            (HANDLE)-2,\n            (_THREADINFOCLASS)9,\n            &dwStartAddress,\n            sizeof(dwStartAddress),\n            nullptr);\n       cout << hex << \"dwStartAddress: 0x\" << dwStartAddress << dec << endl;\n    }\n</code></pre>\nand I'm running this inside the TLS callbacks\n<pre><code>EXTERN_C\n#ifdef _M_X64\n#pragma const_seg (\".CRT$XLB\")\nconst\n#else\n#pragma data_seg (\".CRT$XLB\")\n#endif\nPIMAGE_TLS_CALLBACK p_thread_callback = fooBar;\n#pragma data_seg ()\n#pragma const_seg ()\n</code></pre>\nThe value of dwStartAddress points to the .exe module, not to kernel32.dll as stated in the text. Regardless if I just run the exe or run in debugger or attach a debugger to the process (tho I'm not very experienced with attaching so maybe I'm doing something wrong here). \nAm I doing something wrong, or the text is wrong / no longer valid?\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "anti-debugging",
+        "thread",
+        "entry-point"
+    ],
+    "user": "Marcin K.",
+    "time": "Jul 17, 2018 at 21:25",
+    "comments": [
+        {
+            "user": "mrexodia",
+            "text": "Are you running an infinite loop inside the main function of your executable? The TLS callback should be called for every thread created. Once before main and once when you attach to the process while it’s running.\n",
+            "time": null
+        },
+        {
+            "user": "Marcin K.",
+            "text": "I used system(\"pause\") but I changed to inifite loop now and still no output that would suggest that TSL callback was called 2nd time\n",
+            "time": null
+        },
+        {
+            "user": "Marcin K.",
+            "text": "I think I tried everything and I just can't get a debugger to spawn thread as described in this document. Im using windows 10. If anyone could check it also on windows 10 and maybe some other OS I would be really thankful\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "Today I ran into this again, but in my case a TLS callback was called on debug attach. I’ll show you tomorrow\n",
+            "time": null
+        },
+        {
+            "user": "Marcin K.",
+            "text": "My debugged some more and it seems there is call to LdrDisableThreadCalloutsForDll with address of kernel32.dll as argument which... well should disable this for kernel32.dll spawned threads. Now the question is how to disable this call. This call is made BEFORE main, BEFORE crtMain, BEFORE TLS callbacks. When could it be? On dll loading?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "When a debugger wants to attach to a process it will do the following things (see the DebugActiveProcess implementation on ReactOS):\n\nConnect to the debuggee with <pre><code>DbgUiConnectToDbg</code></pre>\nTell the kernel to start debugging the process with <pre><code>NtDebugActiveProcess</code></pre>\nIssue a <pre><code>DbgBreakPoint</code></pre> in the attached-to process with <pre><code>DbgUiIssueRemoteBreakin</code></pre>\n\nThe <pre><code>DbgUiIssueRemoteBreakin</code></pre> function creates a thread in the debuggee pointed at <pre><code>DbgUiRemoteBreakin</code></pre>, which in turn calls <pre><code>DbgBreakPoint</code></pre>.\nThis anti-debug trick no longer works from Windows 7 and onwards because the <pre><code>DbgUiIssueRemoteBreakin</code></pre> creates the <pre><code>DbgUiRemoteBreakin</code></pre> thread with the <pre><code>SkipThreadAttach</code></pre> flag (relevant blogpost). This causes the newly-created thread to not call <pre><code>DllMain</code></pre> or TLS callbacks with the <pre><code>DLL_THREAD_ATTACH</code></pre> or <pre><code>DLL_THREAD_DETACH</code></pre> reason.\n",
+            "votes": "7",
+            "user": "mrexodia",
+            "time": "Jul 23, 2018 at 8:32",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Marcin K.",
+                    "text": "<span class=\"comment-copy\">Indeed that seems to be an issue. Could you also please confirm if I am correct on this one: Not only the callbacks are not called due to SkipThreadAttach flag, but also even if they were called, the Thread Entry Point would point into ntdll.dll not into kernel32.dll right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">Yes. The start address of the thread is in DbgUiRemoteBreakin, which is an export of ntdll.dll</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

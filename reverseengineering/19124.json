@@ -1,0 +1,65 @@
+{
+    "title": "Injecting exe file into process fails on windows 7 but works on windows 10 / Execution library function fails, access denied",
+    "link": "https://reverseengineering.stackexchange.com/questions/19124/injecting-exe-file-into-process-fails-on-windows-7-but-works-on-windows-10-exe",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to inject my executable payload into remote process. \nI allocated memory in remote process, I converted raw payload using RVA addressing. I applied relocations and imports table. </p>\n<p>When I'm testing my solution in Windows 10 environment it works fine. Exe is injected and it runs properly, and shows me message box. </p>\n<p>But when I'm trying to do the same on Windows 7 64bit (loader, payload and target are compiled as x86 code), I have an error:</p>\n<blockquote>\n<p>Access violation executing location 0x7698FD1E</p>\n</blockquote>\n<p>I checked, and this address is an MessageBoxA function's address from user32.dll library</p>\n<p>Here is my main code to inject pe to remote process:</p>\n<pre><code>char* target_n = \"InjectTarget.exe\";\n    char* payload_path  = \"C:\\\\Users\\\\pb\\\\source\\\\repos\\\\pe-dumper\\\\Debug\\\\DummyApp.exe\";\n\n    FILE* raw_payload = get_file_buffer(payload_path);\n    PIMAGE_NT_HEADERS inth = get_nt_headers(raw_payload);\n\n    DWORD kImageSize = inth-&gt;OptionalHeader.SizeOfImage;\n    DWORD kTargetProcId = get_process_id(target_n);\n\n    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, NULL, kTargetProcId);\n    if (hProcess == NULL) {\n        printf(\"Error: Process handle is NULL\\n\");\n    }\n\n    LPVOID imageBaseRemote = VirtualAllocEx(hProcess, NULL, kImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);\n    if (imageBaseRemote == NULL) {\n        printf(\"Error: Image base remote is NULL\\n\");\n    }\n\n    LPVOID imageBaseLocal = VirtualAlloc(NULL, kImageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);\n    copy_raw_to_image_local(imageBaseLocal, raw_payload);\n    adjust_relocations(imageBaseRemote, imageBaseLocal);\n    adjust_imports(imageBaseLocal);\n\n    DWORD bytesWritten;\n    if (!WriteProcessMemory(hProcess, imageBaseRemote, imageBaseLocal, kImageSize, &amp;bytesWritten)) {\n        printf(\"Cannot write to remote process!\\n\");\n    }\n\n    LPTHREAD_START_ROUTINE routine = ((ULONG_PTR)imageBaseRemote + inth-&gt;OptionalHeader.AddressOfEntryPoint);\n\n    DWORD threadId;\n    HANDLE hThread = CreateRemoteThread(hProcess, NULL, NULL, routine, NULL, NULL, &amp;threadId);\n\n    if (hThread == NULL) {\n        printf(\"%d\", GetLastError());\n    }\n\n    VirtualFree(imageBaseLocal, kImageSize, MEM_RELEASE);\n    fclose(raw_payload);\n</code></pre>\n<p>Why these differences between windows 10 and windows 7 appears?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "765",
+    "tags": [
+        "windows",
+        "c",
+        "pe",
+        "winapi",
+        "injection"
+    ],
+    "user": "bielu000",
+    "time": "Nov 20, 2018 at 8:33",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">Are you doing something special in order to get <code>MessageBoxA</code>s address? I would assume since you're not loading your image, that it won't be resolved for you. If you do anything to resolve it yourself, I assume the problem is there. Additionally, how did you check <code>0x7698FD1E</code> is the address of <code>MessageBoxA</code>? Did you check the target process when it failed?</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">@bielu000 You need to show more code or give details like NirIzr pointed out. The problem is we have no idea what <code>copy_raw_to_image_local</code>, <code>adjust_relocations</code> and <code>adjust_imports</code> do even though the their names suggest particular functionality. But given that any of us would probably come up with a slightly different variation on the theme when tasked to implement said functions, it would make sense if you gave the details NirIzr was inquiring about.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is a very interesting try.</p>\n<ol>\n<li><p>Are you sure that DummyApp and InjectTarget are both 32 bit exe?</p></li>\n<li><p>I saw you launched a thread from entrypoint of DummyApp, but you should know entry point is not a real starting point while launching exe.</p></li>\n</ol>\n<p>Before go to entry point, automatically dlls in import table will be loaded.\nFurthermore, not only dlls in import table, but another dlls are loaded while exe is executing.</p>\n<p>So I think that the list of loading dlls might NOT be same in between win7 and win10.</p>\n<p>I hope my opinion is helpful to you.</p>\n</div>",
+            "votes": "-1",
+            "user": "Luis Bergmann",
+            "time": "Aug 22, 2018 at 2:29",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "bielu000",
+                    "text": "<span class=\"comment-copy\">Yes I'm sure that both aps are 32 bit exe. My DummyApp has only one imported dll which is user32.dll and it can be resolved by my loader, because kernel32.dll and user32.dll have the same address for all running process. I have no idea why this problem occurs. It perfectly works on Windows10 (no mater if DummyApp or InjectTarget are 32 or 64, still works). I tried to run InjectTarget under the debugger, and when the error occures I'm getting the error code which is 0x05 which means Access Denied. But why? Why I'm getting access denied?</span>",
+                    "time": null
+                },
+                {
+                    "user": "bielu000",
+                    "text": "<span class=\"comment-copy\">The memory I'm allocating has Execute rights. When I'm looking into assembly code, before calling \"MessageBoxA\" function, there are some other instructions like push (pushing on the stack captions which will be show in the message box), and these instructions does not cause any errors. Ony calling MessageBoxA from user32.dll</span>",
+                    "time": null
+                },
+                {
+                    "user": "bielu000",
+                    "text": "<span class=\"comment-copy\">Maybe it doesn't matter, but why the same application compiled in 86 bit mode has relocation table but in 64 bit mode it doesn't?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Michael Karcher",
+                    "text": "<span class=\"comment-copy\">The x86_64 instruction set allows IP-relative addressing, so the code might contain a reference to \"the string 1234 bytes after the current instruction\". Compilers use this feature to produce position-independent code which does nit need to be relocated. On x86, emulating this kind if addressing is expensive, so your compiler instead emits \"use the string constant at 1001230 (to be relocated)\".</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@bielu000 I hope your assumption is not that just because there's a 32 in <code>user32.dll</code> and <code>kernel32.dll</code>, that these DLLs (and consequently your target application) must be 32-bit. Sounds a bit like that from your comment. But that'd be a fallacy.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

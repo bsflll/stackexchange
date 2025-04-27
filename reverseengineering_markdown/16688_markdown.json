@@ -1,0 +1,47 @@
+{
+  "title": "Decoding LZSS buffer lookup indices",
+  "link": "https://reverseengineering.stackexchange.com/questions/16688/decoding-lzss-buffer-lookup-indices",
+  "content": "I'm working on unpacking a camera firmware file which consists of various sections that I am able to correctly split and validate. One section within this file is additionally compressed with a form of LZSS as described here, of which I cannot determine the correct format of the lookup bytes.\n\nThe data starts with 2 uncompressed data blocks of 4096 bytes each (or a single 8192 byte block, however you want to see it), then follows the compressed data.\n\nThe compressed data starts with a flag byte, whose bits (starting at the LSB) tell which of the following bytes are to be copied (bit set), and which ones are lookup information (bit unset). Lookup information is made up of 2 bytes / 16 bits, and I am looking for help to decode their exact format.\n\nI already know:\n\nI suspect:\n\nLet's decompress an excerpt, starting at 00675CCE:\n\n```\n00675CC0  65 0D 0A 0D FD 0A 33 C0 3C 68 74 6D 6C 3E FF 3C  e...ý.3À<html>ÿ<\n00675CD0  68 65 61 64 3E 3C 74 BF 69 74 6C 65 3E 34 40 C0  head><t¿itle>4@À\n00675CE0  42 FF 61 64 20 52 65 71 75 65 6F 73 74 3C 2F 5F  Bÿad Requeost</_\n00675CF0  C3 3C 2F 59 C3 6F 62 6F 64 79 57 C0 31 3E 69 CA  Ã</YÃobodyWÀ1>iÊ\n00675D00  FE 8A C0 3C 70 3E 59 6F 75 72 FF 20 62 72 6F 77  þŠÀ<p>Yourÿ brow\n\n```\nThe decoding sequence:\n\n```\n00675CCE FF: read 8 bytes (\"<head><t\")\n00675CD7 BF: read 6 bytes (\"itle>4\")\n             lookup 40C0 -> read 3 bytes @ ? index (\"00 \")\n             read 1 byte  (\"B\")\n00675CE0 FF: read 8 bytes (\"ad Reque\")\n00675CEA 6F: read 4 bytes (\"st</\")\n             lookup 5FC3 -> read 6 bytes @ ? index (\"title>\")\n             read 2 bytes (\"</\")\n             lookup 59C3 -> read 6 bytes @ ? index (\"head><\")\n00675CF5 6F: read 4 bytes (\"body\")\n             ...             \n\n```\nThe decoded result:\n\n```\n00000000  3C 68 65 61 64 3E 3C 74 69 74 6C 65 3E 34 30 30  <head><title>400\n00000010  20 42 61 64 20 52 65 71 75 65 73 74 3C 2F 74 69   Bad Request</ti\n00000020  74 6C 65 3E 3C 2F 68 65 61 64 3E 3C 62 6F 64 79  tle></head><body\n\n```\nNow let's look at the last two lookups and their potential decodings:\n\n```\n0x5FC3 = 0101111111000011b\n         0101111111000 011 -> index 3064, length 6 (3 + 3 per above rule)\n         010111111100 0011 -> index 1532, length 6\n\n0x59C3 = 0101100111000011b\n         0101100111000 011 -> index 2872, length 6\n         010110011100 0011 -> index 1436, length 6\n\n```\nI specifically chose this example because both lookups are only a few bytes back. In the decoded output/lookup-buffer, 0x5FC3 looks back 23 bytes and 0x59C3 looks back 38 bytes. The length is definitely correct, but the index numbers don't make sense to me. No matter which buffer size I assume, or if the index starts from the front or back of the buffer, or even differentiating endianness, the numbers don't fit. I'd assume that the lookup indices, due to only looking back a few bytes, should be on the lower or upper edge of the buffer. Also due to their vicinity in both compressed data and lookup data, their indices should be very close together.\n\nSo the question is either how can the lookup indices be correctly interpreted, or, assuming they are correct, how does the lookup buffer work because it can't be a standard circular buffer in such case. Any help would be greatly appreciated!\n\nps: In case anyone is interested, the firmware format in question is used by the YI M1 and Fujifilm X-A10 cameras. The current state of the firmware unpacker is available on GitHub.\n\nUpdate:\nFurther investigation has led me to this related RE question and the LZRW compression family where the lookup indices may also refer to some kind of lookup table instead of directly into the data.\n\nUpdate 2:\nFound evidence that the lookup length takes at least 4 bits. Also figured out that the lookup bytes are stored in big endian order (seems like I made a mistake last time when I tried it).\n\n```\n0x5FC3 = 0101111111000011b\n         110001011111 0011 -> index 3167, length 6 (big endian)\n\n0x59C3 = 0101100111000011b\n         110001011001 0011 -> index 3161, length 6 (big endian)\n\n```\nIn the test cases I set up in the linked code repository, I noticed that many lookups are off by 709 byte, so I added an initial lookup buffer write offset of 709 and I'm now able to correctly decode large parts of the data, including the example above. Other parts seem to require another offset though, so this is still open to be figured out.\n\nUpdate 3:\nBy analyzing where the lookup offset changes, I noticed longer 0x00 byte sequences that obviously would not be there if that data would be compressed. Taking a closer look at them, it turned out they are paddings for a 2048 byte alignment, and that the compressed data section is again made up of several subsections. Once I split them up and decompressed them separately, the problem with the changing buffer lookup offset was solved. So in the end it seems that the LZSS algorithm works exactly as in the link that I already posted above. The mystery was not the compression itself but the file structure. There are still a few questions open regarding to that, and once I'm done I will post a more detailed answer.\n\n",
+  "votes": "6",
+  "answers": 1,
+  "views": "623",
+  "tags": [
+    "firmware",
+    "unpacking",
+    "decompress"
+  ],
+  "user": "Mario Gu",
+  "time": "Nov 4, 2017 at 5:32",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "It might be easier to just check what the decompression code is doing. Did you find it?",
+      "time": null
+    },
+    {
+      "user": "Mario Gu",
+      "text": "I assumed that code is also part of the compressed data since the other firmware sections only contain resources, the booloader and a partition table. It could be inside the first 8192 uncompressed bytes though, so thanks for the hint! I have not yet identified the architecture either... have you ever heard about \"EV9x\" (\"/XC_ODM/sdk/SDK_selfcheck/src/EV9x_DevEnv\")?",
+      "time": null
+    },
+    {
+      "user": "Mario Gu",
+      "text": "Firmware contains \"ARM926\" strings, pointing at armv5te architecture. Could a relatively new camera that processes 4K H.264 videos be based on a 10 years old processor?",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "ARM926 actually has special instructions for accelerating DSP-like code (that's the e in armv5te) but it's likely that most of the processing is done in dedicated hardware blocks and the CPU only handles the UI and task management.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As already described in the updates to my question, it turned out that the compression algorithm is the standard LZSS algorithm with a 12 bit lookup index and 4 bit lookup length. They were just stored in an unexpected way (flipped bytes).\n\nTaking the example from the question:\n\n```\n0x5FC3 = 0 1 0 1 1 1 1 1 1 1 0 0 0 0 1 1 b\n         <-------------> <-----> <----->\n         7             0 11    8 3     0 (bit indices)\n             index        index  length\n\n```\nOrdering the bits correctly yields the following:\n\n```\nlookup index  110001011111b = 3167\nlookup length 0011b         = 3 (+ 3 [lookup threshold length] = 6) \n\n```\nSo the lookup is 6 bytes at buffer position 3167. The buffer position is absolute and always starts at the \"physical\" buffer index 0, it's not an offset to the circular buffer position.\n\nThe reason why I had observed weird and changing lookup index offsets was\n\n",
+      "votes": "3",
+      "user": "Mario Gu",
+      "time": "Nov 6, 2017 at 4:30",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

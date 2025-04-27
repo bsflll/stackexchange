@@ -1,0 +1,49 @@
+{
+  "title": "Seemingly useless instruction inside function body",
+  "link": "https://reverseengineering.stackexchange.com/questions/32925/seemingly-useless-instruction-inside-function-body",
+  "content": "I am trying to reverse RtlInitUnicodeStringEx from ntdll.dll as an exercise to myself. Here is dissambled version from x64dbg.\n\n\n\nI was able to produce almost exactly the same binary from my own code, except for the int3 instruction in line 0x00007FFDE53AA856.\n\nI have analysed the module using both ghidra and x64dbg but I was not able to find any jumps to that line. I also considered it is used to align, but next instruction is not aligned to any power of two boundary.\n\nMy search online led to __debugbreak intrinsic. According to Microsoft docs it \"Causes a breakpoint in your code, where the user will be prompted to run the debugger.\". However, It doesn't make sense that extra int3 is caused by __debugbreak as it is in an unreachable position.\n\nI assume existence of that instruction means something is going on that I am not aware of, because compiler wouldn't have put it there if it weren't for a reason. So, what is the reason compiler would int3 instruction at a unreachable position?\n\nI am using cl.exe version 19.30.30715 and compiling with /c /O2s flags. I am viewing the result by using dumpbin /disasm on .obj file. Also tried to create a .dll from cl.exe /LD /O2s but it didn't make any difference.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "172",
+  "tags": [
+    "msvc"
+  ],
+  "user": "yasar",
+  "time": "Apr 30, 2024 at 18:17",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "This instruction is inserted after the functions ret, it is normally unreachable.\n\nIn case the ret instruction caused a memory access violation (or some other exception) - the exception handler will be called and the current state saved.\n\nThe exception handler can return execution to the original state, that is, to the instruction after the one that threw the exception, which is after the function's end.\n\nIn this case the int3 will run and either:\n\nCrash (if there is no debugger attached or available) or break to the debugger.\n\nThe debugger, in turn, can \"handle\" (ignore) the int3 and continue, running the next instruction that effectively returns 0xC0000106\n\n",
+      "votes": "2",
+      "user": "Yotamz",
+      "time": "Apr 30, 2024 at 19:00",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "yasar",
+          "text": "Interesting, it doesn't appear on my version though, any idea what compiler flags I might be missing?",
+          "time": null
+        },
+        {
+          "user": "Yotamz",
+          "text": "int3 is added between functions code by compilers when compiling debug builds (as opposed to releasebuilds). This code in ntdll specifically returns STATUS_NAME_TOO_LONG error value, that makes sense in this context, not something generic that a compiler would add automatically.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "If you look through other functions in NTDLL.DLL you will see the addition of int3s after ret instructions is common.\n\nThis would appear to be a mitigation for straight-line speculation vulnerabilities. Originally discovered on ARM, the x86 architecture was also found to be vulnerable.\n\nFor more information see here\n\nThe -mharden-sls=all compiler option can be used in gcc and clang to include these extra int3 instructions.\nI'm not sure what MSVC's equivalent option is.\n\n",
+      "votes": "1",
+      "user": "Ian Cook",
+      "time": "May 2, 2024 at 8:51",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "yasar",
+          "text": "Closest option I could find was /Qspectre-jmp that puts int3 after jmp instruction. There is no mention of any option that puts int3 after ret anywhere.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

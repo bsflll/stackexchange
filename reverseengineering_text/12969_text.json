@@ -1,0 +1,53 @@
+{
+    "title": "Modifying PPID to avoid anti-debugging measure",
+    "link": "https://reverseengineering.stackexchange.com/questions/12969/modifying-ppid-to-avoid-anti-debugging-measure",
+    "content": "I'm trying to debug an application that reads the Parent Process Id(PPID), to check if the application is being debugged. It expects the PPID to be the PID of explorer.exe, if it isn't, it quits. \nTo bypass this, I wrote a pycommand script. This script breaks at the end of (and before the pops and ret) Process32NextW and Process32FirstW. Below is the hook I'm using:\n<pre><code>class Process32NextWHook(LogBpHook):\n\ndef __init__(self):\n    LogBpHook.__init__(self)\n    return\n\ndef run(self, regs):\n    imm = immlib.Debugger()\n\n    # Get the Out_ LPPROCESSENTRY32 lppe\n    PROCESSENTRY32 = regs[\"EBP\"] + 16\n\n    # Get the DWORD th32ParentProcessID\n    target_ppid = PROCESSENTRY32 + 24\n\n    # Get the DWORD th32ProcessID\n    target_pid = imm.readMemory(PROCESSENTRY32 + 12, 4)\n\n    # Get the debugged process id\n    self_pid = imm.getDebuggedPid()\n\n    # If the target pid matches our pid\n    if int(target_pid.encode(\"HEX\"), 16) == self_pid:\n        # Set our ppid to the pid of explorer.exe\n        imm.writeMemory(target_ppid, explorer_pid)\n        imm.log(\"[*] patch_ppid patched ppid!!\")\n\n    return\n</code></pre>\nHowever the\n<pre><code>if int(target_pid.encode(\"HEX\"), 16) == self_pid:\n</code></pre>\nIs never true.\nMy guess is that I use the wrong offsets, but I don't know what the right offsets would be. I could simply patch out the anti-debug measure, but that wouldn't be much of a learning experience.\nThanks.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "588",
+    "tags": [
+        "windows",
+        "python",
+        "anti-debugging",
+        "immunity-debugger"
+    ],
+    "user": "JeffreyZ",
+    "time": "Jul 1, 2016 at 14:53",
+    "comments": [
+        {
+            "user": "peter ferrie",
+            "text": "target_pid is +8 not +12\n",
+            "time": null
+        },
+        {
+            "user": "JeffreyZ",
+            "text": "@peterferrie yes, at first I thought that was the case, but if I print the value with +8, it's the wrong field\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "Just note that this method of debugger detection is super unreliable. Start process hacker and note that lots of services for instance don't have Explorer as parent...\n",
+            "time": null
+        },
+        {
+            "user": "Megabeets",
+            "text": "@mrexodia in general you're absolutely right, different programs are executed by many different ways. But if the program author knows that their program should run only after a user double clicked it via explorer (decoy file extension for example) then it's an okay way to detect it, imo. Not the best way though...\n",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "@Megabeets I use Total Commander for everything, the parent would be TOTALCMD64.exe and I'm not doing anything shady, so no it's never a good way.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "So after going through the existing immunity scripts and mona.py, I found out that you also need to unpack the readMemory return values. Working code:\n<pre><code>class Process32NextWHook(LogBpHook):\n\ndef __init__(self, ppid):\n    LogBpHook.__init__(self)\n    self.new_ppid = ppid\n    return\n\ndef run(self, regs):\n    imm = immlib.Debugger()\n\n    # Get the Out_ LPPROCESSENTRY32 lppe\n    PROCESSENTRY32 = regs[\"EBP\"] + 16\n\n    # Get the DWORD th32ParentProcessID\n    target_ppid = PROCESSENTRY32 + 28\n\n    # Get the DWORD th32ProcessID\n    target_pid = struct.unpack(\"<L\", imm.readMemory(PROCESSENTRY32 + 12, 4))[0]\n\n    # Get the debugged process id\n    self_pid = imm.getDebuggedPid()\n\n    # If the target pid matches our pid\n    if target_pid == self_pid:\n        # Set our ppid to the pid of explorer.exe\n        imm.log(\"[*] patch_ppid patching ppid, Before: %d\" % struct.unpack(\"<L\", imm.readMemory(target_ppid, 4))[0])\n        imm.writeMemory(target_ppid, self.new_ppid)\n        imm.log(\"[*] patch_ppid Done patching, After: %d\" % struct.unpack(\"<L\", imm.readMemory(target_ppid, 4))[0])\n\n    return\n</code></pre>\nFeeling a bit stupid now, that I forgot something so basic. Oh well : )\n",
+            "votes": "1",
+            "user": "JeffreyZ",
+            "time": "Jul 2, 2016 at 12:17",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

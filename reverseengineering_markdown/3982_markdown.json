@@ -1,0 +1,81 @@
+{
+  "title": "How can I get a running thread's start address on linux?",
+  "link": "https://reverseengineering.stackexchange.com/questions/3982/how-can-i-get-a-running-threads-start-address-on-linux",
+  "content": "I'm trying to get the address of a running thread's start_routine as passed in the pthread_create() call.\n\nIt is apparently not in /proc/[tid]/stat or /proc/[tid]/status.\n\nI found that start_routine is a member of struct pthread and gets set by pthread_create[1].\nIf I knew the address of this struct, I could read the start_routine address.\n\nI also found td_thr_get_info defined in the debugging library thread_db.h [2]. It fills a struct with information about the thread, including the start function [3]. But, it needs a struct td_thragent as an argument and I don't know how to create it properly.\n\n",
+  "votes": "10",
+  "answers": 4,
+  "views": "4k",
+  "tags": [
+    "linux",
+    "thread"
+  ],
+  "user": "user2804197",
+  "time": "Mar 27, 2014 at 21:00",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "the start routine is called from pthread_start_thread() by an indirect call like\n\n```\ncall [reg32 + const]  \n\n```\nyou can disassemble the function and confirm the register used and the constant used\n\nin my dsl vm (very very old ) \n\ni see call [esi+0x8c]\n\n```\ngdb -q ./someexe\nbreak main\nr\nbreak pthread_start_thread\nc\ninfo symbol *( *(unsigned long *)($ebp +8) + 0x8c ) )\n\n```\nprovides me the symbol thrdfunc () for the following test program\n\n```\n#include <pthread.h>\nvoid *thrdfunc (void * foo) {\npthread_exit(0);\n}\nint main (void) {\npthread_t thread;\npthread_create(&thread,0,thrdfunc,0);\nreturn 0;\n}\n\n```\ncompiled and linked with \n\n```\ngcc -pthread -o pthreadtest pthreadtext.c\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Apr 4, 2014 at 0:11",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "I'd be inclined to just use gdb to attach to the process, issue an info threads, select the thread with thread nn and do a bt. The function you want is the one called by start_thread(). Although, this will be in the start function, not the entry itself (although you could prob scan for a well known function prologue).\n\n",
+      "votes": "1",
+      "user": "perror",
+      "time": "Apr 4, 2014 at 7:11",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jonathon Reinhart",
+          "text": "+1 And of course, anything GDB can do, one can do with the ptrace APIs.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Thanks to the hints of blabb and Jonathon Reinhart I was able to write a get_thread_start_address() function. It reads the same address used by pthread_start_thread() to call the start routine. In Kernel 3.2.0-4-686-pae this address is GS+0x234. I use ptrace to get the GS register and the actual GS segment address. Here is my code:\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n#include <unistd.h>\n#include <string.h>\n#include <errno.h>\n#include <fcntl.h>\n#include <sys/ptrace.h>\n#include <sys/user.h>\n#include <sys/wait.h>\n#include <asm/ldt.h>\n#include <asm/ptrace.h>\n\nint attach(int tid);\nint detach(int tid);\nvoid print_error(char* func_name, int errnumber);\n\nint get_gs_register(int tid){\n    struct user_regs_struct regs;\n    int ret = ptrace(PTRACE_GETREGS, tid, NULL, &regs);\n    if(ret == -1){\n        print_error(\"PTRACE_GETREGS\", errno);\n        return -1;\n    }\n    return regs.xgs;\n}\n\n// This is needed to get the actual GS segment address from the GS register value\nint get_thread_area_base(tid, gs){\n    struct user_desc desc;\n    memset(&desc, 0, sizeof(desc));\n    int ret = ptrace(PTRACE_GET_THREAD_AREA, tid, gs / LDT_ENTRY_SIZE, &desc);\n    if(ret == -1){\n        print_error(\"PTRACE_GET_THREAD_AREA\", errno);\n        return -1;\n    }\n    return desc.base_addr;\n}\n\nvoid* get_start_address(tid, start_address_pointer){\n    char start_addr_str[4];\n    int mem_file;\n    char mem_file_path[255];\n    snprintf(mem_file_path, sizeof(mem_file_path), \"/proc/%i/mem\", tid);\n    mem_file = open(mem_file_path, O_RDONLY);\n    if(mem_file == -1){\n        print_error(\"open()\", errno);\n        return (void*) -4;\n    }\n    int ret = lseek(mem_file, start_address_pointer, SEEK_SET);\n    if(ret == -1){\n        print_error(\"lseek()\", errno);\n        return (void*) -5;\n    }\n\n    ret = read(mem_file, start_addr_str, 4);\n    if(ret == -1){\n        print_error(\"read()\", errno);\n        return (void*) -6;\n    }   \n\n    return (void*) *((int*)start_addr_str);\n}\n\nint main(int argc, char* argv[]){\n    if(argc <= 1){\n        printf(\"Usage: %s TID  \n\", argv[0]);\n        return -1;\n    }   \n    int tid = atoi(argv[1]);    \n    int gs;\n    int thread_area_base;\n    int start_address_offset = 0x234;\n    void* start_address;\n\n    int ret = attach(tid);\n    if(ret == -1) return -1;\n\n    gs = get_gs_register(tid);\n    if(gs == -1){\n        detach(tid);\n        return -2;\n    }\n\n    thread_area_base = get_thread_area_base(tid, gs);\n    if(thread_area_base == -1){\n        detach(tid);\n        return -3;\n    }\n    printf(\"thread_area_base: %p  \n\", (void*) thread_area_base);\n    unsigned int start_address_pointer = thread_area_base + start_address_offset;\n    printf(\"start_address_pointer: %p  \n\", (void*) start_address_pointer);\n\n    start_address = get_start_address(tid, start_address_pointer);\n    printf(\"start_address: %p  \n\", start_address);\n\n    detach(tid);\n    return 0;\n}\n\nint attach(int tid){\n    int status; \n    int ret = ptrace(PTRACE_ATTACH, tid, NULL, NULL);\n    if(ret == -1){\n        print_error(\"PTRACE_ATTACH\", errno);\n    }\n\n    ret = waitpid(-1, &status, __WALL);\n    if(ret == -1){\n        print_error(\"waitpid()\", errno);\n    }\n    return ret;\n}   \n\nint detach(int tid){\n    int ret = ptrace(PTRACE_DETACH, tid, NULL, NULL);\n    if(ret == -1){\n        print_error(\"PTRACE_DETACH\", errno);\n    }\n    return ret;\n}\n\nvoid print_error(char* func_name, int errnumber){\n    printf(\"%s failed. %i, %s  \n\", func_name, errnumber, strerror(errnumber));\n}\n\n```\n",
+      "votes": "1",
+      "user": "user2804197",
+      "time": "Apr 9, 2014 at 13:11",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Since all threads share the address space of the process that created them, I think what you want is a call to dlsym:\n\nhttp://pubs.opengroup.org/onlinepubs/009695399/functions/dlsym.html\n\n=======NEXT ATTEMPT========\n\nStarted poking around in pthread.h.  The best thing I've found so far is this:\n\npthread_attr_getstack() \n\nThere's more on POSIX thread programming here.\n\nThis is the closest functionality to NtQueryInformationThread I could find.  \n\n",
+      "votes": "0",
+      "user": "avgvstvs",
+      "time": "Apr 3, 2014 at 21:33",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user2804197",
+          "text": "Thanks for your answer. I actually want to get the start address at runtime. And I don't see the danger in providing it. There is a function for this in Windows and I don't know of any attack using it.",
+          "time": null
+        },
+        {
+          "user": "avgvstvs",
+          "text": "If you expose a function to compute a thread's start address, why bother with ASLR in the first place?  ASLR was made to block being able to predict where code was loaded.  If you expose a function like that... you just defeated ASLR.  Anyway, I think I might have a real answer soon...",
+          "time": null
+        },
+        {
+          "user": "avgvstvs",
+          "text": "Updated answer.",
+          "time": null
+        },
+        {
+          "user": "user2804197",
+          "text": "\"ASLR was made to block being able to predict where code was loaded. If you expose a function like that... you just defeated ASLR.\" IMO the goal of ASLR is to prevent an attacker to execute arbitrary code in the first place by making the address of return addresses and libraries unknown. How would an attacker get the address of a get_start_address() function to circumvent ASLR?",
+          "time": null
+        },
+        {
+          "user": "user2804197",
+          "text": "I don't see how you can get a thread's start address with dlsym(). It returns a symbol's address of a shared object. Starting a thread doesn't create or alter any shared object, so it's start address can't be extracted from a shared object. Or am I missing something? Anyway, thanks for trying to help me.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

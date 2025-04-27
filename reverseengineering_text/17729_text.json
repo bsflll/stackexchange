@@ -1,0 +1,60 @@
+{
+    "title": "explain c compile code",
+    "link": "https://reverseengineering.stackexchange.com/questions/17729/explain-c-compile-code",
+    "content": "I compile c code to arm with this site https://godbolt.org/\n<pre><code>int F(int a, int b) \n{\n    int c=0;\n    for(int i=0;i<=10;i++)\n    {\n        c+=a+b;\n    }    \n    return c;\n}\n</code></pre>\nthe result was \n<pre><code>F(int, int):\n        str     fp, [sp, #-4]!\n        add     fp, sp, #0\n        sub     sp, sp, #20\n        str     r0, [fp, #-16]\n        str     r1, [fp, #-20]\n        mov     r3, #0\n        str     r3, [fp, #-8]\n        mov     r3, #0\n        str     r3, [fp, #-12]\n.L3:\n        ldr     r3, [fp, #-12]\n        cmp     r3, #10\n        bgt     .L2\n        ldr     r2, [fp, #-16]\n        ldr     r3, [fp, #-20]\n        add     r3, r2, r3\n        ldr     r2, [fp, #-8]\n        add     r3, r2, r3\n        str     r3, [fp, #-8]\n        ldr     r3, [fp, #-12]\n        add     r3, r3, #1\n        str     r3, [fp, #-12]\n        b       .L3\n.L2:\n        ldr     r3, [fp, #-8]\n        mov     r0, r3\n        sub     sp, fp, #0\n        ldr     fp, [sp], #4\n        bx      lr\n</code></pre>\nI saw here that parameters moved on the stack and not via registers.\nI have 3 line that I not understand\n<pre><code>add     fp, sp, #0\nsub     sp, sp, #20\nstr     r0, [fp, #-16]\n</code></pre>\n\nwhy fp get value= 0? I read about fp but I not sure I eral get it.\nwhy sp get down 20? I know it usualy to save plave for the local var, but why 20?\nwhy <pre><code>str     r0, [fp, #-16]</code></pre> I not get it\n\nby the way, why the parameters hers pass in the stack and not on registers?\nthank you all\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "c",
+        "arm",
+        "program-analysis"
+    ],
+    "user": "arm",
+    "time": "Mar 19, 2018 at 9:27",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The parameters are passed in Registers r0 (a) and r1 (b); this is a convention defined in the Procedure Call Standard for the \nARM Architecture. However, without enabled optimizations, the compiler always stores parameters and local variables in the local stack frame (remember that the stack grown downwards - i.e., towards smaller addresses - on ARM).\n<pre><code> add     fp, sp, #0\n</code></pre>\nThis instruction doesn't set fp to 0, but rather to the current value of sp. fp serves as a reference to local information on the stack that remains constant during the execution of F. The old frame pointer, parameters and local variables are then stored at negative offsets from fp.\n<pre><code> sub     sp, sp, #20\n</code></pre>\nHere, 20 Bytes of space are reserved on the stack, so that subsequent stack operations (e.g. calling another function from inside of F) do not modify the local stack frame of your function F.\n<pre><code> str     r0, [fp, #-16]\n</code></pre>\nThis copies r0 (Parameter a) into the local stack frame at address fp-16. The complete stack frame looks like this:\n<pre><code> fp- 4: old fp\n fp- 8: local variable c\n fp-12: local variable i\n fp-16: parameter a\n fp-20: parameter b\n</code></pre>\nNote that sp points to fp-20 (since sp is copied to fp at the beginning of the function and sp is then decremented by 20). This is correct, since on ARM processors, the sp always points to the last used element on the stack, i.e. the next push operation decrements sp first (to fp-24) and writes data to the new sp address.\n",
+            "votes": "6",
+            "user": null,
+            "time": "Mar 19, 2018 at 9:51",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "It seems you made a few wrong assumptions, possibly due to unfamiliarity with the ARM instruction set. Let's have a look at the instructions one by one.\n<pre><code>add     fp, sp, #0\n</code></pre>\nThis is an add, so the operation is <pre><code>fp = sp+0</code></pre>, or <pre><code>fp=sp</code></pre>. An analog on x86 would be <pre><code>mov ebp, esp</code></pre>\n<pre><code>sub     sp, sp, #20\n</code></pre>\nThis would look like <pre><code>sub esp, 20h</code></pre> on x86. Basically, it allocates 0x20 bytes of stack space for local variables.\n<pre><code>str     r0, [fp, #-16]\n</code></pre>\nUnlike most ARM instructions, here the left operand (<pre><code>r0</code></pre>) is not the destination, but source. This instruction stores (<pre><code>str</code></pre>) the value of the register r0 at the location <pre><code>fp-0x16</code></pre>. An x86 analog would look like:\n<pre><code>mov [ebp-10h], eax\n</code></pre>\nSo, as you can see, it does use the value of <pre><code>r0</code></pre> as an input and only stores it on the stack as a temporary variables (later it retrieved again to perform the addition). The same happens with the second argument in <pre><code>r1</code></pre>. If you add some optimization flags for the compiler (e.g. <pre><code>-O1</code></pre> or <pre><code>-O2</code></pre>), it's likely that it will manage to perform the operation without having to store \nintermediate results on the stack. Here's the result I get for <pre><code>-O1</code></pre> with GCC 7.2.1:\n<pre><code>F(int, int):\n  add r1, r0, r1\n  add r0, r1, r1, lsl #2\n  add r0, r1, r0, lsl #1\n  bx lr\n</code></pre>\nAs you can see, there is no stack involved anymore, and the compiler even managed to convert a loop of additions into an optimized multiplication-add using shifts.\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Mar 19, 2018 at 10:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "arm",
+                    "text": "<span class=\"comment-copy\">How can I compile it  so the compiler will not  stores parameters and local variables in the local stack frame?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">use optimization flags as I mentioned, however in complex functions the compiler may run out of free registers and fall back to the stack for temporary storage anyway</span>",
+                    "time": null
+                },
+                {
+                    "user": "arm",
+                    "text": "<span class=\"comment-copy\">can you give me the full command line you enter to gcc to compile c code to arm 32 bits, (fast call calling convenction)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">any ARM compiler will give you “fastcall” since the standard ARM ABI uses registers for argument passing. anyway, such question is more suited for Stack Overflow since it’s about programming and not RE.</span>",
+                    "time": null
+                },
+                {
+                    "user": "arm",
+                    "text": "<span class=\"comment-copy\">I only want get the command line you run on gcc(on win/linux) to compile it for arm 32 bits,   I not think to open it new topic on stackOverFlow</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

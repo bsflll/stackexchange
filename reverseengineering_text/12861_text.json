@@ -1,0 +1,42 @@
+{
+    "title": "CreateProcess - First thread routine - where is the memory allocated for the thread?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12861/createprocess-first-thread-routine-where-is-the-memory-allocated-for-the-thr",
+    "content": "When calling <pre><code>CreateProcess</code></pre> internally it will call (obviously <pre><code>ZwCreateProcessEx</code></pre> and then) <pre><code>ZwCreateThread</code></pre> with a <pre><code>CreateSuspended</code></pre> set to <pre><code>True</code></pre>, then i assume final initialization is taking place. Afterwards it is calling <pre><code>ZwResumeThread</code></pre> and then everything is working as it should.\nMy question is focused on the <pre><code>ZwCreateThread</code></pre> function:\nhttp://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtCreateThread.html\nWhere exactly in this whole <pre><code>CreateProcess</code></pre> Routine, it is allocating the memory in the remote process for the <pre><code>ThreadStartRoutine</code></pre> Parameter, which in the ZwCreateThread, is the parameter <pre><code>ThreadContext->EAX</code></pre>, i have seen a couple of NtAllocateVirtualMemory with <pre><code>Protect</code></pre> of value <pre><code>PAGE_EXECUTE_READWRITE - 0x40</code></pre> but none of them is allocating the memory for the <pre><code>NewThreadRoutine</code></pre>.. so where exactly the Thread entrypoint is being allocated?\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "memory",
+        "winapi",
+        "thread",
+        "process"
+    ],
+    "user": "0xAK",
+    "time": "Jun 16, 2016 at 12:56",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Disclaimer:  The implementation of these APIs is likely to change between versions of Windows.  I will be referencing 32-bit Windows XP SP3 in my answer.  Your results may vary.\nHow thread creation works\nThere are three structures that must be initialized before calling <pre><code>NtCreateThread</code></pre>:\n\n<pre><code>INITIAL_TEB</code></pre>: Contains pointers to the stack region\n<pre><code>CONTEXT</code></pre>: Contains the register state\n<pre><code>OBJECT_ATTRIBUTES</code></pre>: Contains security attributes for the thread\n\nIn my implementation, there are dedicated functions that handle each of these tasks: <pre><code>BaseCreateStack</code></pre>, <pre><code>BaseInitializeContext</code></pre>, and <pre><code>BaseFormatObjectAttributes</code></pre>, respectively.\nThe <pre><code>BaseInitializeContext</code></pre> function is the one you're interested in, however, since the new thread will begin at <pre><code>CONTEXT.Eip</code></pre>.\nInterestingly, <pre><code>BaseInitializeContext</code></pre> instead puts the thread's start address (i.e. the entry point of the new process) in <pre><code>CONTEXT.Eax</code></pre>.  And <pre><code>CONTEXT.Eip</code></pre> is set to the address of <pre><code>BaseProcessStartThunk</code></pre>.  (Since <pre><code>kernel32</code></pre> is mapped at the same address in every process, we know this will also be the address of <pre><code>BaseProcessStartThunk</code></pre> in the other process)\nSo when we call <pre><code>NtCreateThread</code></pre>, we start a new thread in the other process at <pre><code>BaseProcessStartThunk</code></pre> with <pre><code>eax</code></pre> equal to the entry point.\n<pre><code>BaseProcessStartThunk</code></pre> saves the start address from register <pre><code>eax</code></pre>. It sets the start address internally by calling <pre><code>NtSetInformationThread</code></pre> with a <pre><code>ThreadInformationClass</code></pre> of <pre><code>ThreadQuerySetWin32StartAddress</code></pre> (see <pre><code>ntddk.h</code></pre>).  It then calls the start address.  Finally, when the thread returns, it calls <pre><code>ExitThread</code></pre>.\nHow the executable image is mapped into the new process\nIf you want to know the process was created in the first place, we have to go back a few steps.\nFirst, a handle to the new process executable is opened via <pre><code>NtOpenFile</code></pre>.\nThe file handle is used to create a section object via <pre><code>NtCreateSection</code></pre>.\nA call to <pre><code>NtQuerySection</code></pre> with <pre><code>InformationClass</code></pre> set to <pre><code>SectionImageInformation</code></pre> is made.  This parses the the section object and fills out a <pre><code>SECTION_IMAGE_INFORMATION</code></pre> structure, which most notably includes fields the <pre><code>EntryPoint</code></pre> field.  This is how the entry point of the new process is determined.\nEventually, <pre><code>NtCreateProcessEx</code></pre> is called, given the section handle from <pre><code>NtCreateSection</code></pre> as a parameter.  This is what actually creates the new process and maps the executable image into the new process' address space, among many other things.  <pre><code>NtCreateProcessEx</code></pre> also provides the process handle that we pass to <pre><code>NtCreateThread</code></pre> to create the new thread.\n",
+            "votes": "4",
+            "user": "user1354557",
+            "time": "Jun 16, 2016 at 16:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xAK",
+                    "text": "<span class=\"comment-copy\">this is hilarious, microsoft were the first to implement injection methods ;)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Ok so ZwCreateThread has it in the context structure (PCONTEXT + 0xB0)\nThe api calls to receive the address are like this:\n<pre><code>CreateSection(..SectionInformation..)</code></pre> - Probably to create to initial address\n<pre><code>NtQuerySection(Handle, x, SectionInformation, x, x)</code></pre>\nThis SectionInformation is containing the address of the EntryPoint of the remote process, later initializing the <pre><code>ThreadContext</code></pre> with the function <pre><code>_BaseInitializeContext@20</code></pre> and then using <pre><code>ZwCreateThread</code></pre>...\nThis was all checked under windows xp, hopefully it will be of use for someone\n",
+            "votes": "2",
+            "user": "0xAK",
+            "time": "Jun 16, 2016 at 15:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

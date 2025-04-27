@@ -1,0 +1,45 @@
+{
+    "title": "IDA Pro: Define local variables from non-standard powerpc stack register",
+    "link": "https://reverseengineering.stackexchange.com/questions/16233/ida-pro-define-local-variables-from-non-standard-powerpc-stack-register",
+    "content": "I am using IDA pro 6.95 (paid version) to RE some PowerPC code. The PowerPC normally uses <pre><code>r1</code></pre> as the stack pointer, so IDA builds the stack frame and local variables from <pre><code>r1</code></pre>. Parameters are passed in <pre><code>r3</code></pre>, <pre><code>r4</code></pre>, <pre><code>r5</code></pre>, etc. The problem I am having that I see this:\n<pre><code>.text: foo:\n.text:.set back_chain, -0x30                     // Stack frame\n.text: .set var_4, -4\n.text: .set sender_lr,  4\n<<<function preamble snipped>>>\n.text:               mr        r31, r1        // Copy stack pointer to r31\n.text:               stw       r3, 8(r31)     // All local variables are relative\n.text:               stw       r4, 0xC(r31)   //  to r31, instead of r1, so IDA\n                                              //  doesn't recognize them.\n</code></pre>\nAnd I want to see this:\n<pre><code>.text: foo:\n.text:.set back_chain, -0x30                     // Stack frame\n.text: .set var_C, -C\n.text: .set var_8, -8\n.text: .set var_4, -4\n.text: .set sender_lr,  4\n<<<function preamble snipped>>>\n.text:                  mr        r31, r1        // Copy stack pointer to r31\n.text:                  stw       r3, var_8(r31) // All local variables are\n.text:                  stw       r4, var_C(r31) //  recognized and nameable.\n</code></pre>\nWhat I want is to convert all, e.g. <pre><code>8(r31)</code></pre> local variable references in the function to normal <pre><code>var_8(r31)</code></pre> syntax. I do not want to have to change each reference manually.  Is there a way to:\n\nConvince IDA that <pre><code>r31</code></pre> is the stack pointer?\nChange all <pre><code>8(31)</code></pre> to <pre><code>var_8(r31)</code></pre> in a single command?\nOtherwise get the effect I am looking for in a way I haven't thought of?\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "948",
+    "tags": [
+        "ida",
+        "disassembly",
+        "powerpc"
+    ],
+    "user": "bangaboo",
+    "time": "Sep 1, 2017 at 15:20",
+    "comments": [
+        {
+            "user": "user22967",
+            "text": "The old PPC ELF spec (refspecs.linuxbase.org/elf/elfspec_ppc.pdf) defines r31 as 'Used for local variables or \"environment pointers\"', so maybe this is what you are seeing in this code. So it might help to specify which platform the code you are analyzing is supposed to run on.\n",
+            "time": null
+        },
+        {
+            "user": "Léo Lam",
+            "text": "@MichaelEngel Not OP, but I'm also seeing this in the <pre><code>main()</code></pre> function of an executable that was compiled using CodeWarrior. It does the same thing as OP's function: the SP is copied to r31, and r31 is used as the SP in the rest of the function.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Disclaimer: I'm not going to create a working code example here, and I did not test this on PowerPC for your specific purpose. YMMV\nI could think of two ways of doing that. First will be the manual approach by using some IDAPython magicry to manually force all offsets based on <pre><code>r31</code></pre> to the stack frame structure. Second (which is the one likely used) is using a designated API just for that.\nYou'll need to:\n\nGet the hidden stack frame structure ID for the function you're running on\nThis can easily be done by calling the <pre><code>ida_frame.get_frame</code></pre> function with any address within the desired function. This function returns an ID used to identify this structure in the IDB.\ngo over instruction by instruction and identify all dereferences of <pre><code>r31</code></pre>\nThere are many approaches here. From getting the disassembly string and parsing actual text to operand specific APIs and more. So i'll leave this as the first exercise for the reader.\nSet those dereferences to dereferencing the stack structure\nThis, again, has several APIs to pick from, <pre><code>OffOpEx</code></pre> is an example. If you need to create new stack variables as you go, there are multiple functions for this as well.\n\nThe second approach would be using one of two APIs designed for the purpose. the two APIs are called <pre><code>idc.define_local_var</code></pre> and <pre><code>ida_frame.add_regvar</code></pre>.\n<pre><code>define_local_var</code></pre> is defined as follows:\n<pre><code>def define_local_var(start, end, location, name):\n    \"\"\"\n    Create a local variable\n    @param start: start of address range for the local variable\n    @param end: end of address range for the local variable\n    @param location: the variable location in the \"[bp+xx]\" form where xx is\n                     a number. The location can also be specified as a\n                     register name.\n    @param name: name of the local variable\n    @return: 1-ok, 0-failure\n    @note: For the stack variables the end address is ignored.\n           If there is no function at 'start' then this function.\n           will fail.\n    \"\"\"\n</code></pre>\nAnd will do all the work of locating the stack structure and defining new members if needed. This is probably the first thing you want to play with, however you'll still need to iterate over all the instructions and identify <pre><code>r31</code></pre> offsets manually.\nThe <pre><code>add_regvar</code></pre> function is called by <pre><code>define_local_var</code></pre> and is responsible to applying the variable created by <pre><code>define_local_var</code></pre> to instructions. You can read more about it here\n",
+            "votes": "1",
+            "user": "NirIzr",
+            "time": "Jan 27, 2018 at 20:47",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "I was faced with similar issue and found the following workaround: \n\nCreate specific structure with field offset equal to your <pre><code>r31</code></pre> offset\nUse \"Structure offset (T)\" for each interesting instruction.\n",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "Jul 2, 2018 at 11:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

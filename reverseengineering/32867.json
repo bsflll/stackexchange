@@ -1,0 +1,43 @@
+{
+    "title": "Inject ELF with an entierly self-contained code section that can statically call standard library functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/32867/inject-elf-with-an-entierly-self-contained-code-section-that-can-statically-call",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h1>What I want to do</h1>\n<p>What I want to do is inject an existing ELF binary with additional code that runs before the original .text section and then transfers control back to it.</p>\n<h1>What I can already do</h1>\n<p>Now, I have the following sorted:</p>\n<ul>\n<li>Insert new ELF section and section header</li>\n<li>Insert new ELF program header that loads the section</li>\n<li>Modify entrypoint in the ELF header to point to my new section's VA entrypoint</li>\n<li>Be able to write POC assembly code, compile with NASM into headerless raw cpu instructions format</li>\n<li>Return control back to original entrypoint</li>\n<li>All the above works and runs well</li>\n</ul>\n<h1>What I can't do</h1>\n<p>What I haven't been able to do is use GCC instead of NASM and use the standard library. Take the following example code:</p>\n<pre><code>#include &lt;stdio.h&gt;\n\nvoid foo() {\n    printf(\"hello world\");\n    // ignore the fact that this does not return control to the original ELF entry point\n}\n</code></pre>\n<p>If I were to compile this with <code>gcc -fPIC -c -o hello.o</code> and then yank the .text section from the generated object file with <code>objcopy -O binary -j .text hello.o hello.bin</code> and try to use that as a new section, it simply won't work. <code>hello.bin</code> will contain the following instructions when inspected with <code>objdump</code>:</p>\n<pre><code>Disassembly of section .data:\n\n00000000 &lt;.data&gt;:\n   0:   55                      push   %rbp\n   1:   48 89 e5                mov    %rsp,%rbp\n   4:   48 8d 3d 00 00 00 00    lea    0x0(%rip),%rdi        # 0xb\n   b:   b8 00 00 00 00          mov    $0x0,%eax\n  10:   e8 00 00 00 00          callq  0x15\n  15:   90                      nop\n  16:   5d                      pop    %rbp\n  17:   c3                      retq\n</code></pre>\n<p>The above code has a couple of issues. It was yanked from an object file that expects to be linked and relocated into an executable binary that will have <code>.plt</code> and <code>.got</code> sections. Through these PLT stubs it will be able to call <code>printf</code> that will be located in the standard shared library loaded by <code>ld</code> somewhere in memory.</p>\n<h1>What I suppose it boils down to</h1>\n<p>I want GCC to produce an entirely self-contained object file that has a <code>.text</code> section that does not expect to be relocated, already contains <code>libc</code> statically and is position independent. So that it can just be put anywhere and do its thing.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "elf",
+        "gcc",
+        "instrumentation",
+        "nasm"
+    ],
+    "user": "PaperTsar",
+    "time": "Apr 4, 2024 at 21:44",
+    "comments": [
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<span class=\"comment-copy\">This is not a real answer, but you're going to want to split up the way you think about it a bit. GCC will produce an object file, but it's not going to be self-contained. This is because certain symbol types it can emit literally requre knowing the address of a segment. Your linker (ld), however, is directly responsible for performing these calculations, determining the layout, and putting segments together. You can use a linker script to get most of the way there (applying relos and an elf), but some crt's require rt linking and you'll want a static crt/libc that's more compartmentalized.</span>",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<span class=\"comment-copy\">In summary, use the rt linker with its abilities to resolve symbols and apply relocations as suggested in the other answer. It'll likely be far easier for your needs and for your libc (depending on which one you're using). If you really want to do it the other way, you'll need to be aware of the segment address and stripping the relocations when copying out your segments.</span>",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<span class=\"comment-copy\">Actually...wrote a blogpost that contains an ld-script you can probably use as a base that is referenced at <a href=\"https://www.reddit.com/r/ReverseEngineering/comments/1bnljpl/reversing_justsystems_ichitaro_office_suite_to/\" rel=\"nofollow noreferrer\">reddit.com/r/ReverseEngineering/comments/1bnljpl/…</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h2>Using LD_PRELOAD</h2>\n<p>I suggest to use the ELF constructor instead:</p>\n<ul>\n<li>mark your entry point function with <code>__attribute__((constructor))</code></li>\n<li>compile your code as <code>-shared</code></li>\n<li>inject it using the <code>LD_PRELOAD</code> environment variable</li>\n</ul>\n<p>Your function will be executed before the <code>main</code> function of the targeted executable. The ELF loader will take care of everything for you.</p>\n<h2>The manual approach</h2>\n<p>All your steps in \"What I can already do\" seems correct, but you probably don't have to add a new section, most (if not all) ELF loaders work with segments, not sections.</p>\n<p>The problem with this line <code>objcopy -O binary -j .text hello.o hello.bin</code> is you only keep the program code: in your disassembly listing, you can see <code>lea    0x0(%rip),%rdi</code> is PIC but the actual data (\"hello world\" should in in .rodata) will be missing because it's not stored into the .text section.</p>\n<p>You can use <code>__attribute__((section(\".text\")))</code> to move data inside the .text section, but keep in mind that .text is R-X by default, you will have to patch the segment to be RWX if you need non-const data.</p>\n<p>The last part is \"relocations\" (which on ELF include resolving external symbols), assuming you just need external symbols: you will have find or rewrite <code>dlopen</code> and <code>dlfunc</code> to resolve symbols at runtime and it's OS dependent.</p>\n</div>",
+            "votes": "0",
+            "user": "wisk",
+            "time": "Apr 4, 2024 at 23:23",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

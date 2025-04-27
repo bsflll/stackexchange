@@ -1,0 +1,44 @@
+{
+    "title": "💻 This code does not crash on ARM (qemu). Why?",
+    "link": "https://reverseengineering.stackexchange.com/questions/31673/this-code-does-not-crash-on-arm-qemu-why",
+    "content": "I found a couple of interesting integer underflows leading to <pre><code>memcpy()</code></pre> wild copies in a TLV parser process of some random IoT firmware. It is 32-bit ARMv7.\nI'm able to emulate the userspace process using qemu and debug it, I can confirm the wild copy by inspecting register state before the <pre><code>memcpy()</code></pre> and memory state after it, but when I let it run, it won't crash. No page fault, no overwritten PC, it just exits.\nI tried to come up with some C code that resembles what my code in the field does:\n<pre><code>#include <string.h>\n#include <stdlib.h>\n\nvoid parse_stuff(char*);\n\nint main(int argc, char** argv) {\n        char buffer[128];\n        char c;\n\n        while (1) {\n                parse_stuff(buffer);\n                c = getc(stdin);\n                if (c == 'e')\n                        return 0;\n        }\n\n}\n\nvoid parse_stuff(char* buf){\n        char* heap = malloc(0x1000);\n        for(int i=0;i<0x1000;i++)\n                heap[i] = 0x41;\n\n        memcpy(buf, heap, 0xffffffff);\n}\n\n</code></pre>\nIf I compile this and run it in qemu, it won't crash.\nThere is a tight loop and the parser routine is called from that, so I'm guessing if the parse_stuff stack frame is a leaf, then a stack bof could only happen when the caller is the one trying to restore the PC to its caller (entry / <pre><code>libc_start_main</code></pre>, whatever), but I'm still puzzled by this, because on x86-64, this easily crashes so somehow the ARM binary or maybe the QEMU environment does not trigger that page violation that I'm expecting to happen due to the wild <pre><code>memcpy()</code></pre>, even if there is no PC control due to the cyclometric situation this way.\nHas any of you run into something like this?\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "145",
+    "tags": [
+        "binary-analysis",
+        "arm",
+        "buffer-overflow",
+        "stack",
+        "firmware-analysis"
+    ],
+    "user": "Attila Szász",
+    "time": "Mar 14, 2023 at 19:51",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "Hi and welcome to RE.SE. Uhm, I am surprised that this even compiles for you (<pre><code>#include <stdio.h></code></pre> is missing and a cast of the <pre><code>malloc()</code></pre> return value). What compiler do you use (also exact version)? What compiler and linker options? Also, are you certain that this is the exact code you are observing and that this isn't perchance some sort of implementation where the 0xffffffff for the length happens to mean -1 and some \"magic\" happens (such as looking for a terminating character as with strings)?  godbolt.org/z/Machnnr8Y\n",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "Which level of the optimizations are you using?\n",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "Can you add to the question the exact command line you running qemu and compiler with?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "UPDATE:\nOk, so the older glibc noncompliance I re-discovered was actually fixed back then, and it is a CVE by itself, CVE-2020-6096:\nhttps://github.com/bminor/glibc/commit/beea361050728138b82c57dda0c4810402d342b9\nOk, so I resolved this.\nThe glibc memcpy implementation in place has this code:\nhttps://github.com/rilian-la-te/glibc/blob/master/sysdeps/arm/armv7/multiarch/memcpy_impl.S#L300\n<pre><code>    mov dst, dstin  /* Preserve dstin, we need to return it.  */\n    cmp count, #64\n    bge .Lcpy_not_short\n</code></pre>\nThis is signed comparison, so a 0xffffffff-style wild copy is not possible, becuase it is treated as a short copy. Feels weird to perform a signed comparison of a size_t parameter in assembly without any additional comments by glibc authors, but it ends up being bit of a security measure.\nOn my system, though,\n<pre><code>CHAR_BIT       = 8\nMB_LEN_MAX     = 16\n\nCHAR_MIN       = +0\nCHAR_MAX       = +255\nSCHAR_MIN      = -128\nSCHAR_MAX      = +127\nUCHAR_MAX      = 255\n\nSHRT_MIN       = -32768\nSHRT_MAX       = +32767\nUSHRT_MAX      = 65535\n\nINT_MIN        = -2147483648\nINT_MAX        = +2147483647\nUINT_MAX       = 4294967295\n\nLONG_MIN       = -2147483648\nLONG_MAX       = +2147483647\nULONG_MAX      = 4294967295\n\nLLONG_MIN      = -9223372036854775808\nLLONG_MAX      = +9223372036854775807\nULLONG_MAX     = 18446744073709551615\n\nPTRDIFF_MIN    = -2147483648\nPTRDIFF_MAX    = +2147483647\nSIZE_MAX       = 4294967295\nSIG_ATOMIC_MIN = -2147483648\nSIG_ATOMIC_MAX = +2147483647\nWCHAR_MIN      = +0\nWCHAR_MAX      = +4294967295\nWINT_MIN       = 0\nWINT_MAX       = 4294967295\n</code></pre>\nMeaning that a memcpy of 2147483647+1 bytes is treated like this as well as a short copy that doesn't actually do much, even though that 'n' is well within SIZE_MAX. Not a practical thing to do, and this will mean that src and dst memory areas do overlap, but still feels like noncompliance.\n",
+            "votes": "2",
+            "user": "Attila Szász",
+            "time": "Mar 16, 2023 at 13:43",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

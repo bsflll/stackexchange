@@ -1,0 +1,48 @@
+{
+    "title": "Log input data and resulting hash for CC_MD5 calls in an iOS app with Frida",
+    "link": "https://reverseengineering.stackexchange.com/questions/27984/log-input-data-and-resulting-hash-for-cc-md5-calls-in-an-ios-app-with-frida",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am trying to understand the usage of calls to CC_MD5 in an iOS application.\n </p>\n <p>\n  From Apple's\n  <a href=\"https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/CC_MD5.3cc.html\" rel=\"nofollow noreferrer\">\n   man page\n  </a>\n  I can see that when it is called it requires 3 arguments:\n </p>\n <pre><code>extern unsigned char *\nCC_MD5(const void *data, CC_LONG len, unsigned char *md);\n</code></pre>\n <p>\n  where\n  <code>\n   *md\n  </code>\n  is a pointer to where the result will be stored and is also what will be returned.\n </p>\n <p>\n  When\n  <code>\n   CC_MD5\n  </code>\n  is called I would like to be able to log the input data and the resulting hash and have tried using the following script with Frida, including different ways of printing the data at the return pointer:\n </p>\n <pre><code>Interceptor.attach(Module.findExportByName(\"/usr/lib/libSystem.B.dylib\", \"CC_MD5\"), {\n  onEnter: function(args) {\n    console.log(\"[+] CC_MD5 called with *data: \" + Memory.readCString(args[0], parseInt(args[1], 16)));\n    console.log(\"[+]                    *len:  \" + parseInt(args[1], 16));\n    console.log(\"[+]                    *md:   \" + args[2]);\n  },\n  onLeave: function(retval) {\n    console.log(\"[+] Resulting hash: \" + Memory.readCString(ptr(retval),16));\n    console.log(\"[+] Resulting hash: \" + retval.readByteArray(16));\n    console.log(\"[+] Resulting hash: \" + retval.readCString(16));\n  }\n});\n</code></pre>\n <p>\n  I understand that it will not always be printable text that is passed to the function as the input data however am having problems actually reading the resulting hash.  Below is an example of the output I am getting:\n </p>\n <pre><code>[+] CC_MD5 called with *data: MGCopyAnswerProductVersion\n[+]                    *len:  26\n[+]                    *md:   0x16f6d61f0\n[+] Returning *md: 0x16f6d61f0\n[+] Resulting hash: ��]vU\n�)��\n[+] Resulting hash: [object ArrayBuffer]\n[+] Resulting hash: ��]vU\n�)��\n</code></pre>\n <p>\n  I don't know if I have misunderstood how\n  <code>\n   CC_MD5\n  </code>\n  is called or what I should be able to do with Frida?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "617",
+    "tags": [
+        "memory",
+        "ios",
+        "frida",
+        "hash-functions"
+    ],
+    "user": "Jon",
+    "time": "Jul 12, 2021 at 8:49",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "<html><body><span class=\"comment-copy\">\n The result hash is always 16 byte binary data. If you want to print it convert it to hex or base64. An example script for dumping raw memory data is embedded in this python script:\n <a href=\"https://github.com/poxyran/misc/blob/master/frida-read-process-memory.py\" rel=\"nofollow noreferrer\">\n  github.com/poxyran/misc/blob/master/…\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jon",
+            "text": "<html><body><span class=\"comment-copy\">\n Hi @Robert thanks for the info, that really helped me understand what it is returning better and by using the code from that link I can compare the hexdump to what I get when I run MD5 on the input data and see they are the same.  Do you know if it is possible to format the output not to include the offset and ascii representation? I came across your comment\n <a href=\"https://reverseengineering.stackexchange.com/questions/17835/print-b-byte-array-in-frida-js-script#comment38928_17841\">\n  here\n </a>\n which I thought would help but the outpout is comepletely blank trying that.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Robert",
+            "text": "<html><body><span class=\"comment-copy\">\n The code you have linked to only works in an Android/Java environment and for Java baste arrays. You mean better check the code presented here:\n <a href=\"https://github.com/frida/frida/issues/329\" rel=\"nofollow noreferrer\">\n  github.com/frida/frida/issues/329\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jon",
+            "text": "<html><body><span class=\"comment-copy\">\n Yes, thank you @Robert that turned out to be exactly what I wanted.  Are you able to add something as an answer so I can accept it or should just add an example of the code I used?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The main problem of your code is that you expect the\n  <code>\n   md\n  </code>\n  parameter to be a string. In C the\n  <code>\n   unsigned char *\n  </code>\n  is not an indicator for a string. Instead it is often for storing binary data.\n </p>\n <p>\n  In this case\n  <code>\n   md\n  </code>\n  is also just a pointer where the MD5 functions stores it's 16 byte of binary data.\nIf you want to print the content you have to encode it e.g. hexadecimal or base64.\n </p>\n <p>\n  For printing binary data you can use Frida's\n  <a href=\"https://frida.re/docs/javascript-api/#hexdump\" rel=\"nofollow noreferrer\">\n   hexdump\n  </a>\n  method.\n </p>\n <p>\n  Alternatively you can convert the binary data yourself to a hexadezimal string and format it based on your preferences:\n </p>\n <pre><code>var a = retval.readByteArray(16)\nvar b = new Uint8Array(a);\nvar str = \"\";\n\nfor(var i = 0; i < b.length; i++) {\n    str += (b[i].toString(16) + \" \");\n}\nconsole.log(\"[+] Resulting hash: \" + str);\n</code></pre>\n <p>\n  <a href=\"https://github.com/frida/frida/issues/329#issuecomment-326219950\" rel=\"nofollow noreferrer\">\n   Source of the code snippet\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Robert",
+            "time": "Jul 13, 2021 at 9:10",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

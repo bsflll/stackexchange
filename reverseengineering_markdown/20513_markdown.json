@@ -1,0 +1,50 @@
+{
+  "title": "Which operators use sal, shl, sar or shr",
+  "link": "https://reverseengineering.stackexchange.com/questions/20513/which-operators-use-sal-shl-sar-or-shr",
+  "content": "Which operators in C language would result in assembly commands such as sal, shl, sar or shr for example?\n\n",
+  "votes": "7",
+  "answers": 2,
+  "views": "6k",
+  "tags": [
+    "assembly",
+    "c"
+  ],
+  "user": "PaHa",
+  "time": "Jan 31, 2019 at 9:19",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "Hi and welcome to RE.SE. Given the role optimizers play during the transformation of source code to binary, this is a rather tough question which will be hard to answer unless you also provide details on the compiler (and version) you're interested in. Now my guess is also that these are the usual IA-32 mnemonics, but you may also want to indicate the ISA.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "First it should be noted that there are so many architectures out there, each with its own instruction set. Here I assume you mean x86 (and you should indeed tag the proper architecture as 0xC0000022L said above). Most parts of the below answer would apply to other architectures as well, but they may use different mnemonics or lack some mentioned instructions\n\nSAL and SHL are the same. They're simply aliases to the same opcode because shifting left always fill the vacant bits with 0s. In C << will do a shift left, and whether the shift instruction is printed as SAL or SHL depends on the compiler/disassembler\n\nOTOH there are 2 versions of right shift because you can fill the bits that were shifted out with zero (logical shift) or the high bit of the old value (arithmetic shift). SAR does an arithmetic shift and SHR does a logical shift. In C the operator for right shifting is >>, but the rule depends on the signness of the type:\n\nPer the C99 standard, section 6.5.7:\n\nHowever there are a lot of other operations that can produce a shift instruction, and various cases that shift operators don't produce a shift instruction\n\nIt's less common to see <</>> that are not compiled to a shift instruction, but compilers may optimize x << 1 to x += x and you'll see things like ADD eax, eax or LEA ecx, [eax + eax]. On x86 x << i with i ⩽ 3 can also be compiled to LEA eax, [eax*2ⁱ] instead of shift. Of course an output like MUL x, 2 is also possible on a hypothetical architecture without shift, or where shift is slower than multiplication\n\nCompilers are also able to transform complex statements like (x << 1) + (x << 4) + (x << 13) into simpler ones such as a single multiplication by 8210, no more shifts.\nOr GCC recognizes (a ^ b) + (a & b) + (a & b) as well as its the inverse condition (a + b) - (a & b) - (a & b) and optimize them to a + b and a ^ b respectively, so it's possible (in the future) that they'll be able to convert the equivalents (a ^ b) + ((a & b) << 1) and (a + b) - ((a & b) << 1) into ADD and XOR without any shifts at all.\nSee them in action\n\nFor the other case there are various examples:\n\nHere are some illustrations for the mul/div examples. You can easily see that x*15 is replaced by x*16 - x and x*33 is done by x*32 + x, i.e. (x << 4) - x and (x << 5) + x. Besides, x*8 is optimized to lea eax, [0+rdi*8] or shl edi, 3 depending on the compiler. The mnemonics SAL and SHL are also freely chosen by the compiler\n\nI've also put some non-x86 compilers for comparison, because they don't have LEA but may have other shift-related instructions or different shift capabilities beside the normal shift instructions. You can change between various x86 as well as non-x86 compilers to see the differences between their outputs. Another example that combines multiple things I've said above:\n\n```\nstruct bitfield {\n    int x: 10;\n    int y: 12;\n    int z: 10;\n};\n\nint f(bitfield b)\n{\n    int i = b.x*65;\n    int j = b.y/25;\n    int k = b.z/8;\n    return (i << j) + (k >> j);\n}\n\n```\nThat compiles to\n\n```\nf(bitfield):\n        mov     eax, edi\n        mov     edx, edi\n        sar     edi, 22\n        sal     eax, 10\n        sal     edx, 6\n        sar     eax, 20\n        sar     dx, 6\n        imul    ecx, eax, 5243\n        sar     ax, 15\n        sar     ecx, 17\n        sub     ecx, eax\n        movsx   eax, dx\n        mov     edx, eax\n        movsx   ecx, cx\n        sal     edx, 6\n        add     edx, eax\n        lea     eax, [rdi+7]\n        sal     edx, cl\n        test    di, di\n        cmovns  eax, edi\n        sar     ax, 3\n        cwde\n        sar     eax, cl\n        add     eax, edx\n        ret\n\n```\nYou can open the Godbolt link to see which instruction corresponds to which line of code in color\n\nIn summary: Compilers nowadays are really smart and can output \"surprising\" results to a normal people. They can emit a shift instruction for pretty much any operators in C. With an optimizing compiler, all bets are off\n\n",
+      "votes": "12",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "```\nint main (void){\n    unsigned int    uin =  0x1000;\n    signed int      sin = -0x1000;\n   return (uin<<8)+(uin>>8)+(sin<<8)+(sin>>8);   \n}\n\n```\ncompiled and linked with \n\n```\ncl /Zi /W4 /Od /analyze /nologo salsaar.cpp /link /release\n\n```\ndisassembled\n\n```\n:\\>cdb -c \"uf salsaar!main;q\" salsaar.exe | grep -A 20 Reading\n0:000> cdb: Reading initial command 'uf salsaar!main;q'\nsalsaar!main:\n01121000 55              push    ebp\n01121001 8bec            mov     ebp,esp\n01121003 83ec08          sub     esp,8\n01121006 c745fc00100000  mov     dword ptr [ebp-4],1000h\n0112100d c745f800f0ffff  mov     dword ptr [ebp-8],0FFFFF000h\n01121014 8b45fc          mov     eax,dword ptr [ebp-4]\n01121017 c1e008          shl     eax,8\n0112101a 8b4dfc          mov     ecx,dword ptr [ebp-4]\n0112101d c1e908          shr     ecx,8\n01121020 03c1            add     eax,ecx\n01121022 8b55f8          mov     edx,dword ptr [ebp-8]\n01121025 c1e208          shl     edx,8\n01121028 03c2            add     eax,edx\n0112102a 8b4df8          mov     ecx,dword ptr [ebp-8]\n0112102d c1f908          sar     ecx,8\n01121030 03c1            add     eax,ecx\n01121032 8be5            mov     esp,ebp\n01121034 5d              pop     ebp\n01121035 c3              ret\n\n```\nnote shl and sal are both same (opcodes are same and work same ) shr and sar are not same due to signed unsigned diffferences\n\n",
+      "votes": "4",
+      "user": "blabb",
+      "time": "Jan 30, 2019 at 18:50",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Nordwald",
+          "text": "Also: Division and Multiplication through optimization: en.wikipedia.org/wiki/Multiplication_algorithm#Shift_and_add",
+          "time": null
+        },
+        {
+          "user": "PaHa",
+          "text": "I noticed that in my case 2*30 produced: shl  dword ptr [rbp-4], 1",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

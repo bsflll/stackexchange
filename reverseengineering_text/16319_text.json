@@ -1,0 +1,54 @@
+{
+    "title": "How to do Global DLL injection",
+    "link": "https://reverseengineering.stackexchange.com/questions/16319/how-to-do-global-dll-injection",
+    "content": "How can one go about injection of a DLL into every process? Can <pre><code>SetwindowsHookEx()</code></pre> do the trick? Does <pre><code>AppInit_DLLs</code></pre> work as it used to?\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "dll"
+    ],
+    "user": "Todd",
+    "time": "Jun 5, 2018 at 13:47",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "TLDR: No, no and no.\nYou have several questions hiding there in your post:\n\nIs is possible to inject a DLL into each and every process?\nIf it is possible, can the following methods do that:\n\n<pre><code>SetWindowsHookEx</code></pre>?\n<pre><code>AppInit_Dlls</code></pre>?\n\n\n\nThe answer to the first question is \"no\".\nThe answer to both parts of the second question is \"no, even if the answer to the first question had been yes\".\n<pre><code>SetWindowsHookEx</code></pre> and <pre><code>AppInit_Dlls</code></pre>\nLet's start from the second question. Both methods only apply to processes that load <pre><code>user32.dll</code></pre>. So that's already not \"every process\" which is what you asked.\nOn top of that is everything I mentioned in the comments to NirIzr's answer:\n\nStarting with Windows 8 <pre><code>AppInit_Dlls</code></pre> are disabled by default on machines with Secure Boot enabled (i.e. all real-world machines).\nA process can opt-out from both methods by setting the <pre><code>ProcessExtensionPointDisablePolicy</code></pre> mitigation policy.\n\nProcess that have <pre><code>ProcessExtensionPointDisablePolicy</code></pre> set include most Chrome processes (renderer, gpu, ppapi) and a few system processes (like <pre><code>RuntimeBroker.exe</code></pre>), for example.\nI don't think that this is merely a caveat. The question is can you inject into all processes, and the answer is no.\nDLL injection and loading in general\nBut there are other ways to do DLL injection. What about them?\nThis brings us back to the first question.\nSince Windows Vista, some processes are \"protected processes\" for DRM reasons. See:\n\nProtected Processes (from Windows Internals 5th edition)\nInside the Windows Vista Kernel: Part 3 (scroll to \"Protected Processes\")\n\nTo load into these process you must be signed with a special certificate, which you probably don't have.\nSince then Microsoft has expanded the protected process infrastructure more and more to include more processes and to allow third-party processes to be protected. See Protecting Anti-Malware Services.\nThere are different levels of protection, but to load into some of these processes you also have to be signed with a special certificate that you also don't have, and to load into the rest of them you need a certificate that you can't have (since Microsoft doesn't supply it to any third party).\nProcesses protected in that way are <pre><code>smss.exe</code></pre>, <pre><code>csrss.exe</code></pre>, <pre><code>services.exe</code></pre>, some instances of <pre><code>svchost.exe</code></pre> as well the processes for any AV that respects itself. You can't inject into those either, regardless of method (<pre><code>SetWindowsHookEx</code></pre>, <pre><code>AppInit_Dlls</code></pre>, or something more robust that doesn't depend on <pre><code>user32.dll</code></pre>).\nAdditionally, another mitigation policy, <pre><code>ProcessSignaturePolicy</code></pre>, available starting with Windows 10 can prevent loading of DLLs not signed by Microsoft, WHQL or the Windows Store. And unlike being a protected process which requires a certificate from Microsoft, any process can opt-in to <pre><code>ProcessSignaturePolicy</code></pre>.\nProcess that have this mitigation enabled include <pre><code>WinStore.App.exe</code></pre> (the Windows Store app itself, obviously), <pre><code>MicrosoftEdgeCP.exe</code></pre> (Store only), <pre><code>csrss.exe</code></pre> (Microsoft only), <pre><code>wininit.exe</code></pre> (Microsoft only) and <pre><code>services.exe</code></pre> (Microsoft only).\nIn summary: You can't load arbitrary DLLs into many processes, including by calling <pre><code>LoadLibrary</code></pre> from the program's own legitimate code. You can't inject DLLs into these processes, regardless of the method you use.\nIf you find a way to do this it would be a major subversion of the Windows 10 security mechanisms and such novelty is more likely to be presented in a professional conference rather than on the SE network.\n\nMore links on Windows 8.1 Protected Processes, from Alex Ionescu's blog:\n\nThe Evolution of Protected Processes Part 1: Pass-the-Hash Mitigations in Windows 8.1\nThe Evolution of Protected Processes Part 2: Exploit/Jailbreak Mitigations, Unkillable Processes and Protected Services\nProtected Processes Part 3 : Windows PKI Internals (Signing Levels, Scenarios, Root Keys, EKUs & Runtime Signers)\n",
+            "votes": "7",
+            "user": "Paul",
+            "time": "Apr 8, 2022 at 17:56",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "DLL injections is a big subject, but to answer your two specific questions:\n\nYes, <pre><code>SetwindowsHookEx</code></pre> can inject to all currently running processes. This is done by providing the value of zero (<pre><code>0</code></pre>)  to the <pre><code>dwThreadId</code></pre> parameter.\nYes, generally <pre><code>AppInit_DLLs</code></pre> works on recent windows versions, however microsoft are working their way towards disabling and heavily limiting its usage. For example, since Windows 7, a registry value called <pre><code>RequireSignedAppInit_DLLs</code></pre> controls whether only code-signed DLLs are allowed to load. While the value is set to <pre><code>0</code></pre> (turned off) for Windows 7, it is on by default on windows 10. Furthermore, in Windows 8 (and above) <pre><code>AppInit_DLLs</code></pre> is automatically disabled (enable with  the <pre><code>LoadAppInit_DLLs</code></pre> registry value) on machines with secure boot.\n\nEDIT:\nBoth of these techniques are being phased out (or completely blocked) by multiple counter-measure features in Windows versions. They're not recommended (actually they are often discouraged by Microsoft itself) for legitimate software (or malware). Users are piling up caveats and restrictions in the comments, but for the sake of clarity and simplicity (and because there're numerous caveats here) I chose to only include a few.\n",
+            "votes": "4",
+            "user": "0xC0000022L",
+            "time": "Jun 5, 2018 at 13:50",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">BTW, <code>AppInit_DLLs</code> only works if the process loads <code>user32.dll</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "conio",
+                    "text": "<span class=\"comment-copy\">The <code>PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON</code> mitigation policy disables both <code>AppInit_Dlls</code> and global hooks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "conio",
+                    "text": "<span class=\"comment-copy\">Also, starting with Windows 8, <code>AppInit_Dlls</code> are disabled by default, regardless of signing, when secure boot is enabled. See <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/dn280412(v=vs.85).aspx\" rel=\"nofollow noreferrer\">AppInit DLLs and Secure Boot</a>. You probably don't see this on VMs (unless you use Hyper-V), but real machines have Secure Boot enabled by default.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Thanks, Added a paragraph to note there are many caveats, that those techniques are discouraged and refer to the comments for additional forewarnings.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

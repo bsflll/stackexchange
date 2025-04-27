@@ -1,0 +1,89 @@
+{
+    "title": "Locating Linux Kernel Symbols on ARM",
+    "link": "https://reverseengineering.stackexchange.com/questions/1922/locating-linux-kernel-symbols-on-arm",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Igor posted a great <a href=\"https://stackoverflow.com/a/14811668/139463\">answer</a> previously on SO about the format of the Linux kernel image on ARM.</p>\n<p>Assuming I can't boot my kernel image, can someone give me pointers on finding this compressed symbol table in the binary?  </p>\n</div>",
+    "votes": "13",
+    "answers": 3,
+    "views": "11k",
+    "tags": [
+        "linux",
+        "arm"
+    ],
+    "user": "mrduclaw",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">on what basis do you assume there are symbols? It is possible they have been stripped, because they're only needed - for example - to load kernel modules. If everything is linked into the kernel there is no need to have symbols. ARM being used disproportionately on embedded devices, there could be good reasons to strip symbols out of concern for size. On a (similar) <i>running</i> kernel (or in an emulator like QEMU), have you tried Igor's suggestions to see whether symbols exist?</span>",
+            "time": null
+        },
+        {
+            "user": "mrduclaw",
+            "text": "<span class=\"comment-copy\">@0xC0000022L I have a running copy of the kernel and can <code>cat /proc/kallsyms</code> but they don't have the addresses, just the names (addresses appear as 0).  I'm trying to understand (1) where these names are coming from -- I'm assuming it's from that compressed table, but I'm academically interested in seeing it; (2) how to resolve the addresses.</span>",
+            "time": null
+        },
+        {
+            "user": "Mellowcandle",
+            "text": "<span class=\"comment-copy\">0xC0000022L keeping the symbol is an option you can choose on menu config. Without symbols kernel oops will be meaningless. I have strong reason to believe that the symbols weren't stripped.</span>",
+            "time": null
+        },
+        {
+            "user": "mrduclaw",
+            "text": "<span class=\"comment-copy\">@Mellowcandle do you happen to know which menu config option removes the symbols?</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">@mrduclaw: fair enough, just trying to make sure we all aren't chasing a ghost ;) - Mellowcandle: <i>if</i> size is a main motivation then kernel OOPS are meaningless by themselves, because if the kernel doesn't fit on the device, it won't run anyway :)</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>After decompressing and loading the kernel, you need to find a couple of tables that encode the compressed symbol table. These are (in the usual order they are placed in binary):</p>\n<ul>\n<li><code>kallsyms_addresses</code> - a table of addresses to all public symbols in the kernel</li>\n<li><code>kallsyms_num_syms</code> - not a table but just an integer with total number of symbols (should match previous table)</li>\n<li><code>kallsyms_names</code> - a list of length-prefixed byte arrays that encode indexes into the token table</li>\n<li><code>kallsyms_token_table</code> - a list of 256 zero-terminated tokens from which symbol names are built</li>\n<li><code>kallsyms_token_index</code> - 256 shorts pointing to the corresponding entry in <code>kallsyms_token_table</code></li>\n</ul>\n<p>They're not hard to find with some experience. A good way to find the first one is to look for several 0xC0008000 values in a row, because a typical kernel symbol table starts like this:</p>\n<pre><code>C0008000 T __init_begin\nC0008000 T _sinittext\nC0008000 T _stext\nC0008000 T stext\n</code></pre>\n<p>After locating the tables the symbol recovery is trivial. I made a script for IDA that does it automatically, you can find it <a href=\"http://www.hexblog.com/?p=130\">here</a> (<code>kallsyms.py</code> in the tools zip).</p>\n<p>For more the details of how it's implemented in the kernel, see <code>kernel/kallsyms.c</code>.</p>\n</div>",
+            "votes": "13",
+            "user": "Igor Skochinsky",
+            "time": "Apr 25, 2013 at 4:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">Ah, this is exactly what I was looking for.  Thank you!  So far I was able to identify the <code>kallsyms_addresses</code>, <code>kallsyms_num_syms</code>, and <code>kall_syms_names</code>.  I <i>thought</i> I had located the other two, but your script failed to decode the names; I'm sure I did something wrong.  It seems difficult to know how large the <code>kallsyms_names</code> table will be.  Do you have any suggestions? Thank you again!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>kallsyms_token_table</code> should be pretty obvious - it will look similar to <code>\"tcp_\",0,\"ca\",0,\"unc_\",0,...</code> etc.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">Damn, I think that's the one I found.  I'll play with it some more.  I'm sure it's something incredibly silly on my part.  Thanks again!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You mentioned that you do have a running kernel available.  It is possible to obtain symbol information from a running kernel by reading <code>/proc/kallsyms</code>.  On newer distributions, this information is disabled by default for security reasons (all symbols will be displayed as 0x0 addresses), but you can manually enable it by running the following command as root:</p>\n<p><code>echo 0 &gt; /proc/sys/kernel/kptr_restrict</code></p>\n<p>Once you've obtained the list of kernel symbols/address pairs, it should be easy to convert to any format desired, e.g. an IDA <code>.idc</code> script for import.</p>\n</div>",
+            "votes": "9",
+            "user": "0xC0000022L",
+            "time": "Apr 25, 2013 at 14:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "mncoppola",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L He responded to you in the comments: \"I have a running copy of the kernel and can cat /proc/kallsyms but they don't have the addresses, just the names (addresses appear as 0).\"</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is a bit tricky to answer without getting my hands on the file and verifying a few assumptions based on the question and the linked answer. However, let me try, perhaps we can extend it further if you elaborate more on some aspects of the file.</p>\n<p>We know it's an ARM file and from your description this pretty much sounds like <a href=\"http://www.stlinux.com/u-boot/mkimage/kernel-images\" rel=\"nofollow noreferrer\">an ARM kernel image for U-Boot</a>. Now the problem is that I cannot know whether that's true, but you could run the oft mentioned <code>binwalk</code> or <code>firmware-mod-kit</code> on the file to see what that gives you.</p>\n<p><strong>If</strong> this is an ARM kernel image for <a href=\"http://www.denx.de/wiki/U-Boot\" rel=\"nofollow noreferrer\">U-Boot</a>, you can likely get to the <code>gzip</code> data by skipping the first 64 Bytes of the image (see <a href=\"https://stackoverflow.com/q/2658995/476371\">this answer over at StackOverflow</a>). The gist is:</p>\n<pre><code>dd if=&lt;image&gt; of=&lt;recovered file&gt; bs=64 skip=1\n</code></pre>\n<p>This skips 1 block of 64 bytes and otherwise writes the data from <code>&lt;image&gt;</code> into <code>&lt;recovered file&gt;</code>. Essentially it reverses - in part - the effects of the <a href=\"http://linux.die.net/man/1/mkimage\" rel=\"nofollow noreferrer\"><code>mkimage</code></a> tool, which is part of U-Boot.</p>\n<p>Now, assuming everything so far works - and that is a huge assumption - you should be able to decompress (<code>gzip -d</code>) the resulting file and end up with something you can hopefully <code>grep</code>. If I was you I'd then use <code>file</code> to check what kind of file it is and process it further if I happened to get anything meaningful out of it. If not, I would treat the file with <code>binwalk</code> again and failing that run <code>strings</code> on it.</p>\n<hr/>\n<p><strong>Edit x+1:</strong></p>\n<p>Okay, tried the process myself. Downloaded <a href=\"http://maemo.org/packages/package_instance/view/fremantle_extras-devel_free_armel/kernel-power-bootimg/2.6.28-10power51r1/\" rel=\"nofollow noreferrer\">this Debian package</a>, unpacked it, got a <code>zImage-2.6.28.10-power51</code> which I then looked at in 010 Editor and it's true, this is an ARM kernel image according to the marker (see reading section below):</p>\n<p><img alt=\"010 Editor showing the zImage\" src=\"https://i.sstatic.net/bS2Vz.png\"/></p>\n<p>After that I tried to skip the first 64 Byte and then decompress the rest, to no avail. Investigating a bit more.</p>\n<p>If you manage to get more information using this incomplete answer, please edit your question and I'll amend my answer once I notice your edit, to add more (hopefully useful) information.</p>\n<p><strong>Edit x+2:</strong></p>\n<p>Okay, for the zImage in question it turns out <a href=\"http://code.google.com/p/binwalk/\" rel=\"nofollow noreferrer\"><code>binwalk</code></a>, mentioned in my original answer, can at least handle the file and outputs:</p>\n<pre><code>12900           0x3264          gzip compressed data, from Unix, last modified: Mon Jul 23 13:41:37 2012, max compression\n</code></pre>\n<p>Lovely. Do let's run <code>dd</code> to extract the <code>gzip</code> stuff and then extract it:</p>\n<pre><code>dd if=zImage-2.6.28.10-power51 of=extract.gz bs=12900 skip=1 &amp;&amp; gunzip extract.gz &amp;&amp; ls -l extract\n</code></pre>\n<p>Once I extracted it, I ran <code>binwalk</code> again after noticing that <code>file</code> didn't yield a result:</p>\n<pre><code>DECIMAL         HEX             DESCRIPTION\n-------------------------------------------------------------------------------------------------------\n135456          0x21120         gzip compressed data, from Unix, last modified: Mon Jul 23 13:38:47 2012, max compression\n973460          0xEDA94         ELF\n1070320         0x1054F0        CramFS filesystem, big endian size 2126262976 CRC 0xdc0a0e1, edition 4040895977, 78662882 blocks, 271618533 files\n</code></pre>\n<p>However, I don't want to  proceed now without further input from you. Just an example how it <em>could</em> be investigated. One more thing <code>strings</code> <em>does</em> produce a list of symbols, but since I presume you want symbols and their addresses, I reckon there is more to be investigated.</p>\n<hr/>\n<h2>Further reading:</h2>\n<ul>\n<li><a href=\"http://www.simtec.co.uk/products/SWLINUX/files/booting_article.html\" rel=\"nofollow noreferrer\">this documentation</a> to verify whether this indeed is an ARM kernel image in the format we expect/assume. In particular check the assumption that <code>0x016F2818</code> can be found at offset <code>0x24</code>.</li>\n<li><p><a href=\"http://forum.xda-developers.com/showthread.php?t=871989&amp;page=20\" rel=\"nofollow noreferrer\">this forum entry</a>, in particular the post by user fattire, which mentions</p>\n<blockquote>\n<p>There's a 64 byte header you have to cut off of uRamdisk/uRecRam:</p>\n<p><code>dd if=uRamdisk of=uRamdisk.cpio.gz bs=64 skip=1</code></p>\n<p><code>gunzip uRamdisk.cpi.gz</code></p>\n<p><code>cpio -i -F uRamdisk.cpio</code></p>\n</blockquote>\n<p>which essentially implies that you have to expect an <code>initrd</code> (hence the CPIO format) at offset 64. That is, the \"kernel image\" would actually turn out to be the old kernel format which embedded the <code>initrd</code> (also see <code>mkimage</code> man page under \"Create old legacy image\").</p></li>\n</ul>\n</div>",
+            "votes": "5",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

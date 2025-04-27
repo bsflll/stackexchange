@@ -1,0 +1,61 @@
+{
+    "title": "windbg - Why does the GS register resolve to offset 0x0?",
+    "link": "https://reverseengineering.stackexchange.com/questions/21033/windbg-why-does-the-gs-register-resolve-to-offset-0x0",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to understand how to resolve segment addressing (specifically the GS register in X64).</p>\n<p>My toy program:</p>\n<pre><code>int main()\n{\n    unsigned long long x;\n    __debugbreak();\n    x = __readgsqword(0x30);\n    printf(\"0x%I64X\", x);\n}\n</code></pre>\n<p>which compiles to:</p>\n<pre><code>kd&gt; u\n00007ff6`10201074 cc                 int     3\n00007ff6`10201075 65488b142530000000 mov   rdx,qword ptr gs:[30h]\n...\n</code></pre>\n<p>Then I step once to reach the instruction which reads memory using the <code>GS</code> register, and I retrieve the value of the <code>GS</code> register, the content of the GDT, etc.</p>\n<pre><code>kd&gt; r @gs\ngs=002b\n\nkd&gt; r @gdtr\ngdtr=fffff80105471fb0\n\nkd&gt; .formats @gs\nEvaluate expression:\n  Hex:     00000000`0000002b\n  ...\n  Binary:  00000000 00000000 00000000 00000000 00000000 00000000 00000000 00101011\n\nkd&gt; dq (@gdtr + (5 * 8)) L1\nfffff801`05471fd8  00cff300`0000ffff\n\nkd&gt; .formats poi(@gdtr + (5 * 8))\nEvaluate expression:\n  Hex:     00cff300`0000ffff\n  ...\n  Binary:  00000000 11001111 11110011 00000000 00000000 00000000 11111111 11111111\n\nkd&gt; dg gs\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n002B 00000000`00000000 00000000`ffffffff Data RW Ac 3 Bg Pg P  Nl 00000cf3\n</code></pre>\n<p>So from <code>dg gs</code>, I can see that the <code>GS</code> segment is at offset <code>0x0</code>, which is consistent with the entry retrieved from the GDT using the <code>GS</code> register value.</p>\n<p>Observe that at this point, offset <code>0x0</code> is not \"valid\" memory:</p>\n<pre><code>kd&gt; dq gs:[30]\n002b:00000000`00000030  ????????`???????? ????????`????????\n\nkd&gt; dq 30\n00000000`00000030  ????????`???????? ????????`????????\n</code></pre>\n<p>Also note that the value of <code>RDX</code> at this point (before storing the QWORD retrieved from memory):</p>\n<pre><code>kd&gt; r @rdx\nrdx=000001dfbf892d40\n</code></pre>\n<p>Then I step once, expecting a bug check as I am retrieving invalid memory.</p>\n<p>But surprisingly, it doesn't, and <code>RDX</code> appeared to have gotten assigned a value from <em>somewhere</em>:</p>\n<pre><code>kd&gt; r @rdx\nrdx=00000035ed53f000\n</code></pre>\n<p>Even more surprising, the <code>GS</code> register still resolves to offset <code>0x0</code> which still contains \"invalid\" memory!</p>\n<pre><code>kd&gt; r @gs\ngs=002b\n\nkd&gt; r @gdtr\ngdtr=fffff80105471fb0\n\nkd&gt; dq (@gdtr + (5 * 8)) L1\nfffff801`05471fd8  00cff300`0000ffff\n\nkd&gt; dg gs\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n002B 00000000`00000000 00000000`ffffffff Data RW Ac 3 Bg Pg P  Nl 00000cf3\n\nkd&gt; dq gs:[30]\n002b:00000000`00000030  ????????`???????? ????????`????????\n</code></pre>\n<p>So...</p>\n<ol>\n<li><p>Why does my <code>GS</code> register resolve to offset 0x0?</p></li>\n<li><p>And where/how does the <code>mov rdx,qword ptr gs:[30h]</code> read memory from?</p></li>\n</ol>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "windbg",
+        "kernel"
+    ],
+    "user": "Pie Faced",
+    "time": "Apr 3, 2019 at 16:19",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In long mode, segmentation is not really used and all segment registers have base of 0. <code>fs</code> and <code>gs</code> are exceptions that were added to address thread-specific data. Their real base addresses are stored in MSRs (model specific registers) instead of the descriptor table. The MSRs are only accessible in kernel mode, but you can get the value of <code>GS</code> indirectly via the <code>!teb</code> command, or <code>~</code> (list threads). The <code>Teb:</code> field will show the TEB base which matches the <code>GS</code> base for that thread. For more info, check <a href=\"https://wiki.osdev.org/SWAPGS\" rel=\"nofollow noreferrer\">SWAPGS</a> on the Osdev wiki.</p>\n</div>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Apr 4, 2019 at 13:28",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Pie Faced",
+                    "text": "<span class=\"comment-copy\">in other words, 1. GS base is obtained from MSR C0000101 whenever it is referenced. 2. In usermode, MSR C0000101 contains TEB base. 3. In kernel mode, MSR C0000101 is swapped with MSR C0000102 (SWAPGS during SYSCALL) and then contains KPCR base. Correct?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>gs is kernel mode only </p>\n<p>you can see the data in windbg if you are in a kd session</p>\n<pre><code>0: kd&gt; ? @@c++(@$pcr-&gt;GdtBase)\nEvaluate expression: -8781100130384 = fffff803`7da55fb0\n0: kd&gt; dq gs:[0] l1\n002b:00000000`00000000  fffff803`7da55fb0\n</code></pre>\n<p>__readgsword() is an intrinsic it must have some magic :)</p>\n<pre><code>1: kd&gt; rdmsr c0000101\nmsr[c0000101] = ffffe601`555ea000\n1: kd&gt; dq ffffe601`555ea000 l1\nffffe601`555ea000  ffffe601`555fdfb0\n1: kd&gt; ? @@c++(@$pcr-&gt;GdtBase)\nEvaluate expression: -28581575008336 = ffffe601`555fdfb0\n1: kd&gt; dq gs:[0] l1\n002b:00000000`00000000  ffffe601`555fdfb0\n</code></pre>\n<p>!teb is user_gs_base (which is swapped by swapgs on entering kmode )</p>\n<pre><code>1: kd&gt; rdmsr c0000102\nmsr[c0000102] = 00000080`56086000\n1: kd&gt; !teb\nTEB at 0000008056086000\n    ExceptionList:        0000000000000000\n    StackBase:            0000008055f40000\n    StackLimit:           0000008055f00000\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Apr 4, 2019 at 17:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">What magic do you know about it? I just see only <code>mov rax, gs:[offset]</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>gs</code> is used in user mode too for thread-local data (similar to <code>fs</code> in x86).</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@Biswapriyo nothing they are read using rdmsr in ring 0  msr for GS_BASE and kernel_gs_base are respectively c000_0101 / c000_0102  see the edit</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">@igorsk  !teb is  rdmsr 0xc000_0102  gs;[0] in kmode is rdmsr 0xc000_0101</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

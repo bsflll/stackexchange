@@ -1,0 +1,63 @@
+{
+    "title": "Algorithm for decoding database like file structure",
+    "link": "https://reverseengineering.stackexchange.com/questions/25609/algorithm-for-decoding-database-like-file-structure",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am working on an automatic decode tool for a database like file structure. The file consists of a header and a body. Information that is known before trying to decode the file: Number of rows and size of the body. The files are generally pretty small. 1 to 35 columns and 1 to to 4000 rows.</p>\n<p>The fields can be the following:</p>\n<ul>\n<li>String : one byte for size, followed by the actual string, not zero terminated</li>\n<li>StringAcii : one byte for size, followed by the actual string, not zero terminated</li>\n<li>OptionalString : one byte which can be 0 or 1, if 1, its followed by a string</li>\n<li>OptionalStringAcii : one byte which can be 0 or 1, if 1, its followed by a string</li>\n<li>Number : 32 bits</li>\n<li>Bool : Byte with value 0 or 1</li>\n</ul>\n<p>There is also a meta data file for each file which contains the number of columns.</p>\n<p>My current approach is this: Compute all possible column types, but exit early if I find a combination that never can be possible while looking at the first row. Eg column 1 = bool, where value is 4.</p>\n<p>For each possible column combination that is at least valid for the first row, try to parse the whole table. If no errors and all byte are consumed at the end we have a possible candidate.</p>\n<p>This works pretty well, but it is way too slow if a table has 25+ columns.I also often get multiple possible schamas. What would be a better way to address this problem? Anything I can do to reduce the number of possible combinations?</p>\n</div>",
+    "votes": "2",
+    "answers": 3,
+    "views": "222",
+    "tags": [
+        "file-format"
+    ],
+    "user": "user1038502",
+    "time": "Aug 5, 2020 at 7:23",
+    "comments": [
+        {
+            "user": "Ian Cook",
+            "text": "<span class=\"comment-copy\">If the data/metadata files do not contain any information about the schema except the number of columns, then the only way of narrowing down the possible schemas to probable schemas is to apply some form of heuristics.  Assuming you know what the files are for/from you should be able to come up with some suitable rules. (e.g. likely range of numeric columns, language used in string columns etc)</span>",
+            "time": null
+        },
+        {
+            "user": "Remko",
+            "text": "<span class=\"comment-copy\">Have a look at the binary templates feature of 010 editor (a commercial but affordable hex editor): <a href=\"https://www.sweetscape.com/010editor/templates.html\" rel=\"nofollow noreferrer\">sweetscape.com/010editor/templates.html</a>. A trial version is available and might be enough for you.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You're going to have to get heuristic on this I think. My approach would be to generate a parse tree for the first record, where you tokenize the data and create nodes for valid interpretations. Then you apply the tree to the second record, eliminating any invalid paths. Rinse and repeat until you have either a single valid path, or you reach the end of the file. In the case where you have multiple valid interpretations when you reach the end of the file, then you'll either have to output each interpretation, or go back and improve your validity tests. It's not going to be lightning quick though.</p>\n<p>Is there definitely nothing else in the header? Do you have access to any code that actually parses these files successfully? It's definitely worth posting one of these files so we can take a look.</p>\n</div>",
+            "votes": "2",
+            "user": "MerseyViking",
+            "time": "Apr 21, 2023 at 10:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">This is a good answer, especially this point: \"Is there definitely nothing else in the header? Do you have access to any code that actually parses these files successfully?\" The key point being that, for the programs that were legitimately intended to parse these files, they must know how to decode the structure. How do they do it? The most likely answers are A) they make assumptions about the structure of the file, or B) there is metadata in a header describing the layout. The latter will be easy, the former might require speculative analysis like the first paragraph of this reply.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I would start by computing all valid column types for the first byte of every message. First start with the smallest message though. That will restrict your possible sequence of fields the most.</p>\n<p>Take the intersection across those types. The correct column type for the first column is in there.</p>\n<p>For each column type in the intersection, take the data, remove that column from the start and recurse.</p>\n<p>I'd think carefully about what is a \"valid\" field. Can there be 0 valued bytes in a string or an ascii string?</p>\n<p>Post a couple of these files. That'll help us look at ways to infer the format.</p>\n<p>Another smart thing you could do... for each row, calculate the number of times you can successfully find a location in that row which is a valid field of type t.</p>\n<p>Then for each type t, across all rows, find the minimum number of successful application types. For instance if row 1 has 3 strings and 2 bools, and row two has 2 strings and 3 bools, you would search with the assumption that you can only use up to 2 strings and 2 bool fields.</p>\n</div>",
+            "votes": "1",
+            "user": "pythonpython",
+            "time": "Dec 2, 2020 at 0:49",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jasen",
+                    "text": "<span class=\"comment-copy\">the problem is you can't guess the type of the first column without scanning the entire row.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You know the number of columns from the metadata file (is that really all it contains? A single integer?). Generate the set of all possible schemas with that number of columns. For each line, parse and validate it according to each schema in the set. If any field fails validation, for example a string containing non-printable characters, you discard the entire schema from the set and start over on the first line with the next candidate from the set.</p>\n<p>By testing the optional string and string candidates first for each line you will exit early for the vast majority of candidate schemas, and you will only test the most likely candidates for more than a handful of lines.</p>\n<p>A key to this being performant is not doing any validation when actually parsing the data, only when checking it against the schema definition. Otherwise you will end up testing each and every byte in the file several times over rather than just against likely candidates.</p>\n<p>Hopefully I explain this in a way that makes sense. If not, please provide an example file-set and I'll give you some example code.</p>\n</div>",
+            "votes": "1",
+            "user": "Tobias",
+            "time": "Apr 23, 2023 at 17:27",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

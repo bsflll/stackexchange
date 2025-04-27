@@ -1,0 +1,72 @@
+{
+  "title": "Does V-Table patching (via DLL injection) only work for COM objects/classes?",
+  "link": "https://reverseengineering.stackexchange.com/questions/19147/does-v-table-patching-via-dll-injection-only-work-for-com-objects-classes",
+  "content": "Okay so not too long ago i was introduced to the concept of hooking/detouring, it took me some time to get my head around, but despite the lack of information available, eventually i was able to hook BeginScene and EndScene using IDA, MS Detours and one of the sample d3d9 applications for testing.\n\nBut i realised, that was just one way to do it, so i decided that i'd like to also become familiar with the other methods i'd seen used.\n\nThis led me to do some studying on V-Tables, and more specifically, a practice that has been described as dynamic patching of V-Tables.\n\nI found that the typical way of doing this for DirectX is to create a \"Dummy device\" Then alter it's V-Table, which supposedly affects all instances of the device class.\n\nI went on to try create a scaled down environment using my own class with a single virtual function and some code that instantiated said class, then continuously called said function.\n\nI then injected some code that had access to a copy of this class, it created a new instance and attempted to patch the V-Table function pointer with that of another function.\n\nBut i soon found that the way i'd set it up just didn't work as i'd expected.\nI'm quite certain it modified the V-Table, but only for that instance of the class. \n(i'd tested this by combining the code into a single program which simply called the function, grabbed the V-Table, modified it to point to another function, then called the function again to confirm it had been swapped)\n\nSo i wonder, what is it about DirectX that makes it possible to patch the original V-Table using a new instance of a device class/object?\n\nIs hot patching something specific to COM, or is there some other explanation, maybe i have it all wrong?\n\n(EDIT)\nHere's what i'm trying to do.\n\nTarget:\n\n```\nusing namespace std;\n\nclass A {\npublic:\n    virtual void doThing() {\n        cout << \"Class A doThing\" << endl;\n    }\n\n};\n\n\nvoid dynamicOverride() {\n    cout << \"Function replaced\" << endl;\n}\n\n\nint main()\n{\n\n    A* a = new A();\n    while (1)\n    {\n        a->doThing();\n        Sleep(2000);\n    }\n\n    system(\"pause\");\n    return 0;\n}\n\n```\nCode to inject:\n\n```\nusing namespace std;\n\nclass A {\npublic:\n    virtual void doThing() {\n        cout << \"Class A doThing\" << endl;\n    }\n\n};\n\n\nvoid dynamicOverride() {\n    cout << \"Function replaced\" << endl;\n}\n\n\nvoid MainThread()\n{\n    A* a = new A();\n    void** vtable = *(void***)a;\n\n    DWORD curProtection;\n    VirtualProtect(&vtable[0], 4, PAGE_EXECUTE_READWRITE, &curProtection);\n    vtable[0] = dynamicOverride;\n}\n\n```\nI've seen this done in code that hooks various d3d9 functions, most refer to it as creating a dummy device.\nBut in this case when i try use a class in a DLL and inject the code to modify the V-Table for that class. It never affects the instance of that class in the target process.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "723",
+  "tags": [
+    "patching",
+    "vtables"
+  ],
+  "user": "Michael Strobel",
+  "time": "Aug 25, 2018 at 2:09",
+  "comments": [
+    {
+      "user": "NirIzr",
+      "text": "There's nothing special about directx. Could you add a minimal code example?",
+      "time": null
+    },
+    {
+      "user": "Michael Strobel",
+      "text": "Edited, hopefully i explained clearly enough.",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "For completeness, please include expected result and actual result. The issue (as far as I understand) is with multiple objects, which isn't reflected in the code example. To address your actual issue: Have you tried disassembling your example code and find out what's wrong?",
+      "time": null
+    },
+    {
+      "user": "Michael Karcher",
+      "text": "In your example, if the code us compiled with optimization enabled, it us quite likely that the compiler knows that a points to an A object, and devirtualizes the call. It means there will be a straight call to A::doThing instead of a reference through the vtable. Another possibility is that the compiler caches the result of the VTable lookup of the first invocation of doThing and reuses the cached address.",
+      "time": null
+    },
+    {
+      "user": "Michael Strobel",
+      "text": "I edited again with a exact example of what i was trying to do. I expected both instances of A class to be treated by the target process as actually being the same class, from what i know all class instances share a V-Table, and i'd like to be able to re-write the V-Table function pointer from the DLL.  As i said, i have seen code that does this but i'd like to be able to re-create it in my own scenario and understand how/why it works.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You are absolutely on the right track \n\nBut,\n\n```\nA* a = new A();\n...\na->doThing()\n\n```\nIs not going to bother with the vtable at all. Because a can only be of A type. MSVC will still create the vftable, but in that context a->doThing() will just become A::doThing()\n\nHere, I fixed up your example into my own to demonstrate that you were correct, you just needed to call doThing through some level of inheritance to trigger the vftable lookup.\n\nThe A_vftable struct also provides a better representation of what the vtable would be if you could see it.\n\n```\nclass Base {\npublic:\n    void virtual VirtualMethod1() = 0;\n    void virtual VirtualMethod2() = 0;\n};\n\nclass A : public Base {\npublic:\n    A() {\n        printf(\"A Constructor  \n\");\n    }\n\n    void virtual VirtualMethod1() {                 \n        printf(\"VirtualMethod1  \n\");\n    }\n\n    void virtual VirtualMethod2() {\n        printf(\"VirtualMethod2  \n\");  \n    }\n};\n\nstruct A_vftable {\n    void(*VirtualMethod1)(A* self);\n    void(*VirtualMethod2)(A* self);\n};\n\nint main() {\n\n    A a;\n    A_vftable* vtable = *(A_vftable**)&a;\n\n    vtable->VirtualMethod1(&a);\n    a.VirtualMethod1();\n\n    DWORD oldprotect;\n    VirtualProtect(vtable, sizeof(vtable), PAGE_EXECUTE_READWRITE, &oldprotect);\n    vtable->VirtualMethod1 = vtable->VirtualMethod2;\n    VirtualProtect(vtable, sizeof(vtable), oldprotect, NULL);\n\n    a.VirtualMethod1(); // calls A::VirtualMethod1()\n    Base* b = &a;\n    b->VirtualMethod1(); // calls our redirected function\n\n    return 0;\n}\n\n```\nOh and void dynamicOverride() actually has different arguments to virtual void doThing(). \n\ndoThing() is actually void __thiscall doThing(A* this)\n\nsince dynamicOverride() is missing the arg here, it's bad, but not catastrophic because in a __thiscall the first arg is passed through ECX. \n\nBut not knowing this is a good way to blow the stack, and yourself up later down the line.\n\nAlways replace a hooked function with one that handles the args/calling convention exactly.\n\n",
+      "votes": "3",
+      "user": "NirIzr",
+      "time": "Aug 27, 2018 at 20:32",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Michael Strobel",
+          "text": "I got this to work using something similar, Base class with pure virtual functions, and a class that inherited from said class. But i did it in a DLL and kinda assumed it was a problem with static linking or something.   I will try put this into a static library and compile, if it works as you say with a level of inheritance, then i'll accept this as an answer as it's quite informative.",
+          "time": null
+        },
+        {
+          "user": "Michael Strobel",
+          "text": "I tried to implement this, it works when all logic is contained in the same program, but when i put the interface and concrete class into a static lib, then try use it in both the target program, and in the dll i'm using to patch the V-Table. It seems i still have the same problem.  So far the only way I've got it to work is by loading the library dynamically.",
+          "time": null
+        },
+        {
+          "user": "Abigail",
+          "text": "Of course you're going to have to load whatever class you are trying to modify from the same location as the thing you're trying to hook. This was pointed out to you in previous comments. You can't just make an identical class A and expect a vtable hook to work on someone else's class A. Is that what you mean by static? Just post a larger example of what doesn't work.",
+          "time": null
+        },
+        {
+          "user": "Michael Strobel",
+          "text": "Sorry, i thought it was somewhat implied with the code i gave. The target binary and the DLL to patch the V-Table would have to be compiled at different times, just using identical copies of the class, so from what i gather it is only possible with a shared library, and the module has to be loaded into memory space of the target process?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

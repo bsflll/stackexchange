@@ -1,0 +1,38 @@
+{
+    "title": "If we have IMAGE_IMPORT_DESCRIPTOR, Is the IAT redundant?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16857/if-we-have-image-import-descriptor-is-the-iat-redundant",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Since each\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  already points to a RVA for the resolved virtual addresses the IAT seems to be redundant. Why is this data directory included? If I overwrite the RVA/size for the IAT data directory the binary is still able to run properly.\n </p>\n <p>\n  Am I missing something? Is there a scenario where having the IAT data directory is crucial to the running of a binary?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "windows",
+        "pe",
+        "file-format",
+        "binary-format"
+    ],
+    "user": "HKC",
+    "time": "Nov 30, 2017 at 20:43",
+    "comments": [
+        {
+            "user": "Amaury Pouly",
+            "text": "<html><body><span class=\"comment-copy\">\n I haven't worked with the PE format in a long time. But if I remember correctly, the IAT directory holds the RVA to the import address table. This table contains the address of each imported function. It may be filled with the RVA of the function\n <i>\n  assuming the DLL is loaded at its preferred address\n </i>\n . But the system may have to load the DLL at a different address if two DLL have overlapping virtual address, in this case it will relocate it it and the addresses in the IAT will be wrong. The PE loaded takes care of overwriting the IAT on load in this case I think.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n please refrain from answering in comments, thanks.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h2>\n  First, a couple of clarifications\n </h2>\n <p>\n  The\n  <em>\n   Import Address Table\n  </em>\n  is a table that only consists of the imported function's addresses. Unlike the\n  <code>\n   Import Table\n  </code>\n  (which consists of\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  s) that also details where to lookup those imports.\n </p>\n <p>\n  To reiterate:\n  <em>\n   (this is slightly oversimplified)\n  </em>\n  The\n  <em>\n   Import Address Table\n  </em>\n  is an array of the imported functions' actual addresses in memory in the current process. Not divided to modules, no extra information like the ordinal or name. Just an array of the addresses of all imported functions.\n </p>\n <p>\n  The\n  <code>\n   IMAGE_IMPORT_DESCRIPTORS\n  </code>\n  are way more structured, clean and partitioned. They are what enables the loader to\n  <em>\n   find\n  </em>\n  the function it's looking for. The \"RVAs of the resolved virtual address\" as you called them (There are actually two,\n  <code>\n   Characteristics\n  </code>\n  and\n  <code>\n   FirstThunk\n  </code>\n  , in the\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  structure) is not pointing to the actual imported function in the remote DLL, but to the location in the\n  <em>\n   Import Address Table\n  </em>\n  of the\n  <em>\n   first\n  </em>\n  item in that\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  . Subsequent items in the same\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  are also the following items in the\n  <em>\n   Import Address Table\n  </em>\n  .\n </p>\n <p>\n  As the loader goes over the\n  <code>\n   IMPORT_TABLE\n  </code>\n  and the different\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  s, it resolves each function and places that function's final address in the function's designated\n  <em>\n   Import Address Table\n  </em>\n  location.\n  <code>\n   FirstThunk\n  </code>\n  is how the loader knows the Import Address Table location of a function described in\n  <code>\n   IMAGE_IMPORT_DESCRIPTOR\n  </code>\n  s.\n </p>\n <h2>\n  but, why? (AKA answering your questions)\n </h2>\n <p>\n  So as you can see, the\n  <code>\n   FirstThunk\n  </code>\n  only holds one address for multiple imported functions, and it only\n  <em>\n   points\n  </em>\n  to the address (and not holding it directly as your question implies), so we can't easily \"use the thunk\" instead of the\n  <em>\n   Import Address Table\n  </em>\n  .\n </p>\n <p>\n  As to why you can overwrite the actual content in the IAT for a PE on disk and everything will still work - that was answered implicitly but I'll answer it explicitly as well. The data on disk is the same data as in the\n  <code>\n   Characteristics\n  </code>\n  structure, the pointers are the same. However that data should not ever be actually read according to Microsoft's own documentation, the IAT is mostly made to be populated during the PE loading process. I would guess the reason it is initialized with the relevant data was kind of a thought of \"why the hell not\" by the developers.\n </p>\n <h2>\n  but still, why?\n </h2>\n <p>\n  Now, if you've been following, you should be asking a similar question (and you were, that's what this question is still roughly about):\n </p>\n <p>\n  That structure is still more complicated than it could've been, and the main reason the\n  <em>\n   Import Address Table\n  </em>\n  was created in a condensed manner (instead of being included as addresses in the different\n  <code>\n   IMPORT_NAME\n  </code>\n  or other similar structures) is actually an optimization.\n </p>\n <p>\n  I'm glad you asked! ;) I'll explain.\n </p>\n <p>\n  As you may know, DLLs are efficiently loaded into the same addresses and use a windows mechanism known as\n  <em>\n   Copy On Write\n  </em>\n  to only actually have a single copy of most Modules. This is also true when Modules are mapped to different Virtual Addresses. However, when the need to populate imported functions for a Module, writes to PE structures are required. No matter where you hold the address, it's gotta be changed. The\n  <em>\n   Import Address Table\n  </em>\n  is there to to only trigger Copy On Write for as few pages as possible (those being the actual\n  <em>\n   Import Address Table\n  </em>\n  pages themselves).\n </p>\n <p>\n  This is, by the way, partially the reason there's that extra level of indirection in the PE to begin with.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Eric",
+            "time": "Oct 17, 2020 at 7:04",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

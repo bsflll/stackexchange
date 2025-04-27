@@ -1,0 +1,62 @@
+{
+    "title": "Is this Bignum multiplication of 2048 RSA number a Montgomery multiplication?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18480/is-this-bignum-multiplication-of-2048-rsa-number-a-montgomery-multiplication",
+    "content": "The below code snippets are some kind of <pre><code>bignum</code></pre> multiplications involving 2048bit numbers, possibly in the context of RSA decryption. \n\nDoes any one recognize this pattern?  \nIs it maybe some kind of <pre><code>Montgomery</code></pre> multiplication (unlikely) ? \nOr some RSA obfuscation that someone recognizes?\n\nThere are 2 multiplication loops. I marked them with <pre><code>loop1</code></pre> and <pre><code>loop2</code></pre>. <pre><code>loop1</code></pre> does the partial multiplication and addition I would expect. But how does the second loop make sense mathematically? It uses a seperate vector to multiply with. Does this accumulate into a  modulo operation? \nI converted the IDA compilation to a more readable representation below,\nthe original is at the end. Can anyone recognize a pattern?\n<pre><code>struct mod {\n  int len;\n  uint32_t _pad0[64]; /* 4 */\n  uint32_t r[64];     /* 4 + (256*1) :offset-260  */\n  uint32_t _pad2[64]; /* 4 + (256*2) :offset-516  */\n  uint32_t _pad3[64]; /* 4 + (256*3) :offset-772  */\n  uint32_t _pad4[64]; /* 4 + (256*4) :offset-1028 */\n  int fac;            /* 4 + (256*5) :offset-1284 */\n};\n\n#define align8(c) (((uint64_t)(c)) & (~0x7ULL))\n\nint64_t some_kind_of_mult(int32_t *acc , int32_t *a , int32_t *b, struct mod *n)\n{\n  int i0, i1, i2, j0 ;\n  uint32_t top;\n  uint64_t c0 = 0, c1 = 0, v0, v1, v2, v3, c01, c01_h;\n  intt64_t m1, res, topc0 = 0;\n\n  memset(acc,0,256);\n  res = 0;\n  l = n->len;\n\n  if ( !l )\n    return res;\n\n  top = topc0 = 0;\n\n  for (i0 = 0; i0 < l; i0++)\n  {\n      /* loop1: multiply a[0..l] with partial b[i0], accumulate resule in acc[0..l] */\n      for (c1=0, i1=0; i1 < l; i1++)\n      {\n          v1 = ((uint64_t)a[i1] * (uint64_t)b[i0]) + acc[i1] + c1;\n          acc[i1] = v1;\n          c1 = v1 >> 32;\n      }\n\n      top = (uint32_t)c1 + topc0;\n      c01 = c1 + topc0;\n\n      m1 = (uint32_t)(acc[0] * n->fac);\n      c2 = (m1 * (uint64_t)(n->r[0]) + acc[0]) >> 32;\n\n      /* loop2: do some acc[0..l] postprocessing involving some acc[i2-1] = .. acc[i2] ... calculcation */\n      for (i2 = 1; i2 < l; i2++)\n      {\n          v2 = acc[i2] + c2 + (m1 * n->r[i2]);\n          acc[i2-1] = v2;\n          c2 = (v2 >> 32);\n      }\n\n      acc[l-1] = top + c2;\n      topc0 = (c01 >> 32) + ((top + c2) >> 32);\n  }\n\n  if ( !topc0 && l-1 >= 0 )\n  {\n      res = l-1;\n      if ( acc[l-1] < n->r[l-1] )\n        /* possible error in IDA function */\n        return res;\n      if ( *v28 <= v29 )\n        /* possible error in IDA function */\n        JUMPOUT(loc_BC46E10);\n  }\n\n  res &= 0xffffffff00000000ULL;;\n  /* loop3: some final substraction on acc[0-l] */\n  for (j0 = 0; j0 < l; j0++)\n  {\n      v3 = acc[j0] - (uint64_t)n->r[j0] - (uint32_t)res;\n      acc[j0] = v3;\n      res = -(v3 >> 32);\n  }\n\n  return res;\n}\n</code></pre>\nHere is the original IDA decompile:\n<pre><code> int64 fastcall sub_BC46730(_DWORD *a1, int64 a2, int64 a3, int64 a4)\n{\n    _DWORD *v4; // r9@1\n    signed __int64 v5; // rdi@1\n    __int64 v6; // rbp@1\n    __int64 result; // rax@1\n    unsigned int v8; // ecx@1\n    unsigned int v9; // er13@1\n    __int64 v10; // r10@2\n    unsigned __int64 v11; // rdi@3\n    __int64 v12; // r8@3\n    unsigned __int64 v13; // rax@4\n    unsigned __int64 v14; // rax@4\n    __int64 v15; // r14@5\n    unsigned __int64 v16; // r11@5\n    __int64 v17; // rax@5\n    unsigned __int64 v18; // r11@5\n    __int64 v19; // r8@5\n    unsigned __int64 v20; // r15@5\n    signed __int64 v21; // rdi@6\n    _DWORD *v22; // rcx@6\n    __int64 v23; // rax@7\n    unsigned __int64 v24; // rax@7\n    unsigned __int64 v25; // rax@7\n    __int64 v26; // rsi@9\n    unsigned __int64 v27; // rcx@11\n    unsigned int *v28; // rdi@14\n    unsigned int v29; // ebx@14\n    __int64 v30; // [sp+0h] [bp-40h]@2\n    int v31; // [sp+8h] [bp-38h]@2\n    int v32; // [sp+Ch] [bp-34h]@2\n    v4 = a1;\n    v5 = (signed __int64)(a1 + 2);\n    v6 = a4;\n    *(_QWORD *)(v5 - 8) = 0LL;\n    *(_QWORD *)(v5 + 240) = 0LL;\n    result = 0LL;\n    memset(\n        (void *)(v5 & 0xFFFFFFFFFFFFFFF8LL),\n        0,\n        8 * ((unsigned __int64)((unsigned int)v4 - (v5 & 0xFFFFFFF8) + 256) >> 3));\n    v8 = 0;\n    v9 = *(_DWORD *)v6;\n    if ( *(_DWORD *)v6 )\n    {\n        v10 = 0LL;\n        v31 = *(_DWORD *)(v6 + 1284);\n        v32 = v9 - 1;\n        v30 = v9 - 1;\n        do {\n            v11 = 0LL;\n            v12 = 0LL;\n            /* loop1: */\n            do {\n                v13 = *(_DWORD *)(a2 + v11) * (unsigned __int64)*(_DWORD *)(a3 + 4 * v10) + v4[v11 / 4] + v12;\n                v4[v11 / 4] = v13;\n                v11 += 4LL;\n                v14 = v13 >> 32;\n                v12 = (unsigned int)v14;\n            } while ( v11 != 4 * v30 + 4 );\n            v15 = (unsigned int)v14 + v8;\n            v16 = v14 + v8;\n            v17 = *v4;\n            v18 = v16 >> 32;\n            v19 = (unsigned int)(v17 * v31);\n            v20 = (v19 * (unsigned __int64)*(_DWORD *)(v6 + 260) + v17) >> 32;\n            if ( v9 <= 1 )\n                goto LABEL_16;\n            v21 = v6 + 264;\n            v22 = v4;\n            /* loop2: */\n            do\n            {\n                v23 = v22[1];\n                v21 += 4LL;\n                ++v22;\n                v24 = v23 + v20 + v19 * *(_DWORD *)(v21 - 4);\n                *(v22 - 1) = v24;\n                v25 = v24 >> 32;\n                v20 = (unsigned int)v25;\n            }\n            while ( v21 != v6 + 4LL * (v9 - 2) + 268 );\n            ++v10;\n            v4[v30] = v15 + v25;\n            v8 = v18 + ((v15 + v25) >> 32);\n        }\n        while ( v9 > (unsigned int)v10 );\n        v26 = 0LL;\n        if ( !v8 && v32 >= 0 )\n        {\n            result = v32;\n            v28 = &v4[v32];\n            v29 = *(_DWORD *)(4LL * v32 + v6 + 260);\n            if ( *v28 < v29 )\n                return result;\n            if ( *v28 <= v29 )\n            LABEL_16:\n                JUMPOUT(loc_BC46E10);\n        }\n        LODWORD(result) = 0;\n        do\n        {\n            v27 = v4[v26] - (unsigned __int64)*(_DWORD *)(v6 + 4 * v26 + 260) - (unsigned int)result;\n            v4[v26++] = v27;\n            result = (unsigned int)-HIDWORD(v27);\n        }\n        while ( v9 > (unsigned int)v26 );\n    }\n    return result;\n}\n</code></pre>\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "211",
+    "tags": [
+        "ida",
+        "binary-analysis"
+    ],
+    "user": "Konrad Eisele",
+    "time": "Jun 8, 2018 at 21:37",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "The way I'd go about solving this would be by thoroughly reverse engineering this attached code. I know, we're in RE.SO so that ought to be a weird answer. I could do that for you, but where's the fun in that?! Voting to close, please ask specific questions showing your effort and describe specific challenged you've encountered.\n",
+            "time": null
+        },
+        {
+            "user": "Konrad Eisele",
+            "text": "@NirIzr: I rephrased it a bit.\n",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "Thanks, it does look better but still feels like \"here's a chunk of code, please RE it for me\". Decompilation output isn't too good in this case and it may be confusing you. I honestly suggest you go through the process of writing this as C code. You'll see this is hardly as complex as it currently seem.\n",
+            "time": null
+        },
+        {
+            "user": "Konrad Eisele",
+            "text": "@NirIzr: Did like you suggested. Can you spot some mathematical construct?\n",
+            "time": null
+        },
+        {
+            "user": "Konrad Eisele",
+            "text": "@NirIzr: I think I found what it is (see posted answer). It is a CIOS Montgomery implementation.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The structure seems to resemble a Montgomery CIOS implementation\n\nFrom the paper on Researchgate: Coarsely Integrated Operand Scanning \nMore references on CIOS Montgomery: https://www.microsoft.com/en-us/research/wp-content/uploads/1996/01/j37acmon.pdf\n",
+            "votes": "4",
+            "user": "Konrad Eisele",
+            "time": "Jun 9, 2018 at 14:44",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">could you add some links/references? e.g. where is the screenshot from?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Konrad Eisele",
+                    "text": "<span class=\"comment-copy\">@IgorSkochinsky: Added the reference.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

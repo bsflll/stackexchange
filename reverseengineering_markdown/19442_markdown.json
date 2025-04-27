@@ -1,0 +1,42 @@
+{
+  "title": "What is the password to this file? I can't figure it out with radare2 or gdb",
+  "link": "https://reverseengineering.stackexchange.com/questions/19442/what-is-the-password-to-this-file-i-cant-figure-it-out-with-radare2-or-gdb",
+  "content": "Here is the binary file. https://drive.google.com/file/d/1ywN60yZYIhPPRyZMGbQudZRYoLYBhkeJ/view?usp=sharing\n\nI am able to figure out some of the assembly, but can't get the correct password. I know that it is two integers separated by a space.\n\nEDIT: By using the command ps @ str.d__d you get the result of %d %d. It is located at the address 0x0804853f.\n\nEDIT2: I figured out that there are multiple local variables being used:  \n\n```\nvar int local_2ch @ ebp-0x2c \nvar int local_20h @ ebp-0x20 \nvar int local_1ch @ ebp-0x1c \nvar unsigned int local_18h @ ebp-0x18 \nvar int local_14h @ ebp-0x14 \nvar int local_10h @ ebp-0x10\nvar int canary @ ebp-0xc\nvar int local_4h @ ebp-0x4 \narg int arg_4h @ esp+0x4 \n\n```\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "disassembly",
+    "x86",
+    "decompilation"
+  ],
+  "user": "rockower",
+  "time": "Sep 24, 2018 at 21:04",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "how do you know that it's \"two integers separated by a space\"? what else did you figure out?",
+      "time": null
+    },
+    {
+      "user": "rockower",
+      "text": "By using the command ps @ str.d__d you get the result of %d %d.  This is all located at the address 0x0804853f.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "please add what you already discovered to the question (click 'edit')",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Here's how you can do it. \nUsual stuff : r2 file; aaa; [email protected]\n\nYou can see the params to scanf pushed to stack.\n\n```\n|           0x08048537      8d45e4         lea eax, [local_1ch]\n|           0x0804853a      50             push eax\n|           0x0804853b      8d45e0         lea eax, [local_20h]\n|           0x0804853e      50             push eax\n|           0x0804853f      6855860408     push str.d__d               ; 0x8048655 ; \"%d %d\" ; const char *format\n|           0x08048544      e887feffff     call sym.imp.__isoc99_scanf ; int scanf(const char *format)\n\n```\nLets rename locals.\n\n```\n[0x080484eb]> afv?\nUsage: afv  [rbs]\n| afvr[?]                       manipulate register based arguments\n| afvb[?]                       manipulate bp based arguments/locals\n| afvs[?]                       manipulate sp based arguments/locals\n| afv*                          output r2 command to add args/locals to flagspace\n| afvR [varname]                list addresses where vars are accessed (READ)\n| afvW [varname]                list addresses where vars are accessed (WRITE)\n| afva                          analyze function arguments/locals\n| afvd name                     output r2 command for displaying the value of args/locals in the debugger\n| afvn [new_name] ([old_name])  rename argument/local\n| afvt [name] [new_type]        change type for given argument/local\n| afv-([name])                  remove all or given var\n\n[0x080484eb]> afvn input_1 local_20h\n[0x080484eb]> afvn input_2 local_1ch\n[0x080484eb]> \n\n```\nNow it looks like\n\n```\n|           0x08048537      8d45e4         lea eax, [input_2]\n|           0x0804853a      50             push eax\n|           0x0804853b      8d45e0         lea eax, [input_1]\n|           0x0804853e      50             push eax\n|           0x0804853f      6855860408     push str.d__d               ; 0x8048655 ; \"%d %d\" ; const char *format\n|           0x08048544      e887feffff     call sym.imp.__isoc99_scanf ; int scanf(const char *format)\n\n```\nThere's a check for Correct/Incorrect\n\n```\n|       `-> 0x08048579      837de800       cmp dword [local_18h], 0\n|       ,=< 0x0804857d      7412           je 0x8048591\n|       |   0x0804857f      83ec0c         sub esp, 0xc\n|       |   0x08048582      685b860408     push str.Correct            ; 0x804865b ; \"Correct!\" ; const char *s\n|       |   0x08048587      e824feffff     call sym.imp.puts           ; int puts(const char *s)\n|       |   0x0804858c      83c410         add esp, 0x10\n|      ,==< 0x0804858f      eb10           jmp 0x80485a1\n|      ||   ; CODE XREF from main (0x804857d)\n|      |`-> 0x08048591      83ec0c         sub esp, 0xc\n|      |    0x08048594      6864860408     push str.Incorrect          ; 0x8048664 ; \"Incorrect!\" ; const char *s\n|      |    0x08048599      e812feffff     call sym.imp.puts           ; int puts(const char *s)\n|      |    0x0804859e      83c410         add esp, 0x10\n\n```\nIf local_18h is 1/0, Correct/Incorrect is printed out to stdout respectively. Rename local_18h to final_flag as it decides the final output.\n\n```\n[0x0804852b]> afvn final_flag local_18h\n\n```\nSome constants are loaded to local variables. Remember/rename them to follow in code.\n\n```\n|           0x0804850f      c745e8010000.  mov dword [final_flag], 1\n|           0x08048516      c745ec2a0000.  mov dword [local_14h], 0x2a ; '*' ; 42\n|           0x0804851d      c745f0390500.  mov dword [local_10h], 0x539 ; 1337\n\n```\nfinal_flag is initially 1 (true). Just after input, there's a check to set final_flag to 0(false).\n\n```\n|           0x0804854c      8b45ec         mov eax, dword [const_2a]\n|           0x0804854f      35280a0000     xor eax, 0xa28\n|           0x08048554      89c2           mov edx, eax\n|           0x08048556      8b45e0         mov eax, dword [input_1]\n|           0x08048559      39c2           cmp edx, eax\n|       ,=< 0x0804855b      7407           je 0x8048564\n|       |   0x0804855d      c745e8000000.  mov dword [final_flag], 0\n|       |   ; CODE XREF from main (0x804855b)\n\n```\nThis can be roughly translated to:\n\n```\nif const_2a^0xa28 != input_1:\n    final_flag = False\n\n```\nTo pass this input_1 = const_2a^0xa28 \n\n```\n>>> 0x2a^0xa28\n2562\n\n```\nSimilar check for input_2\n\n```\n|       `-> 0x08048564      8b45f0         mov eax, dword [const_539]\n|           0x08048567      f7d0           not eax\n|           0x08048569      89c2           mov edx, eax\n|           0x0804856b      8b45e4         mov eax, dword [input_2]\n|           0x0804856e      39c2           cmp edx, eax\n|       ,=< 0x08048570      7407           je 0x8048579\n|       |   0x08048572      c745e8000000.  mov dword [final_flag], 0\n\n```\nThis can be roughly translated to:\n\n```\nif ~const_539 != input_2:\n    final_flag = False\n\n```\nTo pass this input_2 = ~const_539\n\n```\n>>> ~0x539\n-1338\n\n```\nFinally\n\n```\n./part2\nEnter the password: 2562 -1338\nCorrect!\n\n```\n",
+      "votes": "3",
+      "user": "sudhackar",
+      "time": "Sep 25, 2018 at 7:53",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

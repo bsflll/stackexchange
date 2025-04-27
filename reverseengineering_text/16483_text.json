@@ -1,0 +1,33 @@
+{
+    "title": "Extract conditional instructions using IDA python in ARM binaries",
+    "link": "https://reverseengineering.stackexchange.com/questions/16483/extract-conditional-instructions-using-ida-python-in-arm-binaries",
+    "content": "While using IDA Python for extract ARM instructions, I noticed that some instructions are not extracted completely. For example, conditional instructions such as <pre><code>BCS</code></pre> or <pre><code>BCC</code></pre> are printed as <pre><code>B</code></pre>. For analyzing, it is necessary we have the instructions completely.  \nHere's the code I used:\n<pre><code>import idautils\nimport idc\nimport idaapi\nfor seg_ea in Segments():\n for head in Heads(seg_ea, SegEnd(seg_ea)):\n  if isCode(GetFlags(head)):\n   disasm= GetMnem(head)\n</code></pre>\nIs there any way to correct this problem?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "idapython",
+        "arm",
+        "python"
+    ],
+    "user": "hamid darabian",
+    "time": "Oct 5, 2017 at 9:51",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I was able to reproduce your problem on IDA 6.95 but it seems like this bug was fixed in IDA 7 since it works for me just fine. The solution below will be relevant to IDA 6.95 though it would probably be valid to earlier versions of IDA Pro.  \nLet's start by describing the deadlock we're facing with:\nThe problematic function, <pre><code>GetMnem</code></pre>, is declared in <pre><code>IDA 6.95\\Python\\idc.py:L2280</code></pre> and looks like this:\n\n<pre><code>def GetMnem(ea):\n    \"\"\"\n    Get instruction mnemonics\n\n    @param ea: linear address of instruction\n\n    @return: \"\" - no instruction at the specified location\n\n    @note: this function may not return exactly the same mnemonics\n    as you see on the screen.\n    \"\"\"\n    res = ida_ua.ua_mnem(ea)\n\n    if not res:\n        return \"\"\n    else:\n        return res\n</code></pre>\nPay attention to the following disclaimer in the function:\n\n@note: this function may not return exactly the same mnemonics as you see on the screen.\n\nSeems like our problems fits the disclaimer -- we don't see the same mnemonics as we see on the screen.\nAs you can see, <pre><code>GetMnem</code></pre> is basically a wrapper to another function -- <pre><code>ua_mnem</code></pre> which is declared in <pre><code>IDA 6.95\\Python\\ida_ua.py:L319</code></pre>:\n\n<pre><code>def ua_mnem(*args):\n  \"\"\"\n  ua_mnem(ea) -> char const *\n  \"\"\"\n  return _ida_ua.ua_mnem(*args)\n</code></pre>\nWell, seems like <pre><code>ua_mnem</code></pre> is a wrapper to another function which is located in <pre><code>IDA 6.95\\python\\lib\\python2.7\\lib-dynload\\ida_64\\_ida_ua.pyd</code></pre>. A <pre><code>pyd</code></pre> file is actually a DLL file and should not be easy-peasy to reverse. Therefore, we can't see, nor edit, the source code so we can't fix the problem.  \nHere comes the workaround: instead of using <pre><code>GetMnem</code></pre> you can simply mimic it by using <pre><code>GetDisasm</code></pre> and split the line to get only the instruction:\n<pre><code>import idautils\nimport idc\nimport idaapi\nfor seg_ea in Segments():\n for head in Heads(seg_ea, SegEnd(seg_ea)):\n  if isCode(GetFlags(head)):\n    mnem = GetMnem(head)\n    if (mnem[0]=='B'):\n        mnem = GetDisasm(head).split()[0]\n    print mnem\n</code></pre>\nIn this case we check whether the mnemonics is a branch instruction (begins with \"B\") and if so, we use the mnemonics from <pre><code>GetDisasm</code></pre> and not from <pre><code>GetMnem</code></pre>. Of course you would need to test this solution better and maybe handle some specific cases.\n",
+            "votes": "3",
+            "user": "Megabeets",
+            "time": "Oct 5, 2017 at 9:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>_ida_ua.ua_mnem</code> is just a direct wrapper of the underlying IDA API from <code>ida_ua.hpp</code> in the SDK.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

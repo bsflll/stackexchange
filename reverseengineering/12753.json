@@ -1,0 +1,107 @@
+{
+    "title": "Segmentation fault while pushing onto the stack",
+    "link": "https://reverseengineering.stackexchange.com/questions/12753/segmentation-fault-while-pushing-onto-the-stack",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So I have been following some tutorials on assembly and the instructor compiles the following code: </p>\n<pre><code>;hello3.asm  attempts to make the code position independent\n\nsection .text\nglobal _start\n\n_start:\n;clear out the registers we are going to need\nxor eax, eax\nxor ebx, ebx\nxor ecx, ecx\nxor edx, edx\n\n;write(int fd, char *msg, unsigned int len)\nmov al, 4\nmov bl, 1\n;Owned!!! =  4f,77,6e,65,64,21,21,21\n;push !,!,!,d\npush 0x21212164\n;push e,n,w,O \npush 0x656e774f\nmov ecx, esp\nmov dl, 8\nint 0x80\n\n;exit(int ret)\nmov al,1\nxor ebx, ebx\nint 0x80\n</code></pre>\n<p>Note that the message <code>Owned!!!</code> is pushed into the stack rather than kept in the <code>.text</code> segment. So, when I try  to execute it, I get a <code>Segment Fault</code> error!</p>\n<p>If instead I keep the message in the <code>.text</code>, then, everything works fine.</p>\n<p>The commands I used to execute:</p>\n<pre><code>$&gt; nasm -f elf64 hello4.asm \n$&gt; ld -o hello hello4.o \n</code></pre>\n<p>Any ideas? </p>\n</div>",
+    "votes": "5",
+    "answers": 3,
+    "views": "9k",
+    "tags": [
+        "assembly",
+        "x86",
+        "linux",
+        "segmentation",
+        "nasm"
+    ],
+    "user": "Dhayalan Pro",
+    "time": "May 28, 2016 at 8:15",
+    "comments": [
+        {
+            "user": "Dhayalan Pro",
+            "text": "<span class=\"comment-copy\">@perror wow you can't answer it but , want to earn rep by correcting the question -_-</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">I do not gain any reputation by correction your spelling... It just hurt my eyes, so I fix it. Be more careful next time, we have some standards when asking questions here (even stupid ones).</span>",
+            "time": null
+        },
+        {
+            "user": "Dominik Antal",
+            "text": "<span class=\"comment-copy\">@DhayalanPro No need to take it so harshly, all StackExchange sites allow community edits if required, i don't see anything wrong with that.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The segmentation fault error doesn't have anything to do with pushing the strings on the stack.</p>\n<p>I used gdb to debug it, and the problem lies at:</p>\n<pre><code>;exit(int ret)\nmov al,1\nxor ebx, ebx\nint 0x80\n</code></pre>\n<p>Changing</p>\n<pre><code>mov al,1\n</code></pre>\n<p>to</p>\n<pre><code>mov eax,1\n</code></pre>\n<p>Fixes the segmentation fault.</p>\n<p>Tested on Kali Linux.</p>\n</div>",
+            "votes": "6",
+            "user": "JeffreyZ",
+            "time": "May 28, 2016 at 10:27",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Dhayalan Pro",
+                    "text": "<span class=\"comment-copy\">yes ,but the fact that having mov eax,1 will introduce 00 in the  payload , thats why we use mov al,1   Would like to know why its crashing , I use kali too</span>",
+                    "time": null
+                },
+                {
+                    "user": "JeffreyZ",
+                    "text": "<span class=\"comment-copy\">If you are on Kali, then let msfvenom take care of that. Example: msfvenom --platform linux -a x86 -f elf -b \"\\x00\\xff\" -o outputbin &lt; inputbin</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dhayalan Pro",
+                    "text": "<span class=\"comment-copy\">I know msfvenom , learning Exploit writing so :D</span>",
+                    "time": null
+                },
+                {
+                    "user": "JeffreyZ",
+                    "text": "<span class=\"comment-copy\">Also, if you want to do this without msfvenom, you could replace \"mov eax,1\" with \"xor eax,eax inc eax\" to avoid the 00s</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dhayalan Pro",
+                    "text": "<span class=\"comment-copy\">yeah i just changed the code to   <code>xor rax,rax</code> <code>mov al, 0x3c</code>  But still 00 comes because i have a  <code>mov di, 2</code> any idea ?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In addition to the answer by @user2389688 it's important to note that the syscall numbers are wrong if you're doing amd64, as are the passed in registers. Here's a 64 bit abi version which corrects the differences, and provides the intended output.</p>\n<pre><code>;hello3.asm  attempts to make the code position independent\n; rewrite of hello3.asm to use 64 bit syscall interface\nsection .text\nglobal _start\n\n_start:\nxor rax, rax ; syscall\nxor rdi, rdi ; arg1\nxor rsi, rsi ; arg2\nxor rdx, rdx ; arg3\n\n; write(int fd, char *msg, unsigned int len)\nmov al, 1\nmov di, ax\n;Owned!!! =  4f,77,6e,65,64,21,21,21\n;push !,!,!,d\n;push e,n,w,O\nsub rsp, 8\nmov dword [rsp], 'Owne'\nmov dword [rsp + 4], 'd!!!'\nmov rsi, rsp\nmov dl, 8 \nsyscall\n\n; exit(int ret)\n; syscall errors will result in rax having a negative value so you\n; can't just move al\nmov eax, 0xffffffc3\nnot eax\nxor rdi, rdi\nsyscall\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "broadway",
+            "time": "May 29, 2016 at 19:33",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Dhayalan Pro",
+                    "text": "<span class=\"comment-copy\">yes we can indeed move al , thats what they do for the payload to not have 00 in them</span>",
+                    "time": null
+                },
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">Eliminating 0 can be done in a bunch of ways. However, if the previous syscall had an error, then the upper bits of eax won't be 0. I've updated the code in my answer to eliminate the 0s.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Dhayalan Pro",
+                    "text": "<span class=\"comment-copy\">actually this works too mov al, 0x3c</span>",
+                    "time": null
+                },
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">only if the write didn't produce an error. You can xor it first to avoid that problem, though. There's lots of ways to avoid 0 bytes.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I tried your code in a 64 bit machine and there are some considerations:</p>\n<p>when you push the 2 snippets of the string, the stack is containing a void word between them:</p>\n<pre><code>Breakpoint 1, 0x000000000040009a in _start () [bp before int 0x80] \n(gdb) x/4wx $rsp\n0x7fffffffde30: 0x656e774f  0x00000000  0x21212164  0x00000000\n</code></pre>\n<p>This causes the <code>write</code> syscall to fail (as we are indicating the length is 8). So, right after the syscall, in the register <code>%rax</code> contain an error code:</p>\n<pre><code>(gdb) ni\n0x000000000040009c in _start ()\n(gdb) info reg\nrax            0xfffffffffffffff2   -14\n</code></pre>\n<p>After that, we move a byte with <code>mov al,1</code>, BUT the resulting value of <code>%rax</code> is: <code>0xffffffffffffff01</code>.</p>\n<p>The <code>exit</code> syscall won't be performed and the code will continue with the contents of the memory... The results are not deterministic... (The segfault occurs somewhere, in my case tries to access to <code>*%rsi</code> when the register <code>%rsi</code> contains a <code>0</code>.</p>\n<p>I hope this helps to anyone.</p>\n<p>BTW. Just in case, better if you introduce a null value before the string, in this way you are sure the string will end in a <code>NULL</code> value. Otherwise, if the memory contains another value, <code>write()</code> may print some strange characters.</p>\n</div>",
+            "votes": "1",
+            "user": "perror",
+            "time": "Jun 6, 2016 at 7:41",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

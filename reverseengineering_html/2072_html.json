@@ -1,0 +1,56 @@
+{
+    "title": "IDA [call $+5 / pop reg] cleaning",
+    "link": "https://reverseengineering.stackexchange.com/questions/2072/ida-call-5-pop-reg-cleaning",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Can anyone tell me how to clean up the code which contains the following blocks:\n </p>\n <pre><code>call $+5\npop reg\nadd reg, 08BE96h\n[...]\n</code></pre>\n <p>\n  In other words I need to change all such blocks to:\n </p>\n <pre><code>mov reg, offset\n</code></pre>\n <p>\n  <em>\n   <strong>\n    Edit # 1\n   </strong>\n  </em>\n </p>\n <p>\n  List all block EA's:\n </p>\n <pre><code>ea = ScreenEA()\nfor funcea in Functions(SegStart(ea), SegEnd(ea)):\n    E = list(FuncItems(funcea))\n    for e in E:\n        if idc.GetMnem(e) == \"call\" and idc.GetOpnd(e, 0) == \"$+5\" and idc.GetMnem(e + 5) == \"pop\":\n            print \"%x\" % e\n</code></pre>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "ida-plugin",
+        "idapython"
+    ],
+    "user": "Ilya Matveychikov",
+    "time": "May 22, 2013 at 12:25",
+    "comments": [
+        {
+            "user": "DCoder",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you asking for a full idc/idapython script?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ilya Matveychikov",
+            "text": "<html><body><span class=\"comment-copy\">\n Well, if such script exists...\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "DCoder",
+            "text": "<html><body><span class=\"comment-copy\">\n It is definitely possible to patch IDA database content through IDC (\n <code>\n  PatchByte\n </code>\n ). If nobody else replies, I will try to come up with my own version later.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Here's a rough implementation that scans the currently focused function for this pattern:\n </p>\n <pre><code>call $+5\npop <reg>\nop <reg>, imm32\n</code></pre>\n <p>\n  And changes it to\n </p>\n <pre><code>mov <reg>, <computed imm32>\nnop\nnop\n</code></pre>\n <p>\n  Adapting it to scan different ranges and support more instructions is left as an exercise to the reader.\n </p>\n <pre><code>def simplify(tgtEA):\n  ins1 = tgtEA\n  if not idc.isHead(idc.GetFlags(ins1)):\n    ins1 = idaapi.prev_head(ins1, limits.startEA)\n\n  ins2 = idaapi.next_head(ins1, limits.endEA)\n  if ins2 == 0xFFFFFFFF:\n    return False\n\n  ins3 = idaapi.next_head(ins2, limits.endEA)\n  if ins3 == 0xFFFFFFFF:\n    return False\n\n  print \"Scanning instructions at %d, %d, %d\" % (ins1, ins2, ins3)\n\n  result = ins2\n  matched = False\n  reg = 0\n\n  if idc.GetMnem(ins1) == \"call\":\n    if idc.GetOpnd(ins1, 0) == \"$+5\":\n      if idc.GetMnem(ins2) == \"pop\":\n        if idc.GetOpType(ins3, 0) == 1:\n          reg = GetOperandValue(ins2, 0)\n          if idc.GetOperandValue(ins3, 0) == reg:\n            op = idc.GetMnem(ins3)\n            optype = idc.GetOpType(ins3, 1)\n\n            if op == \"inc\":\n              matched = True\n              result = result + 1\n            elif op == \"dec\":\n              matched = True\n              result = result - 1\n            elif op == \"add\":\n              if optype == 5:\n                # optype 5 = immediate\n                matched = True\n                offset = idc.GetOperandValue(ins3, 1)\n                result = result + offset\n\n  if matched:\n    # patch the bytes by hand - there's no nice API to assemble(\"foo bar\")?\n    # MOV r32, imm32 = 0xB8 /rd \n    # reg is the register number acquired from IDA operand value\n    # IDA uses the same register numbering as Intel\n    regbyte = 0xB8 + reg;\n    idaapi.patch_byte(ins1, regbyte)\n    idaapi.patch_long(ins1 + 1, result)\n    idaapi.patch_word(ins1 + 5, 0x9090) # NOP NOP \n    return True\n\n  return False\n\n# ----\n\ncurEA = ScreenEA()\ntgtEA = idaapi.askaddr(curEA, \"Enter target address\")\n#tgtEA = curEA\nif tgtEA is None:\n  exit\n\nf = idaapi.get_func(tgtEA)\nif not f:\n  print \"No function at 0x%x\" % (tgtEA)\n  exit\n\nlimits = idaapi.area_t()\nif not idaapi.get_func_limits(f, limits):\n  print \"No limits in this function?!\"\n  exit\n\nprint \"Scanning function from %x to %x\" % (limits.startEA, limits.endEA)\n\nitEA = limits.startEA\nwhile itEA < limits.endEA:\n  if simplify(itEA):\n    itEA = idaapi.next_head(itEA + 7, limits.endEA)\n  else:\n    itEA = idaapi.next_head(itEA, limits.endEA)\n</code></pre>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "DCoder",
+            "time": "May 22, 2013 at 19:50",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Ilya Matveychikov",
+                    "text": "<span class=\"comment-copy\">Thanks, but I found that your script needs to be corrected as it breaks the code in my case. I'll post the result in a few days.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  call $+5 is\n  <code>\n   5 byte\n  </code>\n  (e8 00000000) \npop reg is\n  <code>\n   1 byte\n  </code>\n  add reg  will be\n  <code>\n   3 and more bytes\n  </code>\n </p>\n <p>\n  if you require\n  <code>\n   call $+5\n  </code>\n  to become\n  <code>\n   mov reg , const\n  </code>\n </p>\n <p>\n  you first need to compute the return address + the value of constant\n </p>\n <p>\n  in your case the address of\n  <code>\n   pop reg + 0xbe96\n  </code>\n </p>\n <p>\n  and then use a\n  <code>\n   5 byte mov REG, computed value\n  </code>\n </p>\n <p>\n  that leaves\n  <code>\n   4 + bytes\n  </code>\n  which you need to nop out so that the execution path remains the same  if you did not nop the bytes then the left out garbage bytes can alter the execution path\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Aug 28, 2013 at 19:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

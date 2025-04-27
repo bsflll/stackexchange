@@ -1,0 +1,52 @@
+{
+    "title": "GS Cookie and exception handlers",
+    "link": "https://reverseengineering.stackexchange.com/questions/19186/gs-cookie-and-exception-handlers",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to understand how this GS cookie implementation is working. From what I've read on the topic, a cookie is set during the prologue then checked again in the epilogue. Well I can see the cookie being set, but it is not like the examples I've seen online.</p>\n<p>prologue:</p>\n<pre><code>push ebp\nmov ebp,esp\npush FFFFFFFF\npush sdk.FAB99E9               ; New Exception handler\nmov eax,dword ptr fs:[0]       ; Old Exception handler\npush eax\nsub esp,14                     ; Allocate 5 DWORDs\npush ebx\npush esi\npush edi\nmov eax,dword ptr ds:[FAC635C] ; The GS cookie (.data section)\nxor eax,ebp\npush eax                       ; The GS Cookie\nlea eax,dword ptr ss:[ebp-C]\nmov dword ptr fs:[0],eax       ; Set new Exception Handler\nmov edi,ecx                    ; Address of a vector passed as arg1\nmov dword ptr ss:[ebp-20],edi  ; local variable\nmov dword ptr ss:[ebp-1C],0    ; local variable\nmov dword ptr ds:[edi],0       ; zero the vector\nmov dword ptr ds:[edi+4],0\nmov dword ptr ds:[edi+8],0\nmov dword ptr ss:[ebp-4],0     ; sets the 0xFFFFFFFF above to 0x0\nmov dword ptr ss:[ebp-1C],1\nmov byte ptr ss:[ebp-D],0\n</code></pre>\n<p>epilogue:</p>\n<pre><code>mov eax,edi\nmov ecx,dword ptr ss:[ebp-C]   ; Old Exception handler\nmov dword ptr fs:[0],ecx       ; Restore Exception handler\npop ecx                        ; Pop the GS Cookie\npop edi\npop esi\npop ebx\nmov esp,ebp\npop ebp\nret \n</code></pre>\n<p>The function commented as \"New Exception Handler\", does contain a Cookie check. But I've never been able to step into it.</p>\n<p>Can anybody explain how this works and what it might look like in C++? Or, more specific to my needs, is this a try/catch block in the original code or added by the compiler?</p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "521",
+    "tags": [
+        "x86",
+        "buffer-overflow",
+        "exception"
+    ],
+    "user": "Twifty",
+    "time": "Aug 29, 2018 at 16:30",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>The function commented as \"New Exception Handler\", does contain a Cookie check. But I've never been able to step into it.</p>\n</blockquote>\n<p>Since the exception handler is called only during an exception, it won't be called during normal execution, so this is expected behavior.</p>\n<p>As for the missing cookie check in the epilog, apparently your function is not using the plain old <code>GS</code> cookie (return address overwrite protection via simple comparison) but only the improved <code>EH+GS</code> cookie (local variables + EH data + return address protection with the extra XOR check). </p>\n<p>Commented function prolog (comments refer to final offsets in the frame):</p>\n<pre><code> push    ebp             ; [EBP+0] save old EBP\n mov     ebp, esp        ; set up ebp frame (ESP=EBP)\n push    0FFFFFFFFh      ; [EBP-4] push initial state\n push    offset SEH_1000BF50 ; [EBP-8] SEH handler for the function\n mov     eax, large fs:0 ; read SEH chain list head\n push    eax             ; [EBP-C] pointer to previous SEH record\n sub     esp, 14h        ; allocate space for local vars and move to the saved registers area.\n push    ebx             ; [EBP-18] save ebx\n push    esi             ; [EBP-1C] save esi\n push    edi             ; [EBP-20] save edi\n mov     eax, ___security_cookie\n xor     eax, ebp        ; xor the cookie to make it harder to forge\n push    eax             ; EBP-24 push XOR'ed cookie\n lea     eax, [ebp-0Ch] ; eax = &amp;SEH_record\n mov     large fs:0, eax ; insert our SEH entry at start of list\n</code></pre>\n<p>final stack frame layout:</p>\n<pre><code>EBP-30 xored EH cookie  \nEBP-2C saved edi\nEBP-28 saved esi\nEBP-24 saved ebx\nEBP-20 &lt;local variables&gt;\nEBP-0C SEH pointer to previous record\\\nEBP-08 SEH handler                    | extended SEH record\nEBP-04 EH state                      /\nEBP+00 saved EBP\nEBP+04 return address\n</code></pre>\n<p>In case of an exception, the check happens in the function-specific SEH handler before jumping to <code>___CxxFrameHandler3</code> which performs C++ exception handling or stack unwinding:</p>\n<pre><code>SEH_1000BF50:\n  mov     edx, [esp+8]    ; (1) get pointer to current SEH record\n  lea     eax, [edx+0Ch]  ; edx &lt;- original frame pointer (function's EBP)\n  mov     ecx, [edx-24h]  ; get xor'ed cookie at orig_ebp-30h\n  xor     ecx, eax        ; xor them together\n  call    @__security_check_cookie@4 ; check expected value\n  mov     eax, offset stru_10034344\n  jmp     ___CxxFrameHandler3   ; handle C++ exceptions/unwinding\n</code></pre>\n<p>(1) gets the second argument of the SEH handler (<code>EstablisherFrame</code>), which points to the active SEH record which was stored at <code>EBP-C</code> in the function, so we adjust it by <code>0Ch</code> to get the original <code>EBP</code> value which is used for xoring with the cookie value (originally stored at <code>[EBP-30h]</code>, or at -24h from the SEH record), and the xor result is compared with the expected value by <code>__security_check_cookie()</code>.</p>\n<p>I guess the compiler decided that there is no need to protect just the return address because there are no buffers in the function (see \"GS Buffers\" in <a href=\"https://msdn.microsoft.com/en-us/library/8dbf701c.aspx\" rel=\"nofollow noreferrer\">MSDN</a>), and any other overwrite will trash the EH cookie and will be detected in case of exception.</p>\n<p>BTW, the <code>state</code> variable at <code>[ebp-4]</code> uniquely identifies a state in the function's execution. This allows the C++ exception handler (e.g. <code>__CxxFrameHandler</code>) to destroy any automatic objects leaving their scope due to the exception and <em>unwind</em> the state to the starting one (usually value -1). So this exception handler setup does not correspond to a \"try/catch block\" but has been added by the compiler for the whole function. However, the state transitions (writes to the try level variable <em>may</em> correspond to try block boundaries (or just scope boundaries).</p>\n<p>For more background on Visual C++  exception handling implementation (both C-style SEH and C++ EH), check out <a href=\"http://www.openrce.org/articles/full_view/21\" rel=\"nofollow noreferrer\">my article</a> on the topic (and its references).</p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Aug 29, 2018 at 20:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Twifty",
+                    "text": "<span class=\"comment-copy\">That's a very informative article. I'm still a little confused though. If the handler is only called during an exception, how is a modified return address detected?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">normally there should be a cookie check at the end of the function. You probably cut it off.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">...or possibly your function only uses <code>EH</code> cookie (which is checked in the exception handler) and no <code>GS</code> cookie.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Twifty",
+                    "text": "<span class=\"comment-copy\">There isn't. The epilogue I posted is where all code branches within the function meet. Everything between is normal code. It could be the EH cookie, TBH I wasn't even aware of such a thing before reading your article.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Okay, I think now it's quite complete</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

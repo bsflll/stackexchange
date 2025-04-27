@@ -1,0 +1,44 @@
+{
+    "title": "💻 This code does not crash on ARM (qemu). Why?",
+    "link": "https://reverseengineering.stackexchange.com/questions/31673/this-code-does-not-crash-on-arm-qemu-why",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I found a couple of interesting integer underflows leading to\n  <code>\n   memcpy()\n  </code>\n  wild copies in a TLV parser process of some random IoT firmware. It is 32-bit ARMv7.\n </p>\n <p>\n  I'm able to emulate the userspace process using qemu and debug it, I can confirm the wild copy by inspecting register state before the\n  <code>\n   memcpy()\n  </code>\n  and memory state after it, but when I let it run, it won't crash. No page fault, no overwritten PC, it just exits.\n </p>\n <p>\n  I tried to come up with some C code that resembles what my code in the field does:\n </p>\n <pre><code>#include <string.h>\n#include <stdlib.h>\n\nvoid parse_stuff(char*);\n\nint main(int argc, char** argv) {\n        char buffer[128];\n        char c;\n\n        while (1) {\n                parse_stuff(buffer);\n                c = getc(stdin);\n                if (c == 'e')\n                        return 0;\n        }\n\n}\n\nvoid parse_stuff(char* buf){\n        char* heap = malloc(0x1000);\n        for(int i=0;i<0x1000;i++)\n                heap[i] = 0x41;\n\n        memcpy(buf, heap, 0xffffffff);\n}\n\n</code></pre>\n <p>\n  <em>\n   If I compile this and run it in qemu, it won't crash.\n  </em>\n </p>\n <p>\n  There is a tight loop and the parser routine is called from that, so I'm guessing if the parse_stuff stack frame is a leaf, then a stack bof could only happen when the caller is the one trying to restore the PC to its caller (entry /\n  <code>\n   libc_start_main\n  </code>\n  , whatever), but I'm still puzzled by this, because on x86-64, this easily crashes so somehow the ARM binary or maybe the QEMU environment does not trigger that page violation that I'm expecting to happen due to the wild\n  <code>\n   memcpy()\n  </code>\n  , even if there is no PC control due to the cyclometric situation this way.\n </p>\n <p>\n  Has any of you run into something like this?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "145",
+    "tags": [
+        "binary-analysis",
+        "arm",
+        "buffer-overflow",
+        "stack",
+        "firmware-analysis"
+    ],
+    "user": "Attila Szász",
+    "time": "Mar 14, 2023 at 19:51",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n Hi and welcome to RE.SE. Uhm, I am surprised that this even compiles for you (\n <code>\n  #include <stdio.h>\n </code>\n is missing and a cast of the\n <code>\n  malloc()\n </code>\n return value). What compiler do you use (also exact version)? What compiler and linker options? Also, are you certain that this is the exact code you are observing and that this isn't perchance some sort of implementation where the 0xffffffff for the length happens to mean -1 and some \"magic\" happens (such as looking for a terminating character as with strings)?\n <a href=\"https://godbolt.org/z/Machnnr8Y\" rel=\"nofollow noreferrer\">\n  godbolt.org/z/Machnnr8Y\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "<html><body><span class=\"comment-copy\">\n Which level of the optimizations are you using?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "<html><body><span class=\"comment-copy\">\n Can you add to the question the exact command line you running qemu and compiler with?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <strong>\n   UPDATE:\nOk, so the older glibc noncompliance I re-discovered was actually fixed back then, and it is a CVE by itself, CVE-2020-6096:\n  </strong>\n </p>\n <p>\n  <a href=\"https://github.com/bminor/glibc/commit/beea361050728138b82c57dda0c4810402d342b9\" rel=\"nofollow noreferrer\">\n   https://github.com/bminor/glibc/commit/beea361050728138b82c57dda0c4810402d342b9\n  </a>\n </p>\n <p>\n  Ok, so I resolved this.\nThe glibc memcpy implementation in place has this code:\n </p>\n <p>\n  <a href=\"https://github.com/rilian-la-te/glibc/blob/master/sysdeps/arm/armv7/multiarch/memcpy_impl.S#L300\" rel=\"nofollow noreferrer\">\n   https://github.com/rilian-la-te/glibc/blob/master/sysdeps/arm/armv7/multiarch/memcpy_impl.S#L300\n  </a>\n </p>\n <pre><code>    mov dst, dstin  /* Preserve dstin, we need to return it.  */\n    cmp count, #64\n    bge .Lcpy_not_short\n</code></pre>\n <p>\n  This is signed comparison, so a 0xffffffff-style wild copy is not possible, becuase it is treated as a short copy. Feels weird to perform a signed comparison of a size_t parameter in assembly without any additional comments by glibc authors, but it ends up being bit of a security measure.\n </p>\n <p>\n  On my system, though,\n </p>\n <pre><code>CHAR_BIT       = 8\nMB_LEN_MAX     = 16\n\nCHAR_MIN       = +0\nCHAR_MAX       = +255\nSCHAR_MIN      = -128\nSCHAR_MAX      = +127\nUCHAR_MAX      = 255\n\nSHRT_MIN       = -32768\nSHRT_MAX       = +32767\nUSHRT_MAX      = 65535\n\nINT_MIN        = -2147483648\nINT_MAX        = +2147483647\nUINT_MAX       = 4294967295\n\nLONG_MIN       = -2147483648\nLONG_MAX       = +2147483647\nULONG_MAX      = 4294967295\n\nLLONG_MIN      = -9223372036854775808\nLLONG_MAX      = +9223372036854775807\nULLONG_MAX     = 18446744073709551615\n\nPTRDIFF_MIN    = -2147483648\nPTRDIFF_MAX    = +2147483647\nSIZE_MAX       = 4294967295\nSIG_ATOMIC_MIN = -2147483648\nSIG_ATOMIC_MAX = +2147483647\nWCHAR_MIN      = +0\nWCHAR_MAX      = +4294967295\nWINT_MIN       = 0\nWINT_MAX       = 4294967295\n</code></pre>\n <p>\n  Meaning that a memcpy of 2147483647+1 bytes is treated like this as well as a short copy that doesn't actually do much, even though that 'n' is well within SIZE_MAX. Not a practical thing to do, and this will mean that src and dst memory areas do overlap, but still feels like noncompliance.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Attila Szász",
+            "time": "Mar 16, 2023 at 13:43",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

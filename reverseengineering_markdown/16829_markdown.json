@@ -1,0 +1,68 @@
+{
+  "title": "Disassemblers resolving (ELF) section names",
+  "link": "https://reverseengineering.stackexchange.com/questions/16829/disassemblers-resolving-elf-section-names",
+  "content": "I'm working with linux executables and was just wondering how it is that section names are resolved to addresses upon disassembly of an ELF.\n\nFor example take some random disassembly output from objdump, \n\n```\n  4002b5:       00 00                   add    %al,(%rax)\n  4002b7:       00 67 55                add    %ah,0x55(%rdi)\n  4002ba:       61                      (bad)  \n  4002bb:       10                      .byte 0x10\n\nDisassembly of section .dynsym:\n\n00000000004002c0 <.dynsym>:\n        ...\n  4002d8:       9b                      fwait\n  4002d9:       00 00                   add    %al,(%rax)\n  4002db:       00 12                   add    %dl,(%rdx)\n        ...\n  4002ed:       00 00                   add    %al,(%rax)\n  4002ef:       00 32                   add    %dh,(%rdx)\n  4002f1:       00 00                   add    %al,(%rax)\n  4002f3:       00 12                   add    %dl,(%rdx)\n        ...\n  400305:       00 00                   add    %al,(%rax)\n  400307:       00 17                   add    %dl,(%rdi)\n\n```\nhow has it, if from a heuristic perspective, detected that the section at that address is called dynsm? The same goes for .text, .bss, and even functions listed by objdump, such as 'main'.\n\nHow would I reproduce this if I were to write a disassembly tool + executable analyser myself?\n\nThanks\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "disassembly",
+    "linux",
+    "elf"
+  ],
+  "user": "Marius.pharoe",
+  "time": "Nov 24, 2017 at 0:01",
+  "comments": [
+    {
+      "user": "yaspr",
+      "text": "For ELF binary files, the compiler inserts debug information such as function names, source lines, ... using a debug format called DWARF. The disassembler doesn't guess the name, it reads it from the DWARF info associated to an assembly block/section. check out the documentation : dwarfstd.org. Also, the answer below covers only sections - it is incomplete.",
+      "time": null
+    },
+    {
+      "user": "julian",
+      "text": "@yaspr this question is specifically about how to retrieve section information. It is not about debugging or functions. DWARF and debug symbols are not relevant in this particular case.",
+      "time": null
+    },
+    {
+      "user": "Marius.pharoe",
+      "text": "@yaspr could you verify whether this debug information is inserted by default? Reading into DWARF, and the GCC compiler, GCC does not do this by default (gcc -o).",
+      "time": null
+    },
+    {
+      "user": "yaspr",
+      "text": "@SYS_V : \"... and even functions listed by objdump...\", it is somehow relevant but as I said, your answer is thorough and the DWARF is only complementary with some magic.",
+      "time": null
+    },
+    {
+      "user": "yaspr",
+      "text": "@Marius.pharoe DWARF info are not there by default, but they are very helpful (gcc.gnu.org/onlinedocs/gcc/Debugging-Options.html).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Note that the in example in the question, data is being disassembled as code. The .dynsym section holds the dynamic linking symbol table and does not contain code.\n\nIn this case objdump prints the virtual address 00000000004002c0 and the name .dynsym because this is the information stored in the section header for that particular section (technically, section names are strings stored in the section header string table .shstrtab, but this is not so important in this case). If there was no section header for this section or if there was no section header table present in the binary, objdump would not be able to output this information. \n\nThere is no need for heuristics unless the section header table is not present in the binary. This is unusual, but has been observed to be the case in certain Linux ELF binaries (viruses) in order to thwart analysis since gdb, objdump, and other Binary File Descriptor-based utilities (thank you Igor Skochinsky for the correction) rely on information in the section header table to parse the binary.\n\nRelevant documentation can be found in the System V ABI (generic) beginning in chapter 4 \"Object Files\" (page 44), as well as the manual page for ELF.\n\nMore specifically:\n\nAdditionally,\n\nHere is a high-level overview of what is involved in locating information contained in an ELF binary's individual section headers. The documentation cited is for ELF32 binaries, but the process is the same with ELF64 binaries.\n\nThe location of the section header table is given in the ELF header:\n\n\n\nThe ELF header is a struct and the offset of the section header table is stored in a member called e_shoff:\n\n\n\n\n\n```\n$ readelf -h /bin/ls\nELF Header:\n  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 \n  Class:                             ELF64\n  Data:                              2's complement, little endian\n  Version:                           1 (current)\n  OS/ABI:                            UNIX - System V\n  ABI Version:                       0\n  Type:                              EXEC (Executable file)\n  Machine:                           Advanced Micro Devices X86-64\n  Version:                           0x1\n  Entry point address:               0x404890\n  Start of program headers:          64 (bytes into file)\n  Start of section headers:          108288 (bytes into file)   <---------- e_shoff\n  Flags:                             0x0\n  Size of this header:               64 (bytes)\n  Size of program headers:           56 (bytes)\n  Number of program headers:         9\n  Size of section headers:           64 (bytes)\n  Number of section headers:         28\n  Section header string table index: 27\n\n```\nThe section header table is usually located at the end of the binary following all of the sections:\n\n\n\nAs stated in the documentation and mentioned previously, every section has an entry in the section header table. Each entry is a structure that contains information about the section, including its name and its virtual address when the binary is mapped into memory. The name of the section is stored in a struct member called sh_name, and the address information is stored in a struct member called sh_addr:\n\n\n\n\n\n\n\nRetrieving this information is just a matter of correctly parsing these structures within a given binary.\n\nMore information can be found here:\n\n",
+      "votes": "1",
+      "user": "julian",
+      "time": "Nov 24, 2017 at 16:24",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "yaspr",
+          "text": "Thorough explanation yet incomplete given it only covers sections. The DWARF or debug symbols aren't cited and to be honest, that's where the magic happens.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "in fact, readelf works fine on files without section headers (unlike BFD-based objdump or gdb)",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@IgorSkochinsky Thank you, corrected. If there are any other errors, please let me know.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

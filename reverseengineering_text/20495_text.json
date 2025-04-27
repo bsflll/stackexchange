@@ -1,0 +1,66 @@
+{
+    "title": "Solve a function with angr [closed]",
+    "link": "https://reverseengineering.stackexchange.com/questions/20495/solve-a-function-with-angr",
+    "content": "Closed. This question needs to be more focused. It is not currently accepting answers.\n                                \n                            \n\n\n\n\n\n\n\n\n\n\n\nWant to improve this question? Update the question so it focuses on one problem only by editing this post.\n\n\nClosed 6 years ago.\n\n\n\n\n\n\n\n                        Improve this question\n                    \n\n\n\nLook at this c program:\n<pre><code>#include <stdio.h>\n\nint my_function(int a, int b);\n\nint my_function(int a, int b)\n{\n    // Imagine a very complex calculation on 'a' and 'b'\n    if (a==0x41 && b==0x42)\n    {\n        return 1;\n    }\n    return 0;\n}\n\n\nint main(int argc , char *argv[])\n{\n    int c = 10;\n    int d = 10;\n    // Lot of stuff, including UI\n    if (my_function(c,d)==1)\n    {\n        printf(\"Good\n\");\n    }\n    else\n    {\n        printf(\"Wrong !\n\");\n    }\n    return 0;\n}\n</code></pre>\nSuppose i have compiled this program and i do not have source code.\nHere is what is see with a disassembler:\n<pre><code>...\n0x00001180      e8b0ffffff     call sym.my_function\n....\n\n|           ; var int local_8h @ rbp-0x8\n|           ; var int local_4h @ rbp-0x4\n|           ; CALL XREF from 0x00001180 (main)\n|           0x00001135      55             push rbp\n|           0x00001136      4889e5         mov rbp, rsp\n|           0x00001139      897dfc         mov dword [local_4h], edi\n|           0x0000113c      8975f8         mov dword [local_8h], esi\n|           0x0000113f      837dfc41       cmp dword [local_4h], 0x41  ; [0x41:4]=0x4000000 ; 'A'\n|       ,=< 0x00001143      750d           jne 0x1152\n|       |   0x00001145      837df842       cmp dword [local_8h], 0x42  ; [0x42:4]=0x40000 ; 'B'\n|      ,==< 0x00001149      7507           jne 0x1152\n|      ||   0x0000114b      b801000000     mov eax, 1\n|     ,===< 0x00001150      eb05           jmp 0x1157\n|     |||   ; JMP XREF from 0x00001143 (sym.my_function)\n|     |||   ; JMP XREF from 0x00001149 (sym.my_function)\n|     |``-> 0x00001152      b800000000     mov eax, 0\n|     |     ; JMP XREF from 0x00001150 (sym.my_function)\n|     `---> 0x00001157      5d             pop rbp\n\\           0x00001158      c3             ret\n</code></pre>\nWhat i want to do is to write a python/angr program which will try to solve this function and tell me which argument i should send to the function in order to return 1.\nIn other words, i want to ask angr this question:\n\"Start your analyse at 0x00001135 address.\nTell me what i should put in rbp-0x8 and rbp-0x4 memory addresses in order to reach 0x0000114b code\". \nThanks\n* EDIT WITH STRING *\n<pre><code>#include <stdio.h>\n#include <string.h>\n\nint my_function(char *s);\n\nint my_function(char *s)\n{\n        if (strlen(s)!=4)\n        {\n                return 0;\n        }\n\n        for (int i=0;i<4;i++)\n        {\n                s[i]++;\n        }\n\n        if (strncmp(s,\"b{fs\",4)==0)\n        {\n                return 1;\n        }\n        return 0;\n}\n\n\nint main(int argc , char *argv[])\n{\n        if (my_function(argv[1])==1)\n        {\n                printf(\"Good\n\");\n        }\n        else\n        {\n                printf(\"Wrong !\n\");\n        }\n        return 0;\n}\n</code></pre>\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "angr"
+    ],
+    "user": "Bob5421",
+    "time": "6 years ago",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "You seem to be familiar enough with RE.SE to know we provide assistance, not complete solutions without previous attempts. What have you tried doing and why didn't that work?\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "Currently, this is too broad. Please provide details, such as the code for the function you want to analyze\n",
+            "time": null
+        },
+        {
+            "user": "Bob5421",
+            "text": "okay see my edit\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "thanks for your example scenario.\nAs a disclamer, I compiled your example source code with clang and my disassembly looks like this:\n\nThen all you need is a small python script like this:\n<pre><code>import angr\n\nfunction_start = 0x4004f0\nfunction_target = 0x40050e\nfunction_end = 0x400521\n\np = angr.Project(\"./a.out\")\nstate = p.factory.blank_state(addr=function_start)\na = state.solver.BVS('a', 32)\nb = state.solver.BVS('b', 32)\nstate.regs.esi = b\nstate.regs.edi = a\n\nsm = p.factory.simulation_manager(state)\nsm.explore(find=function_target, avoid=function_end)\n\nfound_path = sm.found[0]\nprint 'a: %d\nb: %d' % (found_path.state.se.eval(a), found_path.state.se.eval(b))\n</code></pre>\nPlease note this example is trivial, but in any other case you should try to add as many constraints on values as possible.\nedit\nHere we go again with stack variable conditions. For this sake, we just skip the first 4 instructions of the function:\n<pre><code>import angr\n\nfunction_start = 0x4004fa\nfunction_target = 0x40050e\nfunction_end = 0x400521\n\np = angr.Project(\"./a.out\")\nstate = p.factory.blank_state(addr=function_start)\na = state.solver.BVS('a', 32)\nb = state.solver.BVS('b', 32)\nstate.mem[state.regs.rbp - 0x8].uint32_t = a\nstate.mem[state.regs.rbp - 0xc].uint32_t = b\n\nsm = p.factory.simulation_manager(state)\nsm.explore(find=function_target, avoid=function_end)\n\nfound_path = sm.found[0]\nprint 'a: %d\nb: %d' % (found_path.state.se.eval(a), found_path.state.se.eval(b))\n</code></pre>\n",
+            "votes": "5",
+            "user": "Nordwald",
+            "time": "Jan 30, 2019 at 8:31",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">thanks for your answer. Which tool provides your screenshot ? how should i do if i want to solve from memory addresses (relative to esp/ebp or not) instead of registers ? Thanks</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nordwald",
+                    "text": "<span class=\"comment-copy\">@Bob5421 The screenshot was taken from binaryninja, but there are plenty of tools which do this (IDA free 7.0, radare for example). I'll edit my answer with another solution for the stack variables</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">Okay thanks i have forgotten to ask you something. What should i do if the variables are not int but buffer (strings)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nordwald",
+                    "text": "<span class=\"comment-copy\">@Bob5421 It does not change a lot. You can pass cast_to=str to an eval call to get an actual string. If you have any problem with it, feel free to ask ;)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">I have tried: \"state.mem[state.regs.rbp - 0xc].string=state.solver.BVS('a', 8*15)\" and i get this error: \"AttributeError: 'SimTypeString' object has no attribute 'store'\"</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,88 @@
+{
+    "title": "Injecting C++ code, while also maximizing compatibility with other injections",
+    "link": "https://reverseengineering.stackexchange.com/questions/22155/injecting-c-code-while-also-maximizing-compatibility-with-other-injections",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Using the New Vegas Script Extender C++ API for Fallout New Vegas, I am able to write to the process' memory directly at runtime through a .dll plugin that's loaded by the NVSE injector. But it is not a debugger, like CheatEngine, so there's no automatic handling of inserting new code to an existing assembly function.</p>\n<p>Beginning of the assembly function, <code>TryOpenPipboy</code>, I want to inject code into: <a href=\"https://i.sstatic.net/xIqmA.png\" rel=\"nofollow noreferrer\">https://i.sstatic.net/xIqmA.png</a></p>\n<p><code>EquipPlayerPipboy()</code> function I want to inject: <a href=\"https://i.sstatic.net/Gaujf.png\" rel=\"nofollow noreferrer\">https://i.sstatic.net/Gaujf.png</a></p>\n<p>The game has a loop called <code>MainUILoop</code> which runs every frame, and when the player presses tab without holding it down, <code>TryOpenPipboy</code> is called.</p>\n<p>My guess is that I need to somehow create a new empty block of memory, edit a copy of the original <code>TryOpenPipboy</code> function, then replace all <code>TryOpenPipboy</code> calls with my modified variant. But that would make a hard incompatibility with any other NVSE plugins that also modify the MainUILoop in any way, as well as any that edit <code>TryOpenPipboy</code>.</p>\n<p>Edit: Another possible way would be to change the jmp assembly to my C++ function, then call <code>TryOpenPipboy</code> from my function. That would mean <code>TryOpenPipboy</code> is still called, but is unmodified, increasing potential compatibility.</p>\n<p>So how should I go about doing this?</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "459",
+    "tags": [
+        "windows",
+        "x86",
+        "c++",
+        "patching",
+        "game-hacking"
+    ],
+    "user": "FiftyTifty",
+    "time": "Sep 19, 2019 at 20:04",
+    "comments": [
+        {
+            "user": "Avery3R",
+            "text": "<span class=\"comment-copy\">Can you copy paste the assembly/code instead of using a screenshot?</span>",
+            "time": null
+        },
+        {
+            "user": "FiftyTifty",
+            "text": "<span class=\"comment-copy\">Sorry about that. Here is the assembly code for <code>TryOpenPipboy</code>: <a href=\"https://pastebin.com/feMycWYW\" rel=\"nofollow noreferrer\">pastebin.com/feMycWYW</a></span>",
+            "time": null
+        },
+        {
+            "user": "FiftyTifty",
+            "text": "<span class=\"comment-copy\">And here is the assembly code for where <code>TryOpenPipboy</code> is called: <a href=\"https://pastebin.com/mT0szzek\" rel=\"nofollow noreferrer\">pastebin.com/mT0szzek</a></span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">@FiftyTifty you can edit the question to add the code inline instead of images or external links (use code formatting)</span>",
+            "time": null
+        },
+        {
+            "user": "Pickle Rick",
+            "text": "<span class=\"comment-copy\">So basically you just want a hook? There are a huge number of ways to achieve this but the simplest is probably a JMP hook. I'm happy to explain the details of how it works if you want, but I suggest just using an existing library like MinHook either way. Note that if this game is online then it's very likely you'll be kicked or banned, CRC hashes on code sections is about the simplest detection of unwanted modifications you can have.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you just want to run code before or after <code>TryOpenPipboy</code> is called, you can overwrite the prologue of the function with a <code>jmp</code> to your function. Before you overwrite it, copy the instructions in the prologue to a new memory buffer, and add a jump to the rest of the function on the end, this is called a trampoline. You can use the trampoline to call the original function.</p>\n<p>Before:</p>\n<pre><code>:originalFunction\npush ebp ;55\nmov ebp, esp ;89 E5\nsub esp, 0x40 ;83 EC 40\n;...\nret\n</code></pre>\n<p>After patching:</p>\n<pre><code>:originalFunction\njmp yourFunction ;?? ?? ?? ?? ??\nnop ;this used to be the 0x40 byte at the end\n:trampolinetarget\n;...\nret\n\nyourFunction:\n;do stuff\ncall trampoline ;calls the original function\n;do stuff\nret\n\ntrampoline:\npush ebp\nmov ebp, esp\nsub esp, 0x40\njmp trampolinetarget\n</code></pre>\n<p>If something else tries to hook the original function, they'll just overwrite that jmp instruction, and their trampoline will call your function. Microsoft's <a href=\"https://www.microsoft.com/en-us/research/project/detours/\" rel=\"nofollow noreferrer\">Detours</a> library can handle all of this for you.</p>\n</div>",
+            "votes": "1",
+            "user": "Avery3R",
+            "time": "Sep 19, 2019 at 20:04",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "FiftyTifty",
+                    "text": "<span class=\"comment-copy\">The examples provided in the Detours library are not that intuitive, especially with the lack of fully fledged documentation, so I tried to make use of NVSE's WriteRelCal() function, and C++'s ThisStdCall(), but I'm hopelessly lost as there's no documentation for them either. I did however find a more simple example of Detours: <a href=\"https://github.com/Alenett/TES-Reloaded-Source/blob/master/TESReloaded/FlyCam.cpp\" rel=\"nofollow noreferrer\">github.com/Alenett/TES-Reloaded-Source/blob/master/TESReloaded/…</a>  So how would I use this? I've got the address where the ASM function is called, and I want to insert my own C++ function in the call's place, and then call the ASM function from it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "FiftyTifty",
+                    "text": "<span class=\"comment-copy\">Here is the project as it is now: <a href=\"https://mega.nz/#!HgMm2YJK!b75ABK-s4wuu63cm8FIxkNmMinmWrVW7xiLBibQv42E\" rel=\"nofollow noreferrer\">mega.nz/#!HgMm2YJK!b75ABK-s4wuu63cm8FIxkNmMinmWrVW7xiLBibQv42E</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Avery3R",
+                    "text": "<span class=\"comment-copy\">Take a look at this example, <a href=\"https://github.com/microsoft/Detours/blob/master/samples/opengl/ogldet.cpp\" rel=\"nofollow noreferrer\">github.com/microsoft/Detours/blob/master/samples/opengl/…</a> they start a transaction, tell the library which thread is the current thread, give it a pointer to the original function that will be replaced with a pointer to the trampoline, then commit it. When they commit it, the first thing it does is suspends all other threads, this is to prevent race conditions and is why you need to tell it what thread you're running on. After that, it does similar patches to what I showed in my answer. Just give it the addrof the func you want to hook, and ur func</span>",
+                    "time": null
+                },
+                {
+                    "user": "FiftyTifty",
+                    "text": "<span class=\"comment-copy\">Thanks for that, the explanation cleared it up for me. However, Detours now throws four errors when compiling, all of them being <b>unresolved external symbol</b>. That error should just apply when calling a function from an <b>#include</b> that isn't exposed, but that's not the case here. They're too long to post in a comment, so I put them on pastebin: <a href=\"https://pastebin.com/fT7jk1Um\" rel=\"nofollow noreferrer\">pastebin.com/fT7jk1Um</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Anonymous Anonymous",
+                    "text": "<span class=\"comment-copy\">@FiftyTifty Some of the errors seem to originate from not linking with <code>detours.lib</code> (or a similar name). But especially the first and the last seem to be different. Could you post the exact code, including compiler-options here?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Intel PIN in Probe Mode can do just. You can inject C code and PIN will even handle the context switching for you. </p>\n</div>",
+            "votes": "0",
+            "user": "MkInitCpIO",
+            "time": "Sep 21, 2019 at 6:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,26 @@
+{
+  "title": "wzr register usage in main method on ARM",
+  "link": "https://reverseengineering.stackexchange.com/questions/33262/wzr-register-usage-in-main-method-on-arm",
+  "content": "I have this C code :\n\n```\n\nint foo(){\n    int a = 1;\n    int b = 1;\n    return a + b;\n}\n\n\nint main() {\n    return 2;\n}\n\n```\nAfter disassembling it shows:\n\n```\nfoo():\n        sub     sp, sp, #16\n        mov     w8, #1\n        str     w8, [sp, #12]\n        str     w8, [sp, #8]\n        ldr     w8, [sp, #12]\n        ldr     w9, [sp, #8]\n        add     w0, w8, w9\n        add     sp, sp, #16\n        ret\n\nmain:\n        sub     sp, sp, #16\n        str     wzr, [sp, #12]\n        mov     w0, #2\n        add     sp, sp, #16\n        ret\n\n```\nWhy does main method use wzr register on this line str     wzr, [sp, #12] while foo method doesn't?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "68",
+  "tags": [
+    "disassembly",
+    "arm",
+    "arm64"
+  ],
+  "user": "pacman",
+  "time": "Oct 15, 2024 at 21:55",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I'll take guess that you are using clang and running it without optimisations.\nNormally when looking at generated code without optimisations, there is lots of seeming superfluous code output and that's the simple answer\n\nHere though, there is more going on.  This is clear to see if we change the source code a bit.\n\n```\nint main2() {\n    return 42;\n}\n\nint main() {\n    return 42;\n}\n\n```\nDespite two, on the face of it, identical functions, we see different code output.\n\n```\nmain2:\n    mov     w0, #42\n    ret\n\nmain:\n    sub     sp, sp, #16\n    str     wzr, [sp, #12]\n    mov     w0, #42\n    add     sp, sp, #16\n    ret\n\n```\nThis difference is also visible in clang's LLVM IR output, which is the precursor to the generated assembly code.\n\n```\ndefine dso_local i32 @main2() {\nentry:\n  ret i32 42\n}\n\ndefine dso_local i32 @main() {\nentry:\n  %retval = alloca i32, align 4\n  store i32 0, ptr %retval, align 4\n  ret i32 42\n}\n\n```\nThis difference is highly likely because main is a special function in C.\n\nThis answer on stackoverflow explains what makes main special.  Of particular interest is the fact that main doesn't need to have an explicit return statement and, in the absence of one, it is specified in the standard to return zero.\n\nIt is highly likely that what is seen in the LLVM IR and assembly language output above is part of clang's preparation to handle this case by setting up a local variable with value zero.\n\nIf you compiled with optimisations, the difference will disappear.\n\nWhere this gets a little more unexpected is we look at 2 more variations -\n\nConsistent with the above, in the first case, clang sets up the %retval variable but doesn't use it.\n\nHowever, in the second case, and somewhat counter-intuitively, when the code is relying on the implicit behaviour clang skips setting up %retval completely and simply returns a zero directly.\n\nFirst case -\n\n```\n// main explicitly returning 0\n\n// C\n\nint main() {\n    return 0;\n}\n\n// LLVM IR\n\ndefine dso_local i32 @main() {\nentry:\n  %retval = alloca i32, align 4\n  store i32 0, ptr %retval, align 4\n  ret i32 0\n}\n\n// AArch64\n\nmain:\n    sub     sp, sp, #16\n    mov     w0, wzr\n    str     wzr, [sp, #12]\n    add     sp, sp, #16\n    ret\n\n```\nSecond case -\n\n```\n// main implicitly returning 0\n\n// C\n\nint main() {\n}\n\n// LLVM IR\n\ndefine dso_local i32 @main() {\nentry:\n  ret i32 0\n}\n\n// AArch64\nmain:\n    mov     w0, wzr\n    ret\n\n```\nThere are a couple of very similar questions on stackoverflow\nhere and here\n\n",
+      "votes": "5",
+      "user": "Ian Cook",
+      "time": "Oct 20, 2024 at 21:55",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

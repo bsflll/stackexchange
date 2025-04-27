@@ -1,0 +1,76 @@
+{
+  "title": "Decoding an ancient format",
+  "link": "https://reverseengineering.stackexchange.com/questions/3059/decoding-an-ancient-format",
+  "content": "It's a very interesting file format may greatly satisfies binary archaeologists. sample file\n\nThis file format was created in 90s to archive customer created AutoCAD components library like window, door and column. The first line is in plain text xxxx DWG library 1.0, it has been removed from the sample file to avoid any problem. The company xxx already gone, not sure if anyone still hold the trademark though. Lots of my father's design documents depends on it.\n\nThis file format has a companion index/reference file which is a simple dBase III. The working platform is DOS/Windows.\n\nI spent 2 days tried to understand the format. While still far from the full picture here are what I've got:\n\nProgress The python lzw seems to be relatively recent. So I looked into older LZW implementation in last century. So I found the lzw module of libtiff, and it's python implementation. (have to use the bitarray module inside of it: ver 0.35 instead of the most recent ver). I tried this python library with the brute force method (thanks to @Attila), the blob is indeed decode-able from 28h (based: \"AS LZW\"). And most importantly, the decoded starts with \"AC10\", AutoCAD DWG format! However, it only decoded around 30% of the blob.\n\nProgress 2 Tried lzw from golang, with the decoding configuration order:LSB and litWid: 2, decoded around 3x more data. Will report more result tomorrow.\n\nProgress 3 The dwg decoded with python LibTiff LZW is a valid AutoCAD DWG. AutoCAD 2014 reported the one decoded from golang LZW invalid. Now I guess the rest part of the blob is image thumbnail of the vector. Will decode all 50 blobs and report back.\n\nThe blobs decoded with the libtiff lzw (lzw.py) are not valid although they have correct header \"AC10\". \n\nI looked carefully into the lzw.py inside of pylibtiff, and found the first two lines:\n\nSo I modified my codes to use tif_lzw to decode the blob. No luck. This time, I read the code carefully, line by line. \n\nAt the first glance, the file has two more Python wrapper methods Py_decode and Py_encode. Then I noticed the disabled methods LZWDecodeCompat for Old-style LZW codes. It's kind of interesting. So I modified the module, enabled LZWDecodeCompat and use it in the Py_decode method. the tif_lzw.decode method requires an extra parameter size. Naturally I used m1 (for the first blob, i used 0x4c07). The decoded result have \"AC10\" header, and opened successfully in AutoCAD(mac ver) but show nothing. AutoCAD says it's a Trusted DWG and contains 1 block which I couldn't find. So I spent a good few hours installed Windows and AutoCAD. bingo! there is a column drawing! There are still remaining questions. e.g. still not able to find the right size for tif_lzw.decode method call.\n\nprogress decoded all 50 binaries with:\n\n```\nstruct FILE {\n\n    char banner[26];\n    char f1[2];\n    FSkip(4); //char sp[4];\n\n    local int count = 0;\n    local int pos;\n    local char sp[36];\n    local char SP[36];\n    Memset(SP, 0, 36);\n\n    while(true){\n        pos = FTell();\n        ReadBytes(sp, pos, 36);\n\n        if(Memcmp(sp, SP, 36) == 0){\n            break;\n        }\n        count ++;\n        FSeek(pos);\n\n        struct {\n            char name[32];\n            DWORD loc;\n        } index;\n    }\n\n\n    FSkip(36); //char sp2[36];\n    struct Binary(int len){\n            char banner[11];\n            WORD size;\n            FSkip(7);//char sp[7];\n            char m3[2]; // CRC16?\n            char m4[2]; // always AA 08\n            FSkip(16);\n            char lzw[len];\n    };\n\n    local int i;\n\n    for(i = 1; i < count; i++){\n        Binary b(index[i].loc - index[i-1].loc - 40);\n    }\n\n    if(count>0){\n        Binary b(FileSize() - index[i-1].loc - 40);\n    }\n} file;\n\n```\n",
+  "votes": "9",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "binary-analysis",
+    "file-format"
+  ],
+  "user": null,
+  "time": "Nov 23, 2013 at 20:49",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "The best way is to reverse the program which reads or writes the format. Do you have it?",
+      "time": null
+    },
+    {
+      "user": "wangii",
+      "text": "unfortunately, I don't have the program to read/write it. it's a software my dad used 12 years ago in china.",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "Literally the point that you took out the company name is pretty bad. See, you want us to help you but you make it artificially worse than what you have. Every single piece of circumstantial information matters in such a scenario (speaking from experience), especially if you have no piece of software able to read/write the file. Even if you had left the first line and then exchanged the company name with letters x (upper/lowercase as it was) in place of the original would have been better. For all we know the key could be part of the first line.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "Not in Little Endian; then it's only 0x74C. You can find your magic string 0x1B bytes before where it points to -- all of the 50 offsets in your sample do. The string is the same for all offsets, except for the 11th and 12th bytes. Also, the next 20 bytes (at least) are the same, but maybe this is only because the first x bytes of the compressed data is.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "Also some small variation in bytes 20 and 21 ... Just confirmed the first 40 data bytes are all the same; only the very last set differs. Apart from that one, the first 52 bytes are all the same. I'll LZW-decode the data next, will report back with findings (if any).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Consider changing your Python script to run LZW decompression from various offsets, that is in  a brute force manner.\n\n",
+      "votes": "4",
+      "user": "Attila",
+      "time": "Nov 20, 2013 at 12:50",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "wangii",
+          "text": "brute force is indeed very useful :) (see updates)",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Feel free to edit this community-wiki \"answer\".\n\nNB: Only writing this as answer because it's too long for a comment. I think given the bits and pieces of information there is no answer unless you get lucky and someone happens to know this particular file format.\n\nIf we assume that the file format has indeed something to do with DWG, we can learn a lot by looking into old or new specifications (Google-search for OpenDesign_Specification_for_.dwg_files.pdf) for DWG and finding out about their used file format. Of particular interest are the data types (see \"BIT CODES AND DATA DEFINITIONS\" and \"Compression\" of the linked paper) and algorithms. For example in the mentioned section we find:\n\nThis is pretty valuable information and helps you confirm findings.\n\nAlso interesting, assuming that this holds for your case:\n\nBricsCAD and others provide SDKs and libraries (and products) which they claim understand also old DWG formats.\n\nBut back to investigating the format yourself.\n\nYou'll want to get handy with a tool such as 010 Editor that allows you to create a template and literally develop your understanding of the file format this way.\n\nNow, you have deprived us of vital information by stating that the first line is text but not giving a length or anyway an idea how you come to the conclusion that it's plain text.\n\nThere are for example 50 occurrences of AS LZW 1.0 in the file. Still, I count more occurrences of the mysterious ASCII numbers at the beginning. Possible that this counts some markers as well that aren't in need of the AS LZW 1.0 bit.\n\nAlso those decimals start out at 2. Why?\n\nI'm also unable to follow your description, to be honest. If the first part are file names and they are separated by 00, then why are there so many occurrences of 00 in that part?\n\nArchStar explains the AS LZW 1.0 of course. It's probably a variation on the \"normal\" LZW then. LZW could of course also stand for something unrelated, like the author's initials or their name for something.\n\nConcerning the update about CEL/FLIC files. If we assume that the information here is correct, we should see something useful here. But it looks like gibberish indeed.\n\n\n\nSo I agree, likely no FLIC file. Still, keep in mind that DWG comes from the same creator. This may not be a coincidence.\n\nUpdate concerning the findings about the LZW data. From Wikipedia (here):\n\n(Emphasis added.)\n\n",
+      "votes": "3",
+      "user": "5 revs, 2 users 94%0xC0000022L",
+      "time": "Jan 2, 2014 at 22:14",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "wangii",
+          "text": "Good point about \"AS LZW\". I thought it was \"as lzw\" instead of \"A(rch)S(tar) lzw\"",
+          "time": null
+        },
+        {
+          "user": "wangii",
+          "text": "I don't think m1, m2, m3 or anything prior to \"AS LZW 1.0\" + 28h are kind of key to decode the LZW, b/c if so blobs should not have same exact \"header\" 0083 0c89 0123 460d 0008 113e 08c0",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

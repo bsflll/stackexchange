@@ -1,0 +1,61 @@
+{
+  "title": "Reverse engineering checksum from RS-485 device",
+  "link": "https://reverseengineering.stackexchange.com/questions/20686/reverse-engineering-checksum-from-rs-485-device",
+  "content": "Attempting to reverse-engineer a checksum for a serial timing device that updates a display. Protocol is partly understood, however the checksum calculation specified does not produce the expected value.\n\nI would like to understand what is happening in this protocol, as I would like to write to the display with my own software and not just sniff the data.\n\nFirst question: If the FEC is indeed \"repeat\", does it follow that the designer would incorporate a CSUM? Perhaps the packets that appear to be CSUM are something else not documented?\n\nas described in protocol spec, possibly incorrect or outdated. (EDIT: the protocol spec does appear to be incorrect for my device. Corruption of the data is unlikely)\n\n\"X\" denotes a nibble that takes a value.\n\"?\" denotes a nibble that is used for flag bits.\n\n```\n| lo_ADDR | hi_ADDR | sub_ADDR | DATA_0 | DATA_1 | DATA_2 | DATA_3 | lo_CSUM | hi_CSUM |\n|   0x8X  |   0x9X  |   0x0c   |  0x?X  |  0x?X  |  0x?X  |  0x?X  |  0xAX   |   0xBX  |\n\n```\nSome of the fields seem to match; others don't. As seen below, lo and hi ADDR and lo and hi CSUM don't seem to match the description.\n\nMost packets in the stream appear to start with 0x0a and end with 0x0b, although some packets observed don't follow that pattern. Are they flag bytes?\n\nAn example of two packets of interest, bytes that work as specified marked ok, ones that don't with !k \n\n```\nA1 A2 A3 A4 A5 A6 A7 A8     B1 B2 B3 B4 B5 B6 B7\n------------------------------------------------\n!k ok ok ok ok ok !k !k     !k ok ok ok ok ok !k\n0a 0c 02 00 60 00 80 0b     28 0c 02 00 60 00 80\n\n```\nStraight from Pyserial, appears as follows:\n\n```\nb'  \n\\x0c\\x02\\x00`\\x00\\x80\\x0b(\\x0c\\x02\\x00 \\x00\\x80'\n\n```\nTen lines of packets, two neighboring packets shown, repeats removed:\n(edit: added more lines, formatting for clarity)\n\n```\nA1 A2 A3 A4 A5 A6 A7 A8          B1 B2 B3 B4 B5 B6 B7\n--------------------- state == running --------------\n----------------------(A3, B3 <= 0x09)---------------\n\n0a 0c 01 09 65 09 d8 0b .repeat. 28 0c 01 09 65 09 e0 .repeat. ...\n0a 0c 01 09 65 08 c0 0b ........ 28 0c 01 09 65 08 80 ...\n0a 0c 01 09 65 07 a8 0b ........ 28 0c 01 09 65 07 a0 ...\n0a 0c 01 09 65 06 90 0b ........ 28 0c 01 09 65 06 c0 ...\n0a 0c 01 09 65 05 f8 0b ........ 28 0c 01 09 65 05 e0 ...\n0a 0c 01 09 65 04 e0 0b ........ 28 0c 01 09 65 04 80 ...\n0a 0c 01 09 65 03 c8 0b ........ 28 0c 01 09 65 03 a0 ...\n0a 0c 01 09 65 02 b0 0b ........ 28 0c 01 09 65 02 c0 ...\n0a 0c 01 09 65 01 98 0b ........ 28 0c 01 09 65 01 e0 ...\n0a 0c 01 09 65 00 80 0b ........ 28 0c 01 09 65 00 80 ...\n0a 0c 01 09 64 09 e0 0b ........ 28 0c 01 09 64 09 80 ...\n0a 0c 01 09 64 08 80 0b ........ 28 0c 01 09 64 08 80 ...\n0a 0c 01 09 64 07 a0 0b ........ 28 0c 01 09 64 07 80 ...\n0a 0c 01 09 64 06 c0 0b ........ 28 0c 01 09 64 06 80 ...\n0a 0c 01 09 64 05 e0 0b ........ 28 0c 01 09 64 05 80 ...\n0a 0c 01 09 64 04 80 0b ........ 28 0c 01 09 64 04 80 ...\n0a 0c 01 09 64 03 a0 0b ........ 28 0c 01 09 64 03 80 ...\n0a 0c 01 09 64 02 c0 0b ........ 28 0c 01 09 64 02 80 ...\n0a 0c 01 09 64 01 e0 0b ........ 28 0c 01 09 64 01 80 ...\n0a 0c 01 09 64 00 80 0b ........ 28 0c 01 09 64 00 80 ...\n         ...                             ...\n0a 0c 01 09 64 04 a0 0b ........ 28 0c 01 09 63 04 80 ...\n         ...                             ...\n-------------------- state == stopped -------------------\n------------(high nibble A5, B5 0b110 -> 0b10)-----------\n------------(bit 6 in byte A5, B5 == flag bit)-----------\n\n0a 0c 01 09 23 04 a0 0b ........ 28 0c 01 09 23 04 80 ...\n         ...                             ...\n---------------- state == running | stopped -------------\n------------(if A3, B3 == 0x0f, then A7, B7 -> 80)-------\n------------(A3, B3 == 0x0f == no digit displayed)-------\n         ...                             ...\n0a 0c 0f ** ** ** 80 0b ........ 28 0c 0f ** ** ** 80 ...\n         ...                             ...\n\n```\n0x0a << 2 == 0x28. Is that just coincidence? Or are some bits handled improperly?\n\nIt would appear that A7 and B7 are 8 bit CSUM values. However, when the following CSUM calculation is done as specified in the documentation:\n\n```\nCSUM = lo_ADDR ^ hi_ADDR ^ sub_ADDR ^ DATA_0 ^ DATA_1 ^ DATA_2 ^ DATA_3\n0x62 =   0xa   ^   0x0   ^   0x0c   ^  0x01  ^  0x09  ^  0x65  ^  0x09\n0x62 =   0x8   ^   0x2   ^   0x0c   ^  0x01  ^  0x09  ^  0x65  ^  0x09   \n\n```\nThe calculated value doesn't match A7 or B7. However:\n\n\"The CSUM byte is then split into 2 bytes, 0xAX (low nibble) and 0xBX (high nibble)\"\n\nI've tried https://crccalc.com as well as others, thinking that the calculation in the specification is incorrect, however I can't get any matches on any 8-bit CSUMs that I've tried. \n\nI think I'm missing something obvious, as I'm quite an amateur. I'm really trying to understand what's happening, where I've gone wrong, and not just get my problem solved. I'm now two days into trying to figure this out, and I just can't get it.\n\nQuesion two: Are those fields actually checksums, if they are, how are they calculated? \n\nQuestion three: If they're not, what are they?\n\nQuestion four: Why would some packets appear to be missing (or have a different) start and stop flag bytes? (EDIT: Most likely because the specification I have is wrong)\n\n(EDIT) The CSUM calc in the spec does not apply to my data.\n\nCheck sum calculation spec, verbatim from documentation:\n\n```\nCSUM = LOW ADDR\nCSUM = CSUM XOR'ed with HIGH ADDR\nCSUM = CSUM XOR'ed with SUB ADDR\nCSUM = CSUM XOR'ed with Data0\n..\nCSUM = CSUM XOR'ed with DataN (the last data-byte)\nThe CSUM byte is then split into 2 byte, 0xAn (low nibble) and 0xBn (high nibble)\n\n```\nSome interesting patterns which seem to hold throughout my data set:\n\n(EDIT) UPDATE:\nYou know, the more I think about it and look around the internet, this system shares many similarities with DMX protocol. This system was made to work with many devices daisy-chained together.  \n\n[1] \"The Texas Instruments seven-segment display decoder chips 7446/7447/7448/7449 and 74246/74247/74248/74249 and the Siemens FLH551-7448/555-8448 chips used truncated versions of \"2\", \"3\", \"4\", \"5\" and \"6\" for digits A–E. Digit F (1111 binary) was blank.\" - wikipedia, 7-segment display\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "serial-communication"
+  ],
+  "user": "r a",
+  "time": "Mar 3, 2019 at 13:58",
+  "comments": [
+    {
+      "user": "Bruce Abbott",
+      "text": "\"However, when the following CSUM calculation is done as specified in the documentation:\" - are you sure you interpreted it correctly? Can you show us the full specification?",
+      "time": null
+    },
+    {
+      "user": "Bruce Abbott",
+      "text": "The specified packet format has 9 bytes, but your packets only have 8 and 7 bytes. So where did the extra bytes go, and where are you getting hi_ADDR from? According the spec hi/low address bytes start with high nibbles 8/9 and hi/low checksum bytes start with A/B, but your data does not have this. Clearly the spec does not match your data, so either it's 'outdated' or the data is corrupt.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "do you have access to the code on either sending or receiving side? might be easier to RE it than trying to guess the algorithm.",
+      "time": null
+    },
+    {
+      "user": "r a",
+      "text": "@BruceAbbott Yes, it would appear that the spec doesn't match. I'm pretty sure the data is not corrupt, I checked all the packets' duplicates and found no difference. The start and end bytes match on all subsequent packets, and the data inside DATA0...n matches the true values, which are known. I'll update the first post",
+      "time": null
+    },
+    {
+      "user": "r a",
+      "text": "@IgorSkochinsky I'll see if I can get the code used to record this stream. The source of the stream is a hardware device, used to drive 7-segment style dumb display.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The protocol spec clearly does not apply to your device, so don't bother trying to use its checksum calculation. However it may be similar enough to provide some clues to the actual protocol.\n\nThe protocol should include some method of synchronizing the serial data stream. In the (incorrect) spec this could be done using the high nibbles (8,9,A,B) that all have bit 7 set. In your data only bytes A7 and B7 have bit 7 set, which suggests that this bit is used for synchronization.\n\nBytes A4-A6 and B4-B6 appear to be digit and flag data. Bytes A2 and B2 match the fixed value for sub_ADDR in the spec, which suggests they perform the same function. \n\nA1,A3,A8,B1,B3 and bits 6-0 of A7 and B7 are unaccounted for. A1,A3,B1,B3 may be the high and low address nibbles, and A8 appears to be a constant value. Bits 2-0 of A7 and bits 3-0 of B7 are always 0 in your data, which leaves bits 6-3 of A7 and bits 6-4 of B7 as potential checksum bits.\n\nAs the digits are different on each line, so the checksum should also be different (though some lines may produce the same checksum). Combining A7 bits 6-3 and B7 bits 6-4 to produce a single 7 bit Hex number,\n\n```\nA7   A7    B7   B7   B7+A7\n   (6..3)     (6.4)  (Hex) (ID#)\nd8  1011   e0  110    6B     1\nc0  1000   80  000    08     2\na8  0101   a0  010    25     3\n90  0010   c0  100    42     4\nf8  1111   e0  110    6F     5\ne0  1101   80  000    0B     6\nc8  1001   a0  010    29     7\nb0  1010   c0  100    4A     8\n98  0011   e0  110    63     9\n80  0000   80  000    00     10\ne0  1100   80  000    0C     11\n80  0000   80  000    00    (10)\na0  0100   80  000    04     12\nc0  1000   80  000    08     (2)\ne0  1100   80  000    0C    (11)\n80  0000   80  000    00    (10)\na0  0100   80  000    04    (12)\nc0  1000   80  000    08     (2)\ne0  1100   80  000    0C    (11)\n80  0000   80  000    00    (10)\n\n```\nThe first 11 lines in your data dump all have unique 'checksums'. Looking good so far! \n\nThe next 9 lines are not so good, as they have many duplicate values. However I have not attempted to calculate checksums of address and data bytes. Depending on the algorithm used, some lines may be expected to produce the same checksum.   \n\nFor a thorough analysis I would capture more data with as many different digit and flag combinations as possible, then write a program to create checksums with various algorithms until one matches the bits in A7 and B7.\n\n",
+      "votes": "2",
+      "user": "Bruce Abbott",
+      "time": "Feb 26, 2019 at 19:58",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "r a",
+          "text": "Wow, thanks! I just realized that I have failed to mark in my op that the low nibbles of bytes A3-A6 are indeed simple BCD that represent clock values.  So in my first example,   0a 0c 02 00 60 00 80 0b  == \"20:00\"  I can't believe I left out that critical info. I'll edit the op.",
+          "time": null
+        },
+        {
+          "user": "r a",
+          "text": "I have made a pastebin which includes the data set I am working with. The format is:  EPOCH [DATA] The data was captured on approximately one second intervals.  pastebin.com/QuEqVns4",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

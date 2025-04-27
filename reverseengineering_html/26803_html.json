@@ -1,0 +1,46 @@
+{
+    "title": "Hex-Rays not properly showing strings",
+    "link": "https://reverseengineering.stackexchange.com/questions/26803/hex-rays-not-properly-showing-strings",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Here's the difference between Hex_Rays and the debugger:\n  <a href=\"https://i.sstatic.net/2YHUL.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/2YHUL.png\"/>\n  </a>\n </p>\n <p>\n  Note that I've synchronized the views, so they are showing the same operations in both the debugger and the decompiler. I've tried\n  <code>\n   Edit -> Plugins -> Hex-Rays Decompiler -> Display string literal casts\n  </code>\n  but to no avail. Anyone has ever faced this problem?\n </p>\n <p>\n  I'm working on IDA Pro 7.5\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "pe",
+        "hexrays"
+    ],
+    "user": "unc4nny",
+    "time": "Jan 17, 2021 at 17:35",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The issue here is not strings, it's the fact that Hex-Rays didn't guess the right calling convention for\n  <code>\n   sub_4022E0\n  </code>\n  . Notice that the disassembly listing moves values into both\n  <code>\n   ecx\n  </code>\n  and\n  <code>\n   edx\n  </code>\n  before the call, whereas the decompilation for that call shows only one argument? Hex-Rays thinks there's only one argument -- maybe even only one stack argument -- whereas there are actually two register arguments and no stack arguments (i.e., 32-bit MSVC\n  <code>\n   __fastcall\n  </code>\n  ).\n </p>\n <p>\n  The easy way to fix this would be to go into that function via the decompiler (put your cursor on\n  <code>\n   sub_4022E0\n  </code>\n  and press enter), then after it decompiles, hit\n  <code>\n   ESC\n  </code>\n  to go back to the calling function and press\n  <code>\n   F5\n  </code>\n  to re-decompile. This will probably cause Hex-Rays to guess the prototype properly, at which point it will show both arguments to the function.\n </p>\n <p>\n  Alternatively, or if it doesn't, you can press\n  <code>\n   Y\n  </code>\n  with your cursor on\n  <code>\n   sub_4022E0\n  </code>\n  , and change the prototype to\n  <code>\n   void __fastcall sub_4022E0(void *, const char *)\n  </code>\n  .\n </p>\n <p>\n  Edit: I thought I might add some detail about Hex-Rays internals to illuminate where this behavior comes from.\n </p>\n <p>\n  IDA/Hex-Rays operate differently from Ghidra. Analyzing a binary in Ghidra involves decompiling every function, which you can see in the status bar as it repeatedly updates \"Decompiling FUN_123456\". In doing so, it performs analyses to determine which registers and stack locations the function expects to access throughout its lifetime (i.e., the function's prototype/calling convention). It works from the leaves of the call graph up to the roots -- that is to say, it begins with functions that don't call other functions, then analyzes the functions that only call those functions, and so on. Therefore, when analyzing any given function, for each function call, it already knows which registers and stack locations should be considered arguments to those calls. This is part of why it takes much longer to analyze a binary in Ghidra than in IDA.\n </p>\n <p>\n  In ordinary interactive operation, IDA and Hex-Rays don't work the same way as Ghidra. When you load a binary into IDA, it only performs its normal auto-analysis based on the disassembly listing. That means when you decompile a function for the first time, Hex-Rays does not know the prototypes for called functions, unless that information is provided due to a type library or mangled import symbol. As a result, Hex-Rays has to guess which registers and stack locations should be considered arguments to called functions -- and, as your question demonstrates, it does not always do it correctly. This is part of what is known as \"call analysis\", with which you may be familiar if you have ever received a \"call analysis failure\".\n </p>\n <p>\n  When decompiling a function, Hex-Rays also guesses the prototype for the function being analyzed, in a similar fashion to how I described Ghidra above. Prototypes guessed \"from the outside\" (at call sites), as described in the previous paragraph, and \"from the inside\", as described in the last sentence, are stored in a global cache of type information. For any given function, the function prototypes gleaned \"from the inside\" always take precedence over the ones gleaned \"from the outside\", as they are strictly more reliable.\n </p>\n <p>\n  So, what happened in this question was that:\n </p>\n <ol>\n  <li>\n   The user decompiled a function, which made calls to other functions which had never been seen before.\n  </li>\n  <li>\n   Because Hex-Rays did not have prototype information for those functions, it guessed their prototypes (incorrectly).\n  </li>\n  <li>\n   As a result, the decompilation for the function call showed one argument instead of two.\n  </li>\n  <li>\n   I advised the user to press\n   <code>\n    ENTER\n   </code>\n   on the function, so as to decompile it and allow Hex-Rays to gain better information about its prototype. The prototype information was then stored in the global types cache.\n  </li>\n  <li>\n   Upon backtracking to the calling function and refreshing, Hex-Rays now did not have to guess the arguments \"from the outside\". It retrieved the prototype from the global types cache, and hence it knew that the function call took two arguments in\n   <code>\n    ecx\n   </code>\n   and\n   <code>\n    edx\n   </code>\n   . It used that information to correctly decompile the arguments to the function call.\n  </li>\n  <li>\n   My alternative suggestion was to supply the called function's prototype directly. User-supplied type information takes precedence over any form of guessed type information in the global types cache.\n  </li>\n </ol>\n <p>\n  If you would like to simulate the auto-analysis functionality of Ghidra, you can use\n  <code>\n   File->Produce file->Create .c file\n  </code>\n  . This decompiles functions \"from the leaves to the roots\", and in so doing, populates the global types cache with the best information possible for the whole binary all at once. Be warned, however, that this process is not especially fast -- after all, the lack of this analysis is a major part of why IDA's auto-analysis is faster than Ghidra's.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Rolf Rolles",
+            "time": "Jan 18, 2021 at 7:48",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "unc4nny",
+                    "text": "<span class=\"comment-copy\">you are an absolute GOD! Thank you so much for this!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Try unchecking\n  <code>\n   Edit-> Plugins -> Hex-Rays Decompiler -> Print Only constant string literals\n  </code>\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "rustam Shirinov",
+            "time": "Jan 17, 2021 at 19:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "unc4nny",
+                    "text": "<span class=\"comment-copy\">Didn't work :(. Thank u for your reply</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

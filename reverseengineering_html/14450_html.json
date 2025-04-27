@@ -1,0 +1,62 @@
+{
+    "title": "GCC change the order of variable declaration",
+    "link": "https://reverseengineering.stackexchange.com/questions/14450/gcc-change-the-order-of-variable-declaration",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have this very simple piece of code:\n </p>\n <pre><code>// test.c\nint main(){\n  int a = 0;\n  char b[10];\n  int c = 0;\n\n  return 0;\n}\n</code></pre>\n <p>\n  Compiled with gcc (6.2.1):\n </p>\n <pre><code>$ gcc -g -o test test.c\n</code></pre>\n <p>\n  And analysed with gdb:\n </p>\n <pre><code>$ gdb -q test\n(gdb) break 6                (the return statement)\n(gdb) run\n(gdb) x &a\n0x7fffffffecb8: 0x00000000\n(gdb) x b\n0x7fffffffecc0: 0x00000001\n(gdb) x &c\n0x7fffffffecbc: 0x00000000\n</code></pre>\n <p>\n  So you can clearly see that in memory, the variables are defined in this order: a, c, b.\n </p>\n <p>\n  Is there a reason for that?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "gdb",
+        "gcc"
+    ],
+    "user": "nobe4",
+    "time": "Jan 19, 2017 at 21:26",
+    "comments": [
+        {
+            "user": "sherlock",
+            "text": "<html><body><span class=\"comment-copy\">\n Can you compile with -O0 (disable optimization)?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "nobe4",
+            "text": "<html><body><span class=\"comment-copy\">\n Same result unfortunately.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  My best guess : memory alignment.\n </p>\n <p>\n  An integer in\n  <strong>\n   C\n  </strong>\n  is 4 bytes and a char 1 byte. Therefore, your declarations go like this : 4B & 1x10=10B & 4B. This order means that the 10B won't be aligned on a power of two memory boundary without wasting space. Data accesses are faster on x86 machines when arrays are aligned on 16B/32B/64B - BTW 64B is the size of cacheline).\n </p>\n <p>\n  Therefore, the compiler finds it more optimal to align the first two 4B variables 0x---ECCB8 & 0x---ECBC (the difference is 4bytes). Then choose the closest aligned memory location 0x---ECC0 for the array (0x---ECC0 - 0x---ECBC = 4B); the zero at the end implies the address is dividable by a power of two. If you forget about the 7F... and convert ECC0 to base 10 you get 60608 which is dividable by 64, 32, 16, ... We can assume safely then that the compiler optimized the array placement to match a 64B memory alignment.\n </p>\n <p>\n  You should read\n  <a href=\"https://people.freebsd.org/~lstewart/articles/cpumemory.pdf\" rel=\"nofollow noreferrer\">\n   Ulrich Drepper\n  </a>\n  's document on memory and check Agner Fog's\n  <a href=\"http://agner.org/optimize/\" rel=\"nofollow noreferrer\">\n   Software Optimization Manuals\n  </a>\n  . Gold mines!\n </p>\n <p>\n  <strong>\n   Addendum :\n  </strong>\n </p>\n <p>\n  If you wish to play around with memory alignment I suggest that you check out how compiler perform data layout restructuring and padding of structures in\n  <strong>\n   C\n  </strong>\n  . Padding means that compilers add sometimes extra bytes to reach a power of two boundary. For example, imagine you have a code that contains the following\n </p>\n <pre><code>    typedef struct { int x; int y; int z; } point3D;\n</code></pre>\n <p>\n  This declaration contains three 4B variables = 12B, not a power of 2. The compiler will most likely add another 4B to align it with the closest power of 2 boundary : 16B. Therefore, after compilation your declaration will look like this :\n </p>\n <pre><code>    typedef struct {int x; int y; int z; char[4] padding; } point3D;\n</code></pre>\n <p>\n  Now with regard to your comment, I'd suggest trying the following :\n </p>\n <pre><code>       #include <stdio.h>\n       #include <emmintrin.h> //Required for mm_malloc\n       #define ALIGN 64\n       int main(){\n       int *a = _mm_malloc(sizeof(int), ALIGN);\n       char b[10];\n       int *c = _mm_malloc(sizeof(int), ALIGN);\n\n       printf(\"a: %p\nb: %p\nc: %p, a, b, c);\n\n       return 0; }\n</code></pre>\n <p>\n  There are many variants of\n  <em>\n   malloc\n  </em>\n  (and tricks with the normal\n  <em>\n   malloc\n  </em>\n  ) which let you align your memory on the boundary you seem fit for your code.\nKeep in mind that you have two types of memory for a binary program : the\n  <em>\n   heap\n  </em>\n  which is manipulated using\n  <em>\n   malloc\n  </em>\n  type functions, and the stack, which is left to the compiler to handle (function parameters, register saving, local variables, ...). The only way you can control the stack usage and data alignment is by doing it yourself using assembly code or, if the compiler handles it, compiler directives and parameters.\n </p>\n <p>\n  Your code allocates three local variables to\n  <em>\n   main\n  </em>\n  . Thefore, they'll be allocated in the stack, and given that your code goes through a compiler it will perform all necessary actions to align these variables using a heuristic analysis (optimistic predictive memory placement). If you compile the code provided above, you'll notice that the addresses aren't similar (heap vs. stack). 0x7FF---? for stack variables and 0x000---? for heap variables. You can play around with these functions and figure a lot of things for yourself. In doubt, refer to the documentation : Intel Software Optimization manual, Agner's, ...\nNext step if you want to understand things clearly is to delve into the OS memory allocation and paging scheme and the x86 architecture in order to understand better the requirement for alignment : cache line size, memory segmentation & BSI (Base + Scale * Index; scale can only take the following values : 1, 2, 4, and 8).\n </p>\n <p>\n  I hope this addendum makes things clearer for you.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "yaspr",
+            "time": "Jan 22, 2017 at 23:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">Interesting, I've tried to change the array size to make its size a power of two. But the result remains unchanged. (thanks for the links)</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">Well, the array size isn't the key here, rather alignment. Check the update.</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">\"An integer in C is 4 bytes and a char 8 bytes.\" This is incorrect. The number of bits of type char is given in <a href=\"http://pubs.opengroup.org/onlinepubs/009695399/basedefs/limits.h.html\" rel=\"nofollow noreferrer\"><code>&lt;limits.h&gt;</code></a> to be 8, not 64. The number of bytes in a <code>char</code> will never exceed the number of bytes in an <code>int</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\"><code>b</code> is a constant pointer to a <code>char</code> array, so <code>b</code> is 8 bytes on x86-64, <code>b[0]</code> is 1  byte.</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">I was mistaken. I wanted to say 8 bits = 1 byte. Thanks for pointing it out. Fixed!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

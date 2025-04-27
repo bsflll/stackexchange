@@ -1,0 +1,44 @@
+{
+    "title": "Force IDA to reanalyze a function recursively?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27443/force-ida-to-reanalyze-a-function-recursively",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>How can i force IDA to re analyze a function recursively (meaning including every function inside of it and so on) and recognize all the functions inside of all the functions? because right now when a PE is mapped, IDA does not recognize any function inside of it, unlike when i analyze the PE file, and i have to click on every function (unk_xxx) and press P in start of it so it can recognize the function..</p>\n<p>clicking on reanalyze in options doesnt work either.</p>\n<p>Alt + P as suggested here doesn't work either :</p>\n<p><a href=\"https://reverseengineering.stackexchange.com/questions/19967/api-to-force-reanalyze-of-function-alt-p\">API to force reanalyze of function (Alt-P)</a></p>\n<p>In decompiler view alt+P doesnt do anything at all, and in disassmbly it just edits the function.</p>\n<p>Using IDA 7.5.</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "idapro-sdk"
+    ],
+    "user": "Notoriouss",
+    "time": "Apr 12, 2021 at 10:10",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">Is this during debugging?</span>",
+            "time": null
+        },
+        {
+            "user": "Notoriouss",
+            "text": "<span class=\"comment-copy\">@IgorSkochinsky yes</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>During debugging IDA does a limited amount of autoanalysis to speed up the debugging experience and not interfere with the process. What you can do is to copy the module to be analyzed to the database, then stop the debugger and let IDA finish the autoanalysis on the saved data. This can be done via the \"Analyze module\" command in the Modules list.</p>\n<p>Please note that if the module is loaded at another address at next run (e.g. due to ASLR), you will have conflicts in the database, so this is not recommended if you need to re-run the process frequently, but more for the case of \"debugging is mostly done, now I need to analyze it statically\".</p>\n</div>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Apr 13, 2021 at 13:57",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If someone feels the need to do this programmatically in a non-debug setting, this is the code I would use.</p>\n<p>Note #1: There are some shortcut functions of my own <code>GetFuncStart</code> and such that are not included, I'm sure you can work them out.  The reference to the <code>Commenter</code> class will just have to be removed.</p>\n<p>Note #2: The seemingly extreme measures taken in <code>ZeroFunction</code> are the only way I have found to ensure a function is actually rebuilt.  None of the ida_auto functions seem to do much.  You may opt for something less extreme if it suits you.</p>\n<p>Note #3: The order of called functions is reversed to attempt to do the rebuild from the bottom up, hopefully allowing IDA to make more educated guesses about arguments and such.</p>\n<p>Note #4: The many superfluous variables, lists and such are from the larger original function which (amongst other things) produces .dot vizgraphs.  I have left them in lest someone find a use for them.</p>\n<pre><code>def RebuildFuncAndSubs(ea):\n    subs = RecurseCalled(ea)['calledLocs']\n    subs.reverse()\n    for addr in subs:\n        ZeroFunction(addr)\n        idc.auto_wait()\n    ZeroFunction(ea)\n    idc.auto_wait()\n\n\ndef RecurseCalled(ea=None, width=512):\n    def all_xrefs_from(funcea, iteratee=None):\n        if iteratee is None:\n            iteratee = lambda x: x\n\n        xrefs = []\n        for (startea, endea) in Chunks(funcea):\n            for head in Heads(startea, endea):\n                xrefs.extend([GetFuncStart(x.to) for x in idautils.XrefsFrom(head) \\\n                        if x.type in (ida_xref.fl_CF, ida_xref.fl_CN, ida_xref.fl_JF, ida_xref.fl_JN) \\\n                        and not ida_funcs.is_same_func(funcea, x.to) \\\n                        and IsFunc_(x.to)])\n\n        xrefs = list(set(xrefs))\n\n        return xrefs\n\n    if ea is None:\n        ea = idc.get_screen_ea()\n\n    calledNames = list()\n    calledLocs = list()\n    visited = set([])\n    if isinstance(ea, list):\n        pending = set(ea)\n        initial = set([GetFuncStart(x) for x in ea])\n    else:\n        pending = set([ea])\n        initial = set([GetFuncStart(ea)])\n    depth = 0\n    count = 0\n    added = [1]\n    functionCalls = collections.defaultdict(set)\n    namedFunctionCalls = collections.defaultdict(set)\n    fwd = dict()\n    rev = dict()\n\n    while pending and len(pending) &lt; width:\n        target = pending.pop()\n        count += 1\n        added[0] -= 1\n        if added[0] &lt; 1:\n            depth += 1\n            added.pop()\n\n        visited.add(target)\n\n        fnName = idc.get_func_name(target) or idc.get_name(target) or \"0x%x\" % ref\n        fnStart = GetFuncStart(target)\n\n        if fnStart &lt; idc.BADADDR:\n            target = fnStart\n            visited.add(target)\n            if not fnStart in initial:\n                calledNames.append(fnName)\n                calledLocs.append(fnStart)\n\n        refs = all_xrefs_from(fnStart)\n        refs = set(refs)\n        refs -= visited\n        size1 = len(pending)\n        pending |= refs\n        size2 = len(pending) - size1\n        added.append(size2)\n\n    return {'calledName': calledNames,\n            'calledLocs': calledLocs,\n           }\n\n\ndef ZeroFunction(ea, total=False):\n    print(\"0x%x: ZeroFunction\" % ea)\n    start = 0\n    end = 0\n    # Don't hold the func_t object open\n    func = clone_items(ida_funcs.get_func(ea))\n    if not func:\n        return BADADDR\n\n    # Keep existing comments\n    with Commenter(ea, 'func') as commenter:\n        fnLoc = func.start_ea\n        fnName = ida_funcs.get_func_name(fnLoc)\n        flags = func.flags  # idc.get_func_attr(ea, FUNCATTR_FLAGS)\n        # remove library flag\n        idc.set_func_attr(fnLoc, FUNCATTR_FLAGS, flags &amp; ~4)\n        ida_name.del_local_name(fnLoc)\n        ida_name.del_global_name(fnLoc)\n        # RemoveAllChunks(ea)\n        for start, end in idautils.Chunks(ea):\n            idc.remove_fchunk(start, end)\n        ida_funcs.del_func(func.start_ea)\n        idc.set_color(fnLoc, CIC_FUNC, 0xffffffff)\n        if not total:\n            func = ida_funcs.func_t(fnLoc)\n            res = ida_funcs.find_func_bounds(func, ida_funcs.FIND_FUNC_DEFINE | ida_funcs.FIND_FUNC_IGNOREFN)\n            if res == ida_funcs.FIND_FUNC_UNDEF:\n                print(\"0x%x ZeroFunction: func passed flow to unexplored bytes\" % fnLoc)\n            elif res == ida_funcs.FIND_FUNC_OK:\n                ida_funcs.add_func_ex(func)\n\n            idc.auto_wait()\n            # remove library flag (again)\n            idc.set_func_flags(fnLoc, idc.get_func_flags(fnLoc) &amp; ~4)\n            # return original function name\n            \n            idc.set_name(fnLoc, fnName, idc.SN_NOWARN)\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "Orwellophile",
+            "time": "Apr 25, 2021 at 7:53",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

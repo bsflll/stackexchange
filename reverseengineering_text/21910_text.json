@@ -1,0 +1,85 @@
+{
+    "title": "Elf x86_64 adding function",
+    "link": "https://reverseengineering.stackexchange.com/questions/21910/elf-x86-64-adding-function",
+    "content": "I'm trying to see if I can append function code in the .text section of an ELF  while still maintaining the execution flow of the original ELF. Ideally, I want to call the new function but that's it's own mountain to climb. I'm more concerned with just adding the code. Is this realistic? Or am I way over my head? I've been able to add the code by simply overwriting bytes. However, I would like to extend the .text section and insert it. If there's a better method of inserting new functionality into an ELF I'm all ears. But any guidance is helpful.\n",
+    "votes": "7",
+    "answers": 3,
+    "views": "3k",
+    "tags": [
+        "c",
+        "elf",
+        "x86-64"
+    ],
+    "user": "stayge",
+    "time": "Aug 19, 2019 at 23:02",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "There are well-known techniques that can be used to add code to an ELF binary. What is your goal? Is the binary statically linked? Is the section header table present in the binary?\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "Hi and welcome to RE.SE. Adding to what @julian wrote: what has python to do with it?\n",
+            "time": null
+        },
+        {
+            "user": "stayge",
+            "text": "it does have the standard dynamically linked libraries but I want to add a user defined function to the ELF. The section header table is present\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "It is possible to do what you want. There are some difficulties you may encounter though. I'll show you a short instruction how it can be done in several different cases.\n\nHave a look at ELF specification to know how every file in that format looks like, which sections it consists of and how they are located in the process image at the runtime. Even when there exist tools that can perform the job automatically for you, it's good to know what has to be done \"underneath\".\nWrite and compile the code you want to add. You can do it later of course, but this way you will know how much space you need to add.\nHaving the knowledge obtained in <pre><code>1.</code></pre>, you can now interpret the output of <pre><code>readelf -S executableToPatch</code></pre> command. It will list the sections present in the executable along with the information such as their offset in the file. \nIf you are lucky, the offset of the section you want to update + its basic size + size of the code you want to add is less than the offset of the next section. In such a case, you simply want to create a file containing the new content of this section (that is, entire content before your modification and the extra code appended by you). Then you can simply run: \n<pre><code>objcopy --update-section .text=fileWithTheNewContent nameOfExe nameOfExePatched</code></pre> and you are done.\nIf you are not so lucky, you can still run the command from the previous point, but you will get messages similar to this: <pre><code>objcopy: nameOfExe: section .text offset adjusted to newOffset</code></pre>, which simply means that <pre><code>objcopy</code></pre> has moved some subsequent sections forward in such a way that they don't overlap with each other (which, from <pre><code>1.</code></pre>, is one of the requirements of the ELF specification). However, contrary to the previous point, you cannot simply finish here, because it could be the case that some section with data has changed its offset as well.\nCheck which sections have been relocated. If none of them contains data, you can now test the program whether it behaves the same as before your modification. If it does, your job is done - your code has been successfully updated.\nIf it behaves differently or some of your sections with data has changed its offset, it is necessary to fix the data references to this section, that is to patch the code, so that it references offsets in the new data section location. For example, when <pre><code>.rodata</code></pre> has been moved forward by <pre><code>4096</code></pre> bytes, you will have to change all references to <pre><code>.rodata</code></pre> by adding <pre><code>4096</code></pre> to each address, i.e. if you have <pre><code>mov rax, [rip+0x20]</code></pre> you want to change it to <pre><code>mov rax, [rip+0x1020]</code></pre>, but it isn't straightforward to do, although it's still possible.\n",
+            "votes": "7",
+            "user": "bart1e",
+            "time": "Aug 17, 2019 at 9:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "stayge",
+                    "text": "<span class=\"comment-copy\">Thank you! I've recently tried the obj copy - I now see that I have .rodata references in the .text section which explains quite a bit. Now going through and updating those will definitely be the next challenge. I appreciate it!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I would like to extend the .text section and insert [code]. If there's a better method of inserting new functionality into an ELF I'm all ears. \n\nTechniques for adding arbitrary code to ELF files were pioneered by Linux virus writers beginning all the way back in the 1990s. In comparison with the methods they developed, as well as with more modern techniques, taking the <pre><code>objcopy</code></pre> route seems rather crude. There is no need to re-invent the wheel.\nMore modern approaches to manipulating ELF binary runtime behavior have emerged since then, including a variety of injection techniques and instrumentation frameworks. \nFor the purposes of this question we can divide approaches to modifying binary functionality into 2 approaches: \n\nadding code to the file itself (static modification, occurs prior to program runtime)\ninducing new behavior via injection (runtime modification).\n\nStatic Modification Techniques\nText Segment Padding Infection\nThe classic ELF <pre><code>text</code></pre> segment (not section) padding infection method seems to be the most closely related to what you are currently attempting.\n\nPage padding at segment borders however provides a practical location for\n  parasite code given that its size is able.  This space will not interfere with\n  the original segments, requiring no relocation.  Following the guideline just\n  given of preferencing the text segment, we can see that the padding at the\n  end of the text segment is a viable solution. 1\n\nThe algorithm to accomplish this is as follows:\n\n\nIncrease <pre><code>p_shoff</code></pre> by <pre><code>PAGE_SIZE</code></pre> in the ELF header\nPatch the insertion code (parasite) to jump to the entry point\n    (original)\nLocate the text segment program header\n  \n  \nModify the entry point of the ELF header to point to the new\n    code (<pre><code>p_vaddr</code></pre> + <pre><code>p_filesz</code></pre>)\nIncrease <pre><code>p_filesz</code></pre> by account for the new code (parasite)\nIncrease <pre><code>p_memsz</code></pre> to account for the new code (parasite)\n\nFor each <pre><code>phdr</code></pre> who's segment is after the insertion (text segment)\n  \n  \nincrease <pre><code>p_offset</code></pre> by <pre><code>PAGE_SIZE</code></pre>\n\nFor the last <pre><code>shdr</code></pre> in the text segment\n  \n  \nincrease <pre><code>sh_len</code></pre> by the parasite length\n\nFor each <pre><code>shdr</code></pre> who's section resides after the insertion\n  \n  \nIncrease <pre><code>sh_offset</code></pre> by PAGE_SIZE\n\nPhysically insert the new code (parasite) and pad to <pre><code>PAGE_SIZE</code></pre>, into\n    the file - text segment <pre><code>p_offset</code></pre> + <pre><code>p_filesz</code></pre> (original) 1\n\n\nIn addition to an explanation of the technique as well as the source code for a virus that implements this technique included with the 1998 article [1], there is a 2016 (it still works, after all these years) tutorial on ELF segment padding infection available at 0x00sec called ELFun File Injector.\nBesides the text segment infection approach, there is also data segment infection, which is quite similar. One can also add an additional segment if they so choose.\n\nPLT/GOT Infection\nFirst detailed in a Phrack article back in 2000 2, this method involves patching the PLT/GOT to point to code inside the binary, which has been inserted via an infection method rather than pointing at code in a shared library dynamically linked to the binary:\n\nIt can be noted that we can change [function name in GOT] to point to our own code, thus replacing library calls.  If we save the state of the GOT before replacing, we can call the old library routine and thus redirect any library call. 2 \n\nThe easiest way to implement this method seems to be using the LIEF instrumentation framework. A tutorial for doing this is provided in the LIEF documentation under the title Infecting the plt/got. Note that in the tutorial the GOT is patched instead of the PLT, and code is added to the file by creating a new segment (one of the aforementioned infection techniques). \n\nThere are additional techiniques besides this for modifying the file directly, but segment padding infection and PLT/GOT infection seem to be the most straightforward.\nRuntime Modification Techniques\nSince DLL injection and runtime process manipulation are less directly related to your current task, I won't go into much detail.\n\nDLL injection via <pre><code>LD_PRELOAD</code></pre> is incredibly powerful and useful. 2 tutorials I have found to be useful are\n\n\nThe LD_PRELOAD trick - for binaries compiled from C source\nNotes on function interposition in C++  for binaries compiled from C++ source\n\nDLL hooking can be accomplished with LIEF as well: see ELF Hooking\nprocess code injection using <pre><code>ptrace()</code></pre>\n\nSome methods are more obscure, such as the <pre><code>DT_NEEDED</code></pre> infection detailed in The Cerberus ELF Interface and \"subversive dynamic linking\" described in Cheating the ELF\n\nReferences\n\nUnix Viruses. Silvio Cesare\nSHARED LIBRARY CALL REDIRECTION VIA ELF PLT INFECTION, Silvio Cesare\n",
+            "votes": "3",
+            "user": "julian",
+            "time": "Aug 22, 2019 at 6:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "stayge",
+                    "text": "<span class=\"comment-copy\">While I was thinking about that route - I don't want my code to be executed first. I want to modify an original function call in main to call my code. While I change the entry point to my code would that not execute my code immediately?</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@stayge You have been presented with many routes. <code>I want to modify an original function call in main to call my code.</code> &lt;- Is a shared library function being called? Is patching the <code>CALL</code> address to jump to your inserted code sufficient? Why are you operating under this constraint? Please clearly describe the problem.</span>",
+                    "time": null
+                },
+                {
+                    "user": "stayge",
+                    "text": "<span class=\"comment-copy\">A user-defined function is being called. I have tried putting my code into a .so and using LD_PRELOAD but it only overrides library functions. I would like to patch the call  so it can jump to my function and then return back to main and continue executing. It's just a matter of where to put the code without having to rework the whole ELF</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@stayge Yes, this approach to using DLL injection will not work, since you want to interpose code resident within the binary itself rather than code in a DLL. As far as I know, you can use the text segment infection method without patching the entry point; the <code>CALL</code> address of the function can be patched instead to point to your code in the text segment. If you are calling a function via this kind of detour (same with the <code>objcopy</code> route), stack alignment may be an issue.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I wrote a small utility back in high school to do something similar:\nhttps://github.com/jdefrancesco/elfy\nYou inject the .note section with the payload and it will modify the ELF entry pointing to the .note section. Afterwards it will jump back to the original entry point.\n",
+            "votes": "0",
+            "user": "in70x",
+            "time": "May 5, 2020 at 12:20",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

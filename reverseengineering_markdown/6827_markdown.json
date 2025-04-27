@@ -1,0 +1,39 @@
+{
+  "title": "How to recover the exception info from .gcc_except_table and .eh_handle sections?",
+  "link": "https://reverseengineering.stackexchange.com/questions/6827/how-to-know-the-c-try-throw-catch-block-size-and-address-from-machine-code",
+  "content": "For C++ program with try catch defined, when using g++ to compile it into assembly code (test is on x86 32bit Linux, g++ 4.6.3)\n\n```\ng++ -S cppexcept.cc\n\n```\nA specified section called .gcc_except_table is produced like below:\n\n```\n        .section        .gcc_except_table\n        .align 4\n.LLSDA980:\n        .byte   0xff\n        .byte   0\n        .uleb128 .LLSDATT980-.LLSDATTD980\n.LLSDATTD980:\n        .byte   0x1\n        .uleb128 .LLSDACSE980-.LLSDACSB980\n.LLSDACSB980:\n        .uleb128 .LEHB3-.LFB980\n        .uleb128 .LEHE3-.LEHB3\n        .uleb128 0\n        .uleb128 0\n        .uleb128 .LEHB4-.LFB980\n        .uleb128 .LEHE4-.LEHB4\n        .uleb128 .L19-.LFB980\n        .uleb128 0x3\n        .uleb128 .LEHB5-.LFB980\n        .uleb128 .LEHE5-.LEHB5\n        .uleb128 0\n        .uleb128 0\n        .uleb128 .LEHB6-.LFB980\n        .uleb128 .LEHE6-.LEHB6\n        .uleb128 .L20-.LFB980\n        .uleb128 0\n        .uleb128 .LEHB7-.LFB980\n        .uleb128 .LEHE7-.LEHB7\n        .uleb128 .L21-.LFB980\n        .uleb128 0\n\n```\nAfter the compilation into exe file with ELF format, it seems that there are two sections related to exception handling, which are .gcc_except_table and .eh_frame. \n\nHowever, I dumped the contents of these two section with the following commands, comparing the labels' memory addresses with what are defined in .gcc_except_table, but it seems too blur to me...\n\n```\nobjdump -s -j .gcc_except_table cppexcept\nobjdump -s -j .eh_frame cppexcept\n\n```\nSo my question is:\n\nIs there any way to recover the information defined in the .gcc_except_table (which is shown above) from ELF file's .gcc_except_table and eh_frame tables?\n\n",
+  "votes": "7",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "x86",
+    "c++",
+    "exception"
+  ],
+  "user": "WindChaser",
+  "time": "Sep 25, 2014 at 1:01",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "(I think you may get some extra comments if you use -fverbose-asm.)\n\nRecovering information from these tables is definitely possible, although documentation is scarce and is often present only in the code which parses them. \n\nThe .eh_frame layout is described briefly in the LSB documentation. Ian Lance Taylor (author of the gold linker) also made some blog posts on .eh_frame and .gcc_except_table layout.\n\nFor a more reference-like description, check my Recon 2012 slides (start at 37 or so).\n\nI've made an IDA script (gcc_extab.py) which parses .eh_frame and .gcc_except_table and formats them nicely.\n\nTaking a sample program:\n\n```\nvoid f()\n{\n    throw 1;\n}\n\nint main()\n{\n    int j;\n    try {\n        f();\n    } catch (int i) {\n        j = i;\n    }   \n    return 0;\n}\n\n```\nI'll show the commented structures produced by GCC.\n\nFirst, the .eh_table (some parts omitted for clarity):\n\n```\n.Lframe1:                     # start of CFI 1\n    .long   .LECIE1-.LSCIE1   # length of CIE 1 data\n.LSCIE1:                      # start of CIE 1 data\n    .long   0                 # CIE id\n    .byte   0x1               # Version\n    .string \"zPL\"             # augmentation string:\n                              # z: has augmentation data\n                              # P: has personality routine pointer\n                              # L: has LSDA pointer\n    .uleb128 0x1              # code alignment factor\n    .sleb128 -4               # data alignment factor\n    .byte   0x8               # return address register no.\n    .uleb128 0x6              # augmentation data length (z)\n    .byte   0                 # personality routine pointer encoding (P): DW_EH_PE_ptr|DW_EH_PE_absptr\n    .long   __gxx_personality_v0 # personality routine pointer (P)\n    .byte   0                 # LSDA pointer encoding: DW_EH_PE_ptr|DW_EH_PE_absptr\n    .byte   0xc               # Initial CFI Instructions\n    [...]\n    .align 4\n.LECIE1:                      # end of CIE 1\n    [...]\n\n.LSFDE3:                      # start of FDE 3\n    .long   .LEFDE3-.LASFDE3  # length of FDE 3\n.LASFDE3:                     # start of FDE 3 data\n    .long   .LASFDE3-.Lframe1 # Distance to parent CIE from here\n    .long   .LFB1             # initial location                \n    .long   .LFE1-.LFB1       # range length                    \n    .uleb128 0x4              # Augmentation data length (z)    \n    .long   .LLSDA1           # LSDA pointer (L)                \n    .byte   0x4               # CFI instructions                \n    .long   .LCFI2-.LFB1\n    [...]\n    .align 4\n.LEFDE3:                      # end of FDE 3\n\n```\nNext, the LSDA (language-specific data area) in .gcc_except_table, referenced by FDE 3:\n\n```\n.LLSDA1:                           # LSDA 1\n    .byte   0xff                   # LPStart encoding: DW_EH_PE_omit\n    .byte   0                      # TType encoding: DW_EH_PE_ptr|DW_EH_PE_absptr\n    .uleb128 .LLSDATT1-.LLSDATTD1  # TType offset\n.LLSDATTD1:                        # LSDA 1 action table\n    .byte   0x1                    # call site encoding: DW_EH_PE_uleb128|DW_EH_PE_absptr\n    .uleb128 .LLSDACSE1-.LLSDACSB1 # call site table length\n.LLSDACSB1:                        # LSDA 1 call site entries\n    .uleb128 .LEHB0-.LFB1          # call site 0 start\n    .uleb128 .LEHE0-.LEHB0         # call site 0 length\n    .uleb128 .L8-.LFB1             # call site 0 landing pad\n    .uleb128 0x1                   # call site 0 action (1=action 1)\n    .uleb128 .LEHB1-.LFB1          # call site 1 start\n    .uleb128 .LEHE1-.LEHB1         # call site 1 length\n    .uleb128 0                     # call site 1 landing pad\n    .uleb128 0                     # call site 1 action (0=no action)\n.LLSDACSE1:                        # LSDA 1 action table entries\n    .byte   0x1                    # action 1 filter (1=T1 typeinfo)\n    .byte   0                      # displacement to next action (0=end of chain)\n    .align 4\n    .long   _ZTIi                  # T1 typeinfo (\"typeinfo for int\")\n.LLSDATT1:                         # LSDA 1 TTBase\n\n```\n",
+      "votes": "10",
+      "user": "Igor Skochinsky",
+      "time": "Sep 25, 2014 at 10:38",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "lllllllllllll",
+          "text": "Hello Igor, thank you a lot for this helpful answer! Do you mind to attach how you compile the simple program.? I tried on my computer and process the script with IDA 6.4, but I can not get your output.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "This output is not from the script, it's annotated assembler output from the compiler.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+    "title": "Is there a tool to reverse engineer UWP apps, similar to dnSpy for .NET?",
+    "link": "https://reverseengineering.stackexchange.com/questions/23289/is-there-a-tool-to-reverse-engineer-uwp-apps-similar-to-dnspy-for-net",
+    "content": "I've been long fascinated with dnSpy and how easily it can reverse engineer .NET apps into a readable C#. So I was wondering if there's a similar tool to RE Windows 10 UWP apps?\nFor instance, I tried Microsoft Settings app from <pre><code>C:\\Program Files\\WindowsApps\\Microsoft.WindowsStore_12002.1001.1.0_x64__8wekyb3d8bbwe\\WinStore.App.exe</code></pre> in dnSpy and it only gave me basic PE structure:\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "windows-10",
+        "dnspy"
+    ],
+    "user": "c00000fd",
+    "time": "Feb 19, 2020 at 3:50",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "UWP is a container/platform, different reversing techniques are needed depending on the executable content. .NET UWP apps can be compiled to CLR, then you can use standard .NET decompilation techniques i.e. JustDecompile, .NET Reflector, etc. To identify if it is .NET you can use a tool such as CFF Explorer and it will list the file type as Portable Executable 32/64 .NET Assembly if .NET tools will be suitable. You will also see in the import directory mscoree.dll is listed.\nHowever UWP .NET apps can also be compiled to .NET Native\nIn addition UWP apps can be written in C++/CX and compiled directly to native code.\nThese will show in CFF explorer as Portable Executable 32/64\nIf we look at WinStore.App.exe in a native code reversing tool such as IDA Pro we can see it imports RHBinder_ShimExeMain from WinStoreApp.dll and it's entry point just jumps to this:\n<pre><code>public start\nstart proc near\njmp     cs:RHBinder__ShimExeMain\nstart endp\n</code></pre>\nWe open this DLL and see this function:\n<pre><code>public RHBinder__ShimExeMain\nRHBinder__ShimExeMain proc near\npush    rbp\nmov     rbp, rsp\nsub     rsp, 20h\ncall    sub_1817A55B4\nlea     rsp, [rbp+0]\npop     rbp\nretn\nRHBinder__ShimExeMain endp\n</code></pre>\nWhich simply calls this function:\n<pre><code>sub_1817A55B4 proc near\n; __unwind { // 182523A80\npush    rbp\nmov     rbp, rsp\nsub     rsp, 30h\nlea     rax, [rbp-10h]\ncall    cs:RhpReversePInvoke\ncall    cs:CreateCommandLine\nmov     rcx, rax\ncall    sub_18173A000\nxor     eax, eax\nlea     rcx, [rbp-10h]\ncall    cs:RhpReversePInvokeReturn\nlea     rsp, [rbp+0]\npop     rbp\nretn\n; } // starts at 1817A55B4\nsub_1817A55B4 endp\n</code></pre>\nUsing a tool like Hex Rays Decompiler you can get pseudocode representation in C:\n<pre><code>__int64 sub_1817A55B4()\n{\n  __int64 v0; // rax\n  char v2[16]; // [rsp+20h] [rbp-10h] BYREF\n\n  RhpReversePInvoke();\n  v0 = CreateCommandLine();\n  sub_18173A000(v0);\n  return RhpReversePInvokeReturn(v2);\n}\n</code></pre>\nIf we look at DllEntryPoint of the DLL we find the following:\n<pre><code>BOOL __stdcall DllEntryPoint(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)\n{\n  BOOL result; // eax\n\n  if ( *(_QWORD *)&fdwReason == 1i64 )\n    result = sub_1817A5650(hinstDLL, 1i64, lpReserved);\n  return result;\n}\n</code></pre>\nIf we follow sub_1817A5650 and sub functions it calls we end up at:\n<pre><code>__int64 sub_1817A55FC()\n{\n  char v1[16]; // [rsp+20h] [rbp-10h] BYREF\n\n  RhpReversePInvoke();\n  RhpSuppressGcStress();\n  RhpRegisterModule(&unk_180001000);\n  nullsub_1();\n  nullsub_1();\n  nullsub_1();\n  nullsub_1();\n  RhpUnsuppressGcStress();\n  return RhpReversePInvokeReturn(v1);\n}\n</code></pre>\nunk_180001000 points to the following:\n\nWorking out the purposes of these API calls and this data structures will help you reverse the UWP apps.\nI would use tools such as IDA Pro with Hex Rays Decompiler or Ghidra\nHowever if you are coming from .NET decompilation, do not expect this to be nearly as easy or for automatic tools to produce results that look like nearly compilable code. It is significantly more effort reversing native code.\nIf we launch the app with WinDbg Preview from Windows store using File -> Launch App Package method we can see this app loads the .NET Native runtime as modules load. This explains why the standard .NET reversing tools will not work on this EXE:\n<pre><code>ModLoad: 00007ff9`b6280000 00007ff9`b6306000   C:\\Program Files\\WindowsApps\\Microsoft.NET.Native.Runtime.2.2_2.2.28604.0_x64__8wekyb3d8bbwe\\mrt100_app.dll\nModLoad: 00007ff9`b34f0000 00007ff9`b41bd000   C:\\Program Files\\WindowsApps\\Microsoft.NET.Native.Framework.2.2_2.2.27912.0_x64__8wekyb3d8bbwe\\SharedLibrary.dll\n</code></pre>\nIf trying to identify how some specific behavior works it may be easier to use the debugger.\nThe Windows Metadata (WinMD) files in the app's folder can be browsed with some .NET decompiler tools and allow you to browse interface/type definitions but these don't contain code as far as I know.\n",
+            "votes": "4",
+            "user": "chentiangemalc",
+            "time": "Nov 17, 2020 at 5:43",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "UWP apps are mostly native code unlike .NET apps which use CLR bytecode. Native code is  much harder to analyze and decompile.\n",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Feb 19, 2020 at 8:45",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Hmm. I don't get it though. It appears one can use C# to write a UWP app. What does it compile to then? Native code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@c00000fd then try compiling one and check how it looks. It seems at least the Settings app is not C#.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

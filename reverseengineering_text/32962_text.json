@@ -1,0 +1,54 @@
+{
+    "title": "WinDbg command to retrieve TTBR registers for Aarch64?",
+    "link": "https://reverseengineering.stackexchange.com/questions/32962/windbg-command-to-retrieve-ttbr-registers-for-aarch64",
+    "content": "Aarch64 architecture has the following registers, that contain physical base addresses for the virtual-to-physical translation tables for different exception levels:\n<pre><code>TTBR0_EL1, TTBR1_EL1, TTBR0_EL2, TTBR0_EL3\n</code></pre>\nI can't seem to find how to retrieve their values in WinDbg when I'm reviewing a full memory kernel crash dump, or if I'm attached to a live Windows OS kernel.\nPS. One can do it in assembly, as follows:\n<pre><code>mrs    x0,   ttbr0_el1     ;    read TTBR0_EL1 register into X0 general purpose register\n</code></pre>\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "90",
+    "tags": [
+        "windows",
+        "windbg",
+        "arm64",
+        "virtual-memory",
+        "aarch64"
+    ],
+    "user": "c00000fd",
+    "time": "May 11, 2024 at 12:47",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "UPDATE 2: short answer is <pre><code>rdmsr 0x00030200</code></pre>. The harder question is how to determine the \"MSR\" values? this is done by using ARM64_WINDBG_SYSREG macro which is defined as follows:\n<pre><code>    #define ARM64_WINDBG_SYSREG(op0, op1, crn, crm, op2) \\\n            ( ((op0) << 16) | \\\n              ((op1) << 12) | \\\n              ((crn) << 8) | \\\n              ((crm) << 4) | \\\n              ((op2) << 0) )\n</code></pre>\nor in python:\n<pre><code>def ARM64_WINDBG_SYSREG(op0, op1, crn, crm, op2):\n    return ( ((op0) << 16) | ((op1) << 12) | ((crn) << 8) | ((crm) << 4) | ((op2) << 0) )\n</code></pre>\nAnd by using the following arguments the result is 0x30200:\n<pre><code>Name        Op0 CRn Op1 CRm Op2 Width\nTTBR0_EL1   3   c2  0   c0  0   64\n</code></pre>\nAs mentioned before in the comments the parameters for this macro for other System Registers or \"MSRs\" can be found here.\nUPDATE 1:\nThere is also an option of looking at a cached version of the registers values through (since the registers don't change after initialization during boot then this is not a bad option):\nKPCR->KPRCB->ProcessorState->ArchState\n<pre><code>kd> !pcr\nKPCR for Processor 0 at fffff803ed4a0000:\n    Major 1 Minor 1\nPanic Stack 00000000\nDpc Stack 00000000\nIrql addresses:\n    Mask    fffff803ed4a0000\n    Table   fffff803ed4a0000\n    Routine fffff803ed4a0000\nkd> dt nt!_KARM64_ARCH_STATE fffff803ed4a0000+0x980+0x40+0xa0\n   +0x000 Midr_El1         : 0x410fd4c0\n   +0x008 Sctlr_El1        : 0x30d0595d\n   +0x010 Actlr_El1        : 0\n   +0x018 Cpacr_El1        : 0x300000\n   +0x020 Tcr_El1          : 0x00000015`b5513511\n   +0x028 Ttbr0_El1        : 0x00010000`008ef000\n   +0x030 Ttbr1_El1        : 0x00010000`008ef800\n   +0x038 Esr_El1          : 0xf200f002\n   +0x040 Far_El1          : 0xffff8180`ed005540\n   +0x048 Pmcr_El0         : 0\n   +0x050 Pmcntenset_El0   : 0\n   +0x058 Pmccntr_El0      : 0\n   +0x060 Pmxevcntr_El0    : [31] 0\n   +0x158 Pmxevtyper_El0   : [31] 0\n   +0x250 Pmovsclr_El0     : 0\n   +0x258 Pmselr_El0       : 0\n   +0x260 Pmuserenr_El0    : 0\n   +0x268 Mair_El1         : 0x444400ff`444400ff\n   +0x270 Vbar_El1         : 0xfffff803`f1a02800\n</code></pre>\nOriginal Answer:\nShort answer is, AFAIK there isn't currently a way to do that.\nI think it might be implemented in the future.\nYou would expect that arm64 should have a command like <pre><code>rdmsr 0xc0000082</code></pre> to read these system registers like ttbr0_el1 but unfortunately I couldn't find one.\nAlternatively, another option to show these registers contents would be the <pre><code>rm 0x4f</code></pre> to set the bit mask for the <pre><code>r</code></pre> command... but that although shows a bit more than the regular Integer registers is not the solution either.\nexample output for <pre><code>r</code></pre> and <pre><code>rm</code></pre> commands:\n<pre><code>kd> rm\nRegister output mask is 4f:\n       2 - Integer state (64-bit)\n       4 - Floating-point state\n       8 - Debug registers\n      40 - NEON registers\nkd> r\n x0=fffff803ed538aa0   x1=fffff803ed538a30   x2=0000000000000003   x3=fffff803ed538a10\n x4=0000000000000000   x5=fffff803f241c000   x6=ffffd785df80a7f0   x7=0000000000000000\n x8=000000000000d7c3   x9=0000000000011000  x10=0000000000004550  x11=000000000000001f\nx12=fffff803f22ad000  x13=0000000000001001  x14=ffffd785df802000  x15=0000000000000600\nx16=0000000000000003  x17=fffff803ed538820  x18=fffff803f1bbba34  x19=fffff803ed538aa0\nx20=fffff803ec5113c0  x21=fffff803ec5113d0  x22=fffff803f2451d00  x23=0000000000000003\nx24=fffff803ed538b20  x25=fffff803f2451000  x26=fffff803ed538b20  x27=fffff803f1800000\nx28=0000000000000000   fp=fffff803ed538a20   lr=fffff803f1b373d4   sp=fffff803ed538a20\n pc=fffff803f1a08908  psr=60000044 -ZC- EL1\n\n d0=    2.13309995079e-313   d1=    8.33242166252e-316\n d2=    6.22223872451e+088   d3=    1.39791210144e-308\n d4=    1.88719426152e+122   d5=    5.12400221257e+102\n d6=    8.33215452122e-316   d7=    6.94122434598e+228\n d8=                     0   d9=                     0\nd10=                     0  d11=                     0\nd12=                     0  d13=                     0\nd14=                     0  d15=                     0\nd16=                     0  d17=   -3.19883464952e+307\nd18=    1.24348953375e-311  d19=    3.60833840091e-313\nd20=                     0  d21=                     0\nd22=                     0  d23=                     0\nd24=    6.99621747986e+253  d25=   -1.37025872537e+182\nd26=    4.46817589305e+076  d27=       0.0184873304943\nd28=    7.13506166131e+257  d29=   -6.03392682883e-270\nd30=    2.36740574464e+237  d31=    1.80548526765e+125\n q0=0 0 1.4013e-044 7.06966e-031\n q1=2.82689e+023 2.24208e-044 0 6.80798e-033\n q2=3365.96 2.22601e+011 2.39744e+011 49.3168\n q3=845.255 3.36312e-044 9.23136e-040 8.4754e+011\n q4=9.23133e-040 3381.34 3.69912e+015 5.99516e+010\n q5=1.34876e+013 837109 1.33523e+013 3.36312e-044\n q6=7.0696e+028 3.36312e-044 0 6.80401e-033\n q7=3.60554e-042 6.97764e+022 7.49922e+028 1.69282e+022\n q8=0 0 0 0\n q9=0 0 0 0\nq10=0 0 0 0\nq11=0 0 0 0\nq12=0 0 0 0\nq13=0 0 0 0\nq14=0 0 0 0\nq15=0 0 0 0\nq16=0 0 0 0\nq17=-1.#QNAN -1.94827e+019 -1.#QNAN 0\nq18=4.62428e-044 4.2039e-044 8.21161e-043 6.96445e-043\nq19=4.2039e-044 1.4013e-045 2.38221e-044 3.0127e-038\nq20=0 0 0 0\nq21=0 0 0 0\nq22=0 0 0 0\nq23=0 0 0 0\nq24=-1.01884e-031 -2.08158e+029 1.03368e+032 6.35816e+009\nq25=-6.85105e-038 9.00862e+021 -1.13638e+023 1.93203e+022\nq26=-3.64747 -6.30615e-031 7.27112e+009 -1.8081e-011\nq27=-1.47062e-019 -8.19573e-019 1.1479 -0.95345\nq28=9.89469e+033 -1.67433e-015 3.14073e+032 1.67504e+022\nq29=-1.0893e-025 -6.0525e+022 -4.13779e-034 -3.07939e+023\nq30=-2.74816e+025 -1.43784e-006 9.07498e+029 69.093\nq31=-5.55539e-013 -6.043e-028 8.4819e+015 0.00020481\n\nkbvr[0] =0000000000000000  kbcr[0] =00000000\nkbvr[1] =0000000000000000  kbcr[1] =00000000\nkwvr[0] =0000000000000000  kwcr[0] =00000000\n</code></pre>\nWhat's left to do is to wait for someone to wake up in MSFT in the windbg team and hopefully do something about this, until then we are left only with debug prints and using the MRS opcode (or actually _ReadStatusReg intrinsic) such as this example:\n\nARM64_SYSREG is a macro defined as:\n<pre><code>#define ARM64_SYSREG(op0, op1, crn, crm, op2) \\\n        ( ((op0 & 1) << 14) | \\\n          ((op1 & 7) << 11) | \\\n          ((crn & 15) << 7) | \\\n          ((crm & 15) << 3) | \\\n          ((op2 & 7) << 0) )\n</code></pre>\nand in python:\n<pre><code>def ARM64_SYSREG(op0, op1, crn, crm, op2):\n    return ( ((op0 & 1) << 14) | ((op1 & 7) << 11) | ((crn & 15) << 7) | ((crm & 15) << 3) | ((op2 & 7) << 0) )\n</code></pre>\nARM64_SYSREG purpose is to encode arguments into a unique constant that represents a system register.\nYou can find a mapping of all system registers and their arguments for this macro here.\n",
+            "votes": "1",
+            "user": "rotem.salinas",
+            "time": "Jun 4, 2024 at 23:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Thanks. I'm actually writing a WinDbg extension. Do you know if there's any way to retrieve those TTBR registers using IDebug* interfaces?</span>",
+                    "time": null
+                },
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">What is the parameters of the <code>_ReadStatusReg</code> intrinsic? I wonder if I can do the same with <a href=\"https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dbgeng/nf-dbgeng-idebugdataspaces-readmsr\" rel=\"nofollow noreferrer\">IDebugDataSpaces::ReadMsr</a>? It requires \"MSR address\", and I don't know what it is for those TTBR registers.</span>",
+                    "time": null
+                },
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Also what is <code>ARM64_SYSREG</code>?</span>",
+                    "time": null
+                },
+                {
+                    "user": "rotem.salinas",
+                    "text": "<span class=\"comment-copy\">@c00000fd Please see my last edit.</span>",
+                    "time": null
+                },
+                {
+                    "user": "c00000fd",
+                    "text": "<span class=\"comment-copy\">Oh, that's a good find. Thanks. I'll check it on Monday.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

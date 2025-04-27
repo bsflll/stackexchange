@@ -1,0 +1,55 @@
+{
+  "title": "MSDetour not detouring SHGetKnownFolderPath",
+  "link": "https://reverseengineering.stackexchange.com/questions/13157/msdetour-not-detouring-shgetknownfolderpath",
+  "content": "Tried to hook SHGetKnownFolderPath from shell32, using the normal DetourFunctionWithTrampoline, and it could not.\n\nInvestigating, it seen that the application use GetProcAddress to load the function, and use the function pointer.\n\nSo I did the same, and hooked using DetourFunction, and it succeed.\n\nI looked on the assembly, and it seen that when I call SHGetKnownFolderPath directly it goes through two jumps before reaching shell32. I don't think that it does that for other functions. \n\nWhat is going on?\n\nSharing code:\n\n```\n#include \"stdafx.h\"\n#include \"windows.h\"\n#include \"FileAPI.h\"\n#include \"Shlobj.h\"\n\n\nint main()\n{\n    HANDLE hFile = CreateFileA(NULL, 0, 0, NULL, 0, 0, NULL);\n    SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0, NULL, NULL);\n    return 0;\n}\n\n```\nLooking in IDA, I see for CreateFileA:\n\n```\ncall    ds:__imp__CreateFileA@28 ; CreateFileA(x,x,x,x,x,x,x)\n\n```\nWhich takes me to:\n\n```\n.idata:0041B000 ; HANDLE __stdcall CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)\n.idata:0041B000                 extrn __imp__CreateFileA@28:dword ; CODE XREF: _main+2Ep\n.idata:0041B000                                         ; DATA XREF: _main+2Er ...\n\n```\nOn the other hand, for SHGetKnownFolderPath I see:\n\n```\ncall    j__SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\n\n```\nWhich redirect to:\n\n```\n; __stdcall SHGetKnownFolderPath(x, x, x, x)\nj__SHGetKnownFolderPath@16 proc near\njmp     _SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\nj__SHGetKnownFolderPath@16 endp\n\n```\nWhich redirect to:\n\n```\n; __stdcall SHGetKnownFolderPath(x, x, x, x)\n_SHGetKnownFolderPath@16 proc near\njmp     ds:__imp__SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\n_SHGetKnownFolderPath@16 endp\n\n```\nWhich redirect to:\n\n```\n.idata:0041B09C ; __declspec(dllimport) __stdcall SHGetKnownFolderPath(x, x, x, x)\n.idata:0041B09C                 extrn __imp__SHGetKnownFolderPath@16:dword\n.idata:0041B09C                                         ; DATA XREF: SHGetKnownFolderPath(x,x,x,x)r\n\n```\nSo SHGetKnownFolderPath have two more jumps then CreateFileA. I did nothing to the project to make it do it. so why?\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "300",
+  "tags": [
+    "dll",
+    "winapi",
+    "function-hooking"
+  ],
+  "user": "Shmuel Fomberg",
+  "time": "Nov 17, 2016 at 13:25",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "",
+      "votes": "2",
+      "user": "Jason Geffner",
+      "time": "Jul 28, 2016 at 14:53",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Shmuel Fomberg",
+          "text": "But why? Why did the compiler decided to make a stub for this function? I don't have this problem with CreateFileA for example. Is that special treatment for shell32? linker flag?",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "See reverseengineering.stackexchange.com/questions/2857/…",
+          "time": null
+        },
+        {
+          "user": "Shmuel Fomberg",
+          "text": "That explain one jump, not why I see TWO jumps. Also, it doesn't explain why CreateFileA does have this problem, in the same program.",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "If you can share the EXE we can take a look.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I found out that SHGetKnownFolderPath does not have a declspec(dllimport) flag in the definition in the header file.\nAdding it made it identical to the CreateFile call. \n\nWithout it, the compiler made a stub for the unknown function, and the linker made his own stub because of incremental linking, and only then forward the call to the DLL.\n\n",
+      "votes": "0",
+      "user": "Shmuel Fomberg",
+      "time": "Nov 21, 2016 at 10:03",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

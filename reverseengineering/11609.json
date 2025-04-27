@@ -1,0 +1,53 @@
+{
+    "title": "Exploitability of Stack-based Buffer Overflows on functions ending with fclose()",
+    "link": "https://reverseengineering.stackexchange.com/questions/11609/exploitability-of-stack-based-buffer-overflows-on-functions-ending-with-fclose",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have been discussing the effectiveness of GNU libc's <code>fclose()</code> function to thwart successful exploitation of trivial vulnerabilities due to segmentation fault when called without a valid pointer to a FILE data structure (implementations of libc on other operating systems fail silently). For instance, given a simple vulnerable function using <code>strcpy()</code> such as:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n#include &lt;string.h&gt;\n\nvoid\nfoo(const char *str)\n{\n  char buffer[256];\n  int ret = 123456;\n\n  FILE *fp = tmpfile();\n  strcpy(buffer, str);\n  if (ret != 500)\n    fclose(fp);\n}\n\nint \nmain(int argc, const char **argv)\n{\n  foo(argv[1]);\n  return 0;\n}\n</code></pre>\n<p>Even when compiled with most memory-protection mechanisms disabled:</p>\n<pre><code>cc -m32 -ggdb -fno-stack-protector -z execstack -z norelro main.c\n</code></pre>\n<p>The function, regardless of being overwritten up to <code>EIP</code> would never return since:</p>\n<pre><code>(gdb) r $(python -c \"print 'A' * 286\")\nProgram received signal SIGSEGV, Segmentation fault.\n0xf7e3e307 in fclose@@GLIBC_2.1 () from /lib/libc.so.6\n(gdb) ba\n#0  0xf7e3e307 in fclose@@GLIBC_2.1 () from /lib/libc.so.6\n#1  0x080484bc in foo (str=0x41414141 &lt;error: Cannot access memory...\n#2  0x41414141 in ?? ()\n#3  0x41414141 in ?? ()\n</code></pre>\n<p>Could there be a way to achieve code execution for such trivial function?. Since the <code>ret</code> variable can be overwritten, can it be set to 500 so that the if condition which determines if <code>fclose()</code> is called or not could be bypassed?</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "365",
+    "tags": [
+        "static-analysis",
+        "exploit",
+        "libc"
+    ],
+    "user": "Steven McDown",
+    "time": "Dec 21, 2015 at 20:34",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">The only last problem you may encounter (outside the gdb prompt) is the ASLR. But, there is no problem exploiting this small program with this bug. What did you already tried and what was the problem ? Note that the <code>fclose()</code> is not really a problem.</span>",
+            "time": null
+        },
+        {
+            "user": "Steven McDown",
+            "text": "<span class=\"comment-copy\">yeah, since <code>ret</code> and <code>fp</code> are overwritten it's possible to write <code>fp</code> with its address before the overflow and it'd work on non-ASLR systems, but the in-stack address would differ from system to system. As far as I know, <code>ret</code> cannot be overwritten to 500 again.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>Since the <code>ret</code> variable can be overwritten, can it be set to 500 so\n  that the if condition which determines if <code>fclose()</code> is called or not\n  could be bypassed?</p>\n</blockquote>\n<p>If the attacker can overwrite the <code>ret</code> variable on the stack with an arbitrary value, then yes.</p>\n<p>And even if the attacker can't overwrite <code>ret</code>, they still might be able to overwrite <code>fp</code> with a value that is acceptable to <code>fclose()</code>.</p>\n<p>Furthermore, your approach relies on several implementation-specific details. For example:</p>\n<ul>\n<li>You assume that <code>fp</code> is between <code>buffer</code> and the return address, but the compiler may not order the variables this way.</li>\n<li>You assume that <code>fclose()</code> will always throw an exception when given a corrupted pointer, however <a href=\"http://www.cplusplus.com/reference/cstdio/fclose/\" rel=\"nofollow\">this is not a requirement</a> and may change in future versions of GNU libc.</li>\n</ul>\n</div>",
+            "votes": "1",
+            "user": "Jason Geffner",
+            "time": "Dec 21, 2015 at 20:44",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Steven McDown",
+                    "text": "<span class=\"comment-copy\">The <code>ret</code> variable can be overwritten, but i don't think it can be changed to a value such as 500 in order to avoid calling <code>fclose()</code> because of the null byte in '\\x00\\x00\\xf4\\x01'. The assumption of the ordering was on purpose, the overflow should rewrite <code>fp</code> address. Regarding <code>fclose()</code> always throwing an exception when invalid pointers are given, I couldn't bruteforce a single address that did not ended on SIGSEGV, but sometimes advances up to FILE-&gt;_IO_file_close.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Steven McDown",
+                    "text": "<span class=\"comment-copy\">In addition, there is an <a href=\"http://www.hcsw.org/reading/vulndev2.txt\" rel=\"nofollow noreferrer\">old challenge</a> that suggests GOT overwritting, could it be possible to achieve code execution with the code I posted using such technique?. What I'm proposing is that functions that contain trivial overflows that overwrite a FILE pointer cannot be reliably exploited.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\"><i>\"because of the null byte in '\\x00\\x00\\xf4\\x01'.\"</i> -- Right, which is why I said that the attacker would need to be able to overwrite the <code>ret</code> variable with an arbitrary value, which isn't possible here.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

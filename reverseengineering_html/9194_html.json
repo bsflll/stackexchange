@@ -1,0 +1,47 @@
+{
+    "title": "Breakpoint on io file read",
+    "link": "https://reverseengineering.stackexchange.com/questions/9194/breakpoint-on-io-file-read",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am investigating an application, which is encrypting it's files and stores them into disk. Of course i know where the files are and their corresponding filenames.\n </p>\n <p>\n  In order to find out how the decryption takes place i need to somehow break the execution on the opening of the file from the disk.\n </p>\n <p>\n  Has anybody any idea if something like this is possible?\n </p>\n <p>\n  The main problem that i have is that i am completely unable to detect how the application reads the file from disk. How am i supposed to find the module that is being called?\n </p>\n <p>\n  The application is a 64bit one and i am using Cheat Engine to debug it. I tried other 64bit debuggers as well, but none of them matched the memory search that is possible with CE.\n </p>\n <p>\n  PS: I've also posted this question in Stackoverflow, but i guess this is the best place to ask this question.\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "debugging",
+        "breakpoint"
+    ],
+    "user": "Greg",
+    "time": "Jun 21, 2015 at 16:33",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<html><body><span class=\"comment-copy\">\n I'm not sure whether this should be marked a duplicate of\n <a href=\"http://reverseengineering.stackexchange.com/questions/9168/reversing-encryption-by-analysing-executable\" title=\"reversing encryption by analysing executable\">\n  reverseengineering.stackexchange.com/questions/9168/…\n </a>\n , but the method i explained in my answer there would probably work for you as well.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "phil294",
+            "text": "<html><body><span class=\"comment-copy\">\n You could try (unix/linux) GDB and do something like\n <code>\n  break fopen64 if strcmp($rdi, \"yourfilename\") == 1\n </code>\n , if the binary still has function names available (check out with\n <code>\n  info functions\n </code>\n ). not sure if mingw-gdb (windows) works in similar ways too\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  use procmon from Sys Internals  to log the process\n  \n\n  filter the log for file access\n  \n\n  (latest release has a file summary tab that simplifies entering filter expressions to mere mouse clicks)\n </p>\n <p>\n  code for a simple xorrer  (takes an input file and writes back a xorred file)\n </p>\n <pre><code>#include <stdio.h>\n#include <stdlib.h>\n#define ENOENT 2\nvoid main(int argc, char *argv[]) {\n  if(argc !=3 ) { printf(\"usage : %s infile outfile\",argv[0]); return;}\n  FILE *fp = 0; errno_t err=ENOENT; long flen =0,bread =0 ; char *buff =0;\n  if (((err = fopen_s(&fp,argv[1],\"rb\")) == 0) && (fp !=0)) {\n    fseek(fp,0,SEEK_END);\n    flen = ftell(fp);\n    if((buff = (char *)calloc(flen,sizeof(char))) !=0 ) {\n      fseek(fp,0,SEEK_SET);\n      if (( bread = fread(buff,sizeof(char),flen,fp) ) == flen) {\n        fclose(fp); err=ENOENT;\n        for(int i = 0; i< flen; i++)  {\n          buff[i] ^= 'A' ;\n        }\n        if(((err = fopen_s(&fp,argv[2],\"wb\")) == 0) && (fp !=0)) {\n          fwrite(buff,1,flen,fp);\n          fclose(fp);\n          free(buff);\n        }\n      }\n    }\n  }\n}\n</code></pre>\n <p>\n  a batfile logging this file access (blind run) and loading the log into procmon again for applying filters and saving back the filtered events as xml\nwhich allows powershell to parse and print\n </p>\n <pre><code>echo off\nstart procmon.exe /quiet  /minimized /backingfile /nofilter .\\LogFile.pml\nprocmon.exe /waitforidle\nstart /wait encfile.exe rawdata.txt encdata.txt\nprocmon.exe /terminate\nstart /wait procmon.exe /openlog .\\logfile.pml\npowershell  ([xml] ( Get-Content .\\logfile.xml)).procmon.eventlist.event[2].stack.frame \npause\n</code></pre>\n <p>\n  filter used to save xml file was \"Include if path contains xxxx where xxxx is the filename of interest\"\n </p>\n <p>\n  here is the stack of the fileRead\n </p>\n <pre><code>PS > ([xml]\n ( Get-Content .\\logfile.xml)).procmon.eventlist.event[2].stack.frame\n\ndepth               address             path                location\n-----               -------             ----                --------\n0                   0xb9ed5888          C:\\WINDOWS\\Syste... FltpPerformPreCa...\n1                   0xb9ed72a0          C:\\WINDOWS\\Syste... FltpPassThroughI...\n2                   0xb9ed7c48          C:\\WINDOWS\\Syste... FltpPassThrough ...\n3                   0xb9ed8059          C:\\WINDOWS\\Syste... FltpDispatch + 0...\n4                   0x804ee129          C:\\WINDOWS\\syste... IopfCallDriver +...\n5                   0x80571d9c          C:\\WINDOWS\\syste... NtReadFile + 0x580\n6                   0x8053d658          C:\\WINDOWS\\syste... KiFastCallEntry ...\n7                   0x40364c            C:\\Documents and... encfile.exe + 0x...\n8                   0x403ac0            C:\\Documents and... encfile.exe + 0x...\n9                   0x4033a2            C:\\Documents and... encfile.exe + 0x...\n10                  0x4015bf            C:\\Documents and... encfile.exe + 0x...\n11                  0x401698            C:\\Documents and... encfile.exe + 0x...\n12                  0x4016d1            C:\\Documents and... encfile.exe + 0x...\n13                  0x4010d3            C:\\Documents and... encfile.exe + 0x...\n14                  0x401d09            C:\\Documents and... encfile.exe + 0x...\n15                  0x7c817077          C:\\WINDOWS\\syste... BaseProcessStart...\n16                  0x0\n</code></pre>\n <p>\n  ascertaining  the ReadFile  call\n </p>\n <pre><code>:\\cdb -c \"ub 40364c;q\" encfile.exe | tail -n 2\n00403646 ff1550b04000    call    dword ptr [image00400000+0xb050 (0040b050)]\nquit:\n\n:\\cdb -c \".printf \\\"%y\n\\\",poi(40b050);q\" encfile.exe | tail -n 2\nkernel32!ReadFile (7c801812)\nquit:\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Jun 21, 2015 at 22:23",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Greg",
+                    "text": "<span class=\"comment-copy\">omg, i completely forgot about procmon. Thanks a million times mate, did not need to use the console version, modified my filters appropriately and i found out exactly who created the file (it was another bootstrap process btw). I hope i find my way in there now :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">glad to be of help but i didn't use any console version i just scripted the gui version to provide me appropriate results conducible to text / xml parsing (actually procmon has a proprietery format for providing filter expression via commandline (/config.\\xxxx.pmc ) which i use in a generic powershell ps1 file with Start-process  cmdlet   try it sometimes it eases the pain of stepping through utter crap looking for hay in pricking needle stacks</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

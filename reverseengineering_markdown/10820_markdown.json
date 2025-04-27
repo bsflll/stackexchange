@@ -1,0 +1,63 @@
+{
+  "title": "What is all this code for?",
+  "link": "https://reverseengineering.stackexchange.com/questions/10820/what-is-all-this-code-for",
+  "content": "In order to be able to effectively reverse assembly one needs to understand how different compilers work, and what are the common code generation patterns. If you do not know them, you spent much more time figuring out something that is simply an artifact of compiler code generation. \n\nGiven the above, I'd like to understand meaning of the following code. It's from lzham_codec library but as you will see in a moment it's not specific to it. I clone this git repo and then I compile the code with VS2015. I set a breakpoint to lzham_codec\\lzhamdll\\lzham_api.cpp (line 9)\n\nThen I run lzhamtest and the breakpoint hits. I open the Disassembly window, and here is what I see:\n\n\n\nThis is an awful lot of code for a function that simply returns a constant. What is all this code for?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "687",
+  "tags": [
+    "assembly",
+    "c++",
+    "compilers"
+  ],
+  "user": "Andrew Savinykh",
+  "time": "Sep 9, 2015 at 4:47",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Try to provide the asm code in text characters when it is as short as your example, providing an image makes it non-machine readable and you cannot copy/paste it easily for further analysis.",
+      "time": null
+    },
+    {
+      "user": "newgre",
+      "text": "This is most likely a debug build as it fills the stack space with 0xCC and lacks some basic optimizations (e.g. removal of unnecessary push/pop sequences).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I'll assume you have a general understanding of the x86 processor architecture, registers, and how the stack works. If you don't, there are a lot of introductions, tutorials, and books out there, which explain things much better than I could in this post.\n\nThe first 2 and last 3 instructions are standard function entry/exit code:\n\n```\npush ebp\nmov ebp, esp\n....\nmov esp, ebp\npop ebp\nret\n\n```\nthey set up the stack for the function, resp. undo this and return to the caller.\n\n```\nsub esp, 0C0h\n\n```\nmakes space for 192 (0xC0) bytes of local variables on the stack.\n\nThe push and pop instructions save registers to the stack that get clobbered by the function, and restore them afterwards:\n\n```\npush ebx\npush esi\npush edi\n...\npop edi\npop esi\npop ebx\n\n```\nNote that ebx and esi aren't even touched by the rest of the code. But it seems you compiled without optimizations; the abi states that these registers shouldn't be changed by procedures, so the compiler saves them, and without optimizations, it doesn't realize it doesn't need them later and doesn't remove the push? /pop` from the code.\n\n```\nlea edi, [ebp-0C0h]\nmov ecx, 30h\nmov eax, 0cccccccch\nrep stos dword ptr es:[edi]\n\n```\nThis fills all local variables with 0xCCCCCCCC, but your C code shows no reason for that. Maybe it has to do with some variable declarations that isn't shown in the code, or maybe the compiler just initializes local variables to 0xCCCCCCCC to prevent \"uninitialized variables have undefined values, don't let the code assume they are zero\" errors.\n\nWhat remains is\n\n```\nmov eax,1010h\n\n```\nwhich is the return instruction - function results are generally returned in the eax register, and 0x1010 seems to be what LZHAM_DLL_VERSION is defined to.\n\n",
+      "votes": "2",
+      "user": "Guntram Blohm",
+      "time": "Sep 9, 2015 at 6:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "broadway",
+          "text": "I assume it was compiled with /RTCs which we produce code to initialize the stack.",
+          "time": null
+        },
+        {
+          "user": "Andrew Savinykh",
+          "text": "Thank you. Nope, no local variables. Do you know why it's 96 bytes and not say 72 or 144? Also do you know why only part of allocated stack memory is filled by cccccccc and not the whole space?",
+          "time": null
+        },
+        {
+          "user": "Andrew Savinykh",
+          "text": "And also, how 0C0h from the code becomes 96 (0x60) in your answer? Is this a typo?",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "Sorry, this was due to not having had coffee yet this morning. It's 30h (=48) times 4 bytes (dword), so it's C0h (=192) bytes, so it's all of the allocated stack.",
+          "time": null
+        },
+        {
+          "user": "user45891",
+          "text": "The 0xCCCCCCCC are, as @broadway rightfully pointed out, the result of the /RTC switch - which is a default for Debug builds, which also turn off optimizations.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

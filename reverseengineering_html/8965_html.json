@@ -1,0 +1,49 @@
+{
+    "title": "How can I change the a port a program listens on?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8965/how-can-i-change-the-a-port-a-program-listens-on",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I want to change the port number a program listens on. The program is a proprietary linux binary, Plex, that always listens to tcp port 32400 (hard-coded).  Since I want to run this on a shared server, another person may already be using this port.  I do not have root access on the server.  The VPS provider is OK with Plex running on their servers.\n </p>\n <p>\n  Would it be possible to use something like LD_PRELOAD to change the port number? If so, how would I go about doing this?  If not, how else might I accomplish this?\n </p>\n <p>\n  <a href=\"https://forums.plex.tv/index.php/topic/134609-issues-changing-default-port-from-32400-on-vps/\" rel=\"nofollow\">\n   Issues changing default port from 32400 on VPS\n  </a>\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "992",
+    "tags": [
+        "linux",
+        "c"
+    ],
+    "user": "jftuga",
+    "time": "May 23, 2015 at 1:25",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You have a couple of options:\n </p>\n <ol>\n  <li>\n   <p>\n    Use an hex editor to change the value manually. This might be the easiest option, provided you don't update that binary too often. A method to find the offset to modify would involve disassembling the binary and identify the value to change.\n   </p>\n  </li>\n  <li>\n   <p>\n    Use a container, like docker, where the binary could still be listening to 32400\n    <em>\n     inside\n    </em>\n    the container, but you could map this to another port outside of it.\n   </p>\n  </li>\n  <li>\n   <p>\n    Use LD_PRELOAD, you could use that to intercept calls to\n    <code>\n     bind()\n    </code>\n    and change what is passed to it\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Frederik Deweerdt",
+            "time": "May 23, 2015 at 1:48",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Probably the easiest way to do this, if you don't have any special tools, is run\n  <code>\n   plex\n  </code>\n  under the control of\n  <code>\n   gdb\n  </code>\n  , with the input of\n  <code>\n   gdb\n  </code>\n  comping from a script. To do that, you need to find the address where 32400 is hardcoded.\n </p>\n <pre><code>objdump -D plex | grep -i 7e90\n</code></pre>\n <p>\n  should give you something like\n </p>\n <pre><code>40090b: bf 90 7e 00 00          mov    $0x7e90,%edi\n</code></pre>\n <p>\n  Start gdb, set a breakpoint there, run the program until it hits the breakpoint.\n </p>\n <pre><code>gdb plex\nbreak *0x40090b\nrun\n</code></pre>\n <p>\n  Step one instruction, change the register value, and continue running the program:\n </p>\n <pre><code>stepi\n>> 0x0000000000400910 in main ()             <-- address of next instruction\ninfo registers                               <-- just to make sure\n>> rdi            0x7e90    32400\nset $rdi=0x7e91                              <-- patch the value\ninfo registers                               <-- again, just to make sure\n>> rdi            0x7e91    32401\ncont\n</code></pre>\n <p>\n  In a different window, check if plex really listens on the other port:\n </p>\n <pre><code>netstat -ntap | grep plex\ntcp   0      0 0.0.0.0:32401     0.0.0.0:*     LISTEN      22018/plex \n</code></pre>\n <p>\n  yes it did!\n </p>\n <p>\n  Now automate this in a script:\n </p>\n <pre><code>gdb plex <<EOF\nbreak *0x400910      <-- note this is the instruction AFTER the load, not the one we breaked on last time\nrun\nset $rdi=0x7e91\ncont\nEOF\n</code></pre>\n <p>\n  and run that script instead of\n  <code>\n   plex\n  </code>\n  everytime you want to start it on a different port.\n </p>\n <p>\n  Of course, you could also use a hex editor to change the value in the binary directly. You'll even have to do this if the routine that sets up the listening port gets called repeatedly (so you can't predict which exact input gdb needs). However, in many cases, this might be the easiest method, since it doesn't require changing the binary or programming a LD_PRELOAD handler, and changing the port number later is super-easy.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "May 23, 2015 at 8:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "jftuga",
+                    "text": "<span class=\"comment-copy\">I found <code>rdx  0x7e90   32400</code> in gdb and changed it.  It is now running on a different port number.  In a hex editor, what would I look for to make the change permanent?</span>",
+                    "time": null
+                },
+                {
+                    "user": "jftuga",
+                    "text": "<span class=\"comment-copy\">I found <code>rdx  0x7e90   32400</code> in gdb and changed it.  It is now listening on both 32400 and 32401.  I also checked the registers a 6 other breakpoints as that it what <code>objump|grep</code> returned.  Any ideas as to why it would be doing this?</span>",
+                    "time": null
+                },
+                {
+                    "user": "jftuga",
+                    "text": "<span class=\"comment-copy\">Ah, it looks like Plex uses both 32400 and 32401 by default.  I will try changing the register to another value.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

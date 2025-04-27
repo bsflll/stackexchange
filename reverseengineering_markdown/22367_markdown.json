@@ -1,0 +1,83 @@
+{
+  "title": "Trace Method Calls in .NET/C# Binary",
+  "link": "https://reverseengineering.stackexchange.com/questions/22367/trace-method-calls-in-net-c-binary",
+  "content": "I have a heavily obfuscated Windows service binary. Fields, types and methods are renamed. While it is possible to decompile the binary using dnSpy, it is still very cumbersome to identify important/interesting locations statically.\n\nIs it possible to dynamically instrument the binary in order to gain a deeper understanding of certain execution paths? I don't know a lot about CLR internals but my understanding is that instrumentation is not easily possible because of JIT compilation of IL instructions.\n\nIf anybody has suggestions for tracing execution paths in the binary, I'd highly appreciate your input. Additionally, if anybody has seen a similar obfuscation scheme before, please let me know:\n\n\n\nEdit: The sample can be downloaded from: https://gofile.io/?c=qrNky4 (not malicious; part of a VPN software)\n\n",
+  "votes": "5",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "obfuscation",
+    ".net",
+    "c#",
+    "instrumentation"
+  ],
+  "user": "DucatiNerd",
+  "time": "Oct 28, 2019 at 9:39",
+  "comments": [
+    {
+      "user": "Paweł Łukasik",
+      "text": "Is it possible you share the binary so it's easier to showcase potential solution on this real example?",
+      "time": null
+    },
+    {
+      "user": "DucatiNerd",
+      "text": "I have uploaded the binary to gofile.io/?c=qrNky4 - It is public and not malicious; it's actually part of a VPN service.",
+      "time": null
+    },
+    {
+      "user": "3dsboy08",
+      "text": "Little note: The obfuscator used is (likely) .NET Reactor, there is public tools for deobfuscating it but they might not work on newer versions.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Well it's actually the opposite. Tracing methods is quite easy - it would be difficult if we would like to trace fields usages. .NET assemblies contain rich type/method information that can be used to inspect/modify them. There's also a great library that does that plus more - Mono.Cecil.\n\nWith the help if this library we can achieve what you want (gist).\n\n```\nusing System;\nusing System.IO;\nusing System.Linq;\nusing Mono.Cecil;\nusing Mono.Cecil.Cil;\n\nclass TraceIL\n{\n    static void Main(string[] args)\n    {\n        if (args.Length != 1)\n        {\n            Console.WriteLine(\"TraceIL.exe <assembly>\");\n            return;\n        }\n\n        string fileName = args[0];\n        ModuleDefinition module = ModuleDefinition.ReadModule(fileName);\n        MethodReference consoleWriteLine =\n            module.ImportReference(typeof(Console).GetMethod(\"WriteLine\", new Type[] {typeof(object)}));\n        foreach (TypeDefinition type in module.Types)\n        {\n            foreach (var methodDefinition in type.Methods)\n            {\n                var ilBody = methodDefinition.Body;\n                var ilProcessor = ilBody.GetILProcessor();\n\n                var firstOp = methodDefinition.Body.Instructions.First();\n                var ldstrEntering = Instruction.Create(OpCodes.Ldstr, $\"--Entering {methodDefinition.Name}\");\n                ilProcessor.InsertBefore(firstOp, ldstrEntering);\n                var call = Instruction.Create(OpCodes.Call, consoleWriteLine);\n                ilProcessor.InsertBefore(firstOp, call);\n                var ldstrLeaving = Instruction.Create(OpCodes.Ldstr, $\"--Leaving {methodDefinition.Name}\");\n                var lastOp = methodDefinition.Body.Instructions.Last();\n                ilProcessor.InsertBefore(lastOp, ldstrLeaving);\n                ilProcessor.InsertBefore(lastOp, call);\n            }\n        }\n        module.Write(Path.GetFileNameWithoutExtension(fileName)+\".modified\"+Path.GetExtension(fileName));\n    }\n}\n\n```\nJust to explain a little bit what's going on. For every method on every type we find in the assembly, we get the ILProcessor that allows us to modify the code. Having that we just insert a string and a call to Console.WriteLine just before the first existing opcode, and similar code just before the end of the method. At the very end we save the new binary under the same name with .modified added.\n\nThe example run:\n\nOf course form there you can do some crazy stuff, like adding timestamp and/or list passed arguments, etc. Since your sample is obfuscated it might not work form the start, but I guess this code is not that difficult to be modified as needed.\n\n",
+      "votes": "5",
+      "user": "Paweł Łukasik",
+      "time": "Oct 25, 2019 at 19:58",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "DucatiNerd",
+          "text": "Thank you very much for your clear explanation. That is definitely something I will look into!",
+          "time": null
+        },
+        {
+          "user": "Paweł Łukasik",
+          "text": "@DucatiNerd I've tried with this file and I can see there's some tricks that would have to be removed in order to instrumentation work. There's for example jump over some invalid calls that make this module impossible to save after instrumenting",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "You can use de4dot (https://github.com/0xd4d/de4dot) to deobfuscate the binary. Static analysis of dotnet binaries can be done easily by using de4dot and then using ILSpy to create a visual studio project, then you can analyze the source code in visual studio. You can also use dnSpy which allows you to debug the binary easily. \n\nAbout the instrumentation, a dotnet binary still runs native code at runtime, with all the normal Win32 libraries. You can use Api Monitor (http://www.rohitab.com/downloads) to monitor os api calls at runtime, it's an awesome tool that works by hooking libraries and decoding parameters.\n\nMoreover you can use procmon to display simple information like file system operations, registry, etc.. \n\nGood luck \n\n",
+      "votes": "3",
+      "user": "oridamari",
+      "time": "Oct 25, 2019 at 22:55",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "DucatiNerd",
+          "text": "d4dot was actually one of the first tools i tried out. Surprisingly, in this case, it did not detect the obfuscation scheme and was not able to deobfuscate the binary.",
+          "time": null
+        },
+        {
+          "user": "oridamari",
+          "text": "Can you share the sample? :)",
+          "time": null
+        },
+        {
+          "user": "DucatiNerd",
+          "text": "Check my reply to my question above. I have linked the file :)",
+          "time": null
+        },
+        {
+          "user": "Johann Aydinbas",
+          "text": "This may be .NET reactor, I think I recognize the control-flow flattening from a previous sample where de4dot did detect it.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

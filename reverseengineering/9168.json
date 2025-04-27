@@ -1,0 +1,36 @@
+{
+    "title": "Reversing encryption by analysing executable",
+    "link": "https://reverseengineering.stackexchange.com/questions/9168/reversing-encryption-by-analysing-executable",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a program that reads data from a file, parses/organizes it, and spits it out as an encrypted XML. The application can also take an encrypted XML and spit out the original file. My objective at this point would be to access the clear-text XML (I'm not interested in the clear text original file as it's not XML organized)</p>\n<p>I have no idea what the encryption is yet although one guy on a forum said it was AES-128 (not sure how he got to that conclusion).</p>\n<p>I ran PEiD with the KANAL plugin on the application, it doesn't detect any encryption signatures.</p>\n<p>Because I have access to the program and some past some experience with exploiting BO on WinXP with some knowledge of ASM, I figured I could give it a try using a debugger.</p>\n<p>In a nutshell, what are the general steps I should be following to figure this out? In this situation would it be best to start looking for the encryption key itself, or find a way to use the application's encrypt/decrypt functions to my advantage?</p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "encryption"
+    ],
+    "user": "Juicy",
+    "time": "Jun 17, 2015 at 22:03",
+    "comments": [
+        {
+            "user": "Abr001am",
+            "text": "<span class=\"comment-copy\">we need to know more informations , that may help to trace AES process</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There are typically many ways to start, and which one you want to use depends on your experience. Also, what works for one target might fail on another, and vice versa. What i'd start with is:</p>\n<ul>\n<li>Use signsrch to check if the executable has a standard encryption algorithm linked in. Note that this might yield false positives (if the application links openssl, for example, you might find signatures of many algorithms even if only one or two of them get used)</li>\n<li>Check for strings in the file that relate to encryption, and google for them. Maybe this helps to find which encryption library was used. For example, the string <code>SHA-%d test #%d:</code> quickly leads to the <code>polarssl</code> source code.</li>\n<li>Trace the application while running procmon. You will probably find a sequence of <code>CreateFile</code>, multiple <code>WriteFile</code> and a <code>CloseFile</code> call, when writing the encrypted file, and the same with <code>ReadFile</code> when reading the encrypted file. In some cases, the parameters of these calls give you a hint already; for example, if the first <code>WriteFile</code> has a byte count of 32, and every following call 4096, this could be a hint that the first 32 bytes are a 256-bit key.</li>\n<li>Check the stack when a call to <code>ReadFile</code> or <code>WriteFile</code> happens, You can do this by placing a breakpoint there while running the application under a debugger, or (much easier imho) look at the stack for several of the <code>procmon</code> calls. This gives you a hint of which chain of functions encrypts the file and writes it.</li>\n<li><p>Pay attention to the stack differences in the <code>CreateFile</code>, <code>WriteFile</code> on the encrypted file, and possibly <code>WriteFile</code> on something else. These might as well give you hint which is your encryption function. For example:</p>\n<ul>\n<li>The <code>CreateFile</code> for the encrypted file has the stack <code>ABCDEFGH</code></li>\n<li>The <code>WriteFile</code> for the encrypted file has the stack <code>ABCIJKLM</code></li>\n<li>The <code>WriteFile</code> for something else has the stack <code>ABNOPKLM</code></li>\n</ul>\n<p>where each letter is one stack entry. In this case, i'd assume <code>KLM</code> to be part of the runtime library (<code>fwrite</code>, <code>write</code>, ....), since unrelated <code>WriteFile</code>s share it, <code>C</code> to be the main writer function (as it's the last to call <code>CreateFile</code> and <code>WriteFile</code>), and <code>I</code> and <code>J</code> the functions that encrypt and write.</p></li>\n<li>Load the file into IDA, or OllyDbg, and have a closer look at <code>C</code>, <code>I</code> and <code>J</code>. Which other functions do they call? Are some of these functions the same ones you identified with signsrch earlier?</li>\n<li>Run the file under the control of IDA, or OllyDbg, and place breakpoints on <code>C</code>, <code>I</code>, <code>J</code>, and maybe some of the functions you found with signsrch. Check the parameters on entry and exit from these functions. Do some of them ring a bell? Does one of the functions has a parameter that is a pointer to a buffer which looks like XML before the function is called, and garbage after it's called? Or vice versa when reading? Congrats, you've just found the function that does the encryption.</li>\n<li>When you found the function that does the encryption, instead of figuring out how it works, it <em>might</em> just be easier to replace the call to it with a series of <code>NOP</code>s (beware of return codes though, maybe you need to set <code>eax</code> to something). Bingo, you have a program that writes plain XML instead of encrypted XML now, without ever figuring out the details of the encryption and having to write one single line of code (unless you consider a series of <code>NOP</code>s code, that is).</li>\n</ul>\n</div>",
+            "votes": "7",
+            "user": "Guntram Blohm",
+            "time": "Jun 18, 2015 at 7:27",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Abr001am",
+                    "text": "<span class=\"comment-copy\">you forget to tell how to remove junk that obfuscates encryption stages</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

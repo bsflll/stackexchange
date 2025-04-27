@@ -1,0 +1,31 @@
+{
+    "title": "Derive logic for 2 \"check bytes\" for a USB fingerprint reader",
+    "link": "https://reverseengineering.stackexchange.com/questions/32157/derive-logic-for-2-check-bytes-for-a-usb-fingerprint-reader",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have been working on reverse engineering and building a Linux driver for a fingerprint reader and have most of it sorted out, but one thing which continues to elude me is that there seems to be 2 bytes in each payload that are some kind of \"check bytes.\" I am not sure if one or both are some kind of CRC, a simple sum or XOR of the bytes in some order, maybe some offset or constant XOR being applied to them, or something? But it seems like any kind of logic I work out for 2 or 3 of the examples does not fit for the others.\n </p>\n <p>\n  Does anyone have any thoughts on what how these could be generated?  More info here if you are super curious to dig in:\n  <a href=\"https://gitlab.freedesktop.org/libfprint/libfprint/-/issues/569\" rel=\"nofollow noreferrer\">\n   https://gitlab.freedesktop.org/libfprint/libfprint/-/issues/569\n  </a>\n </p>\n <p>\n  The \"payloads\" seem to have an 8 byte prefix (one when reading from the device's bulk in, and one when sending to the device's bulk out), followed by these 2 \"check\" bytes (not calling them a \"checksum\" yet as I am not sure what either of them actually represent), then 3 \"0\" bytes, and either 1 or 2 bytes of some kind\nof type/subtype byte to indicate the type of event or message being sent, finally followed by some kind of \"actual\" payload for the specific event.\n </p>\n <p>\n  I am still not sure if the prefix is included in the check algorithm or if it only looks at what comes payload which comes after everything else, or if when there is occasionally some type/subtype suffixes that these are or are not included either.\n </p>\n <p>\n  But here are some examples:\n </p>\n <p>\n  BULK IN example payloads (as hex bytes) read from the device during a trace:\n </p>\n <pre><code>53 49 47 45 00 00 00 01 d5 6d 00 00 00 02 90 00\n53 49 47 45 00 00 00 01 d4 6d 00 00 00 02 91 00\n53 49 47 45 00 00 00 01 d5 69 00 00 00 02 90 04\n53 49 47 45 00 00 00 01 ff 6f 00 00 00 02 65 fe\n53 49 47 45 00 00 00 01 ff d0 00 00 00 04 01 0a 64 91\n53 49 47 45 00 00 00 01 fe d0 00 00 00 04 02 0a 64 91\n53 49 47 45 00 00 00 01 d2 61 00 00 00 04 03 0a 90 00\n53 49 47 45 00 00 00 01 cb 61 00 00 00 04 0a 0a 90 00\n53 49 47 45 00 00 00 01 3a d8 00 00 00 0d 39 30 35 30 2e 31 2e 31 2e 38 31 90 00\n53 49 47 45 00 00 00 01 8d 2c 00 00 00 06 02 04 46 39 90 00\n53 49 47 45 00 00 00 01 9f a5 00 00 00 22 01 89 c4 7f 37 a5 e6 f9 81 c2 b5 45 66 ec 3b ff 26 04 39 77 cb 35 44 ae e8 1d 29 93 41 c0 b4 3b 90 00\n</code></pre>\n <p>\n  BULK OUT example payloads (as hex bytes) sent to the device from the Windows driver during a trace:\n </p>\n <pre><code>45 47 49 53 00 00 00 01 04 54 00 00 00 07 50 07 00 02 00 00 1d\n45 47 49 53 00 00 00 01 1d 1a 00 00 00 07 50 43 00 00 00 00 04\n45 47 49 53 00 00 00 01 00 47 00 00 00 07 50 16 01 00 00 00 20\n45 47 49 53 00 00 00 01 1d 45 00 00 00 07 50 16 02 02 00 00 02\n45 47 49 53 00 00 00 01 21 46 00 00 00 04 50 1a 00 00\n45 47 49 53 00 00 00 01 1f 49 00 00 00 04 50 16 02 01\n45 47 49 53 00 00 00 01 fc 46 00 00 00 07 50 16 05 00 00 00 20\n45 47 49 53 00 00 00 01 55 f1 00 00 00 27 50 16 03 00 00 00 20 01 89 c4 7f 37 a5 e6 f9 81 c2 b5 45 66 ec 3b ff 26 04 39 77 cb 35 44 ae e8 1d 29 93 41 c0 b4 3b\n</code></pre>\n <p>\n  Any ideas?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "55",
+    "tags": [
+        "crc",
+        "checksum"
+    ],
+    "user": "joshuagrisham",
+    "time": "Aug 11, 2023 at 15:14",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In every line the sum of all big-endian words modulo\n  <code>\n   0xFFFF\n  </code>\n  equals to 0.\n  \n\n  Example (the last line):\n </p>\n <pre><code>0x4547 + 0x4953 + 0x0000 + ... + 0x9341 + 0xc0b4 + 0x3b00 = 0x9FFF6\n</code></pre>\n <p>\n  To verify the checksum:\n </p>\n <ul>\n  <li>\n   append zero byte if number of bytes is odd;\n  </li>\n  <li>\n   calculate 32-bit sum of 16-bit words;\n  </li>\n  <li>\n   split the sum into 16 low bits and 16 high bits;\n  </li>\n  <li>\n   calculate the 16-bit sum (or\n   <code>\n    xor\n   </code>\n   ) of the two halves;\n  </li>\n  <li>\n   the result must be equal to\n   <code>\n    0xFFFF\n   </code>\n   .\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "ESkri",
+            "time": "Aug 12, 2023 at 20:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "joshuagrisham",
+                    "text": "<span class=\"comment-copy\">Thanks @ESkri that is incredibly well spotted! I was able to take the observations you made and rough out a basic formula <code>0xFFFF - (sum_of_32bit_words % 0xFFFF)</code> that I guess gives essentially the \"first possibility\" of a reverse mod and the USB device seems to like it!  So I will clean up the code a bit and update... thank you for the help!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

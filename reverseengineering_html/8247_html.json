@@ -1,0 +1,49 @@
+{
+    "title": "Finding responsible part of code writing specific values on stack",
+    "link": "https://reverseengineering.stackexchange.com/questions/8247/finding-responsible-part-of-code-writing-specific-values-on-stack",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to RE an application which shows after hitting a button a specific number.\nThe number comes from a file after parsing it. Input = 5, number displayed = 5 and so on.\n </p>\n <p>\n  I was able to track down the disassembled code where the number being loaded.\n </p>\n <pre><code>v3 = *(_DWORD *)(*((_DWORD *)AfxGetModuleState() + 1) + 164);\n\nATL::CStringT<char,StrTraitMFC_DLL<char,ATL::ChTraitsCRT<char>>>::Format(v2 + 168, \"%u\", *(_DWORD *)(v13 + 1032));\n</code></pre>\n <p>\n  The last part\n  <code>\n   v13 + 1032\n  </code>\n  told me where to look on the stack and indeed I found the number.\n </p>\n <p>\n  <strong>\n   Stack overview\n  </strong>\n </p>\n <pre><code>00188F7C  0000000\n00188F80  0000004\n00188F84  0000001\n00188F88  000001D\n</code></pre>\n <p>\n  <strong>\n   Now my question is:\n  </strong>\n  Is there any way in IDA to show me the code which is putting those 4 values on the stack? The surounding lines (Line1, 3 and 4)\n  <strong>\n   always\n  </strong>\n  have the same values.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "253",
+    "tags": [
+        "ida"
+    ],
+    "user": "vigri",
+    "time": "Feb 15, 2015 at 20:41",
+    "comments": [
+        {
+            "user": "rev",
+            "text": "<html><body><span class=\"comment-copy\">\n I'm not sure if this is what you need, but since you have the place where it reads the stack, you could breakpoint and inspect the frames, and from there, go back to the function that writes to the stack. Could you give us some more context?\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Set a code breakpoint at the point where the stack frame is established and another one at the point where your target value gets used (and hence must have been written already).\n </p>\n <p>\n  In the condition script for the first breakpoint you can add a hardware write breakpoint for your target location; its absolute address can be computed at that point because you have the actual values of ESP and EBP. The second breakpoint is for deleting that hardware breakpoint.\n </p>\n <p>\n  In the condition script for the hardware breakpoint you can do whatever you want: check for a specific value being written, check surrounding values etc.\n </p>\n <p>\n  Note:\n  <a href=\"http://www.cheatengine.org/\" rel=\"nofollow\">\n   CheatEngine\n  </a>\n  was written expressly for tasks like that. You might get results quicker and more easily if you get CheatEngine instead of trying to make sense of IDAs meagerly documented - and often quite bizarre - interfaces.\n </p>\n <p>\n  Here's a rudimentary script that you can adapt by modifying the test in\n  <code>\n   target_check_()\n  </code>\n  and adapting the stack offset in\n  <code>\n   set_target_breakpoint_()\n  </code>\n  . The values there are from a quick test that I did to ensure that the code works. This is for IDA 6.7; it will definitely not work with the free IDA (v5.0).\n </p>\n <pre><code>#include \"idc.idc\"\n\nstatic main ()\n{\n   set_helper_breakpoints_(LocByName(\"test_ufuncs_t\"), 0);\n}\n\nstatic target_check_ (ea)\n{\n   auto e;\n\n   try\n   {\n      Message(\"DbgDword(%x): %x @ EIP %x\n\", ea, DbgDword(ea), EIP);\n\n      return DbgDword(ea) == 0x410A10;\n   }\n   catch (e)  {  Message(\"error: %s\n\", e.description);  }\n\n   return 0;\n}\n\nstatic set_target_breakpoint_ (term_bpt)\n{\n   auto target_ea = ESP - 0x70;\n\n   Message(\"target_ea %a\n\", target_ea);\n\n   SetBptCndEx(term_bpt, form(\"DelBpt(0x%x) & 0\", target_ea), 0);\n   AddBptEx(target_ea, 4, BPT_WRITE);\n   SetBptCndEx(target_ea, form(\"target_check_(0x%x)\", target_ea), 0);\n\n   return 0;\n}\n\nstatic set_helper_breakpoints_ (init_bpt, term_bpt)\n{\n   if (term_bpt <= 0)\n      term_bpt = FindCode(GetFunctionAttr(init_bpt, FUNCATTR_END), SEARCH_UP);\n\n   Message(\"set_helper_breakpoints(): %s %s\n\", GetFuncOffset(init_bpt), GetFuncOffset(term_bpt));\n\n   AddBptEx(init_bpt, 0, BPT_DEFAULT);\n   AddBptEx(term_bpt, 0, BPT_DEFAULT);\n   SetBptCndEx(init_bpt, form(\"set_target_breakpoint_(0x%x)\", term_bpt), 0);\n   SetBptCndEx(term_bpt, \"0\", 0);\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "DarthGizka",
+            "time": "Feb 16, 2015 at 14:51",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "rev",
+                    "text": "<span class=\"comment-copy\">+1 for the Cheat Engine link. many people think it's for 'cheats' and ignore the fact that it even has a full-blown kernel-level debugger!</span>",
+                    "time": null
+                },
+                {
+                    "user": "vigri",
+                    "text": "<span class=\"comment-copy\">Thank you for the answer and the script: I've used now a combination of IDA and Cheat Engine which did the trick.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'll try to guess what happening in your binary, but this will remain only my guess until you provide it.\n </p>\n <p>\n  You need to break API functions while debugging application that process both getting keyboard code and printing the result. In\n  <a href=\"http://windbg.info/\" rel=\"nofollow\">\n   WinDbg\n  </a>\n  it can be done like\n  <code>\n   bp USER32!GetKeyboardState; dd esp+x (or dd poi(esp+x) )\n  </code>\n  Note, that this operation requires debug symbols installed.\n </p>\n <p>\n  Your question was about IDA, but in my opinion separate debugger suits better for such task.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "see ya",
+            "time": "Feb 16, 2015 at 13:57",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

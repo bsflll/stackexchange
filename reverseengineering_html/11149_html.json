@@ -1,0 +1,51 @@
+{
+    "title": "Locating Memory Allocation Functions from Static Analysis",
+    "link": "https://reverseengineering.stackexchange.com/questions/11149/locating-memory-allocation-functions-from-static-analysis",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm currently working on reversing a firmware binary for an embedded device. This device is using an uncommon architecture: it is a modified\n  <a href=\"https://en.wikipedia.org/wiki/Harvard_architecture\" rel=\"nofollow noreferrer\">\n   Harvard architecture\n  </a>\n  , running on a\n  <a href=\"http://www.ti.com/tool/sprc100#Technical%20Documents\" rel=\"nofollow noreferrer\">\n   TMS320C55x\n  </a>\n  chipset with an old Real-time Operating System (RTOS) which does not exists anymore (Byte-BOS) and for which I cannot find any manual (if you have, please let me know). No standard library is used within the firmware.\n </p>\n <p>\n  Based on some rare documentation found from the Internet Archive, the RTOS is actually a micro-kernel which manages tasks, memory allocation and inter-process messaging. Within the kernel, there are two functions that appears to manage memory:\n  <code>\n   fmem_alloc\n  </code>\n  and\n  <code>\n   fmem_free\n  </code>\n  .\n </p>\n <p>\n  I'm trying to locate these functions within the firmware file. I can approximate the location of the code of the RTOS, as well as find functions within that section of code. My goal is to locate the\n  <code>\n   fmem_alloc\n  </code>\n  and\n  <code>\n   fmem_free\n  </code>\n  functions and functions calling them using IDA.\n </p>\n <p>\n  Since my target is a TMS320C55x architecture and I have a raw firmware file versus a neat\n  <a href=\"https://en.wikipedia.org/wiki/COFF\" rel=\"nofollow noreferrer\">\n   COFF\n  </a>\n  binary, debugging it is quite difficult without an actual emulator, which from what I understood, is only hardware-based for this microprocessor. As such, it seems I'm doomed to rely only on static analysis. However if anyone knows of a software solution to debug the raw firmware, I would be extremely interested. The\n  <a href=\"http://www.ti.com/tool/ccstudio\" rel=\"nofollow noreferrer\">\n   Code Composer Studio\n  </a>\n  IDE only debugs COFF binaries.\n </p>\n <p>\n  Is there any techniques, or set of C55x instructions within a certain distance I could search that could identify this function? Or at least reduce the number of potential functions to search? I know the RTOS uses a double linked-list to manage the heap. I first thought of using the\n  <code>\n   malloc\n  </code>\n  function as a potential template, but found it too far from what I'm looking at, i.e. Intel assembly to the C55x, especially given the differences between the Von Neumann and Harvard architectures.\n </p>\n <p>\n  Any help appreciated. Thanks.\n </p>\n <p>\n  P.S. I cannot post product details, firmware files or disassembled code due to non-disclosure conditions. I understand it may be difficult to provide a reliable answer because of this.\n </p>\n <h3>\n  Updates\n </h3>\n <p>\n  Since my last post, I've identify old Seagate firmware binairies using the same RTOS, but for the Intel 8096. BTW, the target RTOS is an old microkernel called Byte-BOS RTOS, which I wrote about in this\n  <a href=\"http://thecyberrecce.net/2015/11/02/the-byte-bos-real-time-multitasking-operating-system/\" rel=\"nofollow noreferrer\">\n   post\n  </a>\n  . The only string available in this OS is the copyright notice. However using the Seagate firmware, I can see heap-related error messages. I could potentially try to work these 8096 code segment into C and then recompile them on the TMS320C55x.\n </p>\n <h3>\n  Updates 2\n </h3>\n <p>\n  So I found out that the compiler/IDE for the platform included somesort of C library which contained a simple\n  <strong>\n   malloc()\n  </strong>\n  function. I wrote a small C program that allocated some memory with it, ran it in the included debugger and dump the machine code. I made a quick\n  <a href=\"https://github.com/InfectedPacket/Idacraft/blob/master/IDAEngine.py\" rel=\"nofollow noreferrer\">\n   byte string search function\n  </a>\n  in IDAPython and replacing non-instruction values with \"????\" for IDA to look only for the instructions. Unfortunately, it found no\n  <strong>\n   malloc()\n  </strong>\n  function. I suspect the code relies exclusively on the memory allocation functions provided by the RTOS rather than the ones from the library. I can hardly believe they would be very different, since both rely on linked list. Anyway, that's where I am with this. I may try to fuzzy the byte string to find code sections that resemble the\n  <strong>\n   malloc()\n  </strong>\n  function from the library.\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "binary-analysis",
+        "memory",
+        "static-analysis",
+        "embedded"
+    ],
+    "user": "InfectedPacket",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<html><body><span class=\"comment-copy\">\n Can't you add a COFF header to the firmware? From reading the\n <a href=\"http://www.delorie.com/djgpp/doc/coff/\" rel=\"nofollow noreferrer\">\n  spec\n </a>\n , it seems that a COFF header that has only one section starting at address 0, no optional header, no relocs, no line numbers, no symbol table, no string table should be easy to produce and prepend to your raw binary.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "MrSynAckSter",
+            "text": "<html><body><span class=\"comment-copy\">\n You could try to study malloc implementations on AVR, that's basically Harvard ARCH.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "InfectedPacket",
+            "text": "<html><body><span class=\"comment-copy\">\n When the COFF file is being made into the firmware, most of the information about symbols is removed. Interrupt services routines and vectors are also added. The interrupt vector is added at 0x0, followed by what I presume are the ISR. In any case, adding a COFF header doesn't simplify disassembly. I'll check for the AVR.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'd approach this problem as follows:\n </p>\n <ol>\n  <li>\n   <p>\n    Check for logging strings. Probably you'll find there something related to allocations which will solve the problem.\n   </p>\n  </li>\n  <li>\n   <p>\n    Find all functions with 1 argument (size for\n    <code>\n     malloc()\n    </code>\n    and pointer for\n    <code>\n     free()\n    </code>\n    ).\n   </p>\n  </li>\n  <li>\n   <p>\n    Track results of these functions.\n    <code>\n     malloc()\n    </code>\n    result is usually checked against\n    <code>\n     NULL\n    </code>\n    after use and rarely used in math operations. In addition result of\n    <code>\n     malloc()\n    </code>\n    function is used in store operations or\n    <code>\n     memcpy()\n    </code>\n    .\n   </p>\n  </li>\n  <li>\n   <p>\n    Free function argument is not used after calling it.\n   </p>\n  </li>\n  <li>\n   <p>\n    <code>\n     malloc()\n    </code>\n    and\n    <code>\n     free()\n    </code>\n    should be located in close addresses.\n   </p>\n  </li>\n </ol>\n <p>\n  These heuristics should be enough to narrow down the number of possible candidates to observable.\n </p>\n <p>\n  Good luck.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "perror",
+            "time": "Nov 3, 2015 at 8:35",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  From the TMS320C55x\n  <a href=\"http://www.ti.com/lit/ug/spru280i/spru280i.pdf\" rel=\"nofollow noreferrer\">\n   documentation\n  </a>\n  it's clear that the chip supports multiple memory modes. Therefore, a function such as\n  <em>\n   malloc\n  </em>\n  could have different definitions for each one. I think that the smartest thing to do is to identify the memory mode and figure out how a\n  <em>\n   malloc\n  </em>\n  can be implemented in that mode.\n </p>\n <p>\n  Given that your binary file is fully stripped and most functions seem to be inlined, all you can do is pattern matching. If you want to be smart, figure out a way to build a\n  <strong>\n   CFG\n  </strong>\n  and try to identify where a\n  <em>\n   malloc\n  </em>\n  could be necessary and check if your target pattern is redundant enough.\n </p>\n <p>\n  Hope this helps.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

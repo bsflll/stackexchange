@@ -1,0 +1,42 @@
+{
+    "title": "Extract non-extractable private key from OS X Keychain",
+    "link": "https://reverseengineering.stackexchange.com/questions/6043/extract-non-extractable-private-key-from-os-x-keychain",
+    "content": "I'm trying to extract a non-extractable private key as a <pre><code>.p12</code></pre> file from <pre><code>Keychain Access.app</code></pre>  or <pre><code>/usr/bin/security</code></pre> on Mac OS X 10.9.4.\n\nBasically, it appears that <pre><code>security import</code></pre> has a <pre><code>-x</code></pre> option to specify that <pre><code>private keys are non-extractable after being imported</code></pre>.\n\nhttp://opensource.apple.com/source/SecurityTool/SecurityTool-55115/keychain_import.c\nhttp://opensource.apple.com/source/Security/Security-55471.14/libsecurity_keychain/lib/SecImportExport.h\n\nAs per above, this is implemented by explicitly omitting <pre><code>CSSM_KEYATTR_EXTRACTABLE</code></pre> during the import.  Subsequently, when trying to export, the key without such an attribute cannot be exported.\nI could find at least two relevant mentions which appear to prevent such keys from being exported (hint: use <pre><code>fgrep -OR</code></pre> to avoid following the symbolic links when searching through Apple source code):\n\nhttp://opensource.apple.com/source/Security/Security-55471.14/libsecurity_keychain/lib/SecImportExportCrypto.cpp\nhttp://opensource.apple.com/source/Security/Security-55471.14/libsecurity_pkcs12/lib/pkcs12Crypto.cpp\n\n\nI've tried keychain_access from github.com/torsten, but it didn't work.\nI've tried using lldb, <pre><code>lldb -- security export -t identities -f pkcs12 -o /tmp/mycerts.p12</code></pre>, to break on SecWrappedKeys.cpp::impExpWrappedKeyOpenSslExport(), but that doesn't seem to work, either, with <pre><code>break impExpWrappedKeyOpenSslExport</code></pre> giving out an error <pre><code>invalid command 'breakpoint impExpWrappedKeyOpenSslExport'</code></pre>.\nI've tried DTrace to trace Cisco AnyConnect, but I'm not familiar enough with DTrace for it to reveal the datastructures.\nI've tried re-compiling the Security and SecurityTool packages, but they all appear to require bootstrapping that does not appear to be in place.\nHow do I get the private key?\n",
+    "votes": "12",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "binary-analysis",
+        "debuggers",
+        "file-format",
+        "osx",
+        "compilers"
+    ],
+    "user": "cnst",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I've arrived at a solution by researching an answer for one of my Keychain subquestions.\n\nhttps://stackoverflow.com/questions/25109994/non-extractable-private-key-in-keychain-on-os-x.\n\nAccording to SecItem.h, this <pre><code>kSecAttrIsExtractable</code></pre> has been introduced with OS X 10.6.\n\nhttp://opensource.apple.com/source/Security/Security-55471.14/libsecurity_keychain/lib/SecItem.h\n\nAs such, I've tried and succeeded in the following:\n\n<pre><code>scp ~/Library/Keychains/login.keychain</code></pre> from OS X 10.9 to OS X 10.5\nOn OS X 10.5, as per the example from the manual page:\n<pre><code>security export -k /tmp/login.keychain -t identities -f pkcs12 -o /tmp/mycerts.p12</code></pre>\nThe <pre><code>security</code></pre> app will ask you for several passwords:\n\nthe new password from the first dialogue is to protect the p12 that's being exported;\nthe second one is the <pre><code>login.keychain</code></pre> password, which normally would be the same as the login password of the user on the original OS X 10.9 from where the keychain file came from.\n\n<pre><code>scp /tmp/mycerts.p12</code></pre> back to OS X 10.9 from 10.5\n",
+            "votes": "6",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "I found an easier way with chainbreaker fork. It works with MacOS 10.14 Mojave. See full instructions here.\nIn my case, I did the following: \n<pre><code>$ pip2 install hexdump pycrypto pyopenssl\n$ git clone https://github.com/gremwell/chainbreaker.git && cd chainbreaker\n$ python2 chainbreaker.py -f ~/Library/Keychains/login.keychain-db -p <PASS>\n$ openssl x509 -inform DER -in exported/associated/1/*.crt -out secret.crt\n$ openssl rsa -inform DER -in exported/associated/1/*.key -out secret.key\n$ openssl pkcs12 -export -out secret.p12 -inkey secret.key -in secret.crt\n</code></pre>\nThen secret.p12 is ready to be imported on another machine.\n",
+            "votes": "4",
+            "user": "julian",
+            "time": "Dec 27, 2018 at 0:30",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Leonovich",
+                    "text": "<span class=\"comment-copy\">You saved my life, respect</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

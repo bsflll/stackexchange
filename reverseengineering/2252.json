@@ -1,0 +1,75 @@
+{
+    "title": "What is DLL Injection and how is it used for reversing?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2252/what-is-dll-injection-and-how-is-it-used-for-reversing",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was reading a discussion about dumping a processes part of a process's memory and someone suggested using DLL injection to do this. I'll be honest in that I don't really understand. How does DLL injection work and what kinds of reversing tasks can you do with it?</p>\n</div>",
+    "votes": "70",
+    "answers": 2,
+    "views": "45k",
+    "tags": [
+        "dll",
+        "dll-injection"
+    ],
+    "user": "user2142",
+    "time": "Jun 14, 2013 at 20:14",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><a href=\"https://reverseengineering.stackexchange.com/a/2253/2676\">DCoder's answer</a> is a good one.  To expand somewhat, I most often use DLL injection in the context of forcing an existing process to load a DLL through CreateRemoteThread.  From there, the entrypoint of the DLL will be executed by the operating system once it is loaded.  In the entrypoint, I will then invoke a routine that performs in-memory patching of all of the locations within the original binary that interest me, and redirects their execution into my DLL via a variety of modifications.  If I am interested in modifying or observing the process' interaction with some imported function, then I will overwrite the IAT (Import Address Table) entry for that function and replace it with a pointer to something that I control.  If I want to do the same with respect to some function that exists within the binary, I will make some sort of detours-style patch at the beginning of the function.  I can even do very surgical and targeted hooks at arbitrary locations, akin to old-school byte patching.  My DLL does its business within the individual hooks, and then is programmed to redirect control back to the original process.</p>\n<p>DLL injection provides a platform for manipulating the execution of a running process.  It's very commonly used for logging information while reverse engineering.  For example, you can hook the IAT entry for a given imported operating system library function, and then log the function arguments onto disk.  This provides you a data source that can assist in rapidly reverse engineering the target.</p>\n<p>DLL injection is not limited to logging, though.  Given the fact that you have free reign to execute whatever code that you want within the process' address space, you can modify the program in any way that you choose.  This technique is frequently used within the game hacking world to code bots.  </p>\n<p>Anything that you could do with byte patching, you can do with DLL injection.  Except DLL injection will probably be easier and faster, because you get to code your patches in C instead of assembly language and do not have to labor over making manual modifications to the binary and its PE structure, finding code caves, etc.  DLL injection almost entirely eliminates the need for using assembly language while making modifications to a binary; the only assembly language needed will be small pieces of code nearby the entrance and exit to a particular hook to save and restore the values of registers / the flags.  It also makes binary modification fast and simple, and does not alter cryptographic signatures of the executable that you are patching. (The comment about cryptographic signatures applies to the executable on disk, not in memory; of course, altering the contents in memory would affect a cryptographic signature computed on the altered memory contents.)</p>\n<p>DLL injection can be employed to solve highly non-trivial reverse engineering problems.  The following example is necessarily vague in some respects because of non-disclosure agreements.</p>\n<p>I had a recurring interest in a program that was updated very frequently (sometimes multiple times daily).  The program had a number of sections in it that were encrypted on disk after compilation time and had to be decrypted at run-time.  The software included a kernel module which performed the run-time encryption/decryption. To request encryption or decryption of a given section, the program shipped with a DLL that exported a function which took as arguments the number of the section and a Boolean that indicated whether the section should be encrypted or decrypted.  All of the components were digitally signed.</p>\n<p>I employed a DLL injection-based solution that worked as follows:</p>\n<ul>\n<li>Create the process suspended.</li>\n<li>Inject the DLL.</li>\n<li>DLL hooks GetProcAddress in the program's IAT.</li>\n<li>GetProcAddress hook waits for a specific string to be supplied and then returns its own hooked version of that function.</li>\n<li>The hooked function inspects the return address on the stack two frames up to figure out the starting address of the function (call it Func) that called it.</li>\n<li>The hooked function then calls Func for each encrypted section, instructing it to decrypt each section.  To make this work, the hooked function has to pass on the calls to the proper function in the DLL for these calls.</li>\n<li>After having done so, for every subsequent call to the hooked function, it simply returns 1 as though the call was successful.</li>\n<li>Having decrypted all the sections, the DLL now dumps the process' image onto the disk and reconstructs the import information.</li>\n<li>After that it does a bunch of other stuff neutralizing the other protections.</li>\n</ul>\n<p>Initially I was doing all of this by hand for each new build.  That was way too tedious.  One I coded the DLL injection version, I never had to undertake that substantial and manual work ever again.</p>\n<p>DLL injection is not widely known or used within reverse engineering outside of game hacking.  This is very unfortunate, because it is an extremely powerful, flexible, and simple technique that should be part of everyone's repertoire.  I have used it dozens of times and it seems to find a role in all of my dynamic projects.  The moment my task becomes too cumbersome to do with a debugger script, I switch to DLL injection.</p>\n<p>In the spectrum of reverse engineering techniques, every capability of DLL injection is offered by dynamic binary instrumentation (DBI) tools as well, and DBI is yet more powerful still.  However, DBI <a href=\"http://blog.coresecurity.com/2012/06/22/recon-2012-presentation-detecting-dynamic-binary-instrumentation-frameworks/\" rel=\"noreferrer\">is not stealthy</a> and incurs a serious overhead in terms of memory consumption and possibly performance.  I always try to use DLL injection before switching to DBI.</p>\n</div>",
+            "votes": "66",
+            "user": "leocrimson",
+            "time": "Nov 2, 2018 at 21:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\"><code>DLL injection is not widely known or used within reverse engineering outside of game hacking.</code> +1 it's usually seen as an <code>attacking</code> technique even if we can make great use of it as you demonstrated!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jonathon Reinhart",
+                    "text": "<span class=\"comment-copy\">What a spectacular answer. You may have changed how I approach REing complex apps forever.</span>",
+                    "time": null
+                },
+                {
+                    "user": "DCoder",
+                    "text": "<span class=\"comment-copy\">+1 - you mentioned a lot of details I had skipped, this answer probably deserves to be accepted rather than mine.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Adam Caviness",
+                    "text": "<span class=\"comment-copy\">+1 This is one of the best answers I've seen on any stackexchange site.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rowan Freeman",
+                    "text": "<span class=\"comment-copy\">Poker bot link appears to be broken.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>DLL Injection works by tricking/forcing the target process into loading a DLL of your choice. After that, the code in that DLL will get executed as part of the target process and will be able to do <em>anything the process itself can</em>. The fun part will be to figure out how to get your code called by the target process.</p>\n<hr/>\n<p>DLLs can be injected by:</p>\n<ul>\n<li>simply substituting your DLL for one the process typically uses - e.g., if you name your DLL <code>ddraw.dll</code>, a lot of games will happily load it instead of the real Direct Draw DLL. I've seen this done to force the game to use Direct Draw in software emulation mode only, to accelerate it on specific GPUs.</li>\n<li>tricking the loader into loading a known DLL from a different folder - see <a href=\"https://devblogs.microsoft.com/oldnewthing/20101110-00/?p=12313\" rel=\"nofollow noreferrer\">The Old New Thing</a>.</li>\n<li>replacing some of the process code with instructions to load your DLL.</li>\n<li><a href=\"https://en.wikipedia.org/wiki/DLL_injection\" rel=\"nofollow noreferrer\">using plenty of other ways</a>.</li>\n</ul>\n<p>The next step would be getting your DLL code to actually execute. But if you want to do something meaningful, this will be hard - you need to know what the process does, what data structures it uses, etc., so you'll most likely need to disassemble it.</p>\n<ul>\n<li>You can create a new thread in the target process to invoke a function from your DLL. Suspend the existing threads first to preserve your sanity and avoid funky multithreading bugs.</li>\n<li>If you replaced a known DLL with your own, the process will expect your DLL to respond to specific function calls - you better know what those functions are and provide their replacements in your DLL.</li>\n<li>If you changed the executable to call your DLL <em>in addition to known DLLs</em>, you had to take the executable apart already. Now go find some places of interest, and insert calls to your DLL functions there. See <a href=\"https://stackoverflow.com/questions/787100/what-is-a-code-cave-and-is-there-any-legitimate-use-for-one\">code cave</a>.</li>\n</ul>\n<hr/>\n<p>I have performed DLL injection by launching the target process as a debuggee process, overwriting some bytes in its startup code with a custom code sequence that calls <code>LoadLibrary(\"mydll.dll\"); GetProcAddress(myLib, \"myFunc\");</code>, and rewriting some code in the executable to jump to functions in the DLL instead.</p>\n<p>Using this method some friends and I wrote a pretty big unofficial bugfix/enhancement DLL for <em>Command &amp; Conquer: Red Alert 2</em> - nowadays that DLL is about 15% the size of the original game executable. As a result, later official updates of the game were limited to only things their staff could do without recompiling the binary, which was uncharacteristically nice of EA.</p>\n</div>",
+            "votes": "45",
+            "user": "Glorfindel",
+            "time": "Jul 20, 2022 at 8:43",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Instead of injecting code, you can also add the DLL to the import table (either statically or dynamically).</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">the act of performing the LoadLibrary() causes code in the loaded DLL to start running.  You don't need anything further, since the DLLMain can perform all necessary modifications on its own.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Daniel Sloof",
+                    "text": "<span class=\"comment-copy\">You should probably mention Detours :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

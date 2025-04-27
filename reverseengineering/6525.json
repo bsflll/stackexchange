@@ -1,0 +1,48 @@
+{
+    "title": "ELF link_map when linked as RELRO",
+    "link": "https://reverseengineering.stackexchange.com/questions/6525/elf-link-map-when-linked-as-relro",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When linking a binary with <code>-Wl,-z,relro,-z,now</code>, all relocations are performed at start-up before passing control to the binary.</p>\n<p>Because of this, there is no need for the <code>.got.plt</code> segment.  Normally, a pointer to the linker's <code>link_map</code> structure is stored in this segment.</p>\n<p>When compiled with full RELRO, where, if anywhere, can a copy of the <code>link_map</code> be obtained without consulting other loaded libraries, or <code>libdl</code>?</p>\n<p>The place one would expect it to be -- in the segment marked with the tag <code>DT_PLTGOT</code> -- it does not appear.  Instead, there's just a link back to Program Header of type <code>PT_DYNAMIC</code>.  The slot in the segment marked <code>DT_GOTPLT</code> starts with the offset of the <code>DYNAMIC</code> section, and does not contain any pointers to the link map.</p>\n<p>Headers</p>\n<pre><code>$ readelf -a amd64-pwntest-relro | egrep -i '(_dynamic|pltgot)'\n 0x0000000000000003 (PLTGOT)             0x202eb8\n    48: 0000000000202ca8     0 OBJECT  LOCAL  DEFAULT   21 _DYNAMIC\n</code></pre>\n<p>Binary is RELRO</p>\n<pre><code>$ checksec.sh --file amd64-relro\nRELRO           STACK CANARY      NX            PIE             RPATH      RUNPATH      FILE\nFull RELRO      No canary found   NX disabled   PIE enabled     No RPATH   No RUNPATH   amd64-relro\n</code></pre>\n<p>GDB shows that the data at the specified offset, at runtime, does not contain a link map pointer.</p>\n<pre><code>$ gdb ./amd64-relro\ngdb-peda$ start\ngdb-peda$ vmmap relro\nStart              End                Perm      Name\n0x0000555555554000 0x0000555555556000 r-xp      /home/user/pwntools-regression/src/amd64-relro\n0x0000555555756000 0x0000555555757000 r-xp      /home/user/pwntools-regression/src/amd64-relro\n0x0000555555757000 0x0000555555758000 rwxp      /home/user/pwntools-regression/src/amd64-relro\ngdb-peda$ telescope 0x0000555555554000+0x202eb8 5\n00:0000|  0x555555756eb8 --&gt; 0x202ca8 \n01:0008|  0x555555756ec0 --&gt; 0x0 \n02:0016|  0x555555756ec8 --&gt; 0x0 \n03:0024|  0x555555756ed0 --&gt; 0x7ffff7675870 (&lt;__GI___libc_free&gt;:        mov    rax,QWORD PTR [rip+0x33b671]        # 0x7ffff79b0ee8)\n04:0032|  0x555555756ed8 --&gt; 0x7ffff79c0430 (&lt;__pthread_create_2_1&gt;:    push   rbp)\n</code></pre>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "linux",
+        "elf",
+        "got",
+        "plt"
+    ],
+    "user": "Zach Riggle",
+    "time": "Nov 20, 2014 at 8:48",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If the binary has a <code>DT_DEBUG</code> entry in the <code>PT_DYNAMIC</code> area, it will be filled with a pointer to the <code>r_debug</code> symbol in the dynamic linker.</p>\n<pre><code>test:00007F17ED7DDDB0 Elf64_Dyn &lt;DT_SYMENT, 18h&gt;\ntest:00007F17ED7DDDB0 Elf64_Dyn &lt;DT_DEBUG, offset _r_debug&gt;\ntest:00007F17ED7DDDB0 Elf64_Dyn &lt;DT_PLTGOT, offset _GLOBAL_OFFSET_TABLE_&gt;\n</code></pre>\n<p>The second field in <code>r_debug</code> is the pointer to <code>link_map</code>:</p>\n<pre><code>debug001:00007F17ED5DC1A0 _r_debug dd 1                                    ; r_version\ndebug001:00007F17ED5DC1A0 db 0, 0, 0, 0\ndebug001:00007F17ED5DC1A0 dq offset _link_map_head                ; r_map\ndebug001:00007F17ED5DC1A0 dq offset _dl_debug_state               ; r_brk\ndebug001:00007F17ED5DC1A0 dd RT_ADD                               ; r_state\ndebug001:00007F17ED5DC1A0 db 0, 0, 0, 0\ndebug001:00007F17ED5DC1A0 dq 7F17ED3B8000h                        ; r_ldbase\n</code></pre>\n</div>",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Oct 23, 2014 at 10:24",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">Bummer that there doesn't appear to be any additional ways for a stripped binary.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Even stripped binaries have dynamic section, and usually it includes the <code>DT_DEBUG</code> entry, so what's the problem?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">After revisiting, it appears that I misunderstood your post.  The <code>DT_DEBUG</code> entry is populated at runtime.  I mistook the output of <code>readelf -a binary</code> showing <code>0</code> for that slot to mean that it didn't contain useful data.  Examining under GDB shows that is it populated.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">Awesome, thanks again!  Just landed a pull request for pwntools to take advantage of this.  Saves about thirty seconds (50% of runtime; slow network comms) vs. leaking a GOT pointer into libc and doing a scandown then parsing the elf header.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

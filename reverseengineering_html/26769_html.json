@@ -1,0 +1,44 @@
+{
+    "title": "WinDBG Hung on Shellcode Execution",
+    "link": "https://reverseengineering.stackexchange.com/questions/26769/windbg-hung-on-shellcode-execution",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I've been trying to debug a piece of simple shellcode with\n  <code>\n   Windbg\n  </code>\n  . To go over the steps I took, I allocated a buffer for the shellcode with\n  <code>\n   .foreach /pS 5  ( register { .dvalloc 400 } ) { r @$t0 = register }\n  </code>\n  and saved the address in the pseudo register\n  <code>\n   $t0\n  </code>\n  . Later I copied the shellcode with\n  <code>\n   eb @$t0 FC 48 83 E4...[REDACTED]\n  </code>\n  . Then changed the\n  <code>\n   rip\n  </code>\n  value to point to the start address of the shellcode buffer by doing\n  <code>\n   r @$ip=@$t0\n  </code>\n  and then simply resumed the program execution with\n  <code>\n   g\n  </code>\n  .\n </p>\n <p>\n  The problem is the shellcode gets hung up on the\n  <code>\n   wininet!HttpSendRequestA\n  </code>\n  API call everytime.\n </p>\n <p>\n  The stack trace after manually breaking from the execution:\n </p>\n <pre><code>00 000000e0f0efea28 00007ffc24811e93 ntdll!NtWaitForSingleObject+0x14\n01 000000e0f0efea30 00007ffc11ba4f64 KERNELBASE!WaitForSingleObjectEx+0x93\n02 000000e0f0efead0 00007ffc11b9fba7 wininet!CPendingSyncCall::HandlePendingSync_AppHangIsAppBugForCallingWinInetSyncOnUIThread+0xe0\n03 000000e0f0efeb00 00007ffc11b47af6 wininet!INTERNET_HANDLE_OBJECT::HandlePendingSync+0x33\n04 000000e0f0efeb30 00007ffc11b023a5 wininet!HttpWrapSendRequest+0x9a256\n05 000000e0f0efecd0 00007ffc11b02318 wininet!InternalHttpSendRequestA+0x5d\n06 000000e0f0efed40 000002a7d873018c wininet!HttpSendRequestA+0x58\n07 000000e0f0efede0 000002a7d87301f9 0x000002a7d873018c\n08 000000e0f0efede8 000002a7d873000a 0x000002a7d87301f9\n09 000000e0f0efedf0 0000000000cc000c 0x000002a7d873000a\n</code></pre>\n <p>\n  <strong>\n   NOTE\n  </strong>\n  : The weird part is the shellcode actually works as it supposed to whenever I debug it in the windbg plugin in\n  <code>\n   IDA PRO 7.5\n  </code>\n  (I do everything exactly the same in the plugin console as I did in the windbg binary console).\n </p>\n <p>\n  As for the shellcode it's a simple  off-the-shelf cobaltstrike http beacon (The same error occurs with any type of\n  <code>\n   reverse shell\n  </code>\n  shellcodes).\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/equ6Q.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/equ6Q.png\"/>\n  </a>\n </p>\n <p>\n  It traverses\n  <code>\n   InMemoryOrderModuleList\n  </code>\n  structure from\n  <code>\n   PEB\n  </code>\n  , resolves the api names from hashes and simply executes them in order.\n </p>\n <p>\n  I've never debugged a cobaltstrike beacon directly in windbg before.\n </p>\n <p>\n  <strong>\n   NOTE\n  </strong>\n  : I don't get any hangs or errors when I try to debug a simple x64 calculator shellcode the same way\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 1,
+    "views": "577",
+    "tags": [
+        "ida",
+        "debugging",
+        "windbg",
+        "shellcode",
+        "metasploit"
+    ],
+    "user": "rustam Shirinov",
+    "time": "Jan 14, 2021 at 10:08",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  can you clarify if the error you are getting is related to message that says this may be caused by another thread holding the LoaderLock ?\n </p>\n <p>\n  if that is the  case then it means you allocate memory etc just after windbg/cdb broke on System  Breakpoint\n </p>\n <p>\n  if you are doing .dvalloc when you are on System Breakpoint then HttpRequestA might cause the block\n </p>\n <p>\n  go to the entrypoint of your dummy using say  g @$exentry and then execute the shellcode\n </p>\n <p>\n  use dp @rsp to find the return address and set a breakpoint on the return\nwith bp poi(@rsp) before you hit g on HttpSendRequestA\n </p>\n <p>\n  it should break properly and not hang\n </p>\n <pre><code>0:000> ? poi(@rsp)\nEvaluate expression: 140696425381209 = 00007ff6`7074bd59\n0:000> bp poi(@rsp)\n0:000> bl\n 0 e 00007ff6`7074bcb4     0001 (0001)  0:**** cdb+0xbcb4\n 1 e 00007ff6`7074bd59     0001 (0001)  0:**** cdb+0xbd59\n0:000> r rcx,rdx,r8,r9\nrcx=0000000000cc000c rdx=00007ff67074bdc6 r8=ffffffffffffffff r9=0000000000000000\n0:000> da @rdx\n00007ff6`7074bdc6  \"User-Agent: Mozilla/4.0 (compati\"\n00007ff6`7074bde6  \"ble; MSIE 8.0; Windows NT 5.1; T\"\n00007ff6`7074be06  \"rident/4.0; GTB7.4; InfoPath.2).\"\n00007ff6`7074be26  \".\"\n0:000> g\nModLoad: 00007ffa`96760000 00007ffa`96776000   C:\\Windows\\SYSTEM32\\dhcpcsvc6.DLL\nModLoad: 00007ffa`96c20000 00007ffa`96c3c000   C:\\Windows\\SYSTEM32\\dhcpcsvc.DLL\nModLoad: 00007ffa`939a0000 00007ffa`93b76000   C:\\Windows\\SYSTEM32\\urlmon.dll\nModLoad: 00007ffa`9c800000 00007ffa`9c80c000   C:\\Windows\\SYSTEM32\\CRYPTBASE.DLL\nBreakpoint 1 hit\ncdb+0xbd59:\n00007ff6`7074bd59 85c0            test    eax,eax\n0:000> u .\ncdb+0xbd59:\n00007ff6`7074bd59 85c0            test    eax,eax\n00007ff6`7074bd5b 0f859d010000    jne     cdb+0xbefe (00007ff6`7074befe)\n00007ff6`7074bd61 48ffcf          dec     rdi\n00007ff6`7074bd64 0f848c010000    je      cdb+0xbef6 (00007ff6`7074bef6)\n00007ff6`7074bd6a ebd3            jmp     cdb+0xbd3f (00007ff6`7074bd3f)\n00007ff6`7074bd6c e9e4010000      jmp     cdb+0xbf55 (00007ff6`7074bf55)\n00007ff6`7074bd71 e8a2ffffff      call    cdb+0xbd18 (00007ff6`7074bd18)\n00007ff6`7074bd76 2f              ???\n0:000>\n</code></pre>\n <p>\n  btw no need for .dvalloc when you are in user code simply use .readmem\n </p>\n <p>\n  0:000> .readmem cobabyte.bin . l?377\n </p>\n <p>\n  Reading 377 bytes.\n </p>\n <pre><code>0:000> u .\ncdb+0xbbf0:\n00007ff6`7074bbf0 fc              cld\n00007ff6`7074bbf1 4883e4f0        and     rsp,0FFFFFFFFFFFFFFF0h\n00007ff6`7074bbf5 e8c8000000      call    cdb+0xbcc2 (00007ff6`7074bcc2)\n00007ff6`7074bbfa 4151            push    r9\n00007ff6`7074bbfc 4150            push    r8\n00007ff6`7074bbfe 52              push    rdx\n00007ff6`7074bbff 51              push    rcx\n00007ff6`7074bc00 56              push    rsi\n0:000> u\n</code></pre>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "blabb",
+            "time": "Jan 18, 2021 at 15:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "rustam Shirinov",
+                    "text": "<span class=\"comment-copy\">Thank you. I read about the System wide hook somewhere else but was not sure about it. Jumping into the entrypoint first and then breaking solved the problem.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">It is not hook. It is same as the caveats that say you cant do certain things in Dllmain  it us same as the warning that says you cant set a hardware bp etc http request loads a few dlls and loading a dll inside LdrInit stage causes  the block</span>",
+                    "time": null
+                },
+                {
+                    "user": "rustam Shirinov",
+                    "text": "<span class=\"comment-copy\">Sorry I meant lock not hook</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

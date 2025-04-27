@@ -1,0 +1,83 @@
+{
+    "title": "Trace Method Calls in .NET/C# Binary",
+    "link": "https://reverseengineering.stackexchange.com/questions/22367/trace-method-calls-in-net-c-binary",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a heavily obfuscated Windows service binary. Fields, types and methods are renamed. While it is possible to decompile the binary using dnSpy, it is still very cumbersome to identify important/interesting locations statically.\n </p>\n <p>\n  Is it possible to dynamically instrument the binary in order to gain a deeper understanding of certain execution paths? I don't know a lot about CLR internals but my understanding is that instrumentation is not easily possible because of JIT compilation of IL instructions.\n </p>\n <p>\n  If anybody has suggestions for tracing execution paths in the binary, I'd highly appreciate your input. Additionally, if anybody has seen a similar obfuscation scheme before, please let me know:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/emslz.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"enter image description here\" src=\"https://i.sstatic.net/emslz.png\"/>\n  </a>\n </p>\n <p>\n  Edit: The sample can be downloaded from:\n  <a href=\"https://gofile.io/?c=qrNky4\" rel=\"nofollow noreferrer\">\n   https://gofile.io/?c=qrNky4\n  </a>\n  (not malicious; part of a VPN software)\n </p>\n</div>\n</body></html>",
+    "votes": "5",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "obfuscation",
+        ".net",
+        "c#",
+        "instrumentation"
+    ],
+    "user": "DucatiNerd",
+    "time": "Oct 28, 2019 at 9:39",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<html><body><span class=\"comment-copy\">\n Is it possible you share the binary so it's easier to showcase potential solution on this real example?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "DucatiNerd",
+            "text": "<html><body><span class=\"comment-copy\">\n I have uploaded the binary to\n <a href=\"https://gofile.io/?c=qrNky4\" rel=\"nofollow noreferrer\">\n  gofile.io/?c=qrNky4\n </a>\n - It is public and not malicious; it's actually part of a VPN service.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "3dsboy08",
+            "text": "<html><body><span class=\"comment-copy\">\n Little note: The obfuscator used is (likely) .NET Reactor, there is public tools for deobfuscating it but they might not work on newer versions.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <blockquote>\n  <p>\n   that instrumentation is not easily possible because of JIT compilation of IL instructions.\n  </p>\n </blockquote>\n <p>\n  Well it's actually the opposite. Tracing methods is quite easy - it would be difficult if we would like to trace fields usages. .NET assemblies contain rich type/method information that can be used to inspect/modify them. There's also a great library that does that plus more -\n  <a href=\"https://www.mono-project.com/docs/tools+libraries/libraries/Mono.Cecil/\" rel=\"noreferrer\">\n   Mono.Cecil\n  </a>\n  .\n </p>\n <p>\n  With the help if this library we can achieve what you want (\n  <a href=\"https://gist.github.com/pawlos/4758365fdef3bcbf733ba73e636fcfb7\" rel=\"noreferrer\">\n   gist\n  </a>\n  ).\n </p>\n <pre><code>using System;\nusing System.IO;\nusing System.Linq;\nusing Mono.Cecil;\nusing Mono.Cecil.Cil;\n\nclass TraceIL\n{\n    static void Main(string[] args)\n    {\n        if (args.Length != 1)\n        {\n            Console.WriteLine(\"TraceIL.exe <assembly>\");\n            return;\n        }\n\n        string fileName = args[0];\n        ModuleDefinition module = ModuleDefinition.ReadModule(fileName);\n        MethodReference consoleWriteLine =\n            module.ImportReference(typeof(Console).GetMethod(\"WriteLine\", new Type[] {typeof(object)}));\n        foreach (TypeDefinition type in module.Types)\n        {\n            foreach (var methodDefinition in type.Methods)\n            {\n                var ilBody = methodDefinition.Body;\n                var ilProcessor = ilBody.GetILProcessor();\n\n                var firstOp = methodDefinition.Body.Instructions.First();\n                var ldstrEntering = Instruction.Create(OpCodes.Ldstr, $\"--Entering {methodDefinition.Name}\");\n                ilProcessor.InsertBefore(firstOp, ldstrEntering);\n                var call = Instruction.Create(OpCodes.Call, consoleWriteLine);\n                ilProcessor.InsertBefore(firstOp, call);\n                var ldstrLeaving = Instruction.Create(OpCodes.Ldstr, $\"--Leaving {methodDefinition.Name}\");\n                var lastOp = methodDefinition.Body.Instructions.Last();\n                ilProcessor.InsertBefore(lastOp, ldstrLeaving);\n                ilProcessor.InsertBefore(lastOp, call);\n            }\n        }\n        module.Write(Path.GetFileNameWithoutExtension(fileName)+\".modified\"+Path.GetExtension(fileName));\n    }\n}\n</code></pre>\n <p>\n  Just to explain a little bit what's going on. For every method on every type we find in the assembly, we get the\n  <code>\n   ILProcessor\n  </code>\n  that allows us to modify the code. Having that we just insert a string and a call to\n  <code>\n   Console.WriteLine\n  </code>\n  just before the first existing opcode, and similar code just before the end of the method. At the very end we save the new binary under the same name with\n  <code>\n   .modified\n  </code>\n  added.\n </p>\n <p>\n  The example run:\n </p>\n <blockquote>\n  <p>\n   λ TestApp.exe\n   \n\n   Inside Run\n   \n\n   Inside Inside\n   \n\n   MoreInside\n   \n\n   OtherProgramRun\n   \n\n   \n\n   λ TraceIL.exe TestApp.exe\n   \n\n   \n\n   λ TestApp.modified.exe\n   \n\n   --Entering Main\n   \n\n   --Entering .ctor\n   \n\n   --Leaving .ctor\n   \n\n   --Entering Run\n   \n\n   Inside Run\n   \n\n   --Entering Inside\n   \n\n   Inside Inside\n   \n\n   --Entering MoreInside\n   \n\n   MoreInside\n   \n\n   --Entering .ctor\n   \n\n   --Leaving .ctor\n   \n\n   --Entering OtherProgramRun\n   \n\n   OtherProgramRun\n   \n\n   --Leaving OtherProgramRun\n   \n\n   --Leaving MoreInside\n   \n\n   --Leaving Inside\n   \n\n   --Leaving Run\n   \n\n   --Leaving Main\n   \n\n  </p>\n </blockquote>\n <p>\n  Of course form there you can do some crazy stuff, like adding timestamp and/or list passed arguments, etc. Since your sample is obfuscated it might not work form the start, but I guess this code is not that difficult to be modified as needed.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Paweł Łukasik",
+            "time": "Oct 25, 2019 at 19:58",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "DucatiNerd",
+                    "text": "<span class=\"comment-copy\">Thank you very much for your clear explanation. That is definitely something I will look into!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Paweł Łukasik",
+                    "text": "<span class=\"comment-copy\">@DucatiNerd I've tried with this file and I can see there's some tricks that would have to be removed in order to instrumentation work. There's for example jump over some invalid calls that make this module impossible to save after instrumenting</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You can use de4dot (\n  <a href=\"https://github.com/0xd4d/de4dot\" rel=\"nofollow noreferrer\">\n   https://github.com/0xd4d/de4dot\n  </a>\n  ) to deobfuscate the binary. Static analysis of dotnet binaries can be done easily by using de4dot and then using ILSpy to create a visual studio project, then you can analyze the source code in visual studio. You can also use dnSpy which allows you to debug the binary easily.\n </p>\n <p>\n  About the instrumentation, a dotnet binary still runs native code at runtime, with all the normal Win32 libraries. You can use Api Monitor (\n  <a href=\"http://www.rohitab.com/downloads\" rel=\"nofollow noreferrer\">\n   http://www.rohitab.com/downloads\n  </a>\n  ) to monitor os api calls at runtime, it's an awesome tool that works by hooking libraries and decoding parameters.\n </p>\n <p>\n  Moreover you can use procmon to display simple information like file system operations, registry, etc..\n </p>\n <p>\n  Good luck\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "oridamari",
+            "time": "Oct 25, 2019 at 22:55",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "DucatiNerd",
+                    "text": "<span class=\"comment-copy\">d4dot was actually one of the first tools i tried out. Surprisingly, in this case, it did not detect the obfuscation scheme and was not able to deobfuscate the binary.</span>",
+                    "time": null
+                },
+                {
+                    "user": "oridamari",
+                    "text": "<span class=\"comment-copy\">Can you share the sample? :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "DucatiNerd",
+                    "text": "<span class=\"comment-copy\">Check my reply to my question above. I have linked the file :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Johann Aydinbas",
+                    "text": "<span class=\"comment-copy\">This may be .NET reactor, I think I recognize the control-flow flattening from a previous sample where de4dot did detect it.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

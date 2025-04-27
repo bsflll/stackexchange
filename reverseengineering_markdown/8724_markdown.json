@@ -1,0 +1,76 @@
+{
+  "title": "Set a breakpoint on GDB entry point for stripped PIE binaries without disabling ASLR",
+  "link": "https://reverseengineering.stackexchange.com/questions/8724/set-a-breakpoint-on-gdb-entry-point-for-stripped-pie-binaries-without-disabling",
+  "content": "Given a position-independent, statically-linked, stripped binary, there does not appear to be a way in GDB to set a breakpoint at the entry point without disabling ASLR.\n\nWithout patching the binary, what mechanism can I use to break at the first instruction executed?\n\nSince a now-deleted response to the question said that a PIE statically-linked binary is impossible, a trivial example is the linker itself.\n\nIt is statically linked.\n\n```\n$ ldd /lib/x86_64-linux-gnu/ld-2.19.so\n    statically linked\n\n```\nIt is executable.\n\n```\n$ strace /lib/x86_64-linux-gnu/ld-2.19.so\nexecve(\"/lib/x86_64-linux-gnu/ld-2.19.so\", [\"/lib/x86_64-linux-gnu/ld-2.19.so\"], [/* 96 vars */]) = 0\nbrk(0)                                  = 0x7ff787b3d000\nwritev(2, [{\"Usage: ld.so [OPTION]... EXECUTA\"..., 1373}], 1Usage: ld.so [OPTION]... EXECUTABLE-FILE [ARGS-FOR-PROGRAM...]\n\n```\nIt is position-independent.\n\n```\n$ readelf -h /lib/x86_64-linux-gnu/ld-2.19.so | grep DYN\n  Type:                              DYN (Shared object file)\n\n```\nIt looks like this can be done with Python by utilizing some of the events made available: http://asciinema.org/a/19078\n\nHowever, I'd like a native-GDB solution.\n\nA successful solution will break at _start in ld.so when executed directly without disabling ASLR.  It should look something like this:\n\n```\nsh $ strip -s /lib/x86_64-linux-gnu/ld-2.19.so -o ld.so\nsh $ gdb ./ld.so\n(gdb) $ set disable-randomization off\n(gdb) $ <your magic commands>\n(gdb) $ x/i $pc\n=> 0x7f9ba515d2d0:     mov    rdi,rsp\n(gdb) $ info proc map\nprocess 10432\nMapped address spaces:\n\n        Start Addr           End Addr       Size     Offset objfile\n    0x7f9ba515c000     0x7f9ba517f000    0x23000        0x0 /lib/x86_64-linux-gnu/ld-2.19.so \n    0x7f9ba537e000     0x7f9ba5380000     0x2000    0x22000 /lib/x86_64- linux-gnu/ld-2.19.so\n    0x7f9ba5380000     0x7f9ba5381000     0x1000        0x0 \n    0x7fffc34c7000     0x7fffc38ca000   0x403000        0x0 [stack]\n    0x7fffc398b000     0x7fffc398d000     0x2000        0x0 [vdso]\n0xffffffffff600000 0xffffffffff601000     0x1000        0x0 [vsyscall]\n\n```\n",
+  "votes": "20",
+  "answers": 4,
+  "views": "28k",
+  "tags": [
+    "debugging",
+    "gdb",
+    "elf"
+  ],
+  "user": "Zach Riggle",
+  "time": "Aug 3, 2015 at 20:22",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Did you try to set a breakpoint in the GOT section ? For example, on _libc_start_main().",
+      "time": null
+    },
+    {
+      "user": "Zach Riggle",
+      "text": "\"position-independent, statically-linked\" -- There is no GOT.",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "My bad... I read too quickly. Sorry.",
+      "time": null
+    },
+    {
+      "user": "Ciro Santilli OurBigBook.com",
+      "text": "related: stackoverflow.com/questions/10483544/…",
+      "time": null
+    },
+    {
+      "user": "nostromo",
+      "text": "related: stackoverflow.com/questions/22488499/…",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "UPDATE: GDB 8.1 has a starti command, as mentioned below by /u/ruslan\n\nSetting a breakpoint on an unmapped address before starting the target process does this, effectively.  It's not correct functionality, but rather a side-effect of the failure to set the breakpoint.\n\n```\n(gdb) break *0\nBreakpoint 1 at 0x0\n(gdb) r\nStarting program: /home/user/ld.so \nError in re-setting breakpoint 1: Warning:\nCannot insert breakpoint 1.\nCannot access memory at address 0x0\n\nWarning:\nCannot insert breakpoint 1.\nCannot access memory at address 0x0\n\n(gdb) x/i $pc\n=> 0x7faae3a25cd0:      mov    rdi,rsp\n\n```\n",
+      "votes": "24",
+      "user": "Zach Riggle",
+      "time": "Feb 6, 2018 at 22:45",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Starting with GDB 8.1, there's a special command for this: starti. Example GDB session:\n\n```\n$ gdb /bin/true\nReading symbols from /bin/true...(no debugging symbols found)...done.\n(gdb) starti\nStarting program: /bin/true \n\nProgram stopped.\n0xf7fdd800 in _start () from /lib/ld-linux.so.2\n(gdb) x/5i $pc\n=> 0xf7fdd800 <_start>: mov    eax,esp\n   0xf7fdd802 <_start+2>:       call   0xf7fe2160 <_dl_start>\n   0xf7fdd807 <_dl_start_user>: mov    edi,eax\n   0xf7fdd809 <_dl_start_user+2>:       call   0xf7fdd7f0\n   0xf7fdd80e <_dl_start_user+7>:       add    ebx,0x1f7e6\n\n```\n",
+      "votes": "12",
+      "user": "Ruslan",
+      "time": "Feb 2, 2018 at 18:26",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "You can define gdb function to break on first argument of libc_star_main. The first si/ni is to load libc itself. Put it in your .gdbinit file.\n\n```\ndefine bmain\n    si\n    ni\n    b __libc_start_main\n    c\n    b *($rdi)\n    c\nend\n\n```\n",
+      "votes": "3",
+      "user": "p0tr3c",
+      "time": "Feb 8, 2020 at 8:20",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Just stumbled across this and thought I would add a bit.\n\nIf you want to stop at the entry point of a stripped, dynamically-linked program, I recommend the following procedure.\n\n```\n$ gdb /usr/bin/ls\n(gdb) starti\n(gdb) info file\n...\nLocal exec file:\n    `/usr/bin/ls', file type elf64-x86-64.\n    Entry point: 0x55555555a7d0\n...\n(gdb) b *0x55555555a7d0\n(gdb) cont\n...\nBreakpoint 1, 0x000055555555a7d0 in ?? ()\n(gdb) x/i $rip\n=> 0x55555555a7d0:  endbr64 \n\n```\nNow, if you want main on Linux, step ahead through the disassembly until you find out how rdi is being set (assuming the usual crt0.o has been linked to start the C runtime).\n\n```\n(gdb) \n   0x55555555a7f1:  lea    rdi,[rip+0xffffffffffffe5f8]        # 0x555555558df0\n\n```\nAh ha!  We can find main (even without any symbols) at 0x555555558df0.\n\n```\n(gdb) b *0x555555558df0\n(gdb) cont\n\n```\nNow you are at main.\nLeaving this here in case someone else comes along with the same question.\n\n",
+      "votes": "0",
+      "user": "Stacy J",
+      "time": "Mar 8, 2021 at 17:28",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "title": "Microsoft Edge and it's related processes may have turned protected in windows 10 1903",
+  "link": "https://reverseengineering.stackexchange.com/questions/21840/microsoft-edge-and-its-related-processes-may-have-turned-protected-in-windows-1",
+  "content": "It seems like driver based injection using APC calls fails on MicrosoftEdge and it's related processes (browser_broker.exe , MicrosoftEdgeCP.exe and MicrosoftEdge.exe).\n\nLooking into the problem, it looks like this application is protected process and uses the ProcessDynamicCodePolicy flag which prevents the driver from allocate new executable memory. \n\nEventually, shortly after trying to inject to those processes, they all fail due to the following reason (exception 0xC0000409, STATUS_STACK_BUFFER_OVERRUN).\n\n```\nDescription:\nFaulting application name: MicrosoftEdgeCP.exe, version: 11.0.15063.674, time stamp: 0x59cdf479\nFaulting module name: ntdll.dll, version: 10.0.15063.1324, time stamp: 0x28af0ac0\nException code: 0xc0000409\nFault offset: 0x00000000000a9f80\nFaulting process ID: 0x1580\nFaulting application start time: 0x01d503e311af20b8\nFaulting application path: C:\\Windows\\SystemApps\\Microsoft.MicrosoftEdge_8wekyb3d8bbwe\\MicrosoftEdgeCP.exe\nFaulting module path: C:\\Windows\\SYSTEM32  \ntdll.dll\nReport ID: 112c6adc-0898-4441-90b6-f1a17b668af1\nFaulting package full name: Microsoft.MicrosoftEdge_40.15063.674.0_neutral__8wekyb3d8bbwe\n\n```\nDoes the above output hint that this is the problem I'm facing? \n\nIs there any way to detect from the driver that this process is protected?\n\n",
+  "votes": "5",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "windows",
+    "dll-injection"
+  ],
+  "user": "Zohar81",
+  "time": "Aug 5, 2019 at 9:56",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "Since you're asking for drivers and the existing answer refers specifically to UM code, potentially introducing limitations with regard to permissible IRQL, you may want to check out the article series by Alex Ionescu (here and here and here)",
+      "time": null
+    },
+    {
+      "user": "Zohar81",
+      "text": "@0xC0000022L, I understood that there's a difference between protected process, an attribute that only Microsoft can entitle to a process and processes that can set  ProcessDynamicCodePolicy by themselves using SetProcessMitigationPolicy. For the second type of processes I wish to override this bit from the driver. do you know if SetProcessMitigationPolicy is also available from kernel space ?",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "I highly doubt it as I think that this is implemented differently from PPL. I think either way you won't get around APCs to execute some user mode code, which places you in a catch 22 situation of sorts. And actually anti-malware vendors can also mark specific processes as PPL, provided they have an ELAM and the files of the designated PPL are signed as described by the ELAM. Details are in fact subject to NDAs.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Disclaimer: This following procedure depends on undocmented data structure which is extracted from PDB symbol of combase.dll file. As usual this may not work in future Windows OS version.\n\nThis is the sample C code to detect protected process. The program accepts a valid process ID in its first argument. This code need to be linked with ntdll.lib library. In user mode, this code may need to be run as administrator for some processes.\n\n```\n#include <Windows.h>\n#include <winternl.h>\n#include <stdio.h>\n#include <stdlib.h>\n\ntypedef struct _PROCESS_EXTENDED_BASIC_INFORMATION {\n    size_t Size;\n    PROCESS_BASIC_INFORMATION BasicInfo;\n    union {\n        unsigned int Flags;\n        struct {\n            unsigned int IsProtectedProcess : 1;\n            unsigned int IsWow64Process : 1;\n            unsigned int IsProcessDeleting : 1;\n            unsigned int IsCrossSessionCreate : 1;\n            unsigned int IsFrozen : 1;\n            unsigned int IsBackground : 1;\n            unsigned int IsStronglyNamed : 1;\n            unsigned int IsSecureProcess : 1;\n            unsigned int IsSubsystemProcess : 1;\n            unsigned int SpareBits : 23;\n        };\n    };\n} PROCESS_EXTENDED_BASIC_INFORMATION, *PPROCESS_EXTENDED_BASIC_INFORMATION; /* size: 0x0040 */\n\nint main(int argc, char *argv[])\n{\n    if (argc < 2)\n        return;\n\n    void *hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, atoi(argv[1]));\n    if (hProcess != NULL)\n    {\n        unsigned int ret;\n        PROCESS_EXTENDED_BASIC_INFORMATION pInfo;\n        memset(&pInfo, 0, sizeof pInfo);\n\n        NTSTATUS Status = NtQueryInformationProcess(hProcess, ProcessBasicInformation, &pInfo, sizeof pInfo, &ret);\n        if (Status == 0)\n            printf(\"Protected: %d  \n\", pInfo.IsProtectedProcess);\n        CloseHandle(hProcess);\n    }\n    else\n        printf(\"OpenProcess error: %d  \n\", GetLastError());\n}\n\n```\nTo add or change process mitigation policy flags, programs use SetProcessMitigationPolicy() function which uses NtSetInformationProcess() function (retrieved from KernelBase.dll). Here is a sample C code which enables dynamic code policy.\n\n```\n#include <Windows.h>\n#include <winternl.h>\n\ntypedef struct _PROCESS_MITIGATION_POLICY_INFORMATION {\n    PROCESS_MITIGATION_POLICY Policy;\n    union {\n        PROCESS_MITIGATION_ASLR_POLICY ASLRPolicy;\n        PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY StrictHandleCheckPolicy;\n        PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY SystemCallDisablePolicy;\n        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY ExtensionPointDisablePolicy;\n        PROCESS_MITIGATION_DYNAMIC_CODE_POLICY DynamicCodePolicy;\n        PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY ControlFlowGuardPolicy;\n        PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY SignaturePolicy;\n        PROCESS_MITIGATION_FONT_DISABLE_POLICY FontDisablePolicy;\n        PROCESS_MITIGATION_IMAGE_LOAD_POLICY ImageLoadPolicy;\n        PROCESS_MITIGATION_SYSTEM_CALL_FILTER_POLICY SystemCallFilterPolicy;\n        PROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY PayloadRestrictionPolicy;\n        PROCESS_MITIGATION_CHILD_PROCESS_POLICY ChildProcessPolicy;\n        PROCESS_MITIGATION_SIDE_CHANNEL_ISOLATION_POLICY SideChannelIsolationPolicy;\n    };\n} PROCESS_MITIGATION_POLICY_INFORMATION, *PPROCESS_MITIGATION_POLICY_INFORMATION; /* size: 0x0008 */\n\nint main(void)\n{\n    PROCESS_MITIGATION_POLICY_INFORMATION PolicyInfo = { 0 };\n    PolicyInfo.Policy = ProcessDynamicCodePolicy;\n    PolicyInfo.DynamicCodePolicy.ProhibitDynamicCode = TRUE;\n\n    NTSTATUS Status = NtSetInformationProcess(\n        GetCurrentProcess(),\n        52, /* ProcessMitigationPolicy */\n        &PolicyInfo,\n        sizeof PolicyInfo);\n}\n\n```\nAny one of the policy can be enabled with this method. Use Zw alternatives of Nt function to use in kernel mode. All of these undocumented structures can also be found in ProcessHacker/phnt repository.\n\n",
+      "votes": "6",
+      "user": "Biswapriyo",
+      "time": "Aug 5, 2019 at 18:25",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Zohar81",
+          "text": "Hi, I think that your methodology deals with revealing protected process - an attribute that only Microsoft can entitle to a process, and can be detected also using the call PsIsProtectedProcess from kernel space . I look for processes that can set the flag ProcessDynamicCodePolicy by themselves using SetProcessMitigationPolicy. For those processes I wish to override this bit from the driver. do you know if SetProcessMitigationPolicy is also available from kernel space ?",
+          "time": null
+        },
+        {
+          "user": "Biswapriyo",
+          "text": "@Zohar81 Edited my answer with internals of SetProcessMitigationPolicy(). Also I don't know if this works for PPL or containerized UWP processes.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@Zohar81 If it can be set with NtSetInformationProcess it stands to reason that this is part of either EPROCESS or KPROCESS (likely the former) and so can be manipulated from within a driver. I'd give WinDbg a try to figure out how the structures look. ProcessHacker is also usually a good source for this kind of information.",
+          "time": null
+        },
+        {
+          "user": "Biswapriyo",
+          "text": "@0xC0000022L Yes, there is a MitigationFlagsValues structure in EPROCESS. But the structure is too long and volatile to include in a source code. Even it vaires with every builds of Windows 10.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "@Biswapriyo Didn't even ProcessHacker pioneer a method by which the debug symbols matching the currently running system are used to extract the respective offsets and then use that? I've at least seen that before. Admittedly probably not a good idea to do this kind of stuff in KM, though ;)",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

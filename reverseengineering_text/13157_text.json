@@ -1,0 +1,55 @@
+{
+    "title": "MSDetour not detouring SHGetKnownFolderPath",
+    "link": "https://reverseengineering.stackexchange.com/questions/13157/msdetour-not-detouring-shgetknownfolderpath",
+    "content": "Tried to hook SHGetKnownFolderPath from shell32, using the normal DetourFunctionWithTrampoline, and it could not.\nInvestigating, it seen that the application use GetProcAddress to load the function, and use the function pointer.\nSo I did the same, and hooked using DetourFunction, and it succeed.\nI looked on the assembly, and it seen that when I call SHGetKnownFolderPath directly it goes through two jumps before reaching shell32. I don't think that it does that for other functions. \nWhat is going on?\nSharing code:\n<pre><code>#include \"stdafx.h\"\n#include \"windows.h\"\n#include \"FileAPI.h\"\n#include \"Shlobj.h\"\n\n\nint main()\n{\n    HANDLE hFile = CreateFileA(NULL, 0, 0, NULL, 0, 0, NULL);\n    SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0, NULL, NULL);\n    return 0;\n}\n</code></pre>\nLooking in IDA, I see for CreateFileA:\n<pre><code>call    ds:__imp__CreateFileA@28 ; CreateFileA(x,x,x,x,x,x,x)\n</code></pre>\nWhich takes me to:\n<pre><code>.idata:0041B000 ; HANDLE __stdcall CreateFileA(LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)\n.idata:0041B000                 extrn __imp__CreateFileA@28:dword ; CODE XREF: _main+2Ep\n.idata:0041B000                                         ; DATA XREF: _main+2Er ...\n</code></pre>\nOn the other hand, for SHGetKnownFolderPath I see:\n<pre><code>call    j__SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\n</code></pre>\nWhich redirect to:\n<pre><code>; __stdcall SHGetKnownFolderPath(x, x, x, x)\nj__SHGetKnownFolderPath@16 proc near\njmp     _SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\nj__SHGetKnownFolderPath@16 endp\n</code></pre>\nWhich redirect to:\n<pre><code>; __stdcall SHGetKnownFolderPath(x, x, x, x)\n_SHGetKnownFolderPath@16 proc near\njmp     ds:__imp__SHGetKnownFolderPath@16 ; SHGetKnownFolderPath(x,x,x,x)\n_SHGetKnownFolderPath@16 endp\n</code></pre>\nWhich redirect to:\n<pre><code>.idata:0041B09C ; __declspec(dllimport) __stdcall SHGetKnownFolderPath(x, x, x, x)\n.idata:0041B09C                 extrn __imp__SHGetKnownFolderPath@16:dword\n.idata:0041B09C                                         ; DATA XREF: SHGetKnownFolderPath(x,x,x,x)r\n</code></pre>\nSo SHGetKnownFolderPath have two more jumps then CreateFileA. I did nothing to the project to make it do it. so why?\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "300",
+    "tags": [
+        "dll",
+        "winapi",
+        "function-hooking"
+    ],
+    "user": "Shmuel Fomberg",
+    "time": "Nov 17, 2016 at 13:25",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<pre><code>DetourFunction()</code></pre> is from an older version of Detours. Probably best to upgrade to the latest version of the library. (The equivalent function is now <pre><code>DetourAttach()</code></pre>.)\nIf you're using <pre><code>DetourFunction(SHGetKnownFolderPath, Hook)</code></pre>,\nthe value for the first parameter is probably pointing to a compiler-created stub for the real <pre><code>SHGetKnownFolderPath()</code></pre> function. Instead, you should use <pre><code>DetourFunction(GetProcAddress(GetModuleHandle(\"shell32.dll\"), \"SHGetKnownFolderPath\"), Hook)</code></pre> to ensure that you're using the actual address of the exported API function.\n",
+            "votes": "2",
+            "user": "Jason Geffner",
+            "time": "Jul 28, 2016 at 14:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">But why? Why did the compiler decided to make a stub for this function? I don't have this problem with CreateFileA for example. Is that special treatment for shell32? linker flag?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">See <a href=\"http://reverseengineering.stackexchange.com/questions/2857/why-is-jmp-used-with-call\" title=\"why is jmp used with call\">reverseengineering.stackexchange.com/questions/2857/…</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">That explain one jump, not why I see TWO jumps. Also, it doesn't explain why CreateFileA does have this problem, in the same program.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">If you can share the EXE we can take a look.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I found out that SHGetKnownFolderPath does not have a declspec(dllimport) flag in the definition in the header file.\nAdding it made it identical to the CreateFile call. \nWithout it, the compiler made a stub for the unknown function, and the linker made his own stub because of incremental linking, and only then forward the call to the DLL.\n",
+            "votes": "0",
+            "user": "Shmuel Fomberg",
+            "time": "Nov 21, 2016 at 10:03",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

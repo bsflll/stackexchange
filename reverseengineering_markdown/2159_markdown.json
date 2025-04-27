@@ -1,0 +1,57 @@
+{
+  "title": "Trying to reverse engineer dump of a timestamp",
+  "link": "https://reverseengineering.stackexchange.com/questions/2159/trying-to-reverse-engineer-dump-of-a-timestamp",
+  "content": "I have the following hex parts and I have a strong suspicion that behind them is a date of an event:\n\n```\n2013.05.23  20:35:00    08014273ed2071a6800017\n2013.05.23  21:45:00    08014273ed246cf0000017\n2013.05.24  17:10:00    08014273ed675173000017\n2013.05.25  01:10:00    08014273ed82900f000017\n2013.05.25  02:15:00    08014273ed8667b3800017\n2013.05.25  17:15:00    08014273edb9c78e800017\n2013.05.25  19:55:00    08014273edc2ee93000017\n2013.05.25  20:30:00    08014273edc52a5a000017\n2013.05.29  06:25:00    08014273eede5079000017\n2013.05.29  06:35:00    08014273eedeac45000017\n2013.05.29  06:40:00    08014273eedf09c6800017\n2013.05.30  21:40:00    08014273ef64b021800017\n\n```\nThe first and the second are my observations of the event (I do not have an exact time for minutes and seconds), also it might be in my time zone. In the third column is hex value, which I suspect to be a presentation of this time. \nCurrently I assume that 08 and 17 are just delimiters. \n\nI was looking for a timestamp representation and date time, but currently with no success.\nAny guess what it can be?\n\nP.S an update with some completely different dates. I will try to find also the earlier date possible. Thanks for help\n\n```\n2013.01.01  00:50:00    08014273bf2ba0ed000017\n2012.12.15  03:25:00    08014273b9bbb8cd000017\n\n```\n",
+  "votes": "12",
+  "answers": 3,
+  "views": "751",
+  "tags": [
+    "obfuscation",
+    "file-format"
+  ],
+  "user": "Salvador Dali",
+  "time": "Dec 7, 2013 at 13:10",
+  "comments": [
+    {
+      "user": "NirIzr",
+      "text": "Can you also provide a few totally unrelated dates? say 2012, another month (1st or June maybe?).",
+      "time": null
+    },
+    {
+      "user": "heinrich5991",
+      "text": "mh. shouldn't this be closed for 'too localized'?",
+      "time": null
+    },
+    {
+      "user": "Salvador Dali",
+      "text": "it might be, but this would not be helpful at all. It is not just the answer I am here for, the way which led people to it might be helpful for other people.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The numbers in the third column do increase over time, which is a good start. Let's check the differences between numbers on consecutive lines, to see if the progression is linear:\n\n```\n#!/usr/bin/env python\nimport re, sys, time\nlines = sys.stdin.readlines()\ndef parse(l): return time.mktime(map(int,l[0:6]) + [0]*3), int(l[6], 16)\nstamps = [parse(re.split('[  \n.: ]+',line)) for line in lines]\n\nprint lines[0][:20]\nfor i in xrange(1,len(stamps)):\n    (t1,x1) = stamps[i]\n    (t0,x0) = stamps[i-1]\n    print \"%s  %8d %18d %12d\" % (lines[i][:20], t1-t0, x1-x0, (x1-x0)/(t1-t0))\n\n```\nOutput:\n\n```\n2012.12.15  03:25:00\n2013.01.01  00:50:00   1459500   1530417643520000   1048590368\n2013.05.23  20:35:00  12339900  12935551254528000   1048270346\n2013.05.23  21:45:00      4200      4377804800000   1042334476\n2013.05.24  17:10:00     69900     73549217792000   1052206263\n2013.05.25  01:10:00     28800     29955719168000   1040129137\n2013.05.25  02:15:00      3900      4224712704000   1083259667\n2013.05.25  17:15:00     54000     56486789120000   1046051650\n2013.05.25  19:55:00      9600     10063183872000   1048248320\n2013.05.25  20:30:00      2100      2455764992000   1169411900\n2013.05.29  06:25:00    294900    309126496256000   1048241764\n2013.05.29  06:35:00       600       394264576000    657107626\n2013.05.29  06:40:00       300       401604608000   1338682026\n2013.05.30  21:40:00    140400    146949537792000   1046649129\n\n```\nThe progression is indeed mostly linear, with the most extreme rates corresponding to the shortest intervals where the uncertainty is comparatively large. There's no marked jump on a day or month or year change, so the number is probably directly a number of units of time and not year-month-day-hour-minute-second packed in columns.\n\nThe rate is close to nanoseconds, but in fact closer to 1048 million ticks per second. It's quite possible that some of the digits on the right encode something else.\n\nIt's remarkable that all the differences are multiples of 1000. Let's print out the hexadecimal numbers in decimal:\n\n```\n9677354747411355314159639\n9677354748941772957679639\n9677354761877324212207639\n9677354761881702017007639\n9677354761955251234799639\n9677354761985206953967639\n9677354761989431666671639\n9677354762045918455791639\n9677354762055981639663639\n9677354762058437404655639\n9677354762367563900911639\n9677354762367958165487639\n9677354762368359770095639\n9677354762515309307887639\n\n```\n639 isn't remarkable, and I don't see any pattern in the preceding digits either. It does seem that the data was at some point built from concatenating decimal digits, though.\n\nRecall the intervals that were closer to 1048 million per second? Since the last 3 decimal digits are probably not part of the time, we must divide this figure by 1000. The result is remarkably close to 2^20 parts per second. So the data looks to have been assembled in decimal at some point, and in hexadecimal at some other point! Let's divide the hexadecimal numbers by 1000, but print them out in hex:\n\n```\nfor (l,s) in zip(lines, stamps): t = (s[1] - 639) / 1000; print l[:20], s[0], hex(t)\n\n```\nOutput:\n\n```\n2012.12.15  03:25:00 1355538300.0 0x20c9c4695f29de6a7efL\n2013.01.01  00:50:00 1356997800.0 0x20c9c469756f1e6a7efL\n2013.05.23  20:35:00 1369337700.0 0x20c9c46a31abcd6a7efL\n2013.05.23  21:45:00 1369341900.0 0x20c9c46a31bc1c6a7efL\n2013.05.24  17:10:00 1369411800.0 0x20c9c46a32ce1a6a7efL\n2013.05.25  01:10:00 1369440600.0 0x20c9c46a333db26a7efL\n2013.05.25  02:15:00 1369444500.0 0x20c9c46a334d6f6a7efL\n2013.05.25  17:15:00 1369498500.0 0x20c9c46a341fdd6a7efL\n2013.05.25  19:55:00 1369508100.0 0x20c9c46a34455a6a7efL\n2013.05.25  20:30:00 1369510200.0 0x20c9c46a344e806a7efL\n2013.05.29  06:25:00 1369805100.0 0x20c9c46a38ce166a7efL\n2013.05.29  06:35:00 1369805700.0 0x20c9c46a38cf8e6a7efL\n2013.05.29  06:40:00 1369806000.0 0x20c9c46a38d10d6a7efL\n2013.05.30  21:40:00 1369946400.0 0x20c9c46a3af47b6a7efL\n\n```\nThose last 5 hexadecimal digits are constant. It's the next portion on the left that corresponds roughly to seconds since some epoch. Stripping off some digits on the left should yield the epoch, the difficulty is knowing how many hexadecimal digits to strip and how many decimal digits to strip. I'm unable to find a nice-looking epoch.\n\n",
+      "votes": "12",
+      "user": "Gilles 'SO- stop being evil'",
+      "time": "Jun 1, 2013 at 21:47",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Following up on Gilles answer, the first 7 hex digits (0801427) and the last 5 (00017) are not part of the timestamp. The remaining ones are the number of milliseconds from Nov 4, 2004. If you convert that to dates you get\n\n```\n3b9bbb8cd0  2012.12.15  03:30:30\n3bf2ba0ed0  2013.01.01  00:55:50\n3ed2071a68  2013.05.23  19:40:53\n3ed246cf00  2013.05.23  20:50:28\n3ed6751730  2013.05.24  16:19:30\n3ed82900f0  2013.05.25  00:15:38\n3ed8667b38  2013.05.25  01:22:47\n3edb9c78e8  2013.05.25  16:20:37\n3edc2ee930  2013.05.25  19:00:34\n3edc52a5a0  2013.05.25  19:39:36\n3eede50790  2013.05.29  05:33:02\n3eedeac450  2013.05.29  05:39:18\n3eedf09c68  2013.05.29  05:45:41\n3ef64b0218  2013.05.30  20:41:23\n\n```\nThe time for May or off by one hour. That could be daylight saving time.\n\nI have no idea why that particular epoch. Could be the release date of whatever is generating the timestamps.\n\n",
+      "votes": "5",
+      "user": "alahel",
+      "time": "Dec 7, 2013 at 13:01",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Following up alahel's answer, the date is indeed a number of milliseconds, but it includes 1 further bit to the left and is from the standard epoch of 1 Jan 1970. For example:\n\n```\n08014273ed2071a6800017\n      ~^^^^^^^^^^\n\n```\nwhere it includes the least significant bit from the \"7\", so 0x13ed2071a68, which corresponds to:\n\n```\n2013-05-23 15:34:41:00 (UTC)\n\n```\nThere appears to be a 5 hour difference due to timezone.\n\nThe author seems to have cared somewhat about being space-efficient by using exactly 41 bits - capable of reaching the year 2039 (whereas 40 bits would only reach 2004).\n\n",
+      "votes": "2",
+      "user": "ndkrempel",
+      "time": "Nov 21, 2022 at 16:34",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

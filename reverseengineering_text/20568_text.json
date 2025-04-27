@@ -1,0 +1,120 @@
+{
+    "title": "Jump in the middle of an instruction Coldfire firmware",
+    "link": "https://reverseengineering.stackexchange.com/questions/20568/jump-in-the-middle-of-an-instruction-coldfire-firmware",
+    "content": "I'm working on an embedded system Coldfire ROM. Currently, I'm trying to reverse engineering it to gain some more in-depth knowledge about its structure. \nROM code quality seems pretty low, and I see a lot of redundancy and dead code lay around, as if the code was compiled with a very low level of optimization. \nI'm telling you that because I do not understand if this fact is somehow related to the question I'm about to pose. \nChecking the code, not infrequently, I'm stepping into jumps inside a single multi byte instruction. I'm new to this technique, so I wonder if someone can put me in the right track to understand this, that I consider a strangeness.\nHere an example of what I'm referring to:\nI have a function which starts at ROM:00005474\n<pre><code>[...]\n.ROM:00005490 30 07             movew %d7,%d0\n.ROM:00005492 4a 80             tstl %d0\n.ROM:00005494 66 0c             bnes 0x0000000c :12 \n.ROM:00005496 70 00             moveq #0,%d0\n.ROM:00005498 60 00 00 a8       braw 0x000000b2\n.ROM:0000549c 4e b9 00 00 36 f8 jsr 0x000036f8  : the jump points inside here\n.ROM:000054a2 32 06             movew %d6,%d1\n.ROM:000054a4 48 c1             extl %d1\n.ROM:000054a6 20 01             movel %d1,%d0\n[...]\n</code></pre>\nIn another area of the  ROM, I have another function which starts at ROM:00012016\n<pre><code>[...]\n.ROM:000120c0 72 00             moveq #0,%d1\n.ROM:000120c2 12 00             moveb %d0,%d1\n.ROM:000120c4 20 3c 00 00 00 ff movel #255,%d0\n.ROM:000120ca b2 80             cmpl %d0,%d1\n.ROM:000120cc 66 00 01 92       bnew 0x00012260\n.ROM:000120d0 4e b9 00 00 54 9e jsr 0x0000549e :here the jump I do not understand\n.ROM:000120d6 72 00             moveq #0,%d1\n.ROM:000120d8 12 00             moveb %d0,%d1\n.ROM:000120da 20 3c 00 00 00 ff movel #255,%d0\n[...]\n</code></pre>\nIf I try to follow the jump and begin to disassemble the function starting from the address ROM:0000549e I get a translation which leads to the following interpretation. I understand it is executable, but I do not get the big picture in this action.\n<pre><code>[...]\n.ROM:0000549e 00 00 36 f8                      orib #-8,%d0\n.ROM:000054a2 32 06                            movew %d6,%d1\n.ROM:000054a4 48 c1                            extl %d1\n.ROM:000054a6 20 01                            movel %d1,%d0\n[...]\n</code></pre>\nIs there, behind this technique, some old practice I should know. Why this ROM developer should have used such a strange technique? To reduce the code size? If so, it is not fit with the rest of the code which is very redundant and has dead code in it which won't be ever executed!\nEDIT.20190214\nAt byte 0xc000 it begins a block of code extends to 0x40000 whose first function appears to be incomplete in its beginning part. \nThe weirdness seems to begin from this point forward and extends to the byte 0x40000 where the second part of the firmware begins. \nIn this code blocks, there are roughly 200 functions of various dimensions and the JSRs with a weird absolute address are not present in all the functions in this block.\nThe functions in this block seem to interact with each other seamlessly, but they occasionally occur to present inconsistent addresses.\n",
+    "votes": "3",
+    "answers": 3,
+    "views": "686",
+    "tags": [
+        "disassembly",
+        "embedded",
+        "motorola"
+    ],
+    "user": "Alessandro",
+    "time": "Feb 14, 2019 at 16:50",
+    "comments": [
+        {
+            "user": "Alessandro",
+            "text": "I've forgotten to say that the address of the [email protected]:0000549c where the second function jumps in, is a valid function starting address. That address corresponds to the prologue of a function that the first function, the one which contains the code, do not execute.\n",
+            "time": null
+        },
+        {
+            "user": "Bruce Abbott",
+            "text": "Are you sure the addresses are correct? For example you have \"00005494 66 0c bnes 0x00000012\" but the destination address should be 5494+0c = 54a0 not 0012.\n",
+            "time": null
+        },
+        {
+            "user": "Alessandro",
+            "text": "Thank you for your comment. Actually the code is taken \"as is\" directly from the ROM I'm Focusing on. Because you raised this doubt, I looked at the part you took as example .ROM:00005494 66 0c             bnes 0x00000012. This is a relative jump, and 0x0c or 12 if prefer, is the offset of the jump. So then ** 0x5494 + 0x02 + 0x0c = 0x54a2** which is the instruction the CPU would execute next if the condition is true. (please note that when the JUMP instruction is fetched, to the PC is added 2) It seems to me that everything's right on this prospect. Am I missing anything?\n",
+            "time": null
+        },
+        {
+            "user": "Alessandro",
+            "text": "I got your point. Somehow, when I copy paste from disassembler a \"0x\" have been spawned. I will fix this typo. Thank you.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "can you add the code at 0x000036f8 ?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "It does look like a size optimization employed in some microcontrollers, although I haven't seen it used around subroutine calls. In particular, CodeWarrior compiler for HC08 and HC12 used it to optimize short branches.\nFrom Freescale/NXP's S12(X) Build Tools Reference Manual (section HC(S)12 Backend Optimizations):\n\nShort BRA Optimization (-OnB=a to disable it)\nA branch over one byte is replaced with the opcode of <pre><code>BRN</code></pre>. A branch over two bytes is\nreplaced with the opcode of <pre><code>CPS</code></pre>\nListing 10.19 Short BRA optimization example\n<pre><code>int q(void) {\nif (f()) {\n    return 1;\n  } else {\n    return 0;\n  }\n}\n</code></pre>\nThe code produced with this optimization:\n<pre><code>0000 160000 JSR f\n0003 044403 TBEQ D,3 ;abs = 0009\n0006 C601 LDAB #1\n0008 21C7 BRN -57 ;abs = FFD1\n000A 87 CLRA\n000B 3D RTS\n</code></pre>\nWith the <pre><code>-OnB=a</code></pre> (disable short BRA optimization) option the Compiler produces one\nmore byte:\n<pre><code>0000 160000 JSR f\n0003 044404 TBEQ D,4 ;abs = 000A\n0006 C601 LDAB #1\n0008 2001 BRA 1 ;abs = 000B\n000A C7 CLRB\n000B 87 CLRA\n000C 3D RTS\n</code></pre>\nThe branch optimizer replaces the BRA 1 in the second example with the opcode of\n“BRN”, 0x21. Then the Decoder joins the BRN with the CLRB to one BRN. Actually the\nDecoder writes something like the following:\n<pre><code>0008 21 “BRA 1”\n000A C7 CLRB\n</code></pre>\nThe <pre><code>CLRB</code></pre> out of the second code disappears in the first listing into the offset of the\n<pre><code>BRN</code></pre> instruction. The same type of optimization is also done with a <pre><code>BRA 2</code></pre>. Then the opcode of a <pre><code>CPS #</code></pre> is taken.\nNOTE <pre><code>BRN</code></pre> and <pre><code>CPS</code></pre> in a Decoder listing are often the result of this optimization. If\nso, one or two additional machine instructions are hidden after the opcode. The\ncompiler writes this as <pre><code>SKIP1</code></pre> or <pre><code>SKIP2</code></pre> pseudo opcode to the listing file.\n\nI haven't found mentions of such optimization used for ColdFire and since you mention that the code does not look optimized it's probably not what is happening here. One theory I have is that the overlapping instructions sequence comes from the compiler's standard library and not developer's code so it has been optimized for size or even written manually in assembly.\nYet another option is that you're looking at data being disassembled which may produce all kinds of weird effects. For example, it could be jump tables embedded in code.\nEDIT yeah, the stuff at 000120c0  does look like some kind of table. For example, when converted to an array of words, it becomes:\n<pre><code>CODE:000120C0  dc.w $7200, $1200, $203C, 0, $FF, $B280, $6600, $192, $4EB9\nCODE:000120C0  dc.w 0, $549E, $7200, $1200, $203C, 0, $FF\n</code></pre>\nSo it's probably not code at all. I suspect it could be the table of initial tasks or similar.\n",
+            "votes": "4",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">Thank you for the beautiful answer. Even if it is not the answer I was looking for, I enjoyed the explanation. Unfortunately, all the scenarios envisaged do not fit in my case. I feel to exclude a compiler size optimization because the code around is redundant. I think it is not a library, size optimized, included as is, for the same reason. Finally, I think it is not even a  jump table, because the JSR address is valid, and because there are no near PC relative instructions.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">Side question, I'm also trying to guess what this ROM relative is; I mean which is the framework or OS used as the template for build it. It has a task descriptor very small with just a few fields: stack full, current stack, current PC ad a few bitfield flags. The number of tasks seems to have been fixed at compile time. Can you suggest anything?  I already tested MQX, MQX lite, free RTOS, BRTOS, and a few others. ROM has been built on 2008.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">could be something homegrown. Please see the edit at the end.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bruce Abbott",
+                    "text": "<span class=\"comment-copy\">$203C, $b280, $4EB9, - this looks a lot like code to me. Only problem is absolute jumps seem to be going to the wrong addresses (or perhaps the disassembly addresses themselves are wrong).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">Hello, thank you again for the time you're spending in writing me things. Yours are well-placed comments, I think I would do the same in your place. However, the code block starting at 0x12016 and comprehending the 0x120d0 is, in fact, a function. I added on the original question the starting of that function to show you how I came to that conclusion. The function is also referenced by other snippets of code around the ROM, but at this stage, I'm not able to tell you which is the right call flow. Lastly, I chose these two snippets of code to substantiate my question, but they are not the only.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Now that you have shown us bit more of the code, a pattern is starting to emerge.\n<pre><code>jsr     unk_A75E       ; This function does not exist.\n...\njsr     (loc_576A+2).l  ; ...points in the middle of an instruction\n...\njsr     (loc_88C+4).l   ; ...points in the middle of an instruction\n</code></pre>\nJumping into the middle of an instruction is sometimes used to produce slightly faster and more compact code (eg. to eliminate a branch when loading a register with one of two possible values). \nHowever in this routine every jsr instruction appears to be pointing to invalid code, for no apparent reason. The addresses are absolute immediate values, and your CPU doesn't have an MMU, so these addresses must be valid. However the code at those locations may not be what you think it is.\nYou probably assumed that the ROM starts at address 0. If this is not the case then pc-relative code (branch instructions etc.) will still point to the 'correct' addresses, but absolute jumps won't. Another possibility is that the ROM does start at address 0 at power on, but is later swapped for RAM and/or moved to a higher  address by special hardware. Code may also be copied from ROM to RAM (possibly at a different address) for execution. There are several possible reasons for doing this:-\n\nRAM may have a shorter cycle time than ROM, so code which is copied to RAM will execute faster, requiring fewer (or no) wait states.\nThe ROM needs to be at location 0 at startup because code execution starts at location 0. However interrupt vectors also appear in the low memory area, and if they are in ROM then they cannot be changed at run time.   \nAbsolute short addressing (which can only access the first and last 32k of memory) is a little quicker than long addressing, so it may be desirable to have RAM in this area for storing frequently accessed variables.\n\nYou should analyze the code starting from location 0, verifying that it does essential stuff such as loading the stack pointer, clearing RAM and initializing I/O hardware. Then look for anything that copies executable code from ROM to RAM, and I/O operations that might change the memory map. From this you should be able to figure what is really at the locations those jsr instructions are pointing to.\nYou don't say exactly which CPU this code is for, and frankly I can't be bothered trawling through all the Coldfire V2 datasheets to find out what they can do. But you should, because it might have a feature which is relevant to your problem. For a full understanding you should also trace the circuit to determine the locations and functions of I/O pins etc. When reverse-engineering, every bit of information helps!\n",
+            "votes": "3",
+            "user": "Bruce Abbott",
+            "time": "Feb 13, 2019 at 0:13",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">Thank you for your detailed answer. I really appreciate the effort you're doing for helping me out. I try to follow your suggestions. In the next 2 comments, some information that integrates the state of play.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">The SoC is an MCF5282; I'm pretty sure the ROM I downloaded using BDM interface starts at 0x0. That's because I downloaded it starting from that address and because at that address I found there the interrupt vector table. The memory map at runtime I determined to be as follows: ROM:0-7ffff, RAM:80000-8ffff, IO:40000000. A detail worth note is that I have two copies of the interrupt vectors, one starting at 0, and another starting at 40000. It is also worth to be said that these two copies are coupled by embedded absolute addresses point at first ISRs in the ISRs pointed by the second table.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">The address pointed by the reset vector is, in fact, the boot device starting function. As said in one of my comments, I found just a function coping data from ROM to RAM. I can not be sure it is the only, but this device has 512KiB ROM and only 64KiB RAM, I guess this fact discourages the usage of the RAM for fetching code. Also, I made rapid research of the following pattern “4eb90008” (JSR 0x0008xxxx) inside my ROM, and I found no occurrences. I also verified the presence within the code of the “JSR (Ax)” and I found some only in functions I identified as coming from “stdlib” (printf chain)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alessandro",
+                    "text": "<span class=\"comment-copy\">Lastly, I checked all the address space I dumped looking for “movc xx,cr_[45]” if anything would care to move the RAM base address or the FLASH base address. Nothing worth to be mentioned. It does a couple of time during the initialization function fixing Flash base address at 0x0, and RAM base address at 0x80000 as expected. Also, VBR (Vector Base Register) is set at 0x0.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bruce Abbott",
+                    "text": "<span class=\"comment-copy\">\"The SoC is an MCF5282; - so your 'SOC' is actually an MCU with internal ROM and RAM. \"I have two copies of the interrupt vectors...absolute addresses point at first ISRs in the ISRs pointed by the second table\" - can you show us these vectors? What are the vectors at location 0 (sp) and 4 (pc) in the ROM, and can you show us the first bit of code that the PC vector points to?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "These phenomena may be explained by the technique used to write the code on the flash.  The fact that code is structured in two parts would allow the developers to write the code in the flash in two distinct moments.  From  MCF5282 and MCF5216 ColdFire Microcontroller User’s Manual, Rev. 3 page 6-19  states: Thus, a single erase page is effectively 2 Kbyte (0xc00=24 pages). It's probable that the code with weird JSR targets might derive from garbage remained there from previous versions, not erased by process of writing the current code in the lower memory. This answer has been elaborated with the help of IgorSkochinsky and BruceAbbott.\n",
+            "votes": "3",
+            "user": "Alessandro",
+            "time": "Feb 14, 2019 at 16:42",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

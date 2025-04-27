@@ -1,0 +1,144 @@
+{
+  "title": "How is a structure located within a disassembled program?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4/how-is-a-structure-located-within-a-disassembled-program",
+  "content": "I took a basic 40-hr Reverse Engineering course a few summers ago. While teaching us to use IDAPro, the instructor demonstrated, rather quickly and without explaining much, how to label certain variables in the ASM as members of a structure, basically equivalent to a good old fashioned struct in C/C++, and treat them as such wherever they are seen in the rest of the code. This seems rather useful to me.\n\nWhat he did not cover, however, was how to identify a structure. How do you know when a group of variables does in fact constitute a structure and not just a set of related variables? How can you be sure that the author used a struct (or something similar) there?\n\n",
+  "votes": "25",
+  "answers": 7,
+  "views": "8k",
+  "tags": [
+    "ida",
+    "assembly",
+    "struct"
+  ],
+  "user": "Ken Bellows",
+  "time": "Aug 26, 2015 at 14:29",
+  "comments": [
+    {
+      "user": "Rolf Rolles",
+      "text": "Out of curiosity, was that my (Rolf Rolles) class?",
+      "time": null
+    },
+    {
+      "user": "Ken Bellows",
+      "text": "No, it was not.",
+      "time": null
+    },
+    {
+      "user": "user1354557",
+      "text": "I believe I've taught the section of the course you're referring to (although probably not when you took it).  We generally spend more time on the subject now than we used to.  Sorry about the confusion!",
+      "time": null
+    },
+    {
+      "user": "Ken Bellows",
+      "text": "This was a private course internal to my company, so unless you happen to be employed by the same folks and actively working in this field, it's unlikely. I imagine there are a lot of these around.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "There are very common patterns that you will find in code that denote structure usage.\n\nIf you have a pointer which is dereferenced at some non-zero offset, you are probably dealing with a structure. Look for patterns like:\n\n```\nmov eax, [ebp-8]  ; Load a local variable into eax\nmov ecx, [eax+8]  ; **Dereference a dword at eax+8**\n\n```\nIn this example, we have a variable that contains a pointer, but we care about the contents of memory at some specific offset ahead of the pointer.  This is exactly how structures are used:  We get a pointer to the structure, and then dereference the pointer plus some offset to access a specific member. In C, the syntax for this is: pMyStruct->member_at_offset_8.\n\nSide note:  Do not confuse dereferencing at the offset of some variable with dereferencing at offsets of the stack pointer or the frame pointer (esp or ebp).  Of course, you could think of the local variables and function arguments as being one large structure, but in C, they are not explicitly defined as such.\n\nYou don't actually need to dereference anything to detect a structure member.  For example:\n\n```\nmov eax, [ebp-8]     ; Load a local variable into eax\npush 30h             ; num = 30h\npush aSampleString   ; src = \"Sample String\"\nadd eax, 0Ch\npush eax             ; dst = eax + 0xC\ncall strncpy\n\n```\nIn this example, we are copying up to 0x30 characters from some source string to eax + 0xC (see strncpy).  This tells us that eax probably points to a structure with a string buffer (of at least 0x30 bytes) at offset 0xC.  For example, the structure may look something like:\n\n```\nstruct _MYSTRUCT\n{\n    DWORD a;      // +0x0\n    DWORD b;      // +0x4\n    DWORD c;      // +0x8\n    CHAR d[0x30]; // +0xC\n    ...\n}\n\n```\nIn which case, the sample code would look like:\n\n```\nstrncpy(&pMyStruct->d, \"Sample String\", sizeof(pMyStruct->d));\n\n```\nSide note: It is possible (though unlikely) that we could be copying to a large string buffer at offset +0xC, but you would be able to determine this through context.  If, say, offset +0x8 were an integer, for example, then it's definitely a struct.  But if we copied a string of fixed length 0xC to address eax then copied another string to address eax+0xC, it's probably one giant string.\n\nLet's say you have a struct (not a pointer to a struct) as a local variable your stack.  Most of the time, IDA doesn't know the difference between a struct on the stack or a bunch of individual local variables.  But a huge tip-off that you're dealing with a structure is if you only ever read from a variable without writing to it, or (less so) if you only write to a variable without reading from it.  Here's an example of each:\n\n```\nlea eax, [ebp+var_58]  ; Load THE ADDRESS of a local variable into eax\npush eax\ncall some_function\nmov eax, [ebp+var_54]  ; Let's say we've never touched var_54 before...\ntest eax, eax          ; ...But we're checking its value!\njz somewhere\n...\n\n```\nIn this example, we're reading from var_54 without ever writing anything to it (within this function).  This probably means that it is a member of a structure which was accessed from some other function call.  In this example, it's implied that var_58 might be the start of that structure, since its address is pushed as the argument to some_function.  You can verify this by following the logic of some_function and checking if its argument is ever dereferenced (and modified) at offset +0x4.  Of course, this doesn't necessarily have to happen in some_function -- it could happen in one of its child functions, or one of its child functions, etc.\n\nA similar example exists for writing:\n\n```\nxor eax, eax\nmov [ebp+var_28], eax  ; Let's say this is the *only* time var_28 is touched\nlea eax, [ebp+var_30]\npush eax\ncall some_other_function\n...\n\n```\nWhen you see local variables being set and then never referenced again, you can't just forget about them, because they could very likely be members of a structure which is passed on to another function.  This example implies that a structure (which starts at var_30) is written to at offset +0x8 before the address of that structure is passed to some_other_function.\n\nBoth of these examples in C might look like:\n\n```\nsome_function(&myStruct);\nif (myStruct.member_at_offset_4) ...\n\n```\nand\n\n```\nmyStruct.member_at_offset_8 = 0;\nsome_other_function(&myStruct);\n\n```\nSide note: Although each of these examples used local variables, the same logic applies to globals.\n\nThis one's probably obvious, and IDA will handle this for you almost all of the time, but an easy way to know when you have a structure in your code is if you call a documented function that expects a certain structure.  For example, CreateProcessW expects a pointer to a STARTUPINFOW structure.  This one shouldn't require an example.\n\nOne final point I want to make is that in all of these cases, yes, technically, the author of the program could written their code without the use of structures.  They also could have written their code by defining every function as __declspec(naked) with a large __asm inline.  You'd never be able to tell.  But arguably, it doesn't matter.  If there are logical groups of values that are stored contiguously in memory and passed from function to function, it is still meaningful to annotate them as structures.  Almost all of the time, this is how the author wrote their code anyway.\n\nIf you need me to elaborate on anything, let me know.\n\n",
+      "votes": "23",
+      "user": "user1354557",
+      "time": "Jun 22, 2016 at 12:46",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Ken Bellows",
+          "text": "Wow. This is impressively thorough.",
+          "time": null
+        },
+        {
+          "user": "Joshua Taylor",
+          "text": "\"Of course, you could think of the local variables and function arguments as being one large structure, but in C, they are not explicitly defined as such.\"  It's also worth pointing out, though, that IDA's interface for specifying stack variables within a function is pretty much the same as that for defining structures. Conflating the two in C isn't all that helpful, but in IDA, it's good to recognize the similarities.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "You can't. In C, structs are there for the readers of the C program and their use in the program image is kinda optional. It's entirely possible that in the original program some crazy jerk decided to do everything with perfectly-sized char* buffers and cast and add appropriately, and you would never know the difference. \n\nThe 'struct' labeling is entirely for your benefit as a code viewer. It could very well be that struct labels you apply to a program are actually two variables always stored next to each other. This won't matter as long as it doesn't lead you to false conclusions about what the program does though. \n\n",
+      "votes": "23",
+      "user": "Andrew",
+      "time": "Mar 19, 2013 at 19:54",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Ken Bellows",
+          "text": "Very interesting. Can you give an example of a case when defining a struct could lead to the wrong conclusion?",
+          "time": null
+        },
+        {
+          "user": "Gilles 'SO- stop being evil'",
+          "text": "@KenB You risk making false conclusions even if the programmer did use a struct, for example if the struct is in a union so that the data structure can have different layouts depending on the code paths or stage in the object lifecycle.",
+          "time": null
+        },
+        {
+          "user": "Andrew",
+          "text": "one (kind of) contrived example I can think of is function identification by argument type. there is a call eax, and you know the parameter is a pointer passed as an argument, and because you believe that pointer points to a struct of type baz, you then believe that 'eax' could contain a function with signature 'void (*)(struct baz *);'. but if your structure identification is incorrect, then this doesn't need to be the case.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "A pity that this answer was accepted too quickly and now gets upvote just because of it. While it's not always possible to do reliably, it's definitely possible to recover or at least guess struct layout in many cases, as evidenced by other answers.",
+          "time": null
+        },
+        {
+          "user": "Robert Mason",
+          "text": "I don't think it's constructive to say it's not possible.  Though you can't say for sure if it was a struct, as you say it can be of great \"benefit as a code viewer\".  You must be conservative about what conclusions your draw - follow the execution path first! - but it can be a very useful tool.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Finding structs is tricky, but can help in understanding the code a lot. As Andrew said, structs are just an C abstraction and in assembly, it is just a blob of memory and there is no fool proof way of identifying structs. However, for simpler programs, some heuristics can be helpful. For example, \"small\" sized arrays are more likely to be structs than giant arrays. Seeing, for example, ints read from a loop would make it appear to be an array, while reading a couple of ints at some constant offset would make it look more like a struct. Another way is seeing the same group of dereferences happening in different areas of the code. If two different functions take some pointer as paramater and both try to deference offset 0x10 followed by 0x18 followed by 0x14 or something, it could be code setting fields of a struct. Also, any access of different sized data dereferenced from a single inputted pointer is a good indicator.\n\n",
+      "votes": "12",
+      "user": "Yifan",
+      "time": "Mar 19, 2013 at 20:32",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "The easiest way of knowing when you are dealing with a structure, is when the code is calling functions for which you know (or documentation states) takes a structure as an argument.\n\nFor example the in_addr structure of the inet_ntoa function.\n\nGiven that IDA didn't figure this out in the first place.\n\n",
+      "votes": "10",
+      "user": "Jesper.Reenberg",
+      "time": "Mar 19, 2013 at 20:19",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Ken Bellows",
+          "text": "Very good point.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I try to look for situations where a pointer to a chunk of data is passed into a function, then when it's used in that function, different offsets from it are treated as different data types. That indicates to me that 1) it's not an array of a single data type, and 2) it's being referenced from a base address rather than being passed as a separate parameter. It also helps when you see it being allocated dynamically (malloc or new) then being filled in with data of various types. \n\nIn IDA, I always advise my students to go ahead and create the IDA structs for things they suspect to be structures, and fill them in with elements as they see them being referenced, even if they later turn out to be wrong/misled. It's very much an iterative process, filling it in with more detail as you gain more understanding about the program and how it uses that data as you go, so it's important to mark up things you figure out as you figure them out.\n\n",
+      "votes": "9",
+      "user": "Wesley McGrew",
+      "time": "Mar 19, 2013 at 23:45",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "There's several methods you can use (most of which have been hinted at by previous answers), but for completeness' sake I'll list some here.\n\nHowever, with any what-if scenario, as long as the use of data is consistent with your model, it doesn't matter if in the original code it is just an array of bytes with some conventions about what goes where or a full-blown struct.  Use whatever model helps you reason about the code.\n\nTo address the union issue about structs having different memory layout in different code branches, I'll address the two most common usages of unions (in my experience):\n\n",
+      "votes": "9",
+      "user": "Robert Mason",
+      "time": "Mar 20, 2013 at 12:29",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "FWIW, eax:edx return usually means a 64-bit integer, not a small struct.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "As others have said, I usually look for a function call where a reference is passed - but I also look for instances where a malloc'ed buffer is returned (this is how you know/confirm the size of the structure) - and various members of the 'buffer' are set/initialized.\n\n",
+      "votes": "1",
+      "user": "SW_user2953243",
+      "time": "Jan 19, 2015 at 14:19",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

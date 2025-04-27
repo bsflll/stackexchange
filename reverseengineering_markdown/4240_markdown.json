@@ -1,0 +1,71 @@
+{
+  "title": "How to directly re-use the dumped content of `.rodata`, `.data` and `.bss` section?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4240/how-to-directly-re-use-the-dumped-content-of-rodata-data-and-bss-secti",
+  "content": "OK, so basically I want to re-use the content from dumped .rodata data and bss section from ELF on Linux 32bit.\n\nThe dump command:\n\n```\nobjdump -s -j .text elf_binary\nobjdump -s -j .rodata elf_binary\nobjdump -s -j .data elf_binary\n\n```\nand for the .bss section, I am preparing to re-use a bunch of 00000000 which has the same size of the bss section.\n\nIt works fine when I re-use it in nasm assembler in this way.\n\n```\n.section rodata\nS_label1: db 0x01\n         db 0x02\n         ....  \n.section data\n        db 0x01\nS_label2:  db 0x02\n         ....\n.section bss\nS_label3: db 0x00\n         db 0x00\n         ....\n\nnasm -f elf test.s\n\n```\nBut basically my question is that:\n\nhow to re-use these dumped sections in gas asssembler?\n\nBasically gas has a different assemble style, and apparently the data sections representations are different...\n\nI tried for several times and I still can not find the solution..\n\nDid I clearly demonstrate my question..? Could anyone give me some help?\n\n=======update==========\n\nSo basically I want to re-use the rodata data and bss sections dumped from another binary.\n\nFor example, here is the content of rodata section\n\n```\n03000000 01000200 0a0a556e 736f7274\n65642061 72726179 2069733a 20200020\n25642000 0a0a536f 72746564 20617272\n61792069 733a2020 00\n\n```\nand I can re-use it in this way:\n\n```\nlabel1: \ndb 0x03\ndb 0x00\ndb 0x00\ndb 0x00\nlabel2: \ndb 0x01\ndb 0x00\ndb 0x02\ndb 0x00\n.....\n\nmov eax, label1      // of course I will guarantee that I use it correctly\n....\n\n```\nBasically in nasm, I can easily re-use them in the above way, but my question is that , how can I re-use it in gas (or directly use gcc) in a similiar way?\n\nIs it possible?\n\n",
+  "votes": "6",
+  "answers": 2,
+  "views": "4k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "nasm"
+  ],
+  "user": "lllllllllllll",
+  "time": "Apr 28, 2017 at 12:55",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "Reuse for what exactly? Please describe the overall problem you're trying to solve here.",
+      "time": null
+    },
+    {
+      "user": "yaspr",
+      "text": "I believe the poster is trying to reuse the content of these sections in an assembly program he/she's writing.",
+      "time": null
+    },
+    {
+      "user": "lllllllllllll",
+      "text": "@IgorSkochinsky Hi, I updated my question..",
+      "time": null
+    },
+    {
+      "user": "lllllllllllll",
+      "text": "@yaspr Hi, I modifyed my question... Is it clear now?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As an assembly programmer I would say that gas is rarely used to assemble external code. The task of calling gas is usually left to the compiler, and most of the assembly that gas has to handle in real life is either inlined inside C or C++ code or comes from a compiler. But, I believe this document by Dean Elsner, Jay Fenlanson & friends is by far the best reference I managed to rely on for quite sometime. It has been updated many times and it covers the 2.19.51 version.\n\nThe easy way would be to use GCC I would say :\n\n```\n  //Just to avoid make a point :]\n  typedef unsigned char byte;\n\n  //\n  byte lbl1[] = { 0x03, 0x00, 0x00, 0x00, ... }, \n       lbl2[] = { 0x01, 0x00, 0x02, 0x00, ... };\n\n  //I prefer Intel syntax rather than AT&T, it's somehow cleaner !\n  __asm__(\"intel_syntax noprefix                 ;\"\n          \"mov eax, %0                           ;\"\n          \"mov ebx, %1                           ;\"\n          \"att_syntax prefix                     ;\"\n          :                        //output\n          : \"r\" (lbl1), \"r\" (lbl2) //input\n          : \"%eax\", \"%ebx\");       //clobber\n\n```\nWell, this is a nice way if you want to concentrate on the assembly code (which is how I do it when I optimize code by hand). \n\nNow, let me explain it a bit. First, you have two arrays containing the retrieved data, nothing fancy. Then you get the assembly code. If you're not familiar with inlined assembly I would recommend you this link, though I'll briefly go over my code.\nThe __asm__ directive lets you insert assembly instructions anywhere in a code. At first I tell the assembler that I'll be using Intel's syntax (no % prefix for registers, ...), then I move the content of the register %0 in eax, and then the content of %1 in ebx (%0 is the pointer for lbl1, %1 is the pointer for lbl2). Then, I switch to AT&T syntax for the rest of the parameters. After the first : you can specify output variables. After the second : you can specify inputs. In here I passed lbl1 & lbl2 and I used \"r\" to let the compiler handle register allocation. You can specify the registers if you know what you're doing. After the last : you have to declare the registers used inside the code so that the compiler frees them & uses them for the remaining code generation steps.  \n\n",
+      "votes": "4",
+      "user": "yaspr",
+      "time": "May 2, 2014 at 19:50",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "thanks @yaspr for his excellent answer.\n\nSo in this post I was asking that \n\nHow to re-use .rodata .data and .bss sections' contents?\n\nHere is my answer:\n\nyou can quickly go this way once you dumped all the content of these sections, I use a hello world code to demostrate it:\n\n```\n.section .text\n.globl  main\nmain:\npush   %ebp\nmov    %esp,%ebp\nand    $0xfffffff0,%esp\nsub    $0x20,%esp\nfldl   S_80484f0     // lift the conceret address into symbol\nfstpl  0x18(%esp)\nfldl   0x18(%esp)\nfstpl  0x4(%esp)\nmovl   $S_80484e0,(%esp) // lift the conceret address into symbol\ncall   printf\nleave\nret\nnop\nnop\nnop\n\n.section .rodata\n\nS_80484e0:\n.long 0x6c6c6568\n.long 0x6f77206f\n.long 0x20642c72\n.long 0x000a6625\n\nS_80484f0:\n.long 0x00000000\n.long 0x40240000\n\n```\nTo @yaspr about AT&T vs. Intel style:\n\nIt is obviously that Intel style is much more clear that AT&T:)\n\nHowever, in the current project I am struggling on, I find it might not be very easy to use nasm inside a bunch of GNU tools(objdump objcopy ld and others...)  \n\nIMHO, Even though objdump can disassemble in Intel style, I still encounter a bunch of problems/unclear issues, especially after comparing the disassemble results between objdump and IDAPro\n\n",
+      "votes": "1",
+      "user": "lllllllllllll",
+      "time": "May 2, 2014 at 21:44",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "yaspr",
+          "text": "Well, you have to keep in mind that IDA & objdump do not perform disassembly the same way (not the same algorithms). objdump uses linear sweep which is a static disassembly technique that can give erroneous results. Especially if data is mixed up with instructions (shellcodes for example). You should trust none of tools you're using blindly, cross-reference their output if you want to efficient. Each one has its flaws & its strengths. I can assure you that using NASM with GNU tools wouldn't affect your work, though it your final choice. And, using multiple tools is a good way to learn.",
+          "time": null
+        },
+        {
+          "user": "lllllllllllll",
+          "text": "@yaspr Thank you for your reply! Yes, I know the difference in disassemble algorithm, so actually in the  current project, I was trying to use IDAPro because it is believed the best, however, even though it is an excellent tool, I still find some un-match between the goal we want to achieve and IDAPro can support (disassemble binary for analysis).",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "There's no such thing as the \"best tool\". There are only sharp & well documented users. IDAPro offers many features which can help you perform excellent analysis & recover lots of information about the target binary file. The most interesting thing about IDAPro is that it's scriptable. And that is not the case of most other tools.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

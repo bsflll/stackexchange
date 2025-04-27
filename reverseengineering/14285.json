@@ -1,0 +1,51 @@
+{
+    "title": "How to perform memory address translation on x86 instructions?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14285/how-to-perform-memory-address-translation-on-x86-instructions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a mechanism that maps memory addresses to other memory addresses, e.g.:</p>\n<pre><code>{\n  0x10000 -&gt; 0xA0000\n  0x20000 -&gt; 0x99000000\n  0x340000 -&gt; 0x50000000 ; Stack in this example\n}\n\nSome example data:\nloc 0xA0000: 0x20000\n</code></pre>\n<p>I'm running code in a simulated environment where the code thinks it's located somewhere, but in reality it is located somewhere else. Therefore I need to instrument every memory access, implicit or explicit, so that any reads or writes happens to the actual memory location and not the one the program thinks it's accessing. This means memory addresses can be passed around in the program as their original value as long the actual access has its address translated so the access is redirected behind the scenes. It also means certain instructions such as <code>call</code> or <code>jmp</code> must go through the same translation, so that the program believes it's actually calling or jumping to the original value, but the destination is translated behind the scenes.</p>\n<p>I'm not entirely sure how to achieve this due to the CISC nature of x86. For example, just look at the breakdown of some instructions:</p>\n<pre><code>mov eax, 0x10000\n; Stays as \"mov eax, 0x10000\" since it's not a memory access\n\nmov ebx, [eax]\n; 0x10000-&gt;0xA0000\n; becomes \"mov ebx, [0xA0000]\" which loads 0x20000\n\npush eax\n; (stack)0x340000-&gt;0x50000000\n; becomes \"push 0x10000 to 0x50000000\"\n\ncall eax\n; 0x10000-&gt;0xA0000\n; becomes \"call 0xA0000\"\n\ncall [0x10000]\n; 0x10000-&gt;0xA0000, 0x20000-&gt;0x99000000\n; becomes \"read what's in 0xA0000, receive 0x20000, convert that to 0x99000000, call 0x99000000\"\n</code></pre>\n<p>I don't think a disassembler or decomposer would be fine-grained enough for my needs since I need to know every implicit memory access per instruction, so that leaves me with using intermediate representations such as OpenREIL. However, it won't be enough to just transform the instruction into its corresponding low-level building blocks (IR) and pass every memory access found therein through the mapping mechanism, as I would also need to transform it back to x86 instructions so I can actually run it.</p>\n<p>Any suggestions? x86 to LLVM IR, do some changes, then back to x86, perhaps?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "387",
+    "tags": [
+        "x86",
+        "memory",
+        "dynamic-analysis",
+        "instrumentation"
+    ],
+    "user": "Mikubyte",
+    "time": "Dec 29, 2016 at 23:44",
+    "comments": [
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">Because you cannot know how the data in registers get used later on - is the EAX in your first example line really an address? -, the only way I can think of is to simulate each separate instruction. Then, if you see that EAX gets used to read from, you need to find the original load instruction back...</span>",
+            "time": null
+        },
+        {
+            "user": "Mikubyte",
+            "text": "<span class=\"comment-copy\">@Rad Lexus You're absolutely right, my bad. EAX -should- be 0x10000, because that's the original value passed around in the program. It's just memory accesses where data is being read from a location that needs to be redirected. Thank you for pointing that out.</span>",
+            "time": null
+        },
+        {
+            "user": "Mikubyte",
+            "text": "<span class=\"comment-copy\">@Rad Lexus Updated the question.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you have control over the original memory, and performance is not a concern, you can install an exception handler, and then mark the entire original memory region as \"not accessible\".  For each access in the original region, the exception handler will gain control.  At that point, you can copy the faulting instruction to a local buffer, save all registers, modify the memory address, let the instruction run from the local buffer, restore all registers, and finally resume execution.</p>\n<p>This technique was demonstrated in a Windows program called \"Brutal Address Space Layout Randomisation\" some years ago.  It came with source code, so that might help you, if you can find it.</p>\n</div>",
+            "votes": "1",
+            "user": "peter ferrie",
+            "time": "Dec 30, 2016 at 17:26",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Things will invariably be messy if you simulate only the (memory) environment but try to have instructions executed natively, regardless of whether you use single-step mode or page faulting - especially if you plan on combining this with (partial) code rewriting.</p>\n<p>Depending on what you're trying to achieve it might be easier to simulate execution instead of running instructions natively, since that gives you full control in a much simpler fashion. Part of the simulation would be a MMU-like subsystem that performs the actual address translation, borrowing heavily from the ideas contained in the MMUs of actual processors. Also, this way you can obtain additional information for analysis, if that's where you're headed.</p>\n<p>I've used a much simplified version of such a system for things like getting my hands on the contents of dynamically initialised data structures (initialised to 0 in the image or residing in BSS) and poking the data into the IDA database for the executable. </p>\n<p>One advantage of such a scheme is that it can be kept very simple, depending on the analysis goal. By contrast, native execution will always be incredibly messy. Another advantage is that simulated execution is not as tightly bound to actual code paths as native execution. For example, an analyser that uses partial simulation could decide to follow all code paths in some of its phases until it achieves maximal coverage, much like good disassemblers (e.g. IDA) do.</p>\n</div>",
+            "votes": "0",
+            "user": "DarthGizka",
+            "time": "Dec 31, 2016 at 9:44",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

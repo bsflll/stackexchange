@@ -1,0 +1,31 @@
+{
+  "title": "Can somebody explain this weird alignment/optimisation done when zeroing out a buffer?",
+  "link": "https://reverseengineering.stackexchange.com/questions/22891/can-somebody-explain-this-weird-alignment-optimisation-done-when-zeroing-out-a-b",
+  "content": "I have the following disassembly which looks like a buffer being populated with zeros in a loop, however, I'm confused at why the alignment is needed here (if a jump will always be 4-bytes, why does aligning to a 4-byte boundary matter?)\n\nI'm also confused at what and'ing ecx (which presumably contains the size of the buffer plus how many bytes it was misaligned by) with 0xFFFFFFFC does, it's not an address so why is the same and used to 4-byte align something being used on something that is being used as a count for a loop etc.\n\nCould someone give a good walkthrough of what this code is doing and why? Is it really a compiler optimization or handwritten code? Is the intention speed etc?\n\n\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "515",
+  "tags": [
+    "ida",
+    "compiler-optimization"
+  ],
+  "user": "fwr nr",
+  "time": "Jan 2, 2020 at 15:03",
+  "comments": [
+    {
+      "user": "genghiskhan",
+      "text": "Is this a 32-bit binary? My guess would be that since it is using indirect addressing, you are not guaranteed to have a 4-byte aligned pointer so the compiler aligns it before performing reads/writes to such an address. One interesting thing is the mov ebx, 0 instruction. I thought that most compilers would output an xor ebx, ebx instruction. This could either mean a non-standard compiler was used or maybe it is handwritten.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You'll find a commented analysis of the assembly code with pseudo-code. What's obvious is that this is 'crappy' compiler generated code used to align local variables to a 4-bytes boundary. Most optimizing compilers avoid using the stack and use registers when optimization flags are set (i.e. gcc -O2, ...). \n\n```\n    lea     eax, [esp+12h]\n    mov     ecx, 1Ah\n    mov     ebx, 0\n    mov     [eax], ebx\n    mov     [eax+ecx-4], ebx\n    lea     edx, [eax+4]\n    and     edx, 0FFFFFFFCh\n    sub     eax, edx\n    add     ecx, eax\n    and     ecx, 0FFFFFFFCh\n    and     ecx, 0FFFFFFFCh\n    mov     eax, 0\n\n    loc_401500:\n    mov     [edx+eax], ebx\n    add     eax, 4\n    cmp     eax, ecx\n    jb      short loc_401500\n\n```\n0xFFFFFFC ==> 11111111111111111111111111111100 in binary. The and operation conserves the bits facing 1s and unsets the ones facing 0s. \n\n```\n    //esp is stack pointer address (suppose esp = 0x00000000)                                                                                                            \n    //Calculations are done in base 10                                                                                                                                   \n\n    eax = esp + 18          : eax = @18                             //Store the address located 18 bytes from stack pointer                                              \n    ecx = 26                : ecx = 26                              //Number of elements in the array                                                                    \n    ebx = 0                 : ebx = 0                               //Zero up                                                                                            \n    eax[0] = ebx            : eax[ 0] = 0 (@18)                     //Set eax[ 0]               = 0                                                                      \n    eax[ecx - 4] = ebx      : eax[22] = 0 (@18 + 26 - 4 = @40)      //Set eax[26 - 4] = eax[22] = 0                                                                      \n    edx = eax + 4           : edx = @22                             //Store the address located 4 bytes from eax (22 bytes from stack pointer)                           \n    edx &= 0FFFFFFFCh       : edx = @20                             //Trucate the pointer to a 4 byte boundary (zero up the lower two bits)                              \n    eax -= edx              : eax = -2\n    ecx += eax              : ecx = 24\n    ecx &= 0FFFFFFFCh       : ecx = 24                             //Trucate the pointer to a 4 byte boundary                                                           \n    ecx &= 0FFFFFFFCh       : ecx = 24                             //Trucate the pointer to a 4 byte boundary - why again? IDK!                                         \n    eax = 0                 : eax = 0\n\n    //Loop over 4 bytes by 4 bytes                                                                                                                                       \n    while (eax < ecx)\n    {\n      edx[eax] = ebx\n      eax += 4\n    }\n\n```\n",
+      "votes": "2",
+      "user": "yaspr",
+      "time": "Jan 2, 2020 at 19:07",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

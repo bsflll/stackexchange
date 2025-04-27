@@ -1,0 +1,27 @@
+{
+    "title": "Can a MSVC class have a deletion destructor without a vftable?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29947/can-a-msvc-class-have-a-deletion-destructor-without-a-vftable",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm reversing the following smart pointee-like MSVC <code>class Buffer : public Referencable</code> with IDA / Hexrays:</p>\n<pre><code>struct Referencable\n{\n    int m_refs;\n};\nstruct Buffer : Referencable\n{\n    void* m_pData;\n};\n</code></pre>\n<p>This class apparently has no vftable, which I deduce from its (base) constructor not storing any vftable-like structure:</p>\n<pre><code>Buffer *__thiscall Buffer::ctor(Buffer *this)\n{\n    Referencable::ctor(this);\n    this-&gt;m_pData = NULL;\n    return this;\n}\nReferencable *__thiscall Referencable::ctor(Referencable *this)\n{\n    // &lt;-- no vftable assignment here or anywhere --&gt;\n    this-&gt;m_refs = 0;\n    return this;\n}\n</code></pre>\n<p>When this object is being deleted, I see the following method:</p>\n<pre><code>Buffer *__thiscall Buffer::ddtor(Buffer *this, char flags)\n{\n    Buffer::dtor(this);\n    if ( (flags &amp; 1) != 0 )\n        operator delete(this);\n    return this;\n}\nvoid __thiscall Buffer::dtor(Buffer *this)\n{\n    free(this-&gt;m_pData);\n    Referencable::dtor(this);\n}\nvoid __thiscall Referencable::dtor(Referencable *this)\n{\n    ; // nop\n}\n</code></pre>\n<p><sup>(I can assure that this is indeed the deletion method belonging to this class due to how the capturing smart pointer calls it)</sup></p>\n<p>According to igorsk's <a href=\"http://www.openrce.org/articles/full_view/23\" rel=\"nofollow noreferrer\">Reversing Microsoft Visual C++ Part II: Classes, Methods and RTTI</a> article, <code>Buffer::ddtor</code> seems to be a deletion destructor, which however are only available to classes with <em>virtual destructors</em>:</p>\n<blockquote>\n<ol start=\"6\">\n<li>Deleting Destructors</li>\n</ol>\n<p><strong>When class has a virtual destructor, compiler generates a helper function - deleting destructor</strong>. Its purpose is to make sure that a proper _operator delete_ gets called when destructing a class. Pseudo-code for a deleting destructor looks like following:</p>\n<pre><code>virtual void * A::'scalar deleting destructor'(uint flags)\n{\n  this-&gt;~A();\n  if (flags&amp;1) A::operator delete(this);\n};\n</code></pre>\n</blockquote>\n<p>Thus my class seems to contradict another statement in that article, mentioning a virtual deletion destructor call which does not exist in my assembly (the deletion destructor above is called directly by the smart pointer logic):</p>\n<blockquote>\n<p>If A's destructor is virtual, it's invoked virtually:</p>\n<pre><code>mov ecx, pA\npush 3\nmov eax, [ecx] ;fetch vtable pointer      // &lt;-- what vftable? I have none!\ncall [eax]     ;call deleting destructor\n</code></pre>\n</blockquote>\n<p>Now I am a little confused.</p>\n<ul>\n<li>Does this class have a virtual destructor now or not?</li>\n<li>Is it possible for a deletion destructor to be generated even if I do not have a virtual destructor, and what are the requirements?</li>\n<li>Or is this what is <em>always</em> generated when I call <code>delete</code> on <em>anything</em> and I simply misunderstood the article?</li>\n<li>If it helps clearing my confusion, what is the exact difference between a deletion destructor and virtual destructor anyway?</li>\n</ul>\n<p>On a postscriptum note I know this assembly quite well otherwise and never noticed <em>any</em> kind of code optimizations (lucky me); I wonder how a vftable could've been optimized out anyway.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "232",
+    "tags": [
+        "c++",
+        "hexrays",
+        "msvc",
+        "virtual-functions"
+    ],
+    "user": "Ray",
+    "time": "Jan 28, 2022 at 17:44",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Apparently I was confused over the articles wording due to initially seeing deletion destructors as virtual destructors. I analyzed a small scratchpad program and realized the following:</p>\n<ul>\n<li>Deletion destructors (in PDBs referred to as \"scalar deleting destructor\") are generated whenever I call <code>delete</code> on an object with a destructor, <strong>no matter if it is virtual or not</strong>. It's practically there to ensure to call the user destructor code and then actually free the memory.</li>\n<li>Only as soon as I make the destructor virtual (or declare another method virtual), MSVC <em>always</em> generates a vftable (what else?).</li>\n</ul>\n<p>There are probably exceptions to these observations but so far I haven't seen them. Feel free to expand my knowledge here!</p>\n</div>",
+            "votes": "1",
+            "user": "Ray",
+            "time": "Jan 28, 2022 at 18:17",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

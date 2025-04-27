@@ -1,0 +1,45 @@
+{
+  "title": "What is CARRY2 in Ghidra?",
+  "link": "https://reverseengineering.stackexchange.com/questions/33280/what-is-carry2-in-ghidra",
+  "content": "I decompiled a 16-bit Windows 3.1 program with Ghidra 11.0.3 and part of it looks like this:\n\n```\nif ((uVar6 = local_8 + local_a + 0xa46b, uVar6 + local_10 == -0xded &&\n    ((uint)CARRY2(local_8,local_a) + (uint)(0x5b94 < local_8 + local_a) + local_e +\n     (uint)CARRY2(uVar6,local_10) == -0x1de3))) {\n  return 1;\n}\n\n```\nWhat does the CARRY2 function do?\n\nThe corresponding disassembly is:\n\n```\n1008:0270 8b 46 fa        MOV        AX,word ptr [BP + local_8]\n1008:0273 2b d2           SUB        DX,DX\n1008:0275 8b 4e f8        MOV        CX,word ptr [BP + local_a]\n1008:0278 2b db           SUB        BX,BX\n1008:027a 03 c1           ADD        AX,CX\n1008:027c 13 d3           ADC        DX,BX\n1008:027e 03 46 f6        ADD        AX,word ptr [BP + local_c]\n1008:0281 13 d3           ADC        DX,BX\n1008:0283 03 46 f2        ADD        AX,word ptr [BP + local_10]\n1008:0286 13 56 f4        ADC        DX,word ptr [BP + local_e]\n1008:0289 3d 13 f2        CMP        AX,0xf213\n1008:028c 75 0e           JNZ        LAB_1008_029c\n1008:028e 81 fa 1d e2     CMP        DX,0xe21d\n1008:0292 75 08           JNZ        LAB_1008_029c\n1008:0294 b8 01 00        MOV        AX,0x1\n1008:0297 5e              POP        SI\n1008:0298 5f              POP        DI\n1008:0299 c9              LEAVE\n1008:029a cb              RETF\n\n```\nIt helps to know that 0xa46b == local_c, -0xded == 0xf213, 0x5b94 + 0xa46b == 0xffff, and -0x1d3 == 0xe21d.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "103",
+  "tags": [
+    "assembly",
+    "decompilation",
+    "ghidra"
+  ],
+  "user": "Alex Henrie",
+  "time": "Oct 25, 2024 at 19:22",
+  "comments": [
+    {
+      "user": "the busybee",
+      "text": "Would you mind to add the assembler code for this part, please? Such constructs mark expressions that are not simple to express in C, here I assume the carry out of the 2 byte sum of the operands. But it is much simpler to answer with the assembler code.",
+      "time": null
+    },
+    {
+      "user": "Alex Henrie",
+      "text": "Sure, I've amended the question to include the disassembly.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "CARRYX represents addition of Carry Flag to the the result\n\nrefer to assembly instruction ADC  which adds the carry flag to the sum of source and destination\n\nx is the size of operand  viz byte,word,dword etc will be 2,4,8\n\nfor modern windows / msvc compilers there are intrinsics\n_addcarry_u8, _addcarry_u16, _addcarry_u32, _addcarry_u64\nyou can include intrin.h to use these intrinsics\non old 3.1 inline assembly might have been used\n\ncode to test the decompilation for x64, x32, x16, x8\nrespectively  CARRY8, CARRY4, CARRY2, CARRY1 implementations as below\n\n```\n#include <intrin.h>\nunsigned __int64 aaaa,cccc;\nunsigned __int32 aaa,ccc;\nunsigned __int16 aa,cc;\nunsigned __int8 a,c;\nunsigned char dddd = 0,ddd = 0,dd = 0,d = 0;\nvoid TestADC64(unsigned __int64 *x, unsigned __int64 *y){\n    dddd = dddd + _addcarry_u64(dddd, *x, *y, &cccc);\n}\nvoid TestADC32(unsigned __int32 *x, unsigned __int32 *y){\n    ddd = ddd + _addcarry_u32(ddd, *x, *y, &ccc);\n}\nvoid TestADC16(unsigned __int16 *x, unsigned __int16 *y){\n    dd = dd + _addcarry_u16(dd, *x, *y, &cc);\n}\nvoid TestADC8(unsigned __int8 *x, unsigned __int8 *y){\n    d = d + _addcarry_u8(d, *x, *y, &c);\n}\nint main(void) {\n    aaaa = 0xa000000000000000;aaa=0xa0000000;aa=0xa000;a=0xa0;\n    TestADC64(&aaaa, &aaaa);\n    TestADC64(&aaaa, &aaaa);\n    TestADC32(&aaa, &aaa);\n    TestADC32(&aaa, &aaa);\n    TestADC16(&aa, &aa);\n    TestADC16(&aa, &aa);\n    TestADC8(&a, &a);\n    TestADC8(&a, &a);\n}\n\n```\non compiling and loading it in ghidra\nthe respective decompilation would be as below\n\n64 or CARRY8\n\n```\nvoid __cdecl TestADC64(ulong64 *param_1,ulong64 *param_2)\n\n{\n  ulonglong uVar1;\n  \n  uVar1 = *param_1 + *param_2;\n  cccc = uVar1 + (dddd != '\\0');\n  dddd = dddd + (CARRY8(*param_1,*param_2) || CARRY8(uVar1,(ulonglong)(dddd != '\\0')));\n  return;\n}\n\n```\n32 or CARRY4\n\n```\nvoid __cdecl TestADC32(uint *param_1,uint *param_2)\n\n{\n  uint uVar1;\n  \n  uVar1 = *param_1 + *param_2;\n  ccc = uVar1 + (ddd != '\\0');\n  ddd = ddd + (CARRY4(*param_1,*param_2) || CARRY4(uVar1,(uint)(ddd != '\\0')));\n  return;\n}\n\n```\n16 or CARRY2\n\n```\nvoid __cdecl TestADC16(ushort *param_1,ushort *param_2)\n\n{\n  ushort uVar1;\n  \n  uVar1 = *param_1 + *param_2;\n  cc = uVar1 + (dd != '\\0');\n  dd = dd + (CARRY2(*param_1,*param_2) || CARRY2(uVar1,(ushort)(dd != '\\0')));\n  return;\n}\n\n```\n8 or CARRY1\n\n```\nvoid __cdecl TestADC8(uchar *param_1,uchar *param_2)\n\n{\n  byte bVar1;\n  \n  bVar1 = *param_1 + *param_2;\n  c = bVar1 + (d != '\\0');\n  d = d + (CARRY1(*param_1,*param_2) || CARRY1(bVar1,d != '\\0'));\n  return;\n}\n\n```\nyou may also want to check this for CONCAT\n\n",
+      "votes": "3",
+      "user": "blabb",
+      "time": "Oct 25, 2024 at 19:35",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "CARRY2 is the value of the carry flag after summing two numbers, which is 1 if the addition overflows and 0 if it does not. The 2 in CARRY2 means that each operand's size is 2 bytes (16 bits). There are actually three overflow checks here because (uint)(0x5b94 < local_8 + local_a) could also be written as CARRY2(local_8 + local_a, 0xa46b).\n\nSo, the C code first performs three additions ((local_8 + local_a) + 0xa46b) + local_10 and checks that the sum equals 0xf213. Then it adds the carry flags from the three additions together to get the number of overflows (between 0 and 3), and finally it adds the number of overflows to local_e and checks whether the result equals 0xe21d.\n\nIn the assembly code, the carry flag is used by the ADC (add with carry) instruction, which adds two numbers and then adds 1 if the previous ADD instruction overflowed. ADC is used three times, once after each of the three ADD instructions that compute ((local_8 + local_a) + 0xa46b) + local_10, to add (((0 + 0 + carry) + 0 + carry) + local_e + carry) and store the result in DX. The final value of DX is the number of overflows plus local_e, which is compared to 0xe21d with the CMP instruction.\n\n",
+      "votes": "0",
+      "user": "Alex Henrie",
+      "time": "Oct 25, 2024 at 20:07",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

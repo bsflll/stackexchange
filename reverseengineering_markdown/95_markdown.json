@@ -1,0 +1,40 @@
+{
+  "title": "Identifying variable args function",
+  "link": "https://reverseengineering.stackexchange.com/questions/95/identifying-variable-args-function",
+  "content": "How would a C variable argument function such as printf(char* format, ...) look like when disassembled?\n\nIs it always identified by calling convention, or are there more ways to identify it?\n\n",
+  "votes": "8",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "disassembly",
+    "calling-conventions",
+    "c"
+  ],
+  "user": "Mellowcandle",
+  "time": "Mar 21, 2013 at 15:26",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "It is very simple in some architectures, and not very obvious in others. I'll describe a few I'm familiar with.\n\nProbably the easiest to recognize. Because of the boneheaded decision to specify the number of used XMM registers in al, most vararg functions begin like this:\n\n```\n    push    rbp\n    mov     rbp, rsp\n    sub     rsp, 0E0h\n    mov     [rbp+var_A8], rsi\n    mov     [rbp+var_A0], rdx\n    mov     [rbp+var_98], rcx\n    mov     [rbp+var_90], r8\n    mov     [rbp+var_88], r9\n    movzx   eax, al\n    lea     rdx, ds:0[rax*4]\n    lea     rax, loc_402DA1\n    sub     rax, rdx\n    lea     rdx, [rbp+var_1]\n    jmp     rax\n    movaps  xmmword ptr [rdx-0Fh], xmm7\n    movaps  xmmword ptr [rdx-1Fh], xmm6\n    movaps  xmmword ptr [rdx-2Fh], xmm5\n    movaps  xmmword ptr [rdx-3Fh], xmm4\n    movaps  xmmword ptr [rdx-4Fh], xmm3\n    movaps  xmmword ptr [rdx-5Fh], xmm2\n    movaps  xmmword ptr [rdx-6Fh], xmm1\n    movaps  xmmword ptr [rdx-7Fh], xmm0\nloc_402DA1:\n\n```\nNote how it's using al to determine how many xmm registers to spill onto the stack.\n\nIn Win64 it's less obvious, but here's one sign: the registers that correspond to the elliptic parameters are always spilled onto the stack and at positions that line up with the rest of arguments passed on the stack. E.g. here's the printf's prolog:\n\n```\n  mov     rax, rsp\n  mov     [rax+8], rcx\n  mov     [rax+10h], rdx\n  mov     [rax+18h], r8\n  mov     [rax+20h], r9\n\n```\nHere, rcx contains the fixed format argument, and the elliptic arguments are passed in rdx, r8 and r9 and then on the stack. We can observe that rdx, r8 and r9 are stored exactly one after another, and just below the rest of the arguments, which begin at rsp+0x28. The area [rsp+8..rsp+0x28] is reserved exactly for this purpose, but the non-vararg functions often don't store all register arguments there, or reuse that area for local variables. For example, here's a non-vararg function prolog:\n\n```\n  mov     [rsp+10h], rbx\n  mov     [rsp+18h], rbp\n  mov     [rsp+20h], rsi\n\n```\nYou can see that it's using the reserved area for saving non-volatile registers, and not spilling the register arguments.\n\nARM calling convention uses R0-R3 for the first arguments, so vararg functions need to spill them onto stack to line up with the rest of parameters passed on the stack. Thus you will see R0-R3 (or R1-R3, or R2-R3 or just R3) being pushed onto stack, which usually does not happen in non-vararg functions. It's not a 100% foolproof indicator - e.g. Microsoft's compiler sometimes pushes R0-R1 onto the stack and accesses them using SP instead of moving to other registers and using that. But I think it's a pretty reliable sign for GCC. Here's an example of GCC-compiled function:\n\n```\nSTMFD   SP!, {R0-R3}\nLDR     R3, =dword_86090\nSTR     LR, [SP,#0x10+var_14]!\nLDR     R1, [SP,#0x14+varg_r0] ; format\nLDR     R0, [R3]        ; s\nADD     R2, SP, #0x14+varg_r1 ; arg\nBL      vsprintf\nLDR     R3, =dword_86094\nMOV     R2, #1\nSTR     R2, [R3]\nLDR     LR, [SP+0x14+var_14],#4\nADD     SP, SP, #0x10\nRET\n\n```\nIt's obviously a vararg function because it's calling vsprintf, and we can see R0-R3 being pushed right at the start (you can't push anything else before that because the potential stack arguments are present at SP and so the R0-R3 have to precede them).\n\n",
+      "votes": "18",
+      "user": "Igor Skochinsky",
+      "time": "Mar 21, 2013 at 0:14",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Glides",
+          "text": "Awesome, thanks for breaking down the different scenarios with examples!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "(My answer is x86-specific).  \n\nInternally to the function, it looks just like any other function.  The only difference being, at some point during the function, it will take the (stack) address of the last non-variable argument, and increment it by the word size on the platform; this is then used as a pointer to the base of the variable arguments.  Externally to the function, you will observe that different numbers of arguments are passed as parameters to the function (and typically one of the non-variable arguments will be some obvious indicator as a variable argument function, such as a hard-coded format string or something similar).  Variable argument functions can not be __stdcall, since __stdcall relies upon precompiled ret XXh instructions, whereas the point of a variable argument function is that an unknown amount of parameters can be passed.  Hence, these functions must be __cdecl, i.e. the caller must correct the stack to remove all pushed arguments.\n\n",
+      "votes": "10",
+      "user": "0xC0000022L",
+      "time": "Apr 17, 2013 at 5:11",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

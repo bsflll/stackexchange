@@ -1,0 +1,27 @@
+{
+  "title": "What's wrong with my mitm to support rr commands with gdbserver on IDA?",
+  "link": "https://reverseengineering.stackexchange.com/questions/22529/whats-wrong-with-my-mitm-to-support-rr-commands-with-gdbserver-on-ida",
+  "content": "First of here is the gdb remote protocol doc.\n\nThe idea of the below script is the following - you enter an actual command (one that will be send as a direct packet see packets) in the gdb window then when you continue the process my command will be executed instead of the IDA vCont;s:1 or vCont;c. This so the IDA recognize the actual changes you have introduced by executing your command. Simply responding with \"OK\" after the qRcmd will not work for lets say stepping back because IDA wouldn't ask for new register values.\n\nI launch rr with rr replay -s 50505 -k, I attach with IDA to localhost:23946. Here is my mitm code (in node.js):\n\n```\nconst net=require(\"net\")\nconst process = require('process');\n\nnet.createServer(server => {\n    const client = new net.Socket()\n\n    let lastcommand, response\n    client.connect(50505, \"localhost\")\n\n/**\n * @param {Buffer} string\n */\n    function createResponse(string)\n    {\n        string = string.slice(0, string.length - 1)\n\n        let checksum = 0 \n        for(const a of string) checksum += a\n        checksum %= 256\n        return \"$\"+string.toString()+\"#\"+checksum.toString(0x10)\n    }    \n\n    client.on(\"data\", handler = data => {\n        let string = data.toString()\n\n        console.log(string),\n        server.write(string)\n    })\n\n    server.on(\"data\", handlerserver = async data => {\n        let string = data.toString()\n\n        console.log(string)\n\n        let cmd\n\n        if((cmd = string.replace(/^\\$qRcmd,([a-f0-9]+)#/, (_, substring) => substring)) != string){\n            lastcommand = string = createResponse(Buffer.from(cmd, \"hex\"))\n            const innerresponse = createResponse(Buffer.from(\"OK  \n\"))\n            console.log(innerresponse)\n            server.write(innerresponse)\n\n            response = lastcommand\n\n\n            return\n        }\n        else if(string.search(/^\\$vCont;c#a8/) != -1 || string.search(/^\\$vCont;s:1#23/) != -1) return console.log(response),\n            client.write(response)//, response = undefined\n        client.write(string)\n    })\n}).listen(23946, \"localhost\")\n\n```\nBasically what's not working is that when i enter bs (step backwards one instruction packet) in the gdb monitor then press continue it'll step backwards twice the first time and on the second it'll run back to the beginning of the program.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "126",
+  "tags": [
+    "ida",
+    "gdb",
+    "javascript",
+    "protocol"
+  ],
+  "user": "rec",
+  "time": "Nov 13, 2019 at 8:26",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "It turned out IDA sends first sends vCont;c and then vCont;s:1 for some weird reason in that particular instance. I fixed my mitm :\n\n```\nconst net=require(\"net\")\nconst process = require('process');\n\nnet.createServer(server => {\n    const client = new net.Socket()\n\n    let lastcommand, response, lastterm\n    client.connect(50505, \"localhost\")\n\n/**\n * @param {Buffer} string\n */\n    function createResponse(string)\n    {\n        string = string.slice(0, string.length - 1)\n\n        let checksum = 0 \n        for(const a of string) checksum += a\n        checksum %= 256\n        return \"$\"+string.toString()+\"#\"+checksum.toString(0x10)\n    }    \n\n    client.on(\"data\", handler = data => {\n        let string = data.toString()\n\n        if(string.search(/^\\$T\\d\\d/) != -1) lastterm = string\n\n        console.log(string),\n        server.write(string)\n    })\n\n    server.on(\"data\", handlerserver = async data => {\n        let string = data.toString()\n\n        console.log(string)\n\n        let cmd\n\n        if((cmd = string.replace(/^\\$qRcmd,([a-f0-9]+)#/, (_, substring) => substring)) != string){\n            lastcommand = string = createResponse(Buffer.from(cmd, \"hex\"))\n            const innerresponse = createResponse(Buffer.from(\"OK  \n\"))\n            console.log(innerresponse)\n            server.write(innerresponse)\n\n            response = lastcommand\n\n\n            return\n        }\n        else if(string.search(/^\\$vCont;c#a8/) != -1) return console.log(response),\n            client.write(response)//, response = undefined\n        else if(string.search(/^\\$vCont;s:1#23/) != -1) return console.log(lastterm), server.write(lastterm)\n        client.write(string)\n    })\n}).listen(23946, \"localhost\")\n\n```\nI basically capture the last received signal and resend it the second time.\n\nThere is still a small issue when issuing a command when the program counter is on a break-point but that's small enough to ignore.\n\n",
+      "votes": "1",
+      "user": "rec",
+      "time": "Nov 13, 2019 at 9:47",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

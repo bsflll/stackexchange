@@ -1,0 +1,33 @@
+{
+    "title": "How does my S62 engine utilize MAF sensors to convert voltage to mass flow?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8928/how-does-my-s62-engine-utilize-maf-sensors-to-convert-voltage-to-mass-flow",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  We're trying to solve a puzzle on one of the automotive forums regarding how the BMW S62 engine utilizes its two MAF (mass air flow) sensors to determine the air mass flow entering the engine. This sensor is critical for correct engine operation and people often replace the sensor without knowing for sure if it needs to be replaced. By understanding how the ECU utilizes the sensor, one can devise a simple test with a multimeter to confirm or disprove whether a new sensor is needed.\n </p>\n <p>\n  Someone has access to the disassembled instructions for the ECU (Motorola M68000) and has shared screenshots of the two subroutines which he believes are relevant to mass air flow evaluation.\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/ie4yK.png\" rel=\"noreferrer\">\n   <code>\n    MAF Curve\n   </code>\n   (this is what\n   <code>\n    tbls\n   </code>\n   uses):\n  </a>\n </p>\n <p>\n  <img alt=\"MAF Curve\" src=\"https://i.sstatic.net/ie4yK.png\"/>\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/VjYlO.png\" rel=\"noreferrer\">\n   <code>\n    sub_12D96:\n   </code>\n  </a>\n </p>\n <p>\n  <img alt=\"sub_12D96\" src=\"https://i.sstatic.net/VjYlO.png\"/>\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/kqYaB.png\" rel=\"noreferrer\">\n   <code>\n    sub_1AA3A:\n   </code>\n  </a>\n  <img alt=\"sub_1AA3A\" src=\"https://i.sstatic.net/kqYaB.png\"/>\n </p>\n <hr/>\n <p>\n  There are a few schools of thought as to what is happening here:\n </p>\n <ol>\n  <li>\n   <p>\n    The average of the two MAF sensor voltages is being used. I don't see that in this particular set of instructions.\n   </p>\n  </li>\n  <li>\n   <p>\n    The result from the lookup table is halved.\n   </p>\n  </li>\n  <li>\n   <p>\n    The two results are computed separately and then added together. This however conflicts with the field data collected.\n   </p>\n  </li>\n  <li>\n   <p>\n    Only one sensor is being used (in other words, the sense of the S62 check is inverted, but it physically makes no sense)\n   </p>\n  </li>\n </ol>\n <hr/>\n <p>\n  Could someone help me to make sense of what the instructions are doing? Here is my stab at it, I just cannot \"piece\" it all together to make sense of it:\n </p>\n <pre><code>sub_12D96:\nmove.l  a2, -(sp)                  ; Push long value at address a2 to stack\nmovea.l #SYS_TIMERTICS_COUNTER, a2 ; Move SYS_TIMERTICS_COUNTER address to a2\nbtst    #7, (PSYNC_ST).l           ; Bit-test on something, not sure how this works\nbeq.s   loc_12E02                  ; If true, go to loc_12E02, else continue\n\nmove.b  (ZUSTAND_MOTOR).l, d0      ; Move a byte from ZUSTAND_MOTOR address to data register d0\nandi.b  #$1C, d0                   ; Bitwise-and 0x1C with data register d0\n                                   ; [to check if engine is running]\nbeq.s   loc_12DEE                  ; If binary-equal, go to loc_12DEE, else continue\n\npea     (1).w                      ; Push effective address onto stack (does this set stack pointer?)\nmove.w  (HFM1_AD).l, d0            ; Move word value from HFM1_AD to data register d0 (why move.w and not move.l?)\nmove.l  d0, -(sp)                  ; Push long value to stack\njsr     sub_1AA3A                  ; Jump to subroutine sub_1AA3A\naddq.l  #8, sp                     ; Add 8 to stack pointer (move stack pointer address by 8?)\nmove.b  (K_MOTORTYP).l, d0         ; Move byte from K_MOTORTYP to data register d0\nandi.l  $#EF, d0                   ; Bitwise-and 0xEF with data register d0\nmoveq   #$20, d1                   ; Move 0x20 to data register d1\ncmp.l   d0, d1                     ; Compare d0 with d1\nbne.s   loc_12DEE                  ; If binary-not-equal, go to loc_12DEE, else continue\n\npea     (2).w                      ; Push effective address onto stack (does this set stack pointer?)\nmove.w  (HFM2_AD).l, d0            ; Move word value from HFM2_AD to data register d0 (why move.w and not move.l?)\nmove.l  d0, -(sp)                  ; Push long value to stack\njsr     sub_1AA3A                  ; Jump to subroutine sub_1AA3A\n\nsub_1AA3A:\n\narg_2=  6                          ; define constant (arg_2 = 6)\narg_7=  $B                         ; define constant (arg_7 = 11)\n\nclr.l   d0\nclr.w   d1\nmove.w  arg_2(sp), d0              ; move a word 6 places after stack pointer to d0\nlsl.w   #3,d0                      ; left-shift the word at d0 by 3 bits (multiply by 8)\ntbls.w  (KL_HFM_ML_V_b).l, d0      ; lookup word from KL_HFM_ML_V_b table with d0 as input\n</code></pre>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 0,
+    "views": "596",
+    "tags": [
+        "ida",
+        "disassembly",
+        "motorola"
+    ],
+    "user": "Zaid",
+    "time": "May 18, 2015 at 19:00",
+    "comments": [
+        {
+            "user": "Marcin",
+            "text": "<html><body><span class=\"comment-copy\">\n From the commented disasm, only the last 3 instructions seem to be relevant to doing anything with MAF, and not just dealing with the computers.  MAF voltage is encoded as some sort of value (16bit?) that needs to get multiplied by 8 and then looked up in the table.  That table is probably the MAF calibration.  Which makes perfect sense so far.   I am not seeing any code however that deals with double MAFs inputs being averaged, or summed.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Zaid",
+            "text": "<html><body><span class=\"comment-copy\">\n @Marcin : Note that I didn't completely analyze\n <code>\n  sub_1AA3A\n </code>\n . I'm told that the MAF voltage is encoded as a 10-bit value. If the S62 check evaluates to true for my car, the from HFM2_AD gets pulled in and run through sub_1AA3A.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "peeebeee",
+            "text": "<html><body><span class=\"comment-copy\">\n It looks like the result of the first lookup from HFM1.AD is discarded and replaced with the lookup from HFM2.AD when (K_MOTORTYP & $EF) == $20. (I'm not a M68000 expert, though, give me an SH2....)\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

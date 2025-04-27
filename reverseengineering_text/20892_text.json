@@ -1,0 +1,26 @@
+{
+    "title": "How to get IOCTLs from all NtDeviceIoControlFile function call?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20892/how-to-get-ioctls-from-all-ntdeviceiocontrolfile-function-call",
+    "content": "Inspired by this answer about RE-ing IOCTLs, I tried to get the IOCTLs from\n<pre><code>NtDeviceIoControlFile()</code></pre> syscall. Here is an example of that syscall\nin <pre><code>Beep()</code></pre> function in <pre><code>KernelBase.dll</code></pre> file:\n\nIn x86_64 (__fastcall) Assembly language:\n\n<pre><code>and     [rsp+72], ebx                   ; OutputBufferLength\nand     [rsp+64], rbx                   ; OutputBuffer\nmov     dword ptr [rsp+56], 8           ; InputBufferLength\nlea     rax, [rsp+152]\nmov     [rsp+48], rax                   ; InputBuffer\nmov     dword ptr [rsp+40], 10000h      ; IoControlCode\nlea     rax, [rsp+78h+var_18]\nmov     [rsp+32], rax                   ; IoStatusBlock\nxor     r9d, r9d                        ; ApcContext\nxor     r8d, r8d                        ; ApcRoutine\nxor     edx, edx                        ; Event\nmov     rcx, [rsp+144]                  ; FileHandle\ncall    cs:__imp_NtDeviceIoControlFile\ntest    eax, eax\n</code></pre>\n\nIn C language:\n\n<pre><code>NTSTATUS Status;\nStatus = NtDeviceIoControlFile(FileHandle,\n                               NULL,\n                               NULL,\n                               NULL,\n                               &IoStatusBlock,\n                               0x10000u,\n                               &InputBuffer,\n                               InputBufferLength,\n                               OutputBuffer,\n                               OutputBufferLength);\n</code></pre>\nI tried this code in IDA Python to list all the cross references of that syscall:\n<pre><code># Global arrays\nXrefList = []\n\n# Get imported function address\nFuncAddr = LocByName(\"__imp_NtDeviceIoControlFile\")\nprint \"NtDeviceIoControlFile found at 0x%08x\" % FuncAddr\n\n# Iterate over all call references\nfor xref in XrefsTo(FuncAddr, True):\n    if xref.frm not in XrefList:\n        XrefList.append(xref.frm)\n        print \"xref @ 0x%08x (%s)\" % (xref.frm, GetFunctionName(xref.frm))\n    else:\n        continue\n</code></pre>\nThis code can successfully list all the syscall in a list. But I want to list\nall the IOCTLs values at <pre><code>RSP+40</code></pre> offset i.e. 6th parameter. What code should I add?\nIf you have any suggestion with IDC code I shall appreciate it as well.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "693",
+    "tags": [
+        "ida",
+        "windows",
+        "idapython"
+    ],
+    "user": "Biswapriyo",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "After iterating some arbitrary functions in IDA Python docs, I found a function\nget_arg_addrs() which shows the argument I need. Here is the Python code\nthat I have appended with my question's code.\n<pre><code># Get IOCTLs\nfor i in XrefList:\n    fifth_arg = idaapi.get_arg_addrs(i)[5]\n    ioctl = GetOpnd(fifth_arg, 1)\n    print \"IOCTL: %s\" % ioctl\n</code></pre>\nThis a for loop iterates over the <pre><code>XrefList</code></pre> array that had been created from previous operations.\nThen find the 5th argument and the 1st operand which is the IOCTL value.\nThis method also works with <pre><code>DeviceIoControl()</code></pre>. But The code has one caveat.\nIf <pre><code>NtDeviceIoControlFile()</code></pre> is used in some wrapper subroutine\nthen the output of above code will be the CPU register name.\n",
+            "votes": "1",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

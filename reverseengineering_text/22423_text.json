@@ -1,0 +1,24 @@
+{
+    "title": "How to handle flags that affect instruction decoding in IDA processor modules?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22423/how-to-handle-flags-that-affect-instruction-decoding-in-ida-processor-modules",
+    "content": "I am writing a processor module for the Oki6620* architecture. Like ARM's Thumb mode or m7700's M flag, this architecture has a special flag that affects instruction decoding, named DD (Data Descriptor). \nFor a POC, I have a global flag to my IDA processor definition, and change the DD flag depending on the instruction analysed. However, due to IDA's multithreading when analysing/decoding instructions (notify_ana/notify_emu/etc), this clearly doesn't work well.\nEven worse, when clicking around in IDA on random instructions, said instructions sometimes get changed randomly because the current DD flag's value is different from when the instruction was first analysed.\nMy two main questions are:\n\nm7700 and ARM both have an option to set the flag from the interface (Alt+G, if I'm not mistaken), and I'm looking for a way to implement this in my module too. Does anybody know how to do that ?\nAlso, I'd be interested in input on how one would handle correctly this DD flag depending on the thread actually running (keep DD values in an array, for each block of code between two DD-value-changing instruction ? things like that)\n\nHere is a PDF explaining the ISA and processor info. My current code (draft of course) is available on github.\nThank you very much in advance.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "330",
+    "tags": [
+        "ida"
+    ],
+    "user": "P1kachu",
+    "time": "Oct 30, 2019 at 4:35",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "First of all, IDA kernel can perform an instruction emulation step in any order (usually consecutive, that's why sometimes you are getting the results that you expect) in accordance with their SDK documentation:\n\nThe second step, the emulation, is called for each instruction.\nThis step must make necessary changes to the database,   plan analysis\nof subsequent instructions, track register   values, memory contents,\netc. Please keep in mind that the kernel may call   the emulation step\nfor any address in the program - there is no   ordering of addresses.\nUsually, the emulation is called   for consecutive addresses but this\nis not guaranteed.\n\nOverall, I see a number of issues with your code, that prevent it from operating correctly. I won't be digging deep in each one of them, just provide a quick overview and some hints:\n\nYou are trying to store the data about the flags in your own global variables. This is wrong, since IDA is completely unaware of it. Therefore, you should utilize IDAs structures for that.\n\nFor example, the DD flag that you are talking about affects just the size of the operands, utilized in the specific instruction. Therefore, this information should be stored in the <pre><code>insn_t</code></pre> object. The closest example would be arc processor module (it is written in C, but it is really easy to understand) from the official IDA SDK, specifically, this part:\n<pre><code>// fix operand size for byte or word loads/stores\ninline void fix_ldst(insn_t &insn)\n{\n  if ( insn.itype == ARC_ld || insn.itype == ARC_st )\n  {\n    switch ( insn.auxpref & aux_zmask )\n    {\n      case aux_b:\n        insn.Op2.dtype = dt_byte;\n        break;\n      case aux_w:\n        insn.Op2.dtype = dt_word;\n        break;\n    }\n  }\n}\n</code></pre>\nThe information about the flags is stored in <pre><code>insn.auxpref</code></pre> in this case. You can work your way from there, looking further into the implementation of flag set/clear routines in the same module.\n\n\nYou've defined dozens and dozens of the same instructions in <pre><code>INSN_DEFS</code></pre>. Even after processing in <pre><code>init_instructions</code></pre> you would end up with duplicate entries. Take a look, for example, on <pre><code>add</code></pre> instruction. The only difference is actually operands and their sizes. You should've defined just one add instruction with 2 arbitrary operands, for example, like that:\n\n<pre><code>{\"add\", CF_CHG1|CF_USE2}</code></pre>\nAll the further processing (number of operands, their values, DD flag, etc.) should be performed in <pre><code>ana</code></pre> and <pre><code>emu</code></pre> modules.\nSo, you should introduce quite a lot of code changes in order for this processor module to become operational.\n",
+            "votes": "1",
+            "user": "none32",
+            "time": "Mar 5, 2023 at 12:49",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

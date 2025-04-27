@@ -1,0 +1,35 @@
+{
+    "title": "Breaking on string access from StringTable (resource)",
+    "link": "https://reverseengineering.stackexchange.com/questions/27754/breaking-on-string-access-from-stringtable-resource",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If I have a resource like this:\n </p>\n <pre><code>STRINGTABLE\nLANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US\n{\n100,    \"OK\"\n101,    \"Warning\"\n102,    \"Error\"\n103,    \"Name\"\n104,    \"Size\"\n}\n</code></pre>\n <p>\n  1- How can I place a BP (conditional) to break when the string\n  <code>\n   102\n  </code>\n  is accessed (x64. I do not know which function is used to load the string)?\n </p>\n <p>\n  2- How could I detect this code in a disassembler such as Ghidra/IDA?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "ghidra",
+        "x64dbg",
+        "pe-resources"
+    ],
+    "user": "user1156544",
+    "time": "May 31, 2021 at 0:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <ol>\n  <li>\n   you don't ... there's a slim chance to use a hardware breakpoint to trigger when the (mapped) resource string gets accessed, though.\n  </li>\n  <li>\n   you need to stake out what APIs get used which could be used to read the string(s). The first one to go to here would be\n   <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadstringw\" rel=\"nofollow noreferrer\">\n    <code>\n     LoadString\n    </code>\n   </a>\n   for obvious reasons. But it's possible that your target uses\n   <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-findresourcew\" rel=\"nofollow noreferrer\">\n    <code>\n     FindResource\n    </code>\n   </a>\n   (or the corresponding\n   <code>\n    *Ex\n   </code>\n   -function), followed by\n   <code>\n    LoadResource\n   </code>\n   ,\n   <code>\n    LockResource\n   </code>\n   etc.\n  </li>\n </ol>\n <p>\n  So if I were you I'd look at the import table first. Check if either\n  <code>\n   LoadStringA\n  </code>\n  or\n  <code>\n   LoadStringW\n  </code>\n  exists and check all instances. The ID parameter for the resource ID should be pretty obvious.\n </p>\n <p>\n  Failing that I'd look for\n  <code>\n   GetProcAddress\n  </code>\n  and friends and whether that is used to get the function\n  <code>\n   LoadString\n  </code>\n  and call it.\n </p>\n <p>\n  Failing that I'd look for the other functions I mentioned above.\n </p>\n <p>\n  Failing that I'd investigate which internal functions inside\n  <code>\n   ntdll.dll\n  </code>\n  are used to implement resource handling and break on those, then investigate the call stack.\n </p>\n <p>\n  If all of the above fails I'd set a hardware breakpoint on the resource string itself in an attempt to catch the program accessing the string.\n </p>\n <p>\n  <strong>\n   NB:\n  </strong>\n  in multilingual applications the resource ID would still matter and typically be identical across languages, but there's a chance the string you're after is in another (resource-only) DLL altogether. Such DLLs have no entry point or code and are purely mapped as data. This could be relevant if you come up empty-handed in all but the last approach ... because for the last approach you'll have to set the breakpoint on the right data.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "Jun 1, 2021 at 7:26",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <blockquote>\n  <p>\n   1- How can I place a BP (conditional) to break when the string 102 is\naccessed (x64. I do not know which function is used to load the\nstring)?\n  </p>\n </blockquote>\n <p>\n  First, it is necessary to find the right method used to load the string. The standard one is\n  <code>\n   LoadString\n  </code>\n  but, as\n  <strong>\n   @0xC0000022L\n  </strong>\n  mentioned, there are other options. Check the imports from the\n  <code>\n   PE\n  </code>\n  file and determine which one can be.\n </p>\n <p>\n  In my case, I found out it was\n  <code>\n   LoadStringW\n  </code>\n  , from\n  <code>\n   user32.dll\n  </code>\n  .\n </p>\n <p>\n  In\n  <code>\n   x86\n  </code>\n  , you will normally place a BP with a condition on some stack value. In\n  <code>\n   x64\n  </code>\n  this normally works differently (\n  <a href=\"https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160\" rel=\"nofollow noreferrer\">\n   x64 calling convention\n  </a>\n  ):\n </p>\n <blockquote>\n  <p>\n   By default, the x64 calling convention passes the first four arguments\nto a function in registers. The registers used for these arguments\ndepend on the position and type of the argument. Remaining arguments\nget pushed on the stack in right-to-left order. Integer valued\narguments in the leftmost four positions are passed in left-to-right\norder in RCX, RDX, R8, and R9, respectively...\n  </p>\n </blockquote>\n <p>\n  According to the documentation\n  <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadstringw\" rel=\"nofollow noreferrer\">\n   LoadStringW function\n  </a>\n  :\n </p>\n <pre><code>int LoadStringW(\n  HINSTANCE hInstance,\n  UINT      uID,           // --> The identifier of the string to be loaded.\n  LPWSTR    lpBuffer,\n  int       cchBufferMax\n);\n</code></pre>\n <p>\n  Therefore,\n  <code>\n   uID\n  </code>\n  will be loaded in\n  <code>\n   EDX\n  </code>\n  . The right breakpoint for\n  <strong>\n   x64dbg\n  </strong>\n  is:\n </p>\n <pre><code>bp user32:LoadStringW;bpcnd user32:LoadStringW,EDX==66\n</code></pre>\n <p>\n  Note: 102 is 66h\n </p>\n <hr/>\n <blockquote>\n  <p>\n   2- How could I detect this code in a disassembler such as Ghidra/IDA?\n  </p>\n </blockquote>\n <p>\n  In Ghidra this is automatically managed. By looking into the\n  <code>\n   Defined Strings\n  </code>\n  you can find the strings in the resources:\n </p>\n <pre><code>                     pu_Error_140312196                              XREF[12]:\nFUN_1400... (*) ,FUN_140...\n   140312196 05004500...      p_unicode  u\"Error\"    Rsrc String ID 102\n</code></pre>\n <p>\n  From here it is trivial to go to the references.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "user1156544",
+            "time": "Jun 1, 2021 at 13:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

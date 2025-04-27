@@ -1,0 +1,70 @@
+{
+    "title": "How to investigate Windows 32/64bit (WOW64) transition",
+    "link": "https://reverseengineering.stackexchange.com/questions/16200/how-to-investigate-windows-32-64bit-wow64-transition",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There is surprisingly little information about Windows WOW64 mechanism.<br/>\nI'm trying to investigate it. </p>\n<p>So when we have system call in 32-land, it calls an address that is stored in <code>FS</code>, which leads us to a weird <code>jmp</code> with <code>033:</code> prefix.<br/>\nIf I understand correctly, this jump is transferring us to 64-land, but still on user-mode. The jump to kernel-mode should happen afterwards.</p>\n<p>I want to follow this jump. My debugger doesn't do that. How can I do it?</p>\n</div>",
+    "votes": "8",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "windows",
+        "debugging",
+        "x86",
+        "anti-debugging",
+        "x86-64"
+    ],
+    "user": "Shmuel Fomberg",
+    "time": "Jun 11, 2018 at 14:10",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">are you using x86 debugger? which one?</span>",
+            "time": null
+        },
+        {
+            "user": "Henno Brandsma",
+            "text": "<span class=\"comment-copy\">Have you read  \"Windows Internals\" by Russinovitch et al. ?</span>",
+            "time": null
+        },
+        {
+            "user": "conio",
+            "text": "<span class=\"comment-copy\">Also relevant: <a href=\"https://reverseengineering.stackexchange.com/questions/14848/what-is-this-hidden-stack-used-by-syscalls-on-windows\" title=\"what is this hidden stack used by syscalls on windows\">reverseengineering.stackexchange.com/questions/14848/…</a> TLDR: Use WinDbg.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The technique of jumping to 64bit code from a 32bit WOW64-ed process is commonly called \"Heaven's gate\" when performed manually. This is usually done to use 64bit features (such as manipulating 64bit processes by calling 64bit versions of windows APIs) or by malware to make debugging more difficult, which is coincidentally what you seem to be experiencing ;).</p>\n<p>Searching for that term online may yield more results.</p>\n<p>Most user-mode debuggers indeed don't handle that transition well for multiple reasons (one being the debugger assumes a 32bit process, while you're now executing 64bit code, another being user-mode debugging APIs don't support that).</p>\n<p><em>TL;DR:</em> The \"solution\" for that situation is to debug using a debugger that explicitly made the effort to support 32 and 64 bit interleaved processes. Although this is often easier for a kernel mode debugger), such as windbg, or other debuggers that support both 32 and 64 bit modes (<s>x64dbg should be able to do it, although I never tried</s> As mentioned in the comments x64dbg is unable to do that).</p>\n<h1>A brief explanation of Heaven's gate</h1>\n<p>There's a special DLL loaded into 32bit processes on 64bit windows environments, this DLL is <code>wow64cpu.dll</code>. This DLL is responsible for most of the WOW64 magic, and specifically for implementing the transition from 32 to 64 bit inside 32 bit processes (WOW64-ed processes).</p>\n<p>This is mandatory because as the operating system is natively 64 bit, all utilities, APIs and low level functionalities are implemented using 64 bit code (otherwise what's the point of having 64 bit OSes??). Therefore, every time an WOW64-ed process requires a OS assistance, it must first translate from 32bit CPU mode to 64 bit CPU mode.</p>\n<h2>So, how's the transition done, and what's that wow64cpu.dll you mentioned got to do with it?</h2>\n<p>To make a long story short, the value at <code>fs:[0c0h]</code> is set to an address inside <code>wow64cpu.dll</code>. This field is called <code>WOW32Reserved</code> and it points to a far jump to a specific address, using the <code>033</code> segment. Changing the segment selector to <code>33</code> (from <code>23</code>, which is used for 32bit code) does not change the code selector or the base addressing, you're merely changing the <a href=\"https://en.wikipedia.org/wiki/Global_Descriptor_Table\" rel=\"noreferrer\">GDT</a> entry used to execute the target code, specifically - you replace the 4th GDT with the 6th.</p>\n<p>GDT entries 4 and 6 only differ in a couple of flags being set - those controlling whether the CPU is executing in 16, 32, and 64 modes (well, those GDT entries only have flags set for 32 and 64 bit modes, but transitioning to 16 bit can be achieved in a similar manner).</p>\n<h1>Where to go on from here?</h1>\n<p>As this is a big and complicated topic, I prefer redirecting you to relevant articles over touching the low-level details in here more than I already did. Here are several useful articles, on the more theoretical side of things:</p>\n<ol>\n<li><a href=\"https://www.malwaretech.com/2014/02/the-0x33-segment-selector-heavens-gate.html\" rel=\"noreferrer\">Explanation of the \"weird jump to <code>33:</code> segment\"</a>.</li>\n<li><a href=\"http://rce.co/knockin-on-heavens-gate-dynamic-processor-mode-switching/\" rel=\"noreferrer\">Explanation of the entire WOW64 mechanism from the process's perspective, including how to debug it to see it happening</a>.</li>\n<li><a href=\"http://vxheaven.org/lib/vrg02.html\" rel=\"noreferrer\">A very brief explanation of the flow executed, and the article historically keying the term \"Heaven's gate\"</a>.</li>\n<li><a href=\"http://www.alex-ionescu.com/?p=300\" rel=\"noreferrer\">Another in-depth explanation</a>.</li>\n<li>The Windows Internals book series.</li>\n</ol>\n<p>Additionally, here are several actual open source implementations of natively executing 64 bit code inside <code>WOW64</code>-ed 32 bit process:</p>\n<ol>\n<li><a href=\"https://gist.github.com/Cr4sh/76b66b612a5d1dc2c614\" rel=\"noreferrer\">This</a> is a code snippet that implements some direct 64 bit OS operations.</li>\n<li><a href=\"http://github.com/rwfpl/rewolf-wow64ext\" rel=\"noreferrer\">This</a> is a full blown heaven's gate implementation.</li>\n<li><a href=\"https://github.com/dadas190/Heavens-Gate-2.0\" rel=\"noreferrer\">This</a> is another, later, full blown heaven's gate implementation.</li>\n</ol>\n</div>",
+            "votes": "18",
+            "user": "NirIzr",
+            "time": "Sep 3, 2017 at 7:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">x64dbg can't do that. it is a pair of debuggers, one for x86 and one for x64. not one that do both.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@ShmuelFomberg Thanks for the clarification, as I said i had no idea. I'll correct my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">WinDbg (x64) can debug this. It has not been implemented in x64dbg for various technical reasons...</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">Derp you are right (just woke up and read over it)... However you don't need a kernel mode debugger to debug this.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">I found a library that does exactly what I wanted to do: <a href=\"https://github.com/rwfpl/rewolf-wow64ext\" rel=\"nofollow noreferrer\">github.com/rwfpl/rewolf-wow64ext</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

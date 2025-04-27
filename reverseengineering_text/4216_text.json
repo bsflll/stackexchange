@@ -1,0 +1,33 @@
+{
+    "title": "Set breakpoint on shared library",
+    "link": "https://reverseengineering.stackexchange.com/questions/4216/set-breakpoint-on-shared-library",
+    "content": "I am a noob to the reversing world.  I have a Android Java application which uses a shared library via JNI and I would like to set a breakpoint in the shared library.  The shared library is stripped so as I far as I understand I can set breakpoints by address only.  I have put the shared object through IDA and have a couple of positions I would like to set breakpoints but I am unsure on how I can calculate this or even if this is possible.  I am using gdbserver on Android attaching to the process and connecting from Mac OSX using gdb in the NDK.  I have been trying to calculate the memory address by taking what /proc/'pid'/smap gives me and calculating an offset from the IDA assembly I have.  Is this the right direction?  Is this even possible?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "ida",
+        "gdb",
+        "android",
+        "arm"
+    ],
+    "user": "allbabel",
+    "time": "Apr 30, 2014 at 16:20",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I've been doing the same/similar stuff recently, and while you can get it to work, it's not that easy.\nIt helps if you have a rooted android device, a terminal emulator to run gdbserver, and, if possible, a terminal emulator that can open more than one window, so you kan kill the gdbserver from the second window if it hangs up. Also, a real keyboard on the android device helps, as it's much easier to repeat commands when you have real cursor keys.\nYou don't need to connect your Droid to your mac using an USB cable. I started gdbserver like this:\n<pre><code>gdbserver --attach 0.0.0.0:8765 2338\n</code></pre>\n(where 2338 is the pid of my target application), then used\n<pre><code>$ arm-none-eabi-gdb\ntarget remote 192.168.178.103:8765\n</code></pre>\nto connect. 192.168.178.103 is the IP address of my android device.\nI didn't want to install the complete NDK on my machine, so i downloaded the ARM GDB from https://launchpad.net/gcc-arm-embedded/+download, they have windows, linux and mac versions. The NDK GDB should probably work as well, of course.\nYou can add the \"IDA Address\" of the function to the Map address. For example, in my library:\n\nThe two functions i was interested in had \"IDA addresses\" BA584 and BA99C.\nThe address in /proc/maps said 688D0000 as base address of the executable segment.\nThe real function addresses were 6898A584/6898A99C, which is base address + \"IDA address\" in both cases.\n\nThere are two things to consider when you check you really found the correct address:\n\nYou can't use the gdb disassemble command as it relies on functions and symbols. Use the x/i command to disassemble. For example, in my case, x/20i 0x6898A584 to see the 20 instructions at this address.\nThe arm has two different modes, Thumb mode and ARM mode. If gdb has no symbols, it might choose the wrong one when disassembling, making your GDB disassembly not resemble the IDA disassembly at all. \n\nUse <pre><code>set arm force-mode arm</code></pre> and <pre><code>set arm force-mode thumb</code></pre> to try both. For example, this is what IDA told me about my BA584 function:\n<pre><code>.text:000BA584\n.text:000BA584 sub_BA584                               ; CODE XREF: sub_BF1C4+3Ap\n...\n.text:000BA584                 PUSH.W          {R4-R11,LR}\n.text:000BA588                 MOV             R6, R0\n.text:000BA58A                 SUB             SP, SP, #0x1C\n.text:000BA58C                 LDR             R0, [R0,#0x18]\n.text:000BA58E                 MOV             R4, R1\n.text:000BA590                 STR             R2, [SP,#0x40+var_34]\n</code></pre>\nthis is what gdb made of it first:\n<pre><code>(gdb) x/20i 0x6890F584\n 0x6890f584:  svcmi   0x00f0e92d\n 0x6890f588:  addlt   r4, r7, r6, lsl #12\n 0x6890f58c:  strmi   r6, [r12], -r0, lsl #19\n 0x6890f590:  stmdacs r0, {r0, r1, r9, r12, pc}\n 0x6890f594:  bichi   pc, r10, r0\n 0x6890f598:  mlapl   r12, r6, r8, pc ; <UNPREDICTABLE>\n 0x6890f59c:                  ; <UNDEFINED> instruction: 0xf0402d00\n</code></pre>\nthen\n<pre><code>(gdb) set arm force-mode thumb\n(gdb) x/20i 0x6890F584\n 0x6890f584:  stmdb   sp!, {r4, r5, r6, r7, r8, r9, r10, r11, lr}\n 0x6890f588:  mov     r6, r0\n 0x6890f58a:  sub     sp, #28\n 0x6890f58c:  ldr     r0, [r0, #24]\n 0x6890f58e:  mov     r4, r1\n 0x6890f590:  str     r2, [sp, #12]\n</code></pre>\nSo don't give up if the disassembly looks weird, try forcing thumb / arm mode.\nMy application crashed various times when i was debugging it, which made gdbserver lose sync with gdb, resulting in lots of \"Ignoring packet error\" messages from gdb. Killing gdbserver (thus the 2nd window), restarting the application, and reconnecting gdb seemed to be the only remedy in these cases. When you restart the application, make sure you re-check /proc/..../maps for the .so base address, it stays the same most of the time but changes sometimes, especially when there's some time between invocations. You'll notice my address (0x6890F584) in the above example does not match the one i told you earlier, this is because in the example, the map base address had changed to 68855000.\n",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Apr 30, 2014 at 21:18",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "allbabel",
+                    "text": "<span class=\"comment-copy\">This was what I was trying but discovered after much pain that I was using the wrong reference.  Now when the application lands at the breakpoint it crashes!!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,83 @@
+{
+    "title": "Deal with obfuscated assembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/2917/deal-with-obfuscated-assembly",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  When using objdump I see the following disassembled code:\n </p>\n <pre><code>8049436:    89 04 24                mov    DWORD PTR [esp],eax\n8049439:    e8 52 f7 ff ff          call   8048b90 <gtk_entry_get_text@plt>\n804943e:    89 44 24 24             mov    DWORD PTR [esp+0x24],eax\n8049442:    eb 01                   jmp    8049445 <gtk_grid_new@plt+0x6c5>\n8049444:    1d c7 04 24 0b          sbb    eax,0xb2404c7\n8049449:    00 00                   add    BYTE PTR [eax],al\n804944b:    00 e8                   add    al,ch\n804944d:    0f f7 ff                maskmovq mm7,mm7\n8049450:    ff eb                   jmp    <internal disassembler error>\n</code></pre>\n <p>\n  This is using an obfuscation technique to make the disassembling harder. When I check in gdb I see the real code at 0x8049445:\n </p>\n <pre><code>(gdb) > x/10i 0x8049445\n0x8049445:  mov    DWORD PTR [esp],0xb\n0x804944c:  call   0x8048b60 <raise@plt>\n0x8049451:  jmp    0x8049454\n0x8049453:  sbb    eax,0xfff8a7e8\n</code></pre>\n <p>\n  Now, my question is: is it possible to tell objdump that the byte at 0x8049444 can be ignored for the purpose of disassembly? One obvious way is to actually patch the file, but is there another way?\n </p>\n <p>\n  And if not with objdump, are there other tools that can do that? Though I'd rather stay with the basic tools included with Linux so as to familiarize myself with those better.\n </p>\n</div>\n</body></html>",
+    "votes": "8",
+    "answers": 4,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "obfuscation",
+        "objdump"
+    ],
+    "user": "Mew",
+    "time": "Oct 15, 2013 at 19:49",
+    "comments": [
+        {
+            "user": "viv",
+            "text": "<html><body><span class=\"comment-copy\">\n Yes there are but remember\n <a href=\"http://reverseengineering.stackexchange.com/questions/2580/why-is-disassembly-not-an-exact-science\">\n  Disassembly is not an exact science\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Most tools don't support a 'ignore that byte for disassembly' feature, only IDA, Hopper and a few others do.\n </p>\n <p>\n  The only alternative is to patch the byte at\n  <code>\n   8049444\n  </code>\n  with a\n  <code>\n   90 NOP\n  </code>\n  , or change your mind and not rely on basic tools.\n </p>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Ange",
+            "time": "Oct 16, 2013 at 6:45",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Both good suggestions. For option (1), search for <code>jmp +1</code>, set the next byte to <code>nop</code> and happily continue working with objdump. I'd go for option (2) -- to the extent I wrote my own.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  That's not obfuscation, that's just the output of a lousy disassembler engine.\n </p>\n <p>\n  Use\n  <a href=\"https://www.hex-rays.com/products/ida/index.shtml\">\n   IDA Pro\n  </a>\n  instead. You can download an evaluation version for Linux from\n  <a href=\"https://www.hex-rays.com/products/ida/support/download_demo.shtml\">\n   here\n  </a>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "Jason Geffner",
+            "time": "Oct 15, 2013 at 20:50",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">This has nothing to do with being \"lousy\". It simply uses a linear sweep disassembling strategy (as opposed to recursive traversal). Both strategies fail in certain situations / against different anti-disassembling techniques.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">\"Lousy\" in regard to meeting the original poster's needs. He should be using a recursive descent disassembler such as IDA Pro.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">IDA Pro actually uses both, IIRC. First off, it tries to evaluate from the program entry point (which would already produce a correct listing for the OP's code). Then it scans remaining data for what looks like function prologue, and only after that it rounds up stray bytes (of which there should not be much left).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mew",
+                    "text": "<span class=\"comment-copy\">I tried IDA Pro. Its disassembly was, for this particular case, less corrent than the one made by objdump. But once debugging it fixed itself. Or I could fix it manually too.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This problem comes from the way\n  <code>\n   objdump\n  </code>\n  disassemble a binary. The technique used here is called\n  <strong>\n   linear sweep\n  </strong>\n  , it is done by starting at the beginning of each symbol in all the sections that are flagged as\n  <code>\n   CODE\n  </code>\n  and disassemble instruction after instruction, supposing that what follow an instruction is also an instruction. The problem with this disassembly technique is that if you mix code and data, data will be interpreted as code as well. For example:\n </p>\n <pre><code>...\n0x0    mov DWORD PTR [esp+0x24],eax\n0x4    jmp *0x10\n0x6    DATA 0xfffa2345\n0x10   mov DWORD PTR [esp+0x20],eax\n...\n</code></pre>\n <p>\n  Here, applying a linear sweep technique on the hexadecimal code will result in a wrong interpretation of the data which will be considered as code. And, if your are really unlucky, a few instructions after the data will also be scrambled.\n </p>\n <p>\n  As already suggested in other answers, the only way to discover the real code is to use a different disassembling technique. Unfortunately,\n  <code>\n   objdump\n  </code>\n  provide only one (linear sweep), so you need to use another tool.\n </p>\n <p>\n  Note also that the other technique suggested in other answers (\n  <strong>\n   recursive traversal\n  </strong>\n  ) will perform well for this specific case but can also issue a wrong disassembly of the original code on some other examples. So, you cannot trust it either.\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "perror",
+            "time": "Oct 16, 2013 at 16:58",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As everybody else is saying, in this case it is due to linear sweep.\nHowever, I would like to add that even IDA can be fooled with Junk Bytes and you can only trust the disassembly while debugging a sample. As encoders can change the code on the run, only trust the value on the EIP and nothing else to be correct code.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Stolas",
+            "time": "Oct 16, 2013 at 14:27",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

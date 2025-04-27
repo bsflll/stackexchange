@@ -1,0 +1,35 @@
+{
+    "title": "Breaking on string access from StringTable (resource)",
+    "link": "https://reverseengineering.stackexchange.com/questions/27754/breaking-on-string-access-from-stringtable-resource",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If I have a resource like this:</p>\n<pre><code>STRINGTABLE\nLANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US\n{\n100,    \"OK\"\n101,    \"Warning\"\n102,    \"Error\"\n103,    \"Name\"\n104,    \"Size\"\n}\n</code></pre>\n<p>1- How can I place a BP (conditional) to break when the string <code>102</code> is accessed (x64. I do not know which function is used to load the string)?</p>\n<p>2- How could I detect this code in a disassembler such as Ghidra/IDA?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "ghidra",
+        "x64dbg",
+        "pe-resources"
+    ],
+    "user": "user1156544",
+    "time": "May 31, 2021 at 0:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<ol>\n<li>you don't ... there's a slim chance to use a hardware breakpoint to trigger when the (mapped) resource string gets accessed, though.</li>\n<li>you need to stake out what APIs get used which could be used to read the string(s). The first one to go to here would be <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadstringw\" rel=\"nofollow noreferrer\"><code>LoadString</code></a> for obvious reasons. But it's possible that your target uses <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-findresourcew\" rel=\"nofollow noreferrer\"><code>FindResource</code></a> (or the corresponding <code>*Ex</code>-function), followed by <code>LoadResource</code>, <code>LockResource</code> etc.</li>\n</ol>\n<p>So if I were you I'd look at the import table first. Check if either <code>LoadStringA</code> or <code>LoadStringW</code> exists and check all instances. The ID parameter for the resource ID should be pretty obvious.</p>\n<p>Failing that I'd look for <code>GetProcAddress</code> and friends and whether that is used to get the function <code>LoadString</code> and call it.</p>\n<p>Failing that I'd look for the other functions I mentioned above.</p>\n<p>Failing that I'd investigate which internal functions inside <code>ntdll.dll</code> are used to implement resource handling and break on those, then investigate the call stack.</p>\n<p>If all of the above fails I'd set a hardware breakpoint on the resource string itself in an attempt to catch the program accessing the string.</p>\n<p><strong>NB:</strong> in multilingual applications the resource ID would still matter and typically be identical across languages, but there's a chance the string you're after is in another (resource-only) DLL altogether. Such DLLs have no entry point or code and are purely mapped as data. This could be relevant if you come up empty-handed in all but the last approach ... because for the last approach you'll have to set the breakpoint on the right data.</p>\n</div>",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "Jun 1, 2021 at 7:26",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>1- How can I place a BP (conditional) to break when the string 102 is\naccessed (x64. I do not know which function is used to load the\nstring)?</p>\n</blockquote>\n<p>First, it is necessary to find the right method used to load the string. The standard one is <code>LoadString</code> but, as <strong>@0xC0000022L</strong> mentioned, there are other options. Check the imports from the <code>PE</code> file and determine which one can be.</p>\n<p>In my case, I found out it was <code>LoadStringW</code>, from <code>user32.dll</code>.</p>\n<p>In <code>x86</code>, you will normally place a BP with a condition on some stack value. In <code>x64</code> this normally works differently (<a href=\"https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160\" rel=\"nofollow noreferrer\">x64 calling convention</a>):</p>\n<blockquote>\n<p>By default, the x64 calling convention passes the first four arguments\nto a function in registers. The registers used for these arguments\ndepend on the position and type of the argument. Remaining arguments\nget pushed on the stack in right-to-left order. Integer valued\narguments in the leftmost four positions are passed in left-to-right\norder in RCX, RDX, R8, and R9, respectively...</p>\n</blockquote>\n<p>According to the documentation <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-loadstringw\" rel=\"nofollow noreferrer\">LoadStringW function</a>:</p>\n<pre><code>int LoadStringW(\n  HINSTANCE hInstance,\n  UINT      uID,           // --&gt; The identifier of the string to be loaded.\n  LPWSTR    lpBuffer,\n  int       cchBufferMax\n);\n</code></pre>\n<p>Therefore, <code>uID</code> will be loaded in <code>EDX</code>. The right breakpoint for <strong>x64dbg</strong> is:</p>\n<pre><code>bp user32:LoadStringW;bpcnd user32:LoadStringW,EDX==66\n</code></pre>\n<p>Note: 102 is 66h</p>\n<hr/>\n<blockquote>\n<p>2- How could I detect this code in a disassembler such as Ghidra/IDA?</p>\n</blockquote>\n<p>In Ghidra this is automatically managed. By looking into the <code>Defined Strings</code> you can find the strings in the resources:</p>\n<pre><code>                     pu_Error_140312196                              XREF[12]:\nFUN_1400... (*) ,FUN_140...\n   140312196 05004500...      p_unicode  u\"Error\"    Rsrc String ID 102\n</code></pre>\n<p>From here it is trivial to go to the references.</p>\n</div>",
+            "votes": "0",
+            "user": "user1156544",
+            "time": "Jun 1, 2021 at 13:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,49 @@
+{
+    "title": "Seemingly useless instruction inside function body",
+    "link": "https://reverseengineering.stackexchange.com/questions/32925/seemingly-useless-instruction-inside-function-body",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to reverse RtlInitUnicodeStringEx from ntdll.dll as an exercise to myself. Here is dissambled version from x64dbg.</p>\n<p><a href=\"https://i.sstatic.net/bZNKZ1DU.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/bZNKZ1DU.png\"/></a></p>\n<p>I was able to produce almost exactly the same binary from my own code, except for the <code>int3</code> instruction in line <code>0x00007FFDE53AA856</code>.</p>\n<p>I have analysed the module using both ghidra and x64dbg but I was not able to find any jumps to that line. I also considered it is used to align, but next instruction is not aligned to any power of two boundary.</p>\n<p>My search online led to <code>__debugbreak</code> intrinsic. According to Microsoft docs it \"Causes a breakpoint in your code, where the user will be prompted to run the debugger.\". However, It doesn't make sense that extra <code>int3</code> is caused by <code>__debugbreak</code> as it is in an unreachable position.</p>\n<p>I assume existence of that instruction means something is going on that I am not aware of, because compiler wouldn't have put it there if it weren't for a reason. So, what is the reason compiler would <code>int3</code> instruction at a unreachable position?</p>\n<p>I am using cl.exe version 19.30.30715 and compiling with <code>/c /O2s</code> flags. I am viewing the result by using <code>dumpbin /disasm</code> on .obj file. Also tried to create a .dll from <code>cl.exe /LD /O2s</code> but it didn't make any difference.</p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "172",
+    "tags": [
+        "msvc"
+    ],
+    "user": "yasar",
+    "time": "Apr 30, 2024 at 18:17",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This instruction is inserted after the functions <code>ret</code>, it is <em>normally</em> unreachable.</p>\n<p>In case the <code>ret</code> instruction caused a memory access violation (or some other exception) - the exception handler will be called and the current state saved.</p>\n<p>The exception handler can return execution to the original state, that is, to the instruction after the one that threw the exception, which is after the function's end.</p>\n<p>In this case the <code>int3</code> will run and either:</p>\n<p>Crash (if there is no debugger attached or available) or break to the debugger.</p>\n<p>The debugger, in turn, can \"handle\" (ignore) the <code>int3</code> and continue, running the next instruction that effectively returns <code>0xC0000106</code></p>\n</div>",
+            "votes": "2",
+            "user": "Yotamz",
+            "time": "Apr 30, 2024 at 19:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yasar",
+                    "text": "<span class=\"comment-copy\">Interesting, it doesn't appear on my version though, any idea what compiler flags I might be missing?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Yotamz",
+                    "text": "<span class=\"comment-copy\"><code>int3</code> is added between functions code by compilers when compiling <code>debug</code> builds (as opposed to <code>release</code>builds). This code in <code>ntdll</code> specifically returns <code>STATUS_NAME_TOO_LONG</code> error value, that makes sense in this context, not something generic that a compiler would add automatically.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you look through other functions in <code>NTDLL.DLL</code> you will see the addition of <code>int3</code>s after <code>ret</code> instructions is common.</p>\n<p>This would appear to be a mitigation for straight-line speculation vulnerabilities. Originally discovered on <code>ARM</code>, the <code>x86</code> architecture was also found to be vulnerable.</p>\n<p>For more information see <a href=\"https://lwn.net/Articles/877845/\" rel=\"nofollow noreferrer\">here</a></p>\n<p>The <code>-mharden-sls=all</code> compiler option can be used in gcc and clang to include these extra int3 instructions.\nI'm not sure what MSVC's equivalent option is.</p>\n</div>",
+            "votes": "1",
+            "user": "Ian Cook",
+            "time": "May 2, 2024 at 8:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yasar",
+                    "text": "<span class=\"comment-copy\">Closest option I could find was /Qspectre-jmp that puts int3 after jmp instruction. There is no mention of any option that puts int3 after ret anywhere.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

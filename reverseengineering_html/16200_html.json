@@ -1,0 +1,70 @@
+{
+    "title": "How to investigate Windows 32/64bit (WOW64) transition",
+    "link": "https://reverseengineering.stackexchange.com/questions/16200/how-to-investigate-windows-32-64bit-wow64-transition",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  There is surprisingly little information about Windows WOW64 mechanism.\n  \n\n  I'm trying to investigate it.\n </p>\n <p>\n  So when we have system call in 32-land, it calls an address that is stored in\n  <code>\n   FS\n  </code>\n  , which leads us to a weird\n  <code>\n   jmp\n  </code>\n  with\n  <code>\n   033:\n  </code>\n  prefix.\n  \n\n  If I understand correctly, this jump is transferring us to 64-land, but still on user-mode. The jump to kernel-mode should happen afterwards.\n </p>\n <p>\n  I want to follow this jump. My debugger doesn't do that. How can I do it?\n </p>\n</div>\n</body></html>",
+    "votes": "8",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "windows",
+        "debugging",
+        "x86",
+        "anti-debugging",
+        "x86-64"
+    ],
+    "user": "Shmuel Fomberg",
+    "time": "Jun 11, 2018 at 14:10",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n are you using x86 debugger? which one?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Henno Brandsma",
+            "text": "<html><body><span class=\"comment-copy\">\n Have you read  \"Windows Internals\" by Russinovitch et al. ?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "conio",
+            "text": "<html><body><span class=\"comment-copy\">\n Also relevant:\n <a href=\"https://reverseengineering.stackexchange.com/questions/14848/what-is-this-hidden-stack-used-by-syscalls-on-windows\" title=\"what is this hidden stack used by syscalls on windows\">\n  reverseengineering.stackexchange.com/questions/14848/…\n </a>\n TLDR: Use WinDbg.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The technique of jumping to 64bit code from a 32bit WOW64-ed process is commonly called \"Heaven's gate\" when performed manually. This is usually done to use 64bit features (such as manipulating 64bit processes by calling 64bit versions of windows APIs) or by malware to make debugging more difficult, which is coincidentally what you seem to be experiencing ;).\n </p>\n <p>\n  Searching for that term online may yield more results.\n </p>\n <p>\n  Most user-mode debuggers indeed don't handle that transition well for multiple reasons (one being the debugger assumes a 32bit process, while you're now executing 64bit code, another being user-mode debugging APIs don't support that).\n </p>\n <p>\n  <em>\n   TL;DR:\n  </em>\n  The \"solution\" for that situation is to debug using a debugger that explicitly made the effort to support 32 and 64 bit interleaved processes. Although this is often easier for a kernel mode debugger), such as windbg, or other debuggers that support both 32 and 64 bit modes (\n  <s>\n   x64dbg should be able to do it, although I never tried\n  </s>\n  As mentioned in the comments x64dbg is unable to do that).\n </p>\n <h1>\n  A brief explanation of Heaven's gate\n </h1>\n <p>\n  There's a special DLL loaded into 32bit processes on 64bit windows environments, this DLL is\n  <code>\n   wow64cpu.dll\n  </code>\n  . This DLL is responsible for most of the WOW64 magic, and specifically for implementing the transition from 32 to 64 bit inside 32 bit processes (WOW64-ed processes).\n </p>\n <p>\n  This is mandatory because as the operating system is natively 64 bit, all utilities, APIs and low level functionalities are implemented using 64 bit code (otherwise what's the point of having 64 bit OSes??). Therefore, every time an WOW64-ed process requires a OS assistance, it must first translate from 32bit CPU mode to 64 bit CPU mode.\n </p>\n <h2>\n  So, how's the transition done, and what's that wow64cpu.dll you mentioned got to do with it?\n </h2>\n <p>\n  To make a long story short, the value at\n  <code>\n   fs:[0c0h]\n  </code>\n  is set to an address inside\n  <code>\n   wow64cpu.dll\n  </code>\n  . This field is called\n  <code>\n   WOW32Reserved\n  </code>\n  and it points to a far jump to a specific address, using the\n  <code>\n   033\n  </code>\n  segment. Changing the segment selector to\n  <code>\n   33\n  </code>\n  (from\n  <code>\n   23\n  </code>\n  , which is used for 32bit code) does not change the code selector or the base addressing, you're merely changing the\n  <a href=\"https://en.wikipedia.org/wiki/Global_Descriptor_Table\" rel=\"noreferrer\">\n   GDT\n  </a>\n  entry used to execute the target code, specifically - you replace the 4th GDT with the 6th.\n </p>\n <p>\n  GDT entries 4 and 6 only differ in a couple of flags being set - those controlling whether the CPU is executing in 16, 32, and 64 modes (well, those GDT entries only have flags set for 32 and 64 bit modes, but transitioning to 16 bit can be achieved in a similar manner).\n </p>\n <h1>\n  Where to go on from here?\n </h1>\n <p>\n  As this is a big and complicated topic, I prefer redirecting you to relevant articles over touching the low-level details in here more than I already did. Here are several useful articles, on the more theoretical side of things:\n </p>\n <ol>\n  <li>\n   <a href=\"https://www.malwaretech.com/2014/02/the-0x33-segment-selector-heavens-gate.html\" rel=\"noreferrer\">\n    Explanation of the \"weird jump to\n    <code>\n     33:\n    </code>\n    segment\"\n   </a>\n   .\n  </li>\n  <li>\n   <a href=\"http://rce.co/knockin-on-heavens-gate-dynamic-processor-mode-switching/\" rel=\"noreferrer\">\n    Explanation of the entire WOW64 mechanism from the process's perspective, including how to debug it to see it happening\n   </a>\n   .\n  </li>\n  <li>\n   <a href=\"http://vxheaven.org/lib/vrg02.html\" rel=\"noreferrer\">\n    A very brief explanation of the flow executed, and the article historically keying the term \"Heaven's gate\"\n   </a>\n   .\n  </li>\n  <li>\n   <a href=\"http://www.alex-ionescu.com/?p=300\" rel=\"noreferrer\">\n    Another in-depth explanation\n   </a>\n   .\n  </li>\n  <li>\n   The Windows Internals book series.\n  </li>\n </ol>\n <p>\n  Additionally, here are several actual open source implementations of natively executing 64 bit code inside\n  <code>\n   WOW64\n  </code>\n  -ed 32 bit process:\n </p>\n <ol>\n  <li>\n   <a href=\"https://gist.github.com/Cr4sh/76b66b612a5d1dc2c614\" rel=\"noreferrer\">\n    This\n   </a>\n   is a code snippet that implements some direct 64 bit OS operations.\n  </li>\n  <li>\n   <a href=\"http://github.com/rwfpl/rewolf-wow64ext\" rel=\"noreferrer\">\n    This\n   </a>\n   is a full blown heaven's gate implementation.\n  </li>\n  <li>\n   <a href=\"https://github.com/dadas190/Heavens-Gate-2.0\" rel=\"noreferrer\">\n    This\n   </a>\n   is another, later, full blown heaven's gate implementation.\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "18",
+            "user": "NirIzr",
+            "time": "Sep 3, 2017 at 7:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">x64dbg can't do that. it is a pair of debuggers, one for x86 and one for x64. not one that do both.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@ShmuelFomberg Thanks for the clarification, as I said i had no idea. I'll correct my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">WinDbg (x64) can debug this. It has not been implemented in x64dbg for various technical reasons...</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrexodia",
+                    "text": "<span class=\"comment-copy\">Derp you are right (just woke up and read over it)... However you don't need a kernel mode debugger to debug this.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Shmuel Fomberg",
+                    "text": "<span class=\"comment-copy\">I found a library that does exactly what I wanted to do: <a href=\"https://github.com/rwfpl/rewolf-wow64ext\" rel=\"nofollow noreferrer\">github.com/rwfpl/rewolf-wow64ext</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,77 @@
+{
+    "title": "How to assemble and inject an instruction with GDB?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18428/how-to-assemble-and-inject-an-instruction-with-gdb",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>GDB has a <code>x/i</code> command (and also <code>disassemble</code>) which allows to view the instructions at a given address.</p>\n<p>How can we do the reverse – assemble an instruction and write to a given address?</p>\n</div>",
+    "votes": "2",
+    "answers": 4,
+    "views": "6k",
+    "tags": [
+        "assembly",
+        "gdb"
+    ],
+    "user": "Ruslan",
+    "time": "Jul 3, 2018 at 9:00",
+    "comments": [
+        {
+            "user": "user22970",
+            "text": "<span class=\"comment-copy\">I'll just note that you should be extremely careful about the legth of the instructions. Even stuff that looks trivial might be dangerous, like operand override (0x66) when using eax instead of ax</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>GDB doesn't seem to have any native command to assemble instructions. But we can use its Python scripting facility to create a custom command, which would prepare an assembly source file, feed it to an assembler, and write the resulting bytes to the inferior's address space.</p>\n<p>Here's an example python script (which you can paste into your <code>.gdbinit</code>) for x86/x86_64, using FASM as the assembler:</p>\n<pre><code>python\nfrom tempfile import mkstemp\nimport subprocess\nimport os\n\nclass Assemble(gdb.Command):\n    \"\"\"Assemble an instruction\nUsage: assemble 0xADDRESS instruction to assemble\n\"\"\"\n    def __init__(self):\n        super(Assemble, self).__init__(\"assemble\", gdb.COMMAND_DATA, gdb.COMPLETE_NONE, True)\n    def invoke(self, arg, from_tty):\n        argPieces=arg.split()\n        try:\n            # addresses like those resulting from $pc can have trailing\n            # junk, which we'll clear here by conversion to long\n            address=gdb.execute('printf \"%#lx\",'+argPieces[0], to_string=True)\n        except:\n            print(\"Failed to parse address\")\n            return\n        instruction=\" \".join(argPieces[1:])\n        bits=format(8*int(gdb.parse_and_eval(\"sizeof(void*)\")),\"d\")\n\n        fd,srcPath=mkstemp(prefix=\"gdb_asm_\")\n        src=os.fdopen(fd, 'w')\n        src.write(\"use%s\\norg %s\\n%s\\n\" % (bits, address, instruction))\n        src.close()\n\n        try:\n            subprocess.check_output([\"fasm\",srcPath], stderr=subprocess.STDOUT)\n        except subprocess.CalledProcessError as err:\n            print(\"Assembler failed with exit code\", err.returncode)\n            print(\"Output:\", err.output)\n            os.remove(srcPath)\n            return\n        os.remove(srcPath)\n\n        binPath=srcPath+\".bin\"\n        binaryFile=open(binPath, 'rb')\n        offset=0\n        while True:\n            byteStr=binaryFile.read(1)\n            if not byteStr:\n                break\n            byte=byteStr[0]\n            if not isinstance(byte, int): # compatibility with python 2\n                byte=ord(byte)\n            gdb.execute(\"set *(unsigned char*)(\"+address+'+'+\n                            format(offset,'d')+\")=\"+format(byte,\"#02x\"))\n            offset+=1\n        binaryFile.close()\n        os.remove(binPath)\n        if offset==0:\n            print(\"Assembler output an empty file\")\n            return\n\n        gdb.execute(\"x/i \"+address)\nAssemble()\nend\n</code></pre>\n<p>Then you'd use it like</p>\n<pre><code>gdb -q -ex starti /bin/true\nReading symbols from /bin/true...(no debugging symbols found)...done.\nStarting program: /bin/true \n\nProgram stopped.\n0xf7fdd800 in _start () from /lib/ld-linux.so.2\n(gdb) disas\nDump of assembler code for function _start:\n=&gt; 0xf7fdd800 &lt;+0&gt;:     mov    eax,esp\n   0xf7fdd802 &lt;+2&gt;:     call   0xf7fe2160 &lt;_dl_start&gt;\n(gdb) assemble $pc+2 mov ebp, [esi+235+edx*2]\n   0xf7fdd802 &lt;_start+2&gt;:       mov    ebp,DWORD PTR [esi+edx*2+0xeb]\n</code></pre>\n</div>",
+            "votes": "5",
+            "user": "Ruslan",
+            "time": "Jun 3, 2018 at 6:16",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>if you have gdb version &gt; 7.7 installing <strong><a href=\"https://github.com/hugsy/gef\" rel=\"nofollow noreferrer\">gef</a></strong> with python support claims to leverage keystone for in place assembly </p>\n<p>it appears to be pythonified gdbinit (peda pwndbg workalike) </p>\n<p><a href=\"https://github.com/hugsy/gef/blob/master/docs/screenshots.md\" rel=\"nofollow noreferrer\">the screen shots page</a>   has some nice displays </p>\n</div>",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Jun 3, 2018 at 3:49",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><strong><code>compile code</code> command</strong></p>\n<p>Introduced around 7.9, it allows code compilation and injection at the current location, documentation: <a href=\"https://sourceware.org/gdb/onlinedocs/gdb/Compiling-and-Injecting-Code.html\" rel=\"nofollow noreferrer\">https://sourceware.org/gdb/onlinedocs/gdb/Compiling-and-Injecting-Code.html</a></p>\n<p>I have given a minimal runnable example at: <a href=\"https://stackoverflow.com/questions/5480868/how-to-call-assembly-in-gdb/31709579#31709579\">https://stackoverflow.com/questions/5480868/how-to-call-assembly-in-gdb/31709579#31709579</a></p>\n<p>I can't find out how to inject at a specific location, but if you are serious about this, patching this feature in extending <code>compile code</code> functionality might be the way to go.</p>\n</div>",
+            "votes": "2",
+            "user": "Ciro Santilli OurBigBook.com",
+            "time": "Sep 16, 2019 at 13:13",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">I did not know this command of <code>gdb</code>, thanks for pointing it out!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">But according to the comments to the answer you link to, we can't compile assembly code with this command, at least currently.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ciro Santilli OurBigBook.com",
+                    "text": "<span class=\"comment-copy\">@Ruslan yes, this is potentially not a super direct answer to this question, but it might be what some of the Googlers are looking for when it comes to interaction on the C level. It would be good to understand why inline assembly does not work in more detail however to see if it is just a bug or fundamental limitation, feels like bug.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It is possible but very complicated!!\nRegardless gdb, you can do the following:</p>\n<ol>\n<li>Using static binary instrumentation to instrument a binary file and add your arbitrary code. APIs like Dyninst is very powerful in this area. </li>\n<li>Using gcc-plugin: you can write your own gcc-plugin to add additional pass to gcc compiler. gcc-plugin is very powerful to do such works. However, you should read the internal architecture of gcc compiler and gcc-plugin API (headers file) to write a plugin.</li>\n<li>Ptrace </li>\n</ol>\n</div>",
+            "votes": "-1",
+            "user": "husin alhaj ahmade",
+            "time": "May 22, 2019 at 20:17",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">points 1 and 2 have nothing to do with gdb. Point 3 requires additional explanation.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

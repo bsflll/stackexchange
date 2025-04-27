@@ -1,0 +1,87 @@
+{
+    "title": "Why are GOT and PLT still present in Linux static stripped binaries?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2172/why-are-got-and-plt-still-present-in-linux-static-stripped-binaries",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am looking at statically linked linux x86 stripped binary. I noticed that there are <code>.got</code> and <code>.plt</code> sections.</p>\n<p>I wonder what does a statically linked binary need <code>got</code> and <code>plt</code> sections for ? Anyone ?</p>\n</div>",
+    "votes": "20",
+    "answers": 2,
+    "views": "6k",
+    "tags": [
+        "linux",
+        "binary-analysis",
+        "elf"
+    ],
+    "user": "daehee",
+    "time": "Oct 30, 2013 at 10:48",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">They shouldn't have these sections at all. I did try on my own and I confirm that the section <code>.got</code> and <code>.got.plt</code> are still present even when <code>-static</code> is given to the compiler. But, the <code>.dynamic</code> section is not present. My guess is that they are just empty sections when <code>-static</code> is given.</span>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">static is dead, a relevant stack overflow question: <a href=\"http://stackoverflow.com/questions/3430400/linux-static-linking-is-dead\" title=\"linux static linking is dead\">stackoverflow.com/questions/3430400/…</a></span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">@Nirlzr: Interesting, I didn't know that. So, in fact, the only way to get rid of the <code>got</code>/<code>plt</code> tables is to use the <code>-nostdlib</code> option.</span>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">@perror: ill give <code>-nodefaultlibs</code> a try first. but you might have to provide your own implementations of any standard functions the compiler might require (memcpy, etc...)</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">@Nirtlzr: Yes, with this option you will have to rebuild the whole libc (no printf, scanf, and so on).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There are a plethora of things programmers do not know about how <code>ELF</code> binaries work internally. And, unfortunately, there's almost no solid references apart from two or three which broadly cover the subject. Many tools (linkers, loaders, assemblers, debuggers, ...) remain a mystery for most of you. When it comes to linkers and loaders, the main reference is <em>Linkers and Loaders</em> by John R. Levine (<a href=\"http://linker.iecc.com/\" rel=\"noreferrer\">http://linker.iecc.com/</a>). Another reliable source of information is the official <code>ELF</code> binary format documentation. But these are merely introductions to how a certain, or most, technologies work.</p>\n<p>Now, here's an answer to your question (why are the <code>GOT</code> and <code>PLT</code> sections still included in static <code>ELF</code> binaries?): <strong>PERFORMANCE</strong>.</p>\n<p>More explanations ... Suppose you have this C code:</p>\n<pre><code>    #include &lt;stdio.h&gt;\n    #include &lt;string.h&gt;\n\n    int main(int argc, char **argv)\n    {\n        char str[1024];\n\n        strcpy(str, argv[1]);\n        printf(\"%s\\n\", str);\n\n        return 0;\n    }\n</code></pre>\n<p>No need to be a genius to figure out that all it does is copy a command line parameter into a string and print it out. Here's the <code>main</code> function in assembly:</p>\n<pre><code>     000000000040105e &lt;main&gt;:\n     40105e:   55                      push   rbp\n     40105f:   48 89 e5                mov    rbp,rsp\n     401062:   48 81 ec 10 04 00 00    sub    rsp,0x410\n     401069:   89 bd fc fb ff ff       mov    DWORD PTR [rbp-0x404],edi\n     40106f:   48 89 b5 f0 fb ff ff    mov    QWORD PTR [rbp-0x410],rsi\n     401076:   48 8b 85 f0 fb ff ff    mov    rax,QWORD PTR [rbp-0x410]\n     40107d    48 83 c0 08             add    rax,0x8\n     401081:   48 8b 10                mov    rdx,QWORD PTR [rax]\n     401084:   48 8d 85 00 fc ff ff    lea    rax,[rbp-0x400]\n     40108b:   48 89 d6                mov    rsi,rdx\n     40108e:   48 89 c7                mov    rdi,rax\n     401091:   e8 3a f2 ff ff          call   4002d0 &lt;__rela_iplt_end+0x38&gt;\n     401096:   48 8d 85 00 fc ff ff    lea    rax,[rbp-0x400]\n     40109d:   48 89 c7                mov    rdi,rax\n     4010a0:   e8 fb 09 00 00          call   401aa0 &lt;_IO_puts&gt;\n     4010a5:   b8 00 00 00 00          mov    eax,0x0\n     4010aa:   c9                      leave\n     4010ab:   c3                      ret\n     4010ac:   0f 1f 40 00             nop    DWORD PTR [rax+0x0]\n</code></pre>\n<p>Notice that at the address <code>401091</code> you have a call to a function stored in the <code>PLT</code> (the label is more expressive). Amazingly, at this address <code>4002d0</code> you'll find a jump to something stored in the <code>GOT</code> (see below).</p>\n<pre><code>     4002d0:   ff 25 f2 2f 2c 00       jmp QWORD PTR [rip+0x2c2ff2] # 6c32c8 &lt;_GLOBAL_OFFSET_TABLE_+0x20&gt;\n</code></pre>\n<p>At that exact location in the <code>GOT</code>, you'll find calls to functions stored in sections such as the following:</p>\n<pre><code>    00000000004187d0 &lt;handle_amd&gt;:\n    4187d0:    53                      push   rbx\n    4187d1:    b8 00 00 00 80          mov    eax,0x80000000\n    4187d6:    0f a2                   cpuid\n    4187d8:    81 ff c4 00 00 00       cmp    edi,0xc4\n    4187de:    7f 40                   jg     418820 &lt;handle_amd+0x50&gt;\n    4187e0:    31 d2                   xor    edx,edx\n    4187e2:    81 ff bf 00 00 00       cmp    edi,0xbf\n    4187e8:    0f 9d c2                setge  dl\n    4187eb:    81 ea fb ff ff 7f       sub    edx,0x7ffffffb\n    4187f1:    39 c2                   cmp    edx,eax\n    4187f3:    77 2b                   ja     418820 &lt;handle_amd+0x50&gt;\n    4187f5:    89 d0                   mov    eax,edx\n    4187f7:    0f a2                   cpuid\n    4187f9:    81 ff bb 00 00 00       cmp    edi,0xbb\n    4187ff:    7e 27                   jle    418828 &lt;handle_amd+0x58&gt;\n    418801:    81 ef bc 00 00 00       sub    edi,0xbc\n    418807:    83 ff 08                cmp    edi,0x8\n    41880a:    0f 87 48 01 00 00       ja     418958 &lt;handle_amd+0x188&gt;\n    418810:    48 8d 35 c9 0b 08 00    lea    rsi,[rip+0x80bc9]        # 4993e0 &lt;__PRETTY_FUNCTION__.4767+0x20&gt;\n    418817:    48 63 04 be             movsxd rax,DWORD PTR [rsi+rdi*4]\n    41881b:    48 01 c6                add    rsi,rax\n    41881e:    ff e6                   jmp    rsi\n    418820:    31 c0                   xor    eax,eax\n    418822:    5b                      pop    rbx\n    418823:    c3                      ret\n</code></pre>\n<p>First, look at the section's name. Second, if you look closely at the code you'll notice that this function identifies the CPU - by dissecting the return values of the <code>cpuid</code> instruction (<code>4187d6</code> and <code>4187f7</code>) - (more accurately the micro architecture and other features such as cache size, ...) you're running your <code>ELF</code> binary on, and then decides which implementation suites that configuration best. This way, the <code>strcpy</code> function called in the above C code will always be the fastest possible, whatever architecture you're on (Intel: Nehalem, Sandy Bridge, Ivy Bridge, Haswell, ...; AMD: Phenom, Opteron, ...; ...). Keep in mind that those fast implementations have been hand optimized and fine tuned for each of the possible target architectures. </p>\n<p>So that's what the <code>PLT</code> and <code>GOT</code> sections are used for in your static <code>ELF</code> binary file.</p>\n<p>Now, if you want to investigate this yourself, you should compile the <code>C</code> code above with GCC version 4.9 (which is the one I used) using the <code>-static</code> and <code>-g3</code> (debug symbols) flags. Then, disassemble the binary file using <code>objdump</code> and the <code>-D</code> switch in order to have all the <code>ELF</code> sections. You can then go through all the sections and explore the assembly code. You can also run the binary file using <code>gdb</code> and set breakpoints at key locations and run the program step by step.</p>\n</div>",
+            "votes": "14",
+            "user": "NirIzr",
+            "time": "Sep 12, 2017 at 8:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Joseph Garvin",
+                    "text": "<span class=\"comment-copy\">Is there a way to avoid the overhead of checking the CPU, and just having it assume a particular CPU implementation?</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">@JosephGarvin Yes! You can do cpu dispatching at compile time using C macros. But this means the programmer has to provide the optimized functions' codes or libraries. Another way is to use a compiler flag. With gcc and icc you can set the -march=native and the -mtune=native. The compiler/language documentations should cover such cases.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Noah",
+                    "text": "<span class=\"comment-copy\">@JosephGarvin worth noting you need to also compile with <code>-fno-plt</code> if you want to remove all indirection. i.e <code>gcc -fno-plt -static -march=&lt;target&gt; -mtune=&lt;target&gt; ...</code></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>@yaspr's answer is great, since this question got some bounty of \"Looking for an answer drawing from credible and/or official sources.\", let me try to provide some references here.</p>\n<p>Generally in my understanding, <code>.PLT</code> and <code>.GOT</code> tables are required here because of performance issues.</p>\n<p><a href=\"http://www3.cs.stonybrook.edu/%7Emizhang/papers/binCFI.pdf\" rel=\"nofollow noreferrer\">BinCFI</a> is published on last year's top 2 computer security conference.</p>\n<blockquote>\n<p>Since the purpose of PLT stubs is to dispatch cross\nmodule calls, it would seem that the targets can only\nbe exported symbols from other modules. However, <strong>recent\nversions of gcc support a new function type called\ngnu indirect function, which allows a function to have\nmany different implementations, with the most suitable\none selected at runtime based on factors such as the CPU\ntype</strong>. Currently, many glibc low level functions such as\n<strong>memcpy</strong>, <strong>strcmp</strong> and <strong>strlen</strong> use this feature. To support\nthis feature, a library exports a chooser function that selects at runtime which of the many implementations is\ngoing to be used. These implementation functions may\nnot be exported at all.</p>\n</blockquote>\n<p>Some other references on how to leverage this feature are listed here.</p>\n<ul>\n<li><a href=\"https://www.agner.org/optimize//blog/read.php?i=167\" rel=\"nofollow noreferrer\">Agner's</a></li>\n<li><a href=\"https://gcc.gnu.org/bugzilla/show_bug.cgi?id=40528\" rel=\"nofollow noreferrer\">GCC bugzilla</a></li>\n<li><a href=\"https://gcc.gnu.org/onlinedocs/gcc/Function-Attributes.html\" rel=\"nofollow noreferrer\">GCC documentation</a></li>\n</ul>\n</div>",
+            "votes": "6",
+            "user": "0xC0000022L",
+            "time": "Mar 1, 2023 at 20:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">Well, I avoided citing those references because they can be quite confusing. They are centered around the ifunc attribute which was not the subject of this question, rather the existence of GOT and PLT in a statically linked binary (Agner's CPU blog is a valuable source of info). But of course, additional information is always good, if used wisely ! The thing is, everything I've written in my post I discovered way before the references you posted when I was working on patching/instrumenting static ELF binaries for performance evaluation.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Relevant: these \"gnu indirect functions\" are known as <code>GNU_IFUNC</code> and you can find some more info <a href=\"https://stackoverflow.com/q/8842194/476371\">over on SO</a>.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

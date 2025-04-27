@@ -1,0 +1,35 @@
+{
+  "title": "Where do arguments 5 and 6 go in this Microsoft x64 function call?",
+  "link": "https://reverseengineering.stackexchange.com/questions/25490/where-do-arguments-5-and-6-go-in-this-microsoft-x64-function-call",
+  "content": "I'm disassembling a working-as-expected compiled C program (MS/Windows x64, MinGW gcc 10.1.0). In the main function, I have the following call which passes 6 arguments to the function DotProduct:\n\n```\n...\n// void** m3 [rbp-0x50] = DotProduct(ptr, ptr2, 3, 2, 2, 3);\n  401b9f:   48 8b 55 b8             mov    rdx,QWORD PTR [rbp-0x48] // arg2 = m2\n  401ba3:   48 8b 45 c0             mov    rax,QWORD PTR [rbp-0x40] // arg1 = m1\n  401ba7:   c7 44 24 28 03 00 00    mov    DWORD PTR [rsp+0x28],0x3 // arg6 = 3   (+40) <- Δ main rsp\n  401bae:   00\n  401baf:   c7 44 24 20 02 00 00    mov    DWORD PTR [rsp+0x20],0x2 // arg5 = 2   (+32)\n  401bb6:   00\n  401bb7:   41 b9 02 00 00 00       mov    r9d,0x2                  // arg4 = 2\n  401bbd:   41 b8 03 00 00 00       mov    r8d,0x3                  // arg3 = 3\n  401bc3:   48 89 c1                mov    rcx,rax                  // arg1 = m1\n  401bc6:   e8 34 fc ff ff          call   4017ff <DotProduct>      // DotProduct(m1, m2, 3, 2, 2, 3);\n  401bcb:   48 89 45 b0             mov    QWORD PTR [rbp-0x50],rax // void** m3 [rbp-0x50] = returned\n...\n\n```\nNote that arg5 and arg6 are placed into [rsp+0x20] and [rsp+0x28].\n\nSee what happens when DotProduct is called:\n\n```\n00000000004017ff <DotProduct>:\n  4017ff:   55                      push   rbp\n  401800:   53                      push   rbx\n  401801:   48 83 ec 48             sub    rsp,0x48       // (-72)\n  401805:   48 8d ac 24 80 00 00    lea    rbp,[rsp+0x80] // (-72+128) => (+56)\n\n```\nThe rbp should be at -0x48+0x80 relative to main's rsp, which simplifies to +0x38 (+56, Δmain rsp). The stack pointer decreased 72 bytes, and the base pointer was placed 128 bytes above that (so 56 bytes above the previous stack pointer location). Next, DotProduct loads the first four arguments from their registers:\n\n```\n  40180d:   48 89 4d e0             mov    QWORD PTR [rbp-0x20],rcx\n  401811:   48 89 55 e8             mov    QWORD PTR [rbp-0x18],rdx // (rbp-24) => (+56-24) => (+32) !\n  401815:   44 89 45 f0             mov    DWORD PTR [rbp-0x10],r8d // (rbp-16) => (+56-16) => (+40) !\n  401819:   44 89 4d f8             mov    DWORD PTR [rbp-0x8],r9d\n\n```\nWait! How are rdx and r8d loaded into these memory locations? Aren't they occupied by arguments 5 and 6? What happened?\n\nRight after that, we have this:\n\n```\n  40181d:   8b 45 00                mov    eax,DWORD PTR [rbp+0x0]\n\n```\nWhat's going on here? [rbp+0x0] hasn't been initialized in this function, so what's in this memory location? Where did arguments 5 and 6 go?\n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "809",
+  "tags": [
+    "disassembly",
+    "windows",
+    "assembly",
+    "x86-64"
+  ],
+  "user": "JoshuaS3",
+  "time": "Jul 14, 2020 at 0:12",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "when you are here 4017ff:   55                      push   rbp\n\nyour 5th argument will be available at [rsp+28]\n(8 bytes for return address and 20 bytes for HOMEPARAMS (space for saving the 4 args passed via register)\n\ntwo pushes and one subtract will make your argument no 5  available at\n0x28 + 0x8 +0x8 +0x48 = 0x80\n\nso rbp+0 will hold the address of 5th argument after the LEA operation\n\n",
+      "votes": "3",
+      "user": "blabb",
+      "time": "Jul 14, 2020 at 10:40",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "I've spent many hours (too many for me to admit) trying to figure this out and I just realized what it is, right after hitting submit. push instructions implicitly decrease the stack pointer. The call to the function DotProduct calls push three times; once in the call instruction itself, where the return address is implicitly pushed, and twice in the function's prolog, where two quadword registers are explicitly pushed with the push instruction. This all automatically decreases rsp by 24 bytes, leaving arg5 and arg6 at [rbp] and [rbp+0x8]. The arguments aren't overwritten.\n\n",
+      "votes": "1",
+      "user": "JoshuaS3",
+      "time": "Jul 14, 2020 at 0:44",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

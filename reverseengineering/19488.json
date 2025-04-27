@@ -1,0 +1,66 @@
+{
+    "title": "Move twice, from and to the same location",
+    "link": "https://reverseengineering.stackexchange.com/questions/19488/move-twice-from-and-to-the-same-location",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to reverse a function and I came across these lines inside the function:</p>\n<pre><code>1. call    ds:HeapAlloc\n2. mov     [ebp+var_4], eax\n3. mov     eax, [ebp+var_4]\n</code></pre>\n<p>Why is line 3 needed? If I need to save the result, line 2 saved that and EAX already contains the result.</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "445",
+    "tags": [
+        "ida",
+        "disassembly"
+    ],
+    "user": "Moshe D",
+    "time": "Sep 30, 2018 at 19:41",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">It might be that the binary is not optimized and the line 3 is part of the next instruction that uses the HeapAlloc’s result</span>",
+            "time": null
+        },
+        {
+            "user": "Moshe D",
+            "text": "<span class=\"comment-copy\">@PawełŁukasik even if it's in used in the next instruction EAX already has the result/</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><strong>It's not needed at all.</strong></p>\n<p>However, some compilers may generate that assembly when compiled without optimization.</p>\n<p>For example, <code>gcc -O0</code> generates: (<a href=\"https://godbolt.org/z/gpu0Q-\" rel=\"nofollow noreferrer\">from godbolt</a>)</p>\n<pre><code>f():\n  push rbp\n  mov rbp, rsp\n  sub rsp, 16\n  call fake_heapalloc()\n  mov DWORD PTR [rbp-4], eax\n  mov eax, DWORD PTR [rbp-4]\n  mov edi, eax\n  call g(int)\n  nop\n  leave\n  ret\n</code></pre>\n<p>from C++ source code</p>\n<pre><code>int fake_heapalloc();\nvoid g(int i);\nvoid f(){\n    int i;\n    i=fake_heapalloc();\n    g(i);\n}\n</code></pre>\n<p>Because it's not optimized, the <code>i</code> is stored on the stack (instead of in a register) and the redundant move to/from stack code is generated.</p>\n<hr/>\n<p>Alternatively, some programmer may manually insert the assembly instruction there to... I don't know, it's unlikely.</p>\n</div>",
+            "votes": "3",
+            "user": "user202729",
+            "time": "Sep 30, 2018 at 15:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "jpa",
+                    "text": "<span class=\"comment-copy\">Third alternative is if the variable is marked volatile: <code>volatile int i;</code>. A bit rare to have volatile variables on stack though.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is to save the value on the stack and continue to work with that value in further instruction(s) as already mentioned in the comments. This happens if no optimization is done.</p>\n<p>You have to look at it separately.\nConsider this in pseudocode.</p>\n<pre><code>var_4 = HeapAlloc()\nfunc1(var_4)\n</code></pre>\n<p>Then the result would be similar to your assembler output namely:</p>\n<pre><code>1. call    ds:HeapAlloc\n2. mov     [ebp+var_4], eax\n3. mov     eax, [ebp+var_4]\n4. push    eax\n5. call    func1\n</code></pre>\n<p>And in that case you are right, the value is still in <code>eax</code>. </p>\n<p>But now consider that:</p>\n<pre><code>var_4 = HeapAlloc()\nbetween_func()\nfunc1(var_4)\n</code></pre>\n<p>The assembler output would be similar to this</p>\n<pre><code>1. call    ds:HeapAlloc\n2. mov     [ebp+var_4], eax\n3. call    between_func\n4. mov     eax, [ebp+var_4]\n5. push    eax\n6. call    func1\n</code></pre>\n<p>You can refer a pseudocode line to a section of the assembler code.</p>\n<blockquote>\n<p>var_4 = HeapAlloc()</p>\n</blockquote>\n<p>Corresponds to:</p>\n<pre><code>1. call    ds:HeapAlloc\n2. mov     [ebp+var_4], eax\n</code></pre>\n<blockquote>\n<p>between_func()</p>\n</blockquote>\n<p>Corresponds to:</p>\n<pre><code>3. call    between_func\n</code></pre>\n<blockquote>\n<p>func1(var_4)</p>\n</blockquote>\n<p>Corresponds to:</p>\n<pre><code>4. mov     eax, [ebp+var_4]\n5. push    eax\n6. call    func1\n</code></pre>\n<p>And if you omit the <code>between_func()</code> then you will get to the result you have. Concluded, the two instructions are compiled independently. </p>\n</div>",
+            "votes": "3",
+            "user": "pudi",
+            "time": "Sep 30, 2018 at 16:05",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Megabeets",
+                    "text": "<span class=\"comment-copy\">Apparently, it is not the presented case. There is no <code>call    between_func</code> in OP's question. Unless I'm missing something, there's no reason for omitting the <code>between_func()</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "pudi",
+                    "text": "<span class=\"comment-copy\">Sorry for the vagueness, I maybe have to edit that. The <code>between_func</code> is inserted by me to illustrate the case where something is in between the two operations (that changes <code>eax</code>). It should clarify the separation and independence of the instructions in case of no optimization.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Megabeets",
+                    "text": "<span class=\"comment-copy\">Which is not the case presented in the original question. I mean, while your answer is true and well structured (I really liked it tbh), it doesn't answers the asked question except the \"This happens if no optimization is done\" part.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

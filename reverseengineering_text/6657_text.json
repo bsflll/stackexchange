@@ -1,0 +1,67 @@
+{
+    "title": "Why does `ldd` and `(gdb) info sharedlibrary` show a different library base address?",
+    "link": "https://reverseengineering.stackexchange.com/questions/6657/why-does-ldd-and-gdb-info-sharedlibrary-show-a-different-library-base-addr",
+    "content": "I see three different outputs for where libc should be loaded.\n<pre><code>ldd</code></pre> shows the loading address of libc at <pre><code>0xf7e9e000</code></pre>\n<pre><code>$ ldd ~/my_tool\n    linux-gate.so.1 =>  (0xf7ffe000)\n    libc.so.6 => /lib/i386-linux-gnu/libc.so.6 (0xf7e9e000)\n    /lib/ld-linux.so.2 (0x56555000)\n</code></pre>\nWhile gdb tells me it's loaded at <pre><code>0xf7e96c60</code></pre>\n<pre><code>(gdb) info sharedlibrary\nFrom        To          Syms Read   Shared Object Library\n0xf7fe1820  0xf7ff805f  Yes (*)     /lib/ld-linux.so.2\n0xf7e96c60  0xf7f9643c  Yes (*)     /lib/i386-linux-gnu/libc.so.6\n</code></pre>\nAnd when I manually calculate the base address based on a symbol:\n<pre><code>(gdb) print system\n$1 = {<text variable, no debug info>} 0xf7ebb6b0 <system>\n</code></pre>\n\nI get this address:\n<pre><code>0xf7ebb6b0-0x003b6b0 = 0xf7e80000</code></pre>\nWhy is that so?\n<pre><code>calculated: 0xf7e80000\ngdb:        0xf7e96c60\nldd:        0xf7e9e000\n</code></pre>\n",
+    "votes": "9",
+    "answers": 2,
+    "views": "16k",
+    "tags": [
+        "linux",
+        "gdb",
+        "symbols",
+        "libraries"
+    ],
+    "user": "samuirai",
+    "time": "Nov 18, 2014 at 22:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<pre><code>ldd</code></pre>\nThe program <pre><code>ldd</code></pre> is wrong for a few reasons.\nFirst, <pre><code>ldd</code></pre> is not meant to be accurate for determining load addresses. Use the environment variable <pre><code>LD_TRACE_LOADED_OBJECTS</code></pre>. \nSecond, <pre><code>ldd</code></pre> will never be correct with ASLR enabled as Guntram showed.  You can disable this pretty trivially if you have <pre><code>sudo</code></pre> access.\n<pre><code>$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f44dae1b000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f9b35341000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fef18efd000)\n$ echo 0 | sudo tee /proc/sys/kernel/randomize_va_space\n0\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n</code></pre>\nYou can verify this by starting an instance of bash in the background and inspecting its maps file.\n<pre><code>$ bash &\n[1] 30398\n[1]  + 30398 suspended (tty input)  bash                                                                             \n$ grep libc /proc/30398/maps | head -n1\n7ffff75e7000-7ffff77a2000 r-xp 00000000 08:01 525269                     /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\n<pre><code>info sharedlibrary</code></pre>\nThe address reported by <pre><code>info sharedlibrary</code></pre> is the address of the <pre><code>.text</code></pre> area.\nNote that in the particular libc that I have, the .text is at <pre><code>0x1f4a0</code></pre>.\n<pre><code>$ readelf --wide --section-headers /lib/x86_64-linux-gnu/libc-2.19.so | grep text\n  [12] .text             PROGBITS        000000000001f4a0 01f4a0 145c23 00  AX  0   0 16\n</code></pre>\nIn GDB, if we look at the load addresses of <pre><code>libc</code></pre>, we see that it is loaded at <pre><code>0x7ffff7a14000</code></pre>.  This will change each time the program is run, if ASLR is enabled on the system.  If you run it under GDB, it will also disable ASLR.  Run the command <pre><code>set disable-randomization off</code></pre> before running the target and you will observe it change each run.\n<pre><code>gdb-peda$ info proc mapping\n  ...\n  0x7ffff7a14000     0x7ffff7bcf000   0x1bb000        0x0 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7bcf000     0x7ffff7dcf000   0x200000   0x1bb000 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7dcf000     0x7ffff7dd3000     0x4000   0x1bb000 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7dd3000     0x7ffff7dd5000     0x2000   0x1bf000 /lib/x86_64-linux-gnu/libc-2.19.so\n  ...\n</code></pre>\nYou can verify this by checking to see if it starts with the ELF header.\n<pre><code>gdb-peda$ hexdump 0x00007ffff7a14000 4\n0x0000 0x00007ffff7a14000 │ 7f 45 4c 46                                      │ .ELF\n0x0004 0x00007ffff7a14004\n</code></pre>\nIf we add the <pre><code>0x1f4a0</code></pre> offset from the <pre><code>.text</code></pre> area, we get <pre><code>0x7ffff7a334a0</code></pre>.\n<pre><code>gdb-peda$ printf \"%p\n\",(0x00007ffff7a14000+0x1f4a0)\n0x7ffff7a334a0\n</code></pre>\nNow if we look at <pre><code>info sharedlibrary</code></pre>, we see exactly this address.\n<pre><code>gdb-peda$ info sharedlibrary libc\nFrom                To                  Syms Read   Shared Object Library\n0x00007ffff7a334a0  0x00007ffff7b790c3  Yes         /lib/x86_64-linux-gnu/libc.so.6\n</code></pre>\nExtra Tips\nIn GDB, you should use the <pre><code>info proc mapping</code></pre> command to get the base address of a loaded module.\nHowever, this is not available on FreeBSD, since GDB does not support the FreeBSD-specific APIs necessary to get module base addresses.  Instead, you must use the <pre><code>info proc mapping</code></pre> command and perform the translation yourself (by subtracting the address of the <pre><code>.text</code></pre> section).\n",
+            "votes": "9",
+            "user": "Zach Riggle",
+            "time": "Nov 20, 2014 at 9:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">There is no ASLR in my case. The example I posted in the original question are constant each time.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">My answer addresses the issue.  Info sharedlibrary prints the address of the .text area, not the moduel base.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">Ping.  This is answered.  The very tl;dr is at the end.  You want \"info proc mapping\".</span>",
+                    "time": null
+                },
+                {
+                    "user": "Giuseppe Crinò",
+                    "text": "<span class=\"comment-copy\">@ZachRiggle ping, could you add an explanation for why ldd \"is not meant to be accurate\"? Also, using LD_TRACE_LOADED_OBJECTS=1 does not improve the situation: indeed reading from <code>man ldd</code>, invoking ldd is <i>equivalent</i> to explicitly call the loader with LD_TRACE_LOADED_OBJECTS variable set -- so, ldd is not using it. <a href=\"http://pastebin.com/raw/06bQjui5\" rel=\"nofollow noreferrer\">pastebin.com/raw/06bQjui5</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">@guiscri: Looking back, I'm not sure why I made that statement.  I expect there was a reason, but it's been two years and I've forgotten.  <code>ldd foo</code> and <code>LD_TRACE_LOADED_OBJECTS foo</code> should be functionally equivalent.  In either case, you shouldn't rely on it for module addresses.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "First, ASLR will load the library at a (slightly) different address with each invocation, to help protect against malware. This is why the addresses between <pre><code>ldd</code></pre> and <pre><code>gdb</code></pre> are different, and why they may be even different each time you run <pre><code>gdb</code></pre>.\nIf i just grep for the libc executable segment on my system (64 bit, as i didn't have a 32 bit system handy):\n<pre><code>$ grep 'r-xp.*libc-2.19' /proc/*/maps|head\n\n/proc/10987/maps:7fe455b72000-7fe455d2d000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/11880/maps:7f029dc1f000-7f029ddda000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/11884/maps:7f25a9c25000-7f25a9de0000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/15715/maps:7ffc713da000-7ffc71595000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/17705/maps:7fe9db80c000-7fe9db9c7000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/18558/maps:7fc248544000-7fc2486ff000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/20156/maps:7f0f8eb13000-7f0f8ecce000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2139/maps:7fba4c097000-7fba4c252000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2215/maps:7f934ed76000-7f934ef31000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2224/maps:7f064d98f000-7f064db4a000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\nyou see every process maps the same library a bit differently.\nAlso, when the loader loads a library, it creates several memory segments for it. The segments from the ELF file get read into these shared memory segments, including some headers. This is why the code start address isn't identical to the segment start address.\nFor example, on my system :\n<pre><code>(gdb) info sharedLibrary\nFrom                To                  Syms Read   Shared Object Library\n0x00007ffff7a334a0  0x00007ffff7b790c3  Yes         /lib/x86_64-linux-gnu/libc.so.6\n</code></pre>\nand\n<pre><code>cat /proc/26271/maps \n7ffff7a14000-7ffff7bcf000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7bcf000-7ffff7dcf000 ---p 001bb000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7dcf000-7ffff7dd3000 r--p 001bb000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7dd3000-7ffff7dd5000 rw-p 001bf000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\nso you see the memory map for the code segment (the one that is executable, i.e. has the x bit set) ranges from 7ffff7a14000-7ffff7bcf000, but the region the actual code is loaded to is just the subset 7ffff7a334a0-7ffff7b790c3.\nYou can find a more thorough explanation here.\n",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Nov 19, 2014 at 8:17",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">There is no ASLR in my case. The example I posted in the original question are constant each time.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

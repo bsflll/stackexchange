@@ -1,0 +1,59 @@
+{
+    "title": "Extracting a private key from memory",
+    "link": "https://reverseengineering.stackexchange.com/questions/8611/extracting-a-private-key-from-memory",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to extract a private key used to encrypt communications in a game modification (SA-MP, closed source, runs on Windows), which uses RakNet for it's communications and presumably encryption. Language I'm using is Python, and I would like to automate getting the key, although manual is OK too. I'm a bit stumped on how to continue, though!</p>\n<p>As RakNet source is now available on GitHub, the encryption is described here: <a href=\"https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/crypt/tunnel/KeyAgreement.hpp#L38\" rel=\"nofollow\">https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/crypt/tunnel/KeyAgreement.hpp#L38</a></p>\n<p>I'm quite sure I can get the challenge (\"52A0106B14E27E13\" for example, though, what good is that?) with WireShark.</p>\n<p>I tried debugging the game with ollydbg, but the game simply crashes if I try to debug when the key is generated. I also tried using CheatEngine to scan the memory, but GTA:SA is such a large game that the program froze after a couple of scans, so I never got any usable results.</p>\n</div>",
+    "votes": "4",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "windows",
+        "c++",
+        "memory",
+        "executable"
+    ],
+    "user": "Joona",
+    "time": "Mar 31, 2015 at 20:25",
+    "comments": [
+        {
+            "user": "rev",
+            "text": "<span class=\"comment-copy\">if the source's available, you can statically reverse the game and find where is it storing the private key (because you have the source, now you only need to locate it in the binary). then you just write a python script to read that memory, and done.</span>",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">The source code of the class in question seems there's one function <code>void GenerateKey(BigTwistedEdwards *math, IRandom *prng, Leg *key);</code> that creates the key in the Leg class. I'd assume this is created with <code>key=new Leg</code> somewhere, so it won't be one single address. Maybe, if you find the GenerateKey function in the binary, you can add a few calls to <code>CreateFile</code>, <code>WriteFile</code> and <code>CloseFile</code> to the end of it to get the key, and maybe the executable detects if a debugger is present, but doesn't detect if the executable itself is modified.</span>",
+            "time": null
+        },
+        {
+            "user": "Joona",
+            "text": "<span class=\"comment-copy\">@AcidShout Sadly source for the game and modification are not available (only RakNet).</span>",
+            "time": null
+        },
+        {
+            "user": "Joona",
+            "text": "<span class=\"comment-copy\">@GuntramBlohm <code>Leg</code> seems to be a <code>typedef uint32_t</code> or <code>typedef uint64_t</code> (defined in Legs.hpp and Platform.hpp). I might be terribly misunderstanding this, but I think <a href=\"https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/src/crypt/tunnel/KeyAgreement.cpp#L109\" rel=\"nofollow noreferrer\">this line</a> generates the key?</span>",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">@Joona I'm not familiar with the source. Yes, that line generates a key, but it is repeated until the surrounding <code>do .. while</code> finds the key to be acceptable, so it's at the end of the loop where you know the key is the correct one.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Making this an answer because the comment history got too long.</p>\n<p>The <a href=\"https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/src/crypt/tunnel/KeyAgreement.cpp#L109\" rel=\"nofollow\">source code of the class in question</a> seems there's one function <code>void GenerateKey(BigTwistedEdwards *math, IRandom *prng, Leg *key)</code> that creates the key in the <code>Leg</code> class. I'd assume this is created with key=new Leg somewhere, so it won't be one single address. (In fact, <code>Leg</code> might be a <code>uint32</code> or a <code>uint64</code>, and <code>Leg *key</code> is a pointer to an array of these integral values).</p>\n<p>Maybe, if you find the <code>GenerateKey</code> function in the binary, you can add a few calls to <code>CreateFile</code>, <code>WriteFile</code> and <code>CloseFile</code> to the end of it to get the key, and maybe the executable detects if a debugger is present, but doesn't detect if the executable itself is modified.</p>\n<p>It seems that <code>KeyAgreement.cpp</code> is the file that holds the <code>GenerateKey</code> function. It generates a key until the <code>do .. while</code> loop finds the key acceptable, so the end of that <code>do .. while</code> loop is where you want to place your breakpoint (if you can debug the executable) or add a call to a function that writes the key to a file.</p>\n<p>Now, we need to find the <code>GenerateKey</code> function in the executable, or in one of its DLLs. You can use any tool that lists DLL exports in the hope that one of your DLLs exports <code>KeyAgreementCommon::GenerateKey</code>. If you're lucky, you'll find it there, and you're done. <a href=\"http://www.dependencywalker.com/\" rel=\"nofollow\">Dependeny Walker</a> is a good tool for this.</p>\n<p>Assuming the function is compiled into the main .exe, or in a .dll but not exported, it's a bit harder. Fortunately, <code>KeyAgreement.cpp</code> holds a bunch of nice character arrays with very distinct signatures, which should be unique and easy to find. You could try one of these:</p>\n<ul>\n<li>add the <code>Q_XXX</code> arrays to <a href=\"http://aluigi.altervista.org/mytoolz.htm\" rel=\"nofollow\">signsrch</a> and run it over all .exes and .dlls</li>\n<li>load your .exe and the .dlls into a <a href=\"http://www.wxhexeditor.org/\" rel=\"nofollow\">hex editor</a> individually, and run a byte search for the <code>Q_XXX</code> arrays over them, until you find the correct one.</li>\n</ul>\n<p>Next, you want to know where these bytes are used. The easiest way to do this is load the file you found to be the correct one into <a href=\"https://www.hex-rays.com/products/ida/support/download_freeware.shtml\" rel=\"nofollow\">Ida Pro</a>, find your character array there, and check the XREFs. There should be only one of them, that comes from <code>KeyAgreementCommon::InstantiateMath</code>. The function after this should be <code>KeyAgreementCommon::GenerateKey</code>, if your developers didn't change the source code.</p>\n<p>If they did change the source code, maybe they shuffled around the functions a bit. (And maybe they decided they didn't want to use anything but the 384 bit version, so they threw away the 256 bit and 512 bit arrays. This is why i said search for all 3 of them.) Now we want to find the <code>GenerateKey</code> function when we only know the <code>InstantiateMath</code> function.</p>\n<p>Fortunately, both of them are declared public in the <a href=\"https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/crypt/tunnel/KeyAgreement.hpp\" rel=\"nofollow\">.hpp</a> file. Which means they should occur in the class vtable somewhere. Check Ida for a data x-reference to the <code>InstatiateMath</code> function. This should be the vtable entry. The same vtable should hold the addresses of the <code>Initialize</code> and <code>GenerateKey</code> function, so check the functions that are referenced next to the <code>InstantiateMath</code> reference.</p>\n</div>",
+            "votes": "1",
+            "user": "Guntram Blohm",
+            "time": "Apr 1, 2015 at 9:33",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Joona",
+                    "text": "<span class=\"comment-copy\">I tried Dependency Walker, but it freezes after gtasa.exe is launched (which happens before samp.dll is loaded), and loading samp.dll alone does not seem to produce any useful results.  So I tried the hex editor you linked and IDA to scan with the hex values (which is probably where I'm going wrong), for example \"F5 83 71 B3 F0\" (with and without 00's) for the Q_256. This didn't net me any results either. Please point out what I'm doing wrong. :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,56 @@
+{
+  "title": "How do I go about overriding a function internally defined in a binary on Linux?",
+  "link": "https://reverseengineering.stackexchange.com/questions/20395/how-do-i-go-about-overriding-a-function-internally-defined-in-a-binary-on-linux",
+  "content": "To be specific, I cannot recompile this binary, nor do I have access to the sourcecode.\n\nThe functions are not defined within a shared library.\n\nSo, how can I go about changing a function, or preferably detouring it to a new function?\n\nAnd if it's possible, use dlsym/dlopen to get my new modified code from a shared library, so I don't have to edit the binary by hand every time I want to change something.\n\nOh, one more thing, editing the actual binary is something I can do/I have access to.\n\nAnd just for extra info, I have Radare2 installed, as well as GDB with pwndbg, so any solutions using those tools, or builtin GNU/Linux debugging tools would be appreciated.\n\nEDIT: \n\nI am a beginner to reverse engineering things, but not to the point I have zero idea what I'm doing.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "linux",
+    "x86-64"
+  ],
+  "user": "Walaryne",
+  "time": "Jan 17, 2019 at 4:24",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "You have several options here, but I like this one.\n\nSince the code is already inside the executable, so you have to patch the entrypoint to jump to a new function.\nTo do so, I suggest to use a shared object (.so). In this module you will both: the new function and a 'patcher function'. The latter function must be defined with __attribute__((constructor)), this attribute will force the ELF loader to call this function before the main function from your original executable is called.\n\nThe patcher function will set write access at the entrypoint of the old function with mprotect (2), encode the jump instruction, and it's probably better to remove the write access you needed for the patch.\n\nOnce you have your shared object, you can inject it using the LD_PRELOAD variable.\n\nEdit with an example, since you didn't mentioned the architecture, I assumed this is for x86-64:\n\nFirst this is a target, we want to change the function my_rand to return 0xdeadbeef.\n\n```\n#include <stdlib.h>\n#include <stdio.h>\n#include <time.h>\n\nint my_rand(void)\n{\n        srand(time(NULL));\n        return rand() + rand() ^ rand();\n}\n\nint main(void)\n{\n        printf(\"random value: %08x  \n\", my_rand());\n}\n\n```\nTo find the RVA, we can use nm because we have the symbol. You might have to find it manually.\n\n```\nnm target|grep my_rand\n0000000000001169 T my_rand\n\n```\nFinally, the code of the patcher:\n\n```\n#include <sys/mman.h>\n#include <unistd.h>\n#include <dlfcn.h>\n#include <stdint.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <link.h>\n\nstatic int new_random(void)\n{\n        return 0xdeadbeef;\n}\n\nstatic void emit_jump_to_address(uint64_t address, uint64_t jump_destination)\n{\n        long page_size = sysconf(_SC_PAGESIZE);\n        void* aligned_address = (void*)(address & ~(page_size - 1));\n        if (mprotect(aligned_address, page_size, PROT_READ|PROT_WRITE|PROT_EXEC) < 0)\n        {\n                perror(\"mprotect\");\n                return;\n        }\n        *(uint16_t*)(address + 0x0) = 0xb848;           // mov rax, Iv\n        *(uint64_t*)(address + 0x2) = jump_destination; // mov rax, jump_destination\n        *(uint16_t*)(address + 0xa) = 0xe0ff;           // jmp rax\n        if (mprotect(aligned_address, page_size, PROT_READ|PROT_EXEC) < 0)\n        {\n                perror(\"mprotect\");\n                return;\n        }\n}\n\n// ref: https://stackoverflow.com/questions/19451791/get-loaded-address-of-a-elf-binary-dlopen-is-not-working-as-expected\nuint64_t get_image_base(void)\n{\n        struct link_map* lm = dlopen(NULL, RTLD_NOW);\n        return (uint64_t)lm->l_addr;\n}\n\n__attribute__((constructor)) void patcher(void)\n{\n        uint64_t target;\n\n        target = get_image_base();\n        target += 0x1169; // RVA\n        printf(\"[!] targeted function is at %p  \n\", (void const*)target);\n        printf(\"[!] new function is at %p  \n\", (void const*)&new_random);\n        emit_jump_to_address(target, (uint64_t)&new_random);\n}\n\n```\nThis source code was compiled with clang and injected using LD_PRELOAD:\n\n```\n$ clang patcher.c  -o patcher.so -shared -ldl\n$ env LD_PRELOAD=./patcher.so ./target\n[!] targeted function is at 0x7fe05f907169\n[!] new function is at 0x7fe05f8c11f0\nrandom value: deadbeef\n\n```\nNote, I'm using fish, so the env is required.\n\n",
+      "votes": "6",
+      "user": "wisk",
+      "time": "Jan 21, 2019 at 18:38",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Walaryne",
+          "text": "Thanks, I really love this answer. It's a really creative way to go about doing this. One thing though, isn't attribute a GCC specific macro? It's not a deal breaker, as I'm pretty sure Clang can handle those macros, but if it can't, is there another way to achieve the same effect?",
+          "time": null
+        },
+        {
+          "user": "Walaryne",
+          "text": "Also, if it's not too much trouble, do you think you could write up some example code? Just a simple theoretical function in a binary, and what the shared library code could look like. Even some ASM representation somewhere, if that's possible. I mostly need clarification on how to use the \"mprotect() then encode jmp\" portion.",
+          "time": null
+        },
+        {
+          "user": "wisk",
+          "text": "__attribute__((constructor)) is supported by clang. And I'll try to write a quick example.",
+          "time": null
+        },
+        {
+          "user": "Walaryne",
+          "text": "I had tagged the question x86_64, should have said it explicitly in the question though, sorry. Thanks for the example.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "First off, I would like to thank @wisk for his answer.  We've been trying to patch some software running in an experiment on the ISS and building from his answer we were finally able to figure this out.\n\nSo, this is a reworked version of @wisk's solution with some additional features:\n\ngcc patcher.c -o libpatcher.so -shared -ldl -fPIC:\n\n```\n#define _GNU_SOURCE\n#include <string.h>\n#include <byteswap.h>\n#include <stdint.h>\n#include <dlfcn.h>\n#include <unistd.h>\n#include <sys/mman.h>\n#include <stdlib.h>\n#include <link.h>\n#include <stdio.h>\n\nstatic void (*__original_routine)();\n\nstatic void __patch_routine(void)\n{\n    fprintf(stderr, \"patch routine!  \n\");\n}\n\n#if defined(__x86_64__)\nuint64_t function_start_offset = 8;\nuint64_t fn_padding_size = 3;\n#elif defined(__aarch64__)\nuint64_t function_start_offset = 0;\nuint64_t fn_padding_size = 4;\n#endif\n\nstatic inline void trampoline()\n{\nasm volatile (\n\"_trampoline_begin:  \n\"\n#if defined(__x86_64__)\n    \"mov 0x2(%rip), %rax  \n\" // <-- fetch data after trampoline\n    \"jmp *%rax  \n\"\n#elif defined(__aarch64__)\n    \"ldr x3, .+(_trampoline_end-_trampoline_begin)  \n\" // <-- fetch data after trampoline\n    \"br  x3  \n\"\n#endif\n\"_trampoline_end:  \n\"\n);\n}\nstatic inline void trampoline_end() { }\n\nstatic void patch_function(uint64_t address, uint64_t jump_destination)\n{\n    long page_size = sysconf(_SC_PAGESIZE);\n    void* aligned_address = (void*)(address & ~(page_size - 1));\n    if (mprotect(aligned_address, page_size, PROT_READ|PROT_WRITE|PROT_EXEC) < 0)\n    {\n        perror(\"mprotect\");\n        return;\n    }\n    uint8_t *ptr = (uint8_t *)(address);\n    uint64_t fn_size = (uint64_t)&trampoline_end - (uint64_t)&trampoline - fn_padding_size;\n    fn_size -= function_start_offset;\n    uint64_t trampoline_begin = (uint64_t)&trampoline + function_start_offset;\n    memcpy(ptr, (void*)trampoline_begin, fn_size);\n    ptr += fn_size;\n    /* store the jump destination here */\n    *((uint64_t *)ptr) = jump_destination;\n    /* turn write protection back on */\n    if (mprotect(aligned_address, page_size, PROT_READ|PROT_EXEC) < 0)\n    {\n        perror(\"mprotect\");\n        return;\n    }\n}\nstatic uint64_t get_address(char *function)\n{\n    uint64_t target;\n#if 0\n    // ref: https://stackoverflow.com/questions/19451791/get-loaded-address-of-a-elf-binary-dlopen-is-not-working-as-expected\n    struct link_map* lm = (struct link_map*)dlopen(NULL, RTLD_NOW);\n    target = (uint64_t)lm->l_addr;\n    printf(\"[!] image base is at %p  \n\", (void const*)target);\n    target += 0x400910; // RVA found by using readelf\n#else\n    target = (uint64_t)dlsym(RTLD_DEFAULT, function);\n#endif\n    return target;\n}\n\n__attribute__((constructor))\nstatic void patcher(void)\n{\n    uint64_t target;\n    target = get_address(\"original_routine\");\n    if (!target)\n    {\n        fprintf(stderr, \"failed to fetch routine to replace.  \n\");\n        exit(1);\n    }\n    printf(\"[!] targeted function is at %p  \n\", (void const*)target);\n    printf(\"[!] new function is at %p  \n\", (void const*)&__patch_routine);\n    __original_routine = (typeof(__original_routine))target;\n    patch_function((uint64_t)__original_routine, (uint64_t)&__patch_routine);\n}\n\n```\ngcc -rdynamic -fPIC -o program program.c:\n\n```\n#include <stdio.h>\n\nvoid original_routine(void)\n{\n    fprintf(stderr, \"original.  \n\");\n}\n\nint main(int argc, char *argv[])\n{\n    original_routine();\n    fprintf(stderr, \"routine done.  \n\");\n    return 0;\n}\n\n```\nWith these two pieces in place, we can test on amd64:\n\n```\n$ uname -m; LD_PRELOAD=$PWD/libpatcher.so ./program\nx86_64\n[!] targeted function is at 0x557a2be7e149\n[!] new function is at 0x7f84757d31f9\npatch routine!\nroutine done.\n\n```\nand on arm64:\n\n```\n$ uname -m; LD_PRELOAD=$PWD/libpatcher.so ./program\naarch64\n[!] targeted function is at 0x400910\n[!] new function is at 0x5500832a0c\npatch routine!\nroutine done.\nroot@d75affb8f124:/\n\n```\n",
+      "votes": "2",
+      "user": "Compholio",
+      "time": "Mar 15, 2024 at 22:01",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

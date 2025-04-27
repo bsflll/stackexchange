@@ -1,0 +1,36 @@
+{
+    "title": "Recreating a lzma archive (non-streamed)",
+    "link": "https://reverseengineering.stackexchange.com/questions/18774/recreating-a-lzma-archive-non-streamed",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am reversing a Dlink camera firmware (<code>dcs5000l_v1.03.05.bin</code>) and am able to extract lzma data via <code>dd</code> and decompress it via <code>lzma -d lzma_data.lzma</code>. I want to be able to recreate the lzma archive from the extracted file to then later modify it. The problem is, I am not able to recreate the exact lzma file. </p>\n<h2>Issue 1</h2>\n<p>When I try to recompress the extracted data, I am able to get the the right properties (byte <code>0x5d</code>) and dictionary size (<code>0x02000000</code>) via </p>\n<p><code>lzma -8 -z decompressed_data</code></p>\n<p>, but the data is streamed, so the header does contain <code>0xFFFF...</code> instead of the uncompressed size (<code>0x6b660a</code>, in swapped endianess <code>0x0a666b</code>).</p>\n<p>Here is a comparison of the beginning of the original lzma data and my recreation:</p>\n<p><strong>Original</strong></p>\n<pre>\n00000000: 5d00 0000 020a 666b 0000 0000 0000 006f  ].....fk.......o\n</pre>\n<p><strong>Recreation</strong></p>\n<pre>\n00000000: 5d00 0000 02ff ffff ffff ffff ff00 006f  ]..............o\n</pre>\n<p>From what I <a href=\"http://manpages.ubuntu.com/manpages/trusty/man1/lzmp.1.html\" rel=\"nofollow noreferrer\">read</a>, the data should only be compressed streamed when the lzma tools gets the data from stdin, but in my case I'm giving the complete file to the tool and would expect that the uncompressed size is written into the header. I dont't know whether my camera could handle streamed mode and would like to create non-streamed lzma data. </p>\n<p><em>Any ideas how I could force that?</em></p>\n<h2>Issue 2</h2>\n<p>Besides that, I also have the issue of the recreated lzma payload beeing different. Starting from position <code>0000 00B0</code>, the lzma compressed data starts to differ:</p>\n<p><strong>Original</strong></p>\n<pre>\n000000b0: 2d7b 73cd 13f6 1621 2ea9 ea09 20f1 8a47  -{s....!.... ..G\n000000c0: 0c5a 53cc d87f d893 45a2 5196 8960 84dd  .ZS.....E.Q.....\n</pre>\n<p><strong>Recreation</strong></p>\n<pre>\n000000b0: 2d7b 73cd 13f6 1621 2ea9 ea09 20f1 8a4a  -{s....!.... ..J\n000000c0: 4634 378a ac21 efd9 c3e2 3ada 4744 a347  F47..!....:.GD.G\n</pre>\n<p>The size of the compressed lzma archives also differs between the original (size: 4522684 bytes) and the recreated file (size: 4521221 bytes). From what I understood the streamed vs. non-streamed issue should not affect the actual compressed data and just append a 5 or 6 bytes end-of-stream marker to the end. So even though I have the right properties and dictionary size, the lzma compressed data differs in my recreation and has a different size. </p>\n<p><em>Do you know why this could be the case and if I can fix it?</em></p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "firmware",
+        "file-format",
+        "unpacking",
+        "embedded",
+        "packers"
+    ],
+    "user": "kerm1t",
+    "time": "Jul 12, 2018 at 15:15",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It’s hard to say for sure, but probably you’re not using the same library version or compression parameters as the original program. The same data may be represented by different compressed streams, so they can change with new versions which make compression more optimal or when you tweak some parameters, e.g. compression level. In general, slight differences in the compressed stream should not matter as long as the decompressed data is the same. </p>\n</div>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Jul 15, 2018 at 9:47",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It's likely that the lzma compressed archive you're working with was generated with an older library version, as Igor said. If you're recompressing the file with your system's built-in <code>lzma</code> command, you might not be getting the right output because it might just be aliased to <code>xz --format=lzma</code>. Refer to your system's man page for <code>xz</code> or <code>lzma</code> to confirm. If <code>lzma</code> is indeed aliased to <code>xz</code>, it's using XZ Utils to compress your archive, which uses a later version of the LZMA SDK.</p>\n<p>You can try using LZMA Utils (<a href=\"https://tukaani.org/lzma/\" rel=\"nofollow noreferrer\">https://tukaani.org/lzma/</a>), which is based on LZMA SDK 4.32. Simply:</p>\n<ol>\n<li>Clone their git repository</li>\n</ol>\n<pre><code>git clone https://git.tukaani.org/lzma.git\n</code></pre>\n<ol start=\"2\">\n<li>Run <code>autogen.sh</code> in the project's root directory (make sure to install the required dependencies, like <code>automake</code> and <code>libtoolize</code>)</li>\n<li>Run the newly generated <code>configure</code> shell script</li>\n<li>Run <code>make</code> to compile the programs</li>\n<li>You <em>could</em> run <code>make install</code>, but by this point, you should have a runnable <code>lzma</code> executable in <code>&lt;Project Root&gt;/src/lzma/</code>. You can run the executable directly from this directory without changing your system <code>lzma</code> configuration.</li>\n</ol>\n<p>(These instructions are also in the <code>INSTALL</code> file in the project's root directory, but it's fairly difficult to understand first time around. I deciphered it here for convenience.)</p>\n<p>You should be able to compress your file by running the following command, assuming <code>in</code> is your input file, <code>out.lzma</code> is your output file, and <code>~/lzma/src/lzma/lzma</code> is your compiled <code>lzma</code> binary:</p>\n<pre><code>~/lzma/src/lzma/lzma -9 -c -z in &gt;out.lzma\n</code></pre>\n<p>I'd suggest trying to recompress the unmodified extracted file to verify this method works before trying to compress the modified file, just in case.</p>\n</div>",
+            "votes": "1",
+            "user": "Rafi Mueen",
+            "time": "Jan 15, 2020 at 0:32",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

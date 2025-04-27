@@ -1,0 +1,27 @@
+{
+    "title": "Why would just two bits of the SP be used here?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26581/why-would-just-two-bits-of-the-sp-be-used-here",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is the section of disassembled code in question. It’s from a Linux kernel module compiled for 4.4.16 on ARMv7.\n </p>\n <pre><code>  ; Registers used:\n  ;  - r3 :  unsigned long argp\n\n0000005c         mov        r1, sp\n00000060         bic        r2, r1, #0x1fc0\n00000064         bic        r2, r2, #0x3f\n00000068         ldr        r4, [r2, #0x8]\n0000006c         adds       r1, r3, #0x1\n00000070         sbcslo     r1, r1, r4\n00000074         movlo      r4, #0x0\n00000078         cmp        r4, #0x0\n0000007c         bne        loc_dc\n</code></pre>\n <p>\n  The stack at this point looks like this:\n </p>\n <pre><code>00  <- SP\n04  [padding]\n07  u8 arg_kernel\n08  pushed[r4]\n0c  pushed[r5]\n10  pushed[r6]\n14  pushed[lr]\n18  <Previous SP>\n</code></pre>\n <p>\n  Here’s how I decoded this assembly into pseudo-C:\n </p>\n <pre><code>r4 = *(SP & 0xe000 + 8);\nr1 = argp + 1;\n\nif (r1 overflowed) {\n    r1 -= r4;\n    r4 = 0;\n}\n\nif (r4 == 0) {\n  /* jump */\n}\n</code></pre>\n <p>\n  If I got this right, I don’t really understand the purpose of this code. If I made a mistake, I\n  <em>\n   really\n  </em>\n  don’t understand it. Can anyone offer any insight into the purpose of these operations?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "42",
+    "tags": [
+        "disassembly",
+        "linux",
+        "arm",
+        "kernel"
+    ],
+    "user": "MTCoster",
+    "time": "Dec 18, 2020 at 16:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Your translation is wrong. The two BIC instructions clear the 13 low bits of the stack pointer (1FC0|3F = 1FFF). In kernel mode, this produces a pointer to the\n  <a href=\"https://stackoverflow.com/q/43176500\">\n   <code>\n    thread_info\n   </code>\n   structure\n  </a>\n  for the current thread.\n </p>\n <p>\n  The\n  <code>\n   ldr\n  </code>\n  then reads the field at offset 8 in it which\n  <a href=\"https://elixir.bootlin.com/linux/v4.3/source/arch/arm/include/asm/thread_info.h\" rel=\"nofollow noreferrer\">\n   seems to be\n   <code>\n    addr_limit\n   </code>\n  </a>\n  and\n  <code>\n   r3+1\n  </code>\n  apparently should not exceed it.\n </p>\n <p>\n  Combined, the code matches this helper from\n  <code>\n   uaccess.h\n  </code>\n  :\n </p>\n <pre><code>#define __range_ok(addr, size) ({ \\\n    unsigned long flag, roksum; \\\n    __chk_user_ptr(addr);   \\\n    __asm__(\"adds %1, %2, %3; sbcccs %1, %1, %0; movcc %0, #0\" \\\n        : \"=&r\" (flag), \"=&r\" (roksum) \\\n        : \"r\" (addr), \"Ir\" (size), \"0\" (current_thread_info()->addr_limit) \\\n        : \"cc\"); \\\n    flag; })\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Dec 19, 2020 at 21:55",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

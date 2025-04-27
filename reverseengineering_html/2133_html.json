@@ -1,0 +1,132 @@
+{
+    "title": "In IDA, is there a way to add a reference to a dynamically imported function into the Imports tab?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2133/in-ida-is-there-a-way-to-add-a-reference-to-a-dynamically-imported-function-int",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The title says most of it. Say I have a Windows PE (x86, 32bit) binary (just so we have case to discuss), the imports list will usually only show the imports found in the import directory. The attributes it shows are address of the function, name and library from which it got imported as shown in this screenshot snippet:\n </p>\n <p>\n  <img alt=\"Screenshot of import tab in IDA Pro\" src=\"https://i.sstatic.net/KYZWX.png\"/>\n </p>\n <p>\n  Is there a way for me through scripting (IDC or Python, I don't care too much), to add imports of my own to the list and, for example, have them point (the address attribute) to code such as this (highlighted line)?:\n </p>\n <p>\n  <img alt=\"Dynamically imported function in IDA Pro\" src=\"https://i.sstatic.net/4lUw2.png\"/>\n </p>\n <p>\n  I.e. the line would in such case look like:\n </p>\n <pre><code>0DCBA987     GetLongPathNameW       kernel32.dll\n</code></pre>\n <p>\n  or even just\n </p>\n <pre><code>0DCBA987     GetLongPathNameW       ???\n</code></pre>\n <p>\n  assuming the above\n  <code>\n   call GetProcAddress\n  </code>\n  would be at address\n  <code>\n   0DCBA987\n  </code>\n  .\n </p>\n <p>\n  The advantage to me would be readability. But it would also yield a more comprehensive list of imports (and consequently xrefs) as some functions are frequently imported dynamically due to their availability in the various Windows versions.\n </p>\n <p>\n  It should be quite trivial given a certain binary to figure out all xrefs to candidate functions that retrieve the imported function's address (such as\n  <code>\n   GetProcAddress\n  </code>\n  ) and then walk their calls to find which function was imported. The DLL part may be more complicated to find out, but it could be left empty or entered manually. But I didn't find a function that would allow me to add imports. Is there a way?\n </p>\n</div>\n</body></html>",
+    "votes": "19",
+    "answers": 3,
+    "views": "15k",
+    "tags": [
+        "ida",
+        "idapython",
+        "import-reconstruction",
+        "ida-plugin"
+    ],
+    "user": "0xC0000022L",
+    "time": "Oct 2, 2018 at 20:03",
+    "comments": [
+        {
+            "user": "ekse",
+            "text": "<html><body><span class=\"comment-copy\">\n Interesting question, that would be useful when analyzing a program from a memory dump. Having the ability to edit the Imports would add cross-references and make the analysis easier.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "alexanderh",
+            "text": "<html><body><span class=\"comment-copy\">\n If you haven't seen it you should check out\n <a href=\"https://bitbucket.org/Alexander_Hanel/reiat/src/\" rel=\"nofollow noreferrer\">\n  reiat.py\n </a>\n . It does most of what you discussed except adding to the import tabs.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n @alexanderh: hadn't, although I saw some of the other repos you have on Bitbucket before. Do you have any idea how to get that last step done?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "alexanderh",
+            "text": "<html><body><span class=\"comment-copy\">\n @0xC0000022L No, I do not. I'll try to take a crack at it this weekend. My email is in the source code. Feel free to email the sample if you can share it. Stupid side note, the comment \"GetLongPathNameW\" can be used to gather non-commented cross-references via hot-key X. Not useful for automated analysis but still helpful.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "<html><body><span class=\"comment-copy\">\n You could try updating\n <code>\n  import_node\n </code>\n (exported from the SDK's nalt.hpp), but it's unclear if IDA re-reads those\n <code>\n  netnode\n </code>\n s every time it redraws the list of imports.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't know if many people know this, but IDA uses some kind of a trick to decide if a segment is an imports segment, and handles it completely different.\n </p>\n <p>\n  IDA uses a few segment properties to treat a segment as an imports segment. for example, naming a segment\n  <code>\n   .idata\n  </code>\n  , or setting the segment's class to\n  <code>\n   XTRN\n  </code>\n  will immediately make it an imports segment. such segments\n  <strong>\n   won't\n  </strong>\n  display the usual code/data listings, function definitions and most of the other stuff we're used to in the Code View.\n </p>\n <p>\n  More specifically, adding code to those segments will be hidden in IDA, which will refuse displaying any assembly in those segments. A nice Anti-IDA trick I'd say :)\n </p>\n <p>\n  Instead, they'll only display name definitions, offsets and comments.\nOnce an offset is assigned a name of an API stored in IDA's database, IDA will get the API's prototype and other info, assign type definition and comments.\n </p>\n <p>\n  IIRC These APIs will also be shown in the imports window but i'm not sure what exactly triggers this. it might also depend on IDA versions and other import-related PE properties.\n </p>\n <p>\n  <strong>\n   EDIT\n  </strong>\n  \n\n  It's been more than three years and obviously I couldn't find the script then, and I just went over some old code of mine and were able to reconstruct what I did in that script, and here is the gist of it:\n </p>\n <pre><code>import idaapi\nimport idc\n\nfor import_rva, import_name in LIST_OF_IMPORTS:\n    ea = imagebase + import_rva\n\n    if idaapi.get_segm_class(getseg(ea)) == \"XTRN\":\n        print(\"import is already inside an XTRN segment, \"\n              \"assuming it's correctly named\")\n        continue\n    elif idaapi.get_segm_class(getseg(ea-1)) == \"XTRN\":\n        print(\"Import is just below an import segment, \"\n              \"extending segment to include this additional import\")\n        # shrinking it's current segment\n        # WARNING: this assumes current import is at the top of its segment\n        # otherwise we'll have to SPLIT the import's current segment\n        # and to that I say CBA aka left as an exercise to the reader\n        idaapi.set_segm_start(ea, SegStart(ea)+4, 0)\n        # expanding it's new segment\n        idaapi.set_segm_end(ea-1, SegEnd(ea-1)+4, 0)\n    else:\n        print(\"Creating new segment for import\")\n        idc.AddSeg(ea, ea+4, 0, 1, 4, 0)\n        idc.SetSegClass(ea, \"XTRN\")\n\n    # renaming import to API name. This will make IDA add type\n    # information and automatic comments for any function it's\n    # familiar with\n    idc.MakeName(ea, import_name)\n    # Making it an offset to have IDA show it as an import instead\n    # of hiding it\n    idc.MakeDword(ea)\n</code></pre>\n</div>\n</body></html>",
+            "votes": "13",
+            "user": "NirIzr",
+            "time": "Oct 23, 2016 at 18:11",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@Nirlzr: by all means, I'd be curious to see this answer fleshed out a bit. Thanks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@Nirlzr: any news concerning the mentioned script?</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L: Terribly sorry! I'm currently in reserve duty and I can't get to stuff I have at work. didn't forget about it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L I know it's been a long time (and that's an understatement), but I've edited my answer to include the script)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  if adding an extra import section to the PE file is an acceptable option\n </p>\n <p>\n  use tools like iidking and add an import section with all the imports that are resolved dynamically\n </p>\n <p>\n  use add cross referances dialog or idc add_dref() to add cross references to them\n </p>\n <p>\n  code for demo\n </p>\n <pre><code>#include <stdio.h>\n#include <windows.h>\n#pragma comment(lib , \"user32.lib\")\nDWORD (WINAPI * MyGetShortPathName)(LPCTSTR,LPTSTR,DWORD);\nint main (void) {\n    MessageBox(NULL,\"testing add import\" , \"Test\", MB_OK);\n    char modname[MAX_PATH] = {0};\n    GetModuleFileName(NULL,modname,MAX_PATH);\n    printf(\"%s\n\",modname);\n    HMODULE hMod = LoadLibrary(\"kernel32.dll\");\n    if(hMod) {\n        *(FARPROC *)&MyGetShortPathName = GetProcAddress(hMod,\"GetShortPathNameA\");\n        if(MyGetShortPathName) {\n            MyGetShortPathName(modname,modname,MAX_PATH);\n            printf(\"%s\n\",modname);\n        }\n    }\n    return 0;\n}\n</code></pre>\n <p>\n  compiled and executed\n </p>\n <pre><code>C:\\codesnips\\addimp\\addimp.exe\nC:\\CODESN~1\\addimp\\addimp.exe\n</code></pre>\n <p>\n  unmodified imports\n </p>\n <pre><code>00412000  GetCurrentThread                      KERNEL32 \nXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n00412130  MessageBoxA                           USER32   \n</code></pre>\n <p>\n  exe modified with iidking and an import GetShortPathNameA \nadded in the extra import section\n </p>\n <pre><code>C:\\codesnips\\addimp>fc /b addimp.exe modaddimp.exe\nComparing files addimp.exe and MODADDIMP.EXE\n000000E6: 04 05  no of section \n00000131: 90 A0  \n00000160: F4 00\n00000161: 47 90\n00000164: 3C 50\n00000278: 00 2E .\n00000279: 00 49 I\n0000027A: 00 49 I\n0000027B: 00 44 D\n0000027C: 00 4B K\n0000027D: 00 69 I\n0000027E: 00 6E N\n0000027F: 00 67 G\n00000281: 00 02 vsize\n00000285: 00 90 \n00000286: 00 01\n00000289: 00 02\n0000028D: 00 5E\n0000028E: 00 01\n0000029C: 00 20\n0000029F: 00 E0\n</code></pre>\n <p>\n  ida imports window copy paste of modified exe\n </p>\n <pre><code>00412000  GetCurrentThread                      KERNEL32 \nXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n00412130  MessageBoxA                           USER32   \n00419058  GetShortPathNameA                     kernel32 \n</code></pre>\n <p>\n  double clicked 419058 -> open view -> open subviews -> crooss referances-> add cross refernces\n </p>\n <pre><code>Up P sub_401000+89 call    ds:GetProcAddress  (data xref)\n</code></pre>\n <p>\n  or idc command\n </p>\n <pre><code>add_dref(0x401089,0x419058,53);\nAddCodeXref(0x419058,0x401089,53);\n</code></pre>\n <p>\n  <img alt=\"AddImports\" src=\"https://i.sstatic.net/z0mL9.png\"/>\n </p>\n <p>\n  compiling these three lines into a plugin will add the Desired import into the first module's import\n </p>\n <pre><code>void idaapi run(int) {\nnodeidx_t index = import_node.alt1st();\nunsigned long value = import_node.altval(index);\nnetnode(value).supset(0x410004,\"GetShortPathNameA\\0\");\n}\n</code></pre>\n <p>\n  the idc file to create Segment\n </p>\n <pre><code>#include <idc.idc>\nstatic main()\n{\nauto addr;\naddr = 0x410000;\nSegCreate(addr,addr+0x200,0,1,3,2);\nSetSegmentType(addr,SEG_XTRN);\nMakeDword(addr+4);\nMakeName(addr+4,\"GetShortPathNameA\");\n}\n</code></pre>\n <p>\n  open an exe / run idc / plugin / close and save database / reopen database to see the added imports in imports tab of first module\n </p>\n <p>\n  edit\n  \n\n  windows -> reset desktop works the same ways as closing and opening the database so that eleiminates closing and opening of database\n </p>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "blabb",
+            "time": "Mar 31, 2015 at 5:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "alexanderh",
+                    "text": "<span class=\"comment-copy\">Thanks for the answer! Unfortunately this won't work for some unpacked executables or when dealing with position independent code.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">can you elaborate or post / point to a sample where this doesn't seem to work ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "alexanderh",
+                    "text": "<span class=\"comment-copy\">I might be mistaken but your example would not work on samples that are missing the portable executable header. Examples of these would be shellcode, injected DLLs that zero out the header, or position independent code ( no header and resolves symbols address by traversing PEB for kernel32.dll). Sure, a PE header could be added but this isn't always a feasible approach because it relies on having and modifying the binary.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">if you are convinced about the reasoning i am fine with that but my thought process is like this if ida has enough information to retirieve and create the original imports then it should be capable of finding this too. the original query seemed to imply that the pe is available and didn't say anything about non availabilty of the original pe so i posted this approach with a caveat if modifying the exe is acceptable if your new requiremnts  are about mucking with an idb standlaone then i dont have any idea</span>",
+                    "time": null
+                },
+                {
+                    "user": "alexanderh",
+                    "text": "<span class=\"comment-copy\">I understand your thought process but it still doesn't answer how to add the imports to the import tab via IDC or Python in IDA. Which is the original request. Check out NirIzr answer it is the closest.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If you can not add something to the imports viewer you can write your own.\nHere is the simple example (it is slightly modified example referenced at\n  <a href=\"http://www.hexblog.com/?p=229\" rel=\"noreferrer\">\n   this hexblog entry\n  </a>\n  and located\n  <a href=\"http://hexblog.com/ida_pro/files/ImportExportViewer.py\" rel=\"noreferrer\">\n   here\n  </a>\n  with added double-click functionality, added columns, removed exports and fixed bug for a case of unknown origin of the imported function). See the function BuildImports for creating additional imports (manual_func1 and manual_func2)\n </p>\n <pre><code>import idaapi\nimport idautils\nfrom idaapi import PluginForm\nfrom PySide import QtGui, QtCore\n\nclass ImpExpForm_t(PluginForm):\n\n    def imports_names_cb(self, ea, name, ord):\n        self.items.append((ea, '' if not name else name, ord))\n        # True -> Continue enumeration\n        return True\n\n    def BuildImports(self):\n        tree = {}\n        nimps = idaapi.get_import_module_qty()\n\n        for i in xrange(0, nimps):\n            name = idaapi.get_import_module_name(i)\n            if not name:\n                name = \"unknown\"\n            # Create a list for imported names\n            self.items = []\n\n            # Enum imported entries in this module\n            idaapi.enum_import_names(i, self.imports_names_cb)\n\n            if name not in tree:\n                tree[name] = []\n            tree[name].extend(self.items)\n        tree[\"manually_added\"] = [(0x01, \"manual_func1\", 3), (0x02, \"manual_func2\",4)]\n\n        return tree\n\n    def PopulateTree(self):\n        # Clear previous items\n        self.tree.clear()\n\n        # Build imports\n        root = QtGui.QTreeWidgetItem(self.tree)\n        root.setText(0, \"Imports\")\n\n        for dll_name, imp_entries in self.BuildImports().items():\n            imp_dll = QtGui.QTreeWidgetItem(root)\n            imp_dll.setText(0, dll_name)\n\n            for imp_ea, imp_name, imp_ord in imp_entries:\n                item = QtGui.QTreeWidgetItem(imp_dll)\n                item.setText(0, \"%s\" % imp_name)\n                item.setText(1, \"0x%08x\" % imp_ea)\n                item.setText(2, \"0x%08x\" % imp_ord)\n\n    def dblclick(self, item):\n        try:\n            idaapi.jumpto(int(item.text(1).encode(\"ascii\", \"ignore\"), 16))\n        except:\n            print \"Can not jump\"\n\n\n    def OnCreate(self, form):\n        \"\"\"\n        Called when the plugin form is created\n        \"\"\"\n        # Get parent widget\n        self.parent = self.FormToPySideWidget(form)\n\n        # Create tree control\n        self.tree = QtGui.QTreeWidget()\n        self.tree.setColumnCount(4)\n        self.tree.setHeaderLabels((\"Names\",\"Address\", \"Ordinal\", \"Source\"))\n        self.tree.itemDoubleClicked.connect(self.dblclick)\n        self.tree.setColumnWidth(0, 100)\n\n        # Create layout\n        layout = QtGui.QVBoxLayout()\n        layout.addWidget(self.tree)\n\n        self.PopulateTree()\n        # Populate PluginForm\n        self.parent.setLayout(layout)\n\n\n    def OnClose(self, form):\n        \"\"\"\n        Called when the plugin form is closed\n        \"\"\"\n        global ImpExpForm\n        del ImpExpForm\n        print \"Closed\"\n\n\n    def Show(self):\n        \"\"\"Creates the form is not created or focuses it if it was\"\"\"\n        return PluginForm.Show(self,\n                               \"Imports / Exports viewer\",\n                               options = PluginForm.FORM_PERSIST)\n\n# --------------------------------------------------------------------------\ndef main():\n    global ImpExpForm\n\n    try:\n        ImpExpForm\n    except:\n        ImpExpForm = ImpExpForm_t()\n\n    ImpExpForm.Show()\n\n# --------------------------------------------------------------------------\nmain()\n</code></pre>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "w s",
+            "time": "Mar 25, 2015 at 16:59",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "alexanderh",
+                    "text": "<span class=\"comment-copy\">Thanks, I have used the viewer approach before. An issue I have found is that once the IDB is closed the viewer and the data is gone. It would be cool to find something a little more permanent.</span>",
+                    "time": null
+                },
+                {
+                    "user": "w s",
+                    "text": "<span class=\"comment-copy\">You can use OnClose to save the data for example. It will require a bit more development, but it is still easy</span>",
+                    "time": null
+                },
+                {
+                    "user": "w s",
+                    "text": "<span class=\"comment-copy\">Generally speaking you have some better alternatives. First of all, you can store the script itself in the script window (File--&gt;Script command has an interface for that) - this will allow to keep all your latest additions with the idb. You can also use OnClose and store your data in a file with name derived from the name of the idb which can be obtained by idautils.GetIdbPath. You can also store the data in the custom node of the idb.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+    "title": "Is IDA resolving ELF relocations correctly?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18475/is-ida-resolving-elf-relocations-correctly",
+    "content": "While working on this kernel module, I noticed IDA somehow resolves some ELF relocations statically. Consider the symbol <pre><code>sys_renameat</code></pre>, which, according to IDA, resides at <pre><code>0x8000720</code></pre> in <pre><code>.bss</code></pre> segment.\n\nThe raw hex bytes corresponding to the <pre><code>mov</code></pre> instruction at <pre><code>0x800328</code></pre> are <pre><code>A3 20 07 00 08</code></pre>\nHowever, looking at bytes at that specific offset with a hex-editor reveals <pre><code>A3 00 00 00 00</code></pre>. Clearly, there is a relocation which IDA is resolving somehow. \n\n<pre><code>readelf -r rootkit</code></pre> confirms this.\n<pre><code>Relocation section '.rel.init.text' at offset 0x119c contains 26 entries:\n Offset     Info    Type            Sym.Value  Sym. Name\n.\n00000059  00001701 R_386_32          00000000   sys_renameat\n.\n</code></pre>\nThe symbol information as returned by <pre><code>readelf -s rootkit</code></pre>\n<pre><code>Symbol table '.symtab' contains 44 entries:\nNum:    Value  Size Type    Bind   Vis      Ndx Name\n.\n23: 00000000     4 OBJECT  GLOBAL DEFAULT   15 sys_renameat\n.\n</code></pre>\nHowever, if I <pre><code>strip</code></pre> the binary, suddenly IDA fails to resolve (<pre><code>mov</code></pre> instruction at <pre><code>0x800328</code></pre>) the relocations any more.\n\nMy understanding is, resolving dynamic relocations never depends on symbol information which <pre><code>strip</code></pre> removes. I tried to compute how IDA was computing <pre><code>R_386_32</code></pre> type relocation for <pre><code>sys_renameat</code></pre> according to ELF specification, but couldn't figure out what's going on.\nIs IDA resolving relocation correctly in this case/ If so, can someone please explain this behavior?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "elf"
+    ],
+    "user": "sherlock",
+    "time": "Jun 7, 2018 at 15:05",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "Hi. Two things. Could you please - either in addition or as replacement -copy&paste the actual textual contents of the disassembly instead of the screenshots. And then, what was the output for the various places that ELF has to store symbols after you stripped the binary?\n",
+            "time": null
+        },
+        {
+            "user": "sherlock",
+            "text": "I don't know if IDA allows us to copy raw disassembly. I have linked the original binary in my post though.\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "yep, IDA can easily do that. The point behind this request is that this makes your question easier to index for search engines. They won't recognize keywords from the screenshots.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Linux kernel modules are not shared objects and don't use dynamic relocations, although they may look a little similar.\n<pre><code>file</code></pre>:\n\nrootkit: ELF 32-bit LSB relocatable, Intel 80386, version 1 (SYSV), BuildID[sha1\n  ]=5552f893cf02ce13e9a183af3b6717e884493ead, not stripped\n\n<pre><code>readelf -h</code></pre>:\n\n<pre><code>Type:                              REL (Relocatable file)</code></pre>\n\nSo it's a relocatable object, and by stripping it you remove information necessary for its functioning.\nFrom the Linux Loadable Kernel Module HOWTO:\n\nHow that relocation happens is fundamentally different between Linux\n  2.4 and Linux 2.6. In 2.6, <pre><code>insmod</code></pre> pretty much just passes the verbatim contents of the LKM file (.ko file) to the kernel and the kernel does the relocation.\n\nAbout relocation resolution by IDA:\nSince the real address of the symbols is not known until runtime but the user expects to see nice names in the disassembly, IDA's ELF loader creates a fake segment (\"extern\") and fills it with placeholders for the external symbols. The relocatable bytes are then patched to point to those fake symbols.\n",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Jun 7, 2018 at 20:58",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "sherlock",
+                    "text": "<span class=\"comment-copy\">Does it essentially mean that the address <code>0x080000720</code> (as the destination of <code>mov</code> instruction at <code>0x08000328</code>) I am seeing in the first disassembly is plain wrong, and no way the real one?</span>",
+                    "time": null
+                },
+                {
+                    "user": "sherlock",
+                    "text": "<span class=\"comment-copy\">Also the symbol <code>sys_renameat</code> lands in <code>.bss</code>, not in <code>.extern</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">well, local symbols are obviously resolved locally.  as for the addresses, “wrong” depends on your point of view. they probably don’t match the real addresses at runtime but the logical connections should be the same.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

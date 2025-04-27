@@ -1,0 +1,50 @@
+{
+    "title": "Loop through letters of a string with index",
+    "link": "https://reverseengineering.stackexchange.com/questions/9339/loop-through-letters-of-a-string-with-index",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have the following code:</p>\n<pre><code>00401163   &gt; 8D15 49634000  LEA EDX,DWORD PTR DS:[406349]            ; see below, 0x406349 is pointing to entered username\n00401169   . 52             PUSH EDX                                 ; /String =&gt; \"myusername\"\n0040116A   . E8 8D020000    CALL &lt;JMP.&amp;kernel32.lstrlenA&gt;            ; \\lstrlenA\n0040116F   . 8BE8           MOV EBP,EAX\n00401171   . B9 05000000    MOV ECX,5\n00401176   . 33F6           XOR ESI,ESI                              ; ESI = 0\n00401178   . 33C0           XOR EAX,EAX\n0040117A   &gt; 8A0C16         MOV CL,BYTE PTR DS:[ESI+EDX]             ; Why is it pointing to 'y' (2nd letter of username) at 1st run in the loop?\n0040117D   . 8AD9           MOV BL,CL\n0040117F   . 3298 28634000  XOR BL,BYTE PTR DS:[EAX+406328]\n00401185   . 40             INC EAX\n00401186   . 83F8 05        CMP EAX,5\n00401189   . 881C32         MOV BYTE PTR DS:[EDX+ESI],BL\n0040118C   . 8888 27634000  MOV BYTE PTR DS:[EAX+406327],CL\n00401192   . 75 02          JNZ SHORT crackme.00401196\n00401194   . 33C0           XOR EAX,EAX\n00401196   &gt; 46             INC ESI\n00401197   . 3BF5           CMP ESI,EBP\n00401199   .^72 DF          JB SHORT crackme.0040117A\n</code></pre>\n<p>As you can see, <code>0x406349</code> contains the username:</p>\n<pre><code>00406349  6D 79 75 73 65 72 6E 61 6D 65 00 00 00 00 00 00  myusername......\n</code></pre>\n<p>There is a loop that will go thru the letters of the entered username. I don't understand why the first run in the loop (at <code>0x40117A</code>) contains the 2nd letter of the username instead of the 1st one because the index (<code>ESI</code>) is <code>0</code>.</p>\n<p>Can you please help me understand?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "5k",
+    "tags": [
+        "assembly",
+        "x86"
+    ],
+    "user": "Sebastien Damaye",
+    "time": "Jul 13, 2015 at 8:11",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">Check your <code>EDX</code> register content at <code>0x40116F</code>. This will probably confirm that <code>EDX</code> gets changed by <code>lstrlenA</code>. It probably didn't get changed by the <code>lstrlenA</code> of the version of Windows that was current when the crackme was written, but does get changed with your version; the bug probably didn't ever bite the author of the crackme, but bites you now.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>as hanno binder replied edx is not preserved by the function call lstrlena</p>\n<p>you can easily deduce such things by instrumenting the code prior to and post the operation where your assumptions dont pan out to actual behaviour</p>\n<p>a sample test code could look like this (in x64 you may need a seperate file for inline asm but since you say <strong>edx</strong> and not <strong>rdx</strong> inline asm inside a cpp file is fine)</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;windows.h&gt;\n// the vars are global so they are initialised to zero\nint preeax,preebx,preecx,preedx,posteax,postebx,postecx,postedx;\nvoid main (void) {\n  printf(\"does lstrlena change edx ? lets check\\n\");\n__asm {\n  mov preeax,eax\n  mov preebx,ebx\n  mov preecx,ecx\n  mov preedx,edx  \n}\nlstrlenA(\"does this change edx\\n\");\n__asm {\n  mov posteax,eax\n  mov postebx,ebx\n  mov postecx,ecx\n  mov postedx,edx  \n}\nprintf(\n\"preeax = %08x\\tposteax = %08x\\npreebx = %08x\\tpostebx = %08x\\n\"\n\"preecx = %08x\\tpostecx = %08x\\npreedx = %08x\\tpostedx = %08x\\n\",\npreeax,posteax,preebx,postebx,preecx,postecx,preedx,postedx);\n}\n</code></pre>\n<p>on compiling and running it </p>\n<pre>\nedxlstrlen.exe\ndoes lstrlena change edx ? lets check\npreeax = 00000026       posteax = 00000015\npreebx = 7ffd8000       postebx = 7ffd8000\npreecx = 00401120       postecx = 7c80be86\n<h3>preedx = 004166a0       postedx = 004121b9</h3>\n</pre>\n<p>and as guntram commented to confirm you could disassemble lstrlena and grep for edx </p>\n<pre><code>cdb -c \"uf kernel32!lstrlena;q\" cdb | grep edx\neax=00191eb4 ebx=7ffdb000 ecx=00000007 edx=00000080 esi=00191f48 edi=00191eb4\n7c80be71 8d5001          lea     edx,[eax+1] &lt;-------------\n7c80be7b 2bc2            sub     eax,edx\n</code></pre>\n<p>guess what eax points to :)\nor here is the spoiler you still need to understand x86 stack</p>\n<blockquote class=\"spoiler\">\n<p> cdb -c \"uf kernel32!lstrlena;q\" cdb | grep eax<br/>\n eax=00191eb4 ebx=7ffd7000 ecx=00000007 edx=00000080 esi=00191f48 edi=00191eb4<br/>\n 7c80be62 8b4508          mov     eax,dword ptr <b>[ebp+8]</b><br/>\n 7c80be65 85c0            test    eax,eax</p>\n</blockquote>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jul 13, 2015 at 13:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Now the interesting part of this is: why is your <code>postedx</code> so completely different from <code>preedx</code>, when it's only <code>preedx+1</code> in the OP's example? (Probable answer: <code>edx</code> equals the input string  + 1 after <code>lstrlenA</code>, and in the OP's example, it's the input string before the call; in your example, it's some random value).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sebastien Damaye",
+                    "text": "<span class=\"comment-copy\">You guys are correct. <code>EDX</code> is modified by <code>lstrlenA</code>. Thank you all for your quick and very valuable feedback.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><code>EDX</code> may have been altered by the function call, see <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions#stdcall\" rel=\"nofollow\"><code>stdcall</code></a>:</p>\n<blockquote>\n<p>Registers EAX, ECX, and EDX are designated for use within the function</p>\n</blockquote>\n<p>Use another register, or push+pop <code>EDX</code> before/after the call to <code>lstrlenA</code>.</p>\n</div>",
+            "votes": "3",
+            "user": "JimmyB",
+            "time": "Jul 13, 2015 at 11:34",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

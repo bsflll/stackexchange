@@ -1,0 +1,53 @@
+{
+  "title": "Running a binary identified as an ARM excutable by binwalk --disasm",
+  "link": "https://reverseengineering.stackexchange.com/questions/15311/running-a-binary-identified-as-an-arm-excutable-by-binwalk-disasm",
+  "content": "I have a Philips 10FF2 picture frame I'm trying to reverse engineer. In the firmware download from the Philips website (http://download.p4c.philips.com/files/1/10ff2cme_00/10ff2cme_00_fus_aen.zip) I can find a file called UBLDM350.bin which when analyzed with binwalk --disasm gives me:\n\n```\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n0             0x0             ARM executable code, 32-bit, little endian, at least 984 valid instructions\n\n```\nMy question is how do I get more information on this file? I tried running it with qemu-arm but that fails:\n\n```\nwalterheck@walter-toshiba:~/projects/pictureframe/PHILIPS.10FF2M$ qemu-arm ./UBLDM350.BIN \nError while loading ./UBLDM350.BIN: Permission denied\n\n```\nRunning strings on it gives me garbage and only a few readable things:\n\n```\n(null)\n0123456789abcdef0123456789ABCDEF\n...fail(%d)\nNANDReadPage error(%d)\nError block(%d)\nMagic switch failure(0x%X)\nBad block found(block=%d)\nMove done.\nStart boot from NAND\nVer = %s\nUBLN1.05\n\n```\nI'm looking for help on what to try next.\n\n",
+  "votes": "6",
+  "answers": 3,
+  "views": "5k",
+  "tags": [
+    "binary-analysis",
+    "firmware",
+    "arm"
+  ],
+  "user": "Walter Heck",
+  "time": "May 7, 2017 at 14:47",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "One of the difficulties associated with analyzing firmware is that firmware binaries do not usually have a standard format and do not segregate code and data in a standard manner like ELF or PE binaries do. The absence of clearly identifiable partitions within firmware binaries that allow for fast and accurate identification and differentiation between code and data is problematic for disassembly, since a disassembler such as Capstone (which is used to identify  to identify the CPU architecture by binwalk when the --disasm argument is used) or Radare2 will disassemble data (such as ASCII strings) as opcodes and operands.\n\nIt appears that this is the case with UBLDM350.BIN. If binwalk -A is executed, we see that ARM code is detected fairly uniformly from offset 0x130 to offset 0x4224, a range of 16628 bytes:\n\n```\n$ binwalk -A UBLDM350.BIN\n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n304           0x130           ARM instructions, function prologue\n792           0x318           ARM instructions, function prologue\n1396          0x574           ARM instructions, function prologue\n8008          0x1F48          ARM instructions, function prologue\n9380          0x24A4          ARM instructions, function prologue\n9880          0x2698          ARM instructions, function prologue\n9908          0x26B4          ARM instructions, function prologue\n10024         0x2728          ARM instructions, function prologue\n10320         0x2850          ARM instructions, function prologue\n13036         0x32EC          ARM instructions, function prologue\n13080         0x3318          ARM instructions, function prologue\n13196         0x338C          ARM instructions, function prologue\n13548         0x34EC          ARM instructions, function prologue\n15912         0x3E28          ARM instructions, function prologue\n16872         0x41E8          ARM instructions, function prologue\n16932         0x4224          ARM instructions, function prologue\n\n```\nHowever, when binwalk --disasm --verbose is run to print the disassembled instructions, the memory address range of the disassembled code is much less than this (0x00 to 0xF5C = 3932 bytes):\n\n```\n$ binwalk --disasm --verbose UBLDM350.BIN\n\nScan Time:     2017-05-07 10:56:43\nTarget File:   /home/c/firmware/Philips/10FF2cme_pictureframe/PHILIPS.10FF2M/UBLDM350/UBLDM350.BIN\nMD5 Checksum:  15b2dac3ce98d3308d9c6cf47e74eba7\n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n0             0x0             ARM executable code, 32-bit, little endian, at least 984 valid instructions\n0             0x0             ldr r0, [pc, #0x124]\n4             0x4             mcr p15, #0, r0, c9, c1, #0\n8             0x8             mov r0, r0\n12            0xC             mrs r0, apsr\n16            0x10            bic r0, r0, #0x1f\n20            0x14            orr r0, r0, #0x11\n24            0x18            msr cpsr_fc, r0\n28            0x1C            ldr sp, [pc, #0xf4]\n32            0x20            ldr r0, [pc, #0xf4]\n36            0x24            add sp, sp, r0\n40            0x28            mrs r0, apsr\n\n< snip >\n\n3888          0xF30           lsl ip, ip, #0x16\n3892          0xF34           lsr ip, ip, #0x16\n3896          0xF38           strh ip, [sp, #0x16]\n3900          0xF3C           ldrh ip, [sp, #0x14]\n3904          0xF40           ldr r0, [sp, #4]\n3908          0xF44           ldrb r1, [ip, r0]\n3912          0xF48           ldrb r2, [sp, #0x16]\n3916          0xF4C           eor r1, r2, r1\n3920          0xF50           strb r1, [ip, r0]\n3924          0xF54           mov r0, #0\n3928          0xF58           add sp, sp, #0x1c\n3932          0xF5C           bx lr\n\n```\nWhy is this? A broken instruction causes Capstone to cease disassembly following offset 0xF5C:\n\n\n\nAbove we see that there are indeed invalid instructions following the instruction at offset 0xF5C.\n\nSome of the following data is disassembled as code:\n\n```\n00001ba0  bf f9 0a 1c 02 e0 d3 17  02 f0 92 fc 19 1c 10 1c  |................|\n00001bb0  70 bc 04 bc 10 47 c0 46  30 31 32 33 34 35 36 37  |p....G.F01234567|\n00001bc0  38 39 61 62 63 64 65 66  30 31 32 33 34 35 36 37  |89abcdef01234567|\n00001bd0  38 39 41 42 43 44 45 46  00 00 00 00 04 d0 4d e2  |89ABCDEF......M.|\n00001be0  00 c0 a0 e3 00 c0 8d e5  00 c0 9d e5 2a 00 5c e3  |............*.\\.|\n\n```\n\n\nDirect execution of the binary likely fails due to the fact that there is no header that provides the kernel program loader the information required to create a process image in memory, such as the entry point and binary layout information.\n\n1. Unicorn\n\nAn option for further investigation could be using the Unicorn engine to dynamically analyze successfully disassembled code. See this Q&A for more information:\n\nUnicorn and QEMU: Example use cases to understand the differences\n\n2. Device processor identification\n\nIf you have direct access to the hardware, it may prove useful to identify the exact processor/microcontroller, since this will allow you to locate the technical reference manual and datasheet, which will describe in detail the memory layout and instruction set architecture of the device. Knowledge of memory layout will aid in the analysis of the firmware binary.\n\n3. Hex dump analysis\n\nAnalysis of a hex dump may allow you to manually identify non-code portions of the firmware. Portions with code only can be sliced out and disassembled by Capstone, r2, or some other disassembler.\n\n4. Visualization\n\nVisualization of the firmware binary using binwalk -E can give an insight into the overall structure of the binary. An entropy plot allows for fast identification of compressed or regions of contiguous null bytes. binvis.io is a useful source for binary visualization as well.\n\nSee also:\n\nApproach to extract useful information from binary file\n\n\n1. SKIPDATA mode\n\n",
+      "votes": "7",
+      "user": "julian",
+      "time": "May 7, 2017 at 18:17",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Walter Heck",
+          "text": "Took me a while to get back to this project. I'm fiddling around with some of your suggestions now. As for option 2: I do indeed have access to the hardware itself. The central chip seems to be a DMSoc from TI identified by TMS320DM350ZWK. This seems to have been released later as TMS320DM355, of which a datasheet is here: ti.com/lit/ds/symlink/tms320dm355.pdf.",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@WalterHeck according to the data sheet, the device uses an ARM926EJ-S processor",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "To add to SYS_V's good answer, this 'weird' mixing of code and data is actually very common with ARM code.\n\nARM instructions are fixed sizes (4 bytes on ARM, 2 bytes for THUMB) and have insufficient space to encode an 32 bit immediate value.  Instead, ARM compilers usually do two things -\n\nIn SYS_V's disassembly, the instructions at addresses 0x00000F08 and 0x00000F28 are both PC relative loads. (Though the disassembler is being helpful here and displaying the calculated addresses 0x00000FF8 and 0x00000FFC rather than showing [PC,offset].)\n\nThe disassembler is further being helpful and annotating the disassembly in red at the side showing the values of the immediate constants that will be loaded.  In this case the values loaded are 0x01E100D4 and 0x01E100DC respectively.\n\nIt's usual to see the immediate constants stored after the function in order of the addresses of the functions that access them.  So, in this case, the function ends with the instruction at 0x00000F5C and the immediate constants would appear to span the address range 0x00000F60 to 0x00000FFF and I would usually expect the following function to begin at address 0x00001000.\n\nKnowing this it would be possible for a disassembler to identify this pattern and automatically skip the associated data.\n\n",
+      "votes": "4",
+      "user": "Ian Cook",
+      "time": "May 8, 2017 at 6:53",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "It seems you have a raw firmware file and not a user-mode executable. qemu-arm only supports user-mode ARM Linux ELF executables. You could in theory try the full-system emulator (qemu-system-arm), but don't expect it to work unless QEMU explicitly supports the underlying hardware. It may be also possible to use the QEMU-based Unicorn emulator which is somewhat more flexible but you would need to write some code to load your file and start emulation; there's no convenient ready to use program.\n\n",
+      "votes": "3",
+      "user": "Igor Skochinsky",
+      "time": "May 8, 2017 at 8:12",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

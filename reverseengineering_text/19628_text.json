@@ -1,0 +1,52 @@
+{
+    "title": "Why is the process crashing after executing my injected payload?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19628/why-is-the-process-crashing-after-executing-my-injected-payload",
+    "content": "I tried the following payload for APC injection in Windows.\nIt gets executed successfully(pops up a MessageBox) but the process crashes after the execution of payload.\nWhat could be the possible reason(s) for this?\nPayload:\n<pre><code>push   ebp                     ;save ebp\nmov    ebp,esp                 ;start new frame\nsub    esp,0x8                 ;make space for strings\nmov    BYTE PTR [ebp-0x4],0x48 ;store strings\nmov    BYTE PTR [ebp-0x3],0x0\nmov    BYTE PTR [ebp-0x8],0x46\nmov    BYTE PTR [ebp-0x7],0x0\npush   eax                     ;save registers to restore the values later\n                               ;(I think that I need not save all registers\n                               ;but only the ones I use,\n                               ;but since the process kept crashing after the payload execution\n                               ;I thought let's not take a chance! :P\npush   ebx\npush   ecx\npush   edx\npush   edi\npush   esi\npush   0x0                     ;push arguments for MessageBox()\nlea    eax,[ebp-0x4]\npush   eax\nlea    eax,[ebp-0x8]\npush   eax\npush   0x0\ncall   DWORD PTR [ebp+0x8]     ;call MessageBox()\npop    esi                     ;restore registers\npop    edi\npop    edx\npop    ecx\npop    ebx\npop    eax\nxor    eax, eax\nmov    esp,ebp\npop    ebp                     ;restore ebp\nret                            ;return\n</code></pre>\nInjection code:\n<pre><code>QueueUserAPC((PAPCFUNC)p, hThread, messageBoxAddr); //p: address of payload(written to victim process)\n</code></pre>\nError Message(From IDA Pro, WinDbg):\n<pre><code>The instruction at 0x771C63BD referenced memory at 0x75C2442D. The memory could not be read -> 75C2442D (exc.code c0000005, tid 2948)\n</code></pre>\nIt basically says that <pre><code>edi</code></pre> in <pre><code>mov  ecx, [edi+2CCh]</code></pre> (coming after the payload execution) has an invalid address. \nDisassembled code near crash:\n<pre><code>ntdll:771C63BD ; ---------------------------------------------------------------------------\nntdll:771C63BD mov     ecx, [edi+2CCh]    ;<--- It CRASHES here\nntdll:771C63C3 mov     large fs:0, ecx\nntdll:771C63CA push    1\nntdll:771C63CC push    edi\nntdll:771C63CD call    near ptr ntdll_ZwContinue\nntdll:771C63D2 mov     esi, eax\nntdll:771C63D4\nntdll:771C63D4 loc_771C63D4:                           ; CODE XREF: ntdll:ntdll_KiUserApcDispatcher+42j\nntdll:771C63D4 push    esi\nntdll:771C63D5 call    near ptr ntdll_RtlRaiseStatus\nntdll:771C63DA jmp     short loc_771C63D4\n</code></pre>\nCall stack:\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "573",
+    "tags": [
+        "windows",
+        "assembly",
+        "injection"
+    ],
+    "user": "Jithin Pavithran",
+    "time": "Oct 15, 2018 at 12:57",
+    "comments": [
+        {
+            "user": "sudhackar",
+            "text": "Please provide more information as backtrace, instructions around the crash etc\n",
+            "time": null
+        },
+        {
+            "user": "Jithin Pavithran",
+            "text": "@sudhackar, I have added the disassembled code\n",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "Excute your code step by step at the assembly level in a debugger and try to catch the bug...\n",
+            "time": null
+        },
+        {
+            "user": "user22970",
+            "text": "Could it be you need to clear the stack before returning? (I can see you use [ebp + 8], but ret with no argument. It depends on the calling convention though). It doesn't explain the crush if it's right after the return but it might be it if some processing was done before the crash\n",
+            "time": null
+        },
+        {
+            "user": "user22970",
+            "text": "Cool :D. What made me think about that was raymond chen's article: blogs.msdn.microsoft.com/oldnewthing/20040115-00/?p=41043\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Here's the rest of the function where the crash happens:\n<pre><code>_KiUserApcDispatcher@16 proc near\n lea     eax, [esp+2DCh]\n mov     ecx, large fs:0\n mov     edx, offset _KiUserApcExceptionHandler@16 ; KiUserApcExceptionHandler(x,x,x,x)\n mov     [eax], ecx\n mov     [eax+4], edx\n mov     large fs:0, eax\n pop     eax\n lea     edi, [esp+0Ch]\n call    eax\n</code></pre>\nAs you can see, <pre><code>edi</code></pre> is intialized from <pre><code>esp</code></pre>, so the crash likely happens because of wrong esp after the call. Now, let's check the API headers:\n<pre><code>WINBASEAPI\nDWORD\nWINAPI\nQueueUserAPC(\n    _In_ PAPCFUNC pfnAPC,\n    _In_ HANDLE hThread,\n    _In_ ULONG_PTR dwData\n    );\n</code></pre>\nand <pre><code>PACPFUNC</code></pre> is:\n<pre><code>typedef\nVOID\n(NTAPI *PAPCFUNC)(\n    _In_ ULONG_PTR Parameter\n    );\n</code></pre>\nWhere <pre><code>NTAPI</code></pre> is:\n<pre><code>#define NTAPI __stdcall\n</code></pre>\n<pre><code>__stdcall</code></pre> functions are responsible for cleaning up the stack from their incoming arguments, and since our function accepts one argument of type <pre><code>ULONG_PTR</code></pre> (a pointer, so 4 bytes), it must clean up the stack at return , i.e. use <pre><code>retn 4</code></pre> instead of just <pre><code>retn</code></pre> which is enough for <pre><code>__cdecl</code></pre> functions.\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Oct 23, 2018 at 12:05",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

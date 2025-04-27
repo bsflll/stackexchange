@@ -1,0 +1,40 @@
+{
+  "title": "What is operator new(unsigned int)?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4402/what-is-operator-newunsigned-int",
+  "content": "In the disassembler output (ARM) I see:\n\n```\n    BLX _Znwj\n\n```\nwhere BLX is ARM procedure call and _Znwj is demangled as\n\n```\n$ c++filt  _Znwj\noperator new(unsigned int)\n\n```\nWhat does that operator new do? Is it new or new[]?\nWhat type does it return?\nHow do I explicitly call it from C++, something in the operator+(a,b) style?\n\n(I know that it is possible to define operator new in a class, but this looks a bit different.)\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "8k",
+  "tags": [
+    "disassembly",
+    "c++",
+    "gcc"
+  ],
+  "user": "18446744073709551615",
+  "time": "May 22, 2014 at 9:05",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "A runtime function does not necessarily convert to a C++ function. For example, on a processor that has no floating point hardware, a simple statement like\n\n```\na=b+c;\n\n```\nwith a, b and c being floats, will probably be converted to a function call that takes b and c as parameters and returns the results. The user is not supposed to call that function directly.\n\nIn your case, consider that every new probably maps to something that allocates memory and calls a constructor function, and every new[] allocates memory for several elements and calls a constructor function on each element. The new _Znwj function is the memory allocator used internally by the new operator (at least if you're using gcc, which I assume), and it's not intended to be called directly from C++.\n\nThis program:\n\n```\n    class Foo {\n            int bar;\n    };\n\n    int main(void) {\n            Foo *baz=new Foo();\n            Foo *var=new Foo[20];\n    }\n\n```\nCompiles to (try gcc -S):\n\n```\n    stmfd   sp!, {fp, lr}\n    .save {fp, lr}\n    .setfp fp, sp, #4\n    add     fp, sp, #4\n    .pad #8\n    sub     sp, sp, #8\n    mov     r0, #4                <-- 4 bytes for single variable\n    bl      _Znwj\n    mov     r3, r0                <-- r0 returns the pointer to the allocated memory\n    mov     r2, #0\n    str     r2, [r3]\n    str     r3, [fp, #-8]\n    mov     r0, #80               <-- 80 bytes (20*4) for array\n    bl      _Znaj\n    mov     r3, r0                <-- r0 returns the pointer to the allocated memory\n    str     r3, [fp, #-12]\n    mov     r3, #0\n    mov     r0, r3\n    sub     sp, fp, #4\n    @ sp needed\n    ldmfd   sp!, {fp, lr}\n    bx      lr\n\n```\nSo, you see that the _Znwj resp. _Znaj are the allocator functions for a single class resp. an array of classes, both of them take the number of bytes required as parameter, and both of them return a pointer to the allocated memory as result.\n\nTo answer your questions:\n\n",
+      "votes": "3",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "18446744073709551615",
+          "text": "In fact, void*x=operator new(4); compiles and generates the same code as int*x=new(int);",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "This is called \"placement new\" and was introduced in C++03.  The way it works is that one can have, say a C++ class around a set of hardware registers and then use placement new to put the class exactly atop those hardware registers.  For example, if a hardware-based hardware Random Number Generator (RNG) is defined using 32-bit Control Register, Status Register and Data Register all starting at offset 0x50000600, you could define a class:\n\n```\nclass RNG_class\n{\nprivate:\n  volatile uint32_t CR;  // set to 1 to enable\n  volatile uint32_t SR;  // low bit set when next num available\n  volatile uint32_t DR:\npublic;\n  RNG_class() : CR(1) {} \n  uint32_t next() { while (SR&1 == 0); return DR; }\n};\n\n```\nElsewhere, then one can instantiate this class as\n\n```\nRNG_class RNG* = new(0x50000600) RNG_class();\n\n```\nAnd one can use it as:\n\n```\nr = RNG->next();\n\n```\nSee this question for more information.\n\n",
+      "votes": "1",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

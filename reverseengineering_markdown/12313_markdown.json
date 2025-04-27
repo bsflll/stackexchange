@@ -1,0 +1,52 @@
+{
+  "title": "Getting list of opcodes from PANDA trace",
+  "link": "https://reverseengineering.stackexchange.com/questions/12313/getting-list-of-opcodes-from-panda-trace",
+  "content": "As answer to the post \"Using QEmu monitor interface to extract execution traces from a binary?\", one of the PANDA authors outlined how QUEMU may be used to record execution traces.\n\nI would like to do it with PANDA.\n\nI found that the QEMU function cpu_memory_rw_debug(env, pc, buf, size, is_write); allows to access the guest's memory. Yet, I don't know how much memory I have to read, because the size of the opcodes differ.\n\nPANDA provides the function panda_disas:\n\nBut same question here, how do I determine the size of the instruction?\n\nAs PANDA_CB_INSN_EXEC and PANDA_CB_INSN_TRANSLATE do not provide the size of the instruction, I figured it must be in CPUState.\n\nI looked into cpu.h and cpu-all.h but couldn't find anything.\n\nIs there another approach or am I missing something?\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "887",
+  "tags": [
+    "disassembly",
+    "x86",
+    "qemu"
+  ],
+  "user": "langlauf.io",
+  "time": "Apr 13, 2017 at 12:49",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "At the moment PANDA doesn't provide information about the instruction size (which isn't known before translation) at the level of an individual instruction. One thing you can do, however, is get the size of an entire basic block once it has been translated by QEMU using PANDA_CB_AFTER_BLOCK_TRANSLATE and then look at the tb->size field. You can then cache the disassembly for that block and print it out in a PANDA_CB_BEFORE_BLOCK_EXEC callback.\n\nHere is a plugin that uses this trick to compute rolling instruction opcode histograms using the capstone disassembler. You'll have to adapt it a bit to get a full instruction trace, but it should demonstrate the principle.\n\n```\n// This needs to be defined before anything is included in order to get\n// the PRIx64 macro\n#define __STDC_FORMAT_MACROS\n\nextern \"C\" {\n\n#include \"config.h\"\n#include \"qemu-common.h\"\n\n#include \"panda_plugin.h\"\n#include \"panda/panda_common.h\"\n#include \"rr_log.h\"\n#include <capstone/capstone.h>\n\n}\n\n#include <map>\n#include <string>\n\ntypedef std::map<std::string,int> instr_hist;\n\n\n// These need to be extern \"C\" so that the ABI is compatible with\n// QEMU/PANDA, which is written in C\nextern \"C\" {\n\nbool init_plugin(void *);\nvoid uninit_plugin(void *);\n\n}\n\n#define WINDOW_SIZE 100\n\ncsh handle;\ncs_insn *insn;\nbool init_capstone_done = false;\ntarget_ulong asid;\nint sample_rate = 100;\nFILE *histlog;\n\n// PC => Mnemonic histogram\nstd::map<target_ulong,instr_hist> code_hists;\n\n// PC => number of instructions in the TB\nstd::map<target_ulong,int> tb_insns;\n\n// Circular buffer PCs in the window\ntarget_ulong window[WINDOW_SIZE] = {};\n\n// Rolling histogram of PCs\ninstr_hist window_hist;\nuint64_t window_insns = 0;\nuint64_t bbcount = 0;\n\nvoid init_capstone(CPUState *env) {\n    cs_arch arch;\n    cs_mode mode;\n#ifdef TARGET_I386\n    arch = CS_ARCH_X86;\n    mode = env->hflags & HF_LMA_MASK ? CS_MODE_64 : CS_MODE_32;\n#elif defined(TARGET_ARM)\n    arch = CS_ARCH_ARM;\n    mode = env->thumb ? CS_MODE_THUMB : CS_MODE_ARM;\n#endif\n\n    if (cs_open(arch, mode, &handle) != CS_ERR_OK) {\n        printf(\"Error initializing capstone  \n\");\n    }\n    init_capstone_done = true;\n}\n\nvoid add_hist(instr_hist &a, instr_hist &b) {\n    for (auto &kvp : b) a[kvp.first] += kvp.second;\n}\n\nvoid sub_hist(instr_hist &a, instr_hist &b) {\n    for (auto &kvp : b) a[kvp.first] -= kvp.second;\n}\n\nvoid print_hist(instr_hist &ih, uint64_t window_insns) { \n    fprintf(histlog, \"%\" PRIu64 \" \", rr_get_guest_instr_count());\n    fprintf(histlog, \"{\");\n    for (auto &kvp : ih) {\n        fprintf (histlog, \"\\\"%s\\\": %f, \", kvp.first.c_str(), kvp.second/(float)window_insns);\n    }\n    fprintf(histlog, \"}  \n\");\n}\n\n// During retranslation we may end up with different\n// instructions. Since we don't have TB generations we just\n// remove it from the rolling histogram first.\nvoid clear_hist(target_ulong pc) {\n    for (int i = 0; i < WINDOW_SIZE; i++) {\n        if (window[i] == pc) {\n            window[i] = 0;\n            window_insns -= tb_insns[pc];\n            sub_hist(window_hist, code_hists[pc]);\n        }\n    }\n}\n\nstatic int after_block_translate(CPUState *env, TranslationBlock *tb) {\n    size_t count;\n    uint8_t mem[1024] = {};\n\n    if (asid && panda_current_asid(env) != asid) return 0;\n\n    if (!init_capstone_done) init_capstone(env);\n\n    if (code_hists.find(tb->pc) != code_hists.end()) {\n        clear_hist(tb->pc);\n        return 0;\n    }\n\n    panda_virtual_memory_rw(env, tb->pc, mem, tb->size, false);\n    count = cs_disasm_ex(handle, mem, tb->size, tb->pc, 0, &insn);\n    for (unsigned i = 0; i < count; i++)\n        code_hists[tb->pc][insn[i].mnemonic]++;\n    tb_insns[tb->pc] = count;\n    return 1;\n}\n\nstatic int before_block_exec(CPUState *env, TranslationBlock *tb) {\n    if (asid && panda_current_asid(env) != asid) return 0;\n\n    if (window[bbcount % WINDOW_SIZE] != 0) {\n        target_ulong old_pc = window[bbcount % WINDOW_SIZE];\n        window_insns -= tb_insns[old_pc];\n        sub_hist(window_hist, code_hists[old_pc]);\n    }\n\n    window[bbcount % WINDOW_SIZE] = tb->pc;\n    window_insns += tb_insns[tb->pc];\n    add_hist(window_hist, code_hists[tb->pc]);\n\n    bbcount++;\n\n    if (bbcount % sample_rate == 0) {\n        // write out to the histlog\n        print_hist(window_hist, window_insns);\n    }\n    return 1;\n}\n\nbool init_plugin(void *self) {\n    panda_cb pcb;\n\n    panda_arg_list *args = panda_get_args(\"insthist\");\n    const char *name = panda_parse_string(args, \"name\", \"insthist\");\n    asid = panda_parse_ulong(args, \"asid\", 0);\n    sample_rate = panda_parse_uint32(args, \"sample_rate\", 1000);\n\n    char fname[260];\n    sprintf(fname, \"%s_insthist.txt\", name);\n    histlog = fopen(fname, \"w\");\n\n    pcb.after_block_translate = after_block_translate;\n    panda_register_callback(self, PANDA_CB_AFTER_BLOCK_TRANSLATE, pcb);\n    pcb.before_block_exec = before_block_exec;\n    panda_register_callback(self, PANDA_CB_BEFORE_BLOCK_EXEC, pcb);\n\n    return true;\n}\n\nvoid uninit_plugin(void *self) {\n    print_hist(window_hist, window_insns);\n    fclose(histlog);\n}\n\n```\n",
+      "votes": "3",
+      "user": "m000",
+      "time": "Apr 1, 2016 at 15:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "langlauf.io",
+          "text": "Thanks! My last idea was also to use capstone. But this way: 1.) Get 15 bytes (max. i386 opcode length) starting from PC, 2.) letting capstone disassemble the entire 15 bytes, 3.) taking the first struct (from the array of structs returned) and 4.) using the .size information from this struct. See capstone-engine.org/lang_c.html . What do you think? Could also try to make a plugin out of it so that others can re-use the code ... Yet, your solution probably has a better performance, as you avoid disassembling the same instructions twice or even more...",
+          "time": null
+        },
+        {
+          "user": "Brendan Dolan-Gavitt",
+          "text": "Your strategy should work for the most part. The one edge case is if you try to read 15 bytes near a page boundary where the next page is unmapped. The real instruction may not cross the page boundary, but trying to read 15 bytes will fail.  I think the real solution would be to add an AFTER_INSN_TRANSATE callback to PANDA that provides the size of the instruction in bytes (since QEMU's translator will have that information at that point).",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "Capstone is rather heavy-weight. If you only need to find instruction lengths, you might want to use a more light-weight solution such as github.com/greenbender/lend.",
+          "time": null
+        },
+        {
+          "user": "langlauf.io",
+          "text": "@BrendanDolan-Gavitt I like your suggestion to add an AFTER_INSN_TRANSATE callback to PANDA. However, I was not able to find the right spot where qemu has the info. Is it in target-i386/translate.c? Could you point me to the right location?",
+          "time": null
+        },
+        {
+          "user": "langlauf.io",
+          "text": "@BrendanDolan-Gavitt my guess: the size can be obtained at the end of function disas_insn(DisasContext *s, target_ulong pc_start) in target-i386/translate.c. disas_insn returns s->pc (which was incremented byte by byte when the opcode is parsed). This means size = s->pc - pc_start  Please tell me if I am wrong here.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

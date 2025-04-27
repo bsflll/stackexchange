@@ -1,0 +1,51 @@
+{
+    "title": "IDA Pro C dump for Decryption function",
+    "link": "https://reverseengineering.stackexchange.com/questions/4226/ida-pro-c-dump-for-decryption-function",
+    "content": "I have been battling this infection I got that encrypts my files in 512 byte chunks with a friend. We have managed to find the Decryption function we think in IDA (the code is heavily obfuscated) from a user who paid for the decrypter. Below is the C dump of the encryption function:\n<pre><code>int __stdcall sub_40C78E(int a1, int a2, int a3, int a4)\n{\n  int result;\n  char v5; \n  int v6; \n  int v7; \n  int v8; \n\n  v7 = a1;\n  v6 = a2;\n  v5 = 0;\n  result = 0;\n  if ( a2 )\n  {\n    v8 = a3;\n    do\n    {\n      LOBYTE(v8) = v5 + v8;\n      *(_BYTE *)v7 ^= v8;\n      v5 = *(_BYTE *)v7++;\n      v8 = __ROL__(a4 + v8, 8);\n      --v6;\n    }\n    while ( v6 );\n    result = v8;\n  }\n  return result;\n}\n</code></pre>\nMy friend tried to simplify it or make sense of it and this is what he came up with:\n<pre><code>int __stdcall sub_40C78E((_BYTE *)buffer, int nonce1, int nonce2)\n{\n  char v5; \n  int n; \n  int v8; \n\n  n = 0x400;    // It is a little bit confusing, because the length of block is 0x200 (rest of buffer is filled by 0).\n                        // Only first 0x200 bytes are saved to a file for block CT0A.\n  v5 = 0;\n  v8 = nonce1;\n\n  do\n  {\n      LOBYTE(v8) = v5 + LOBYTE(v8);\n      *buffer ^= LOBYTE(v8);\n      v5 = *buffer;\n      buffer++;\n      v8 = __ROL__(nonce2 + v8, 8);\n      --n;\n  }\n  while ( n );\n\nreturn v8;       \n}\n</code></pre>\nWhere nonce1 and nonce2 is suppose to represent some kind of key.\nWhat we have found with this infection is that if you XOR the first byte of the cipher text with the plain text, you get a key byte you can use to get the first byte of every file back. Which makes sense with this function because the first time in the loop the key is added to 0, which means it is simply the key. But then this guy used some type of weird CFB type xor encryption where it uses the previous xor'ed byte with the key next.\nI just don't quite understand the function and I was hoping somewhere here could perhaps simplify it more for me or explain it. I also know C#, and VB if anyone would know how to explain the function in these languages.\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "c",
+        "ida"
+    ],
+    "user": "user3546043",
+    "time": "Apr 27, 2014 at 20:16",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "As you expected, it's doing a very simple XOR.  The equivalent code looks something like this:\n<pre><code>int mystery(char *buff, int bufsize, int nonce1, int nonce2)\n{\n  int result = 0;\n  // ch is the next byte (character) in the buffer\n  char ch = 0; \n  int count = bufsize; \n  char *ptr = buff; \n  int x;\n\n  for (x = nonce1; count; --count)\n  {\n      // this bit of trickery just replaces the low 8 bits\n      // of x with the low 8 bits of (x+ch) neglecting carry, if any\n      x = (x & ~0xff) | ((x+ch) & 0xff);\n      // XOR the buffer with the calculated x value\n      *ptr ^= x;\n      // read in the next character into ch\n      ch = *ptr++;\n      // obfuscate by adding nonce2 \n      x += nonce2;\n      // if x = 0x12345678, this would make it 0x34567812\n      // for 32-bit ints.  Just a rotate left of 8 bits.\n      x = (x<<8) | ((x >>((sizeof(int)-1)*8) ) & 0xff);  \n  }\n  result = x;\n  // return the last calculated x which may be used to chain all\n  // of the blocks together.  That is, the return value x is \n  // probably passed as nonce1 to encode the next block.\n  return result;\n}\n</code></pre>\n",
+            "votes": "6",
+            "user": "Edward",
+            "time": "May 1, 2014 at 20:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user3546043",
+                    "text": "<span class=\"comment-copy\">Thank you so much for your answer. I had almost given up hope. But i do have another question if you don't mind. At first i was confused with this function. If it was a function called in a loop or if it did the loop encryption itself. Basically there is a 20 byte key in each decrypter, 4 bytes of it is used to generate a header, and the other bytes used for encryption. In this function above, do you think Nonce1 and nonce2 and more than 1 byte (as in a full key), or one byte (one byte from key). And do you think this encryption scheme is bruteforceable/Crackable like XOR? Thank you so much.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">It should be easy to reverse.  In fact, you can use almost the exact same code, except change the line <code>ch = *ptr++;</code> to <code>ch = *ptr++ ^ x;</code> and call it with the same nonce values and that will effectively unscramble a previously scrambled buffer.  As for your other question, please ask it as a separate question -- comments are too short to explain it, I think.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user3546043",
+                    "text": "<span class=\"comment-copy\">Well as for the cracking, the nonce's are generated from the key, Of which i do not know as this code came from another victims decrypter. So do you think there would be anyway without knowing the key (nonce)?</span>",
+                    "time": null
+                },
+                {
+                    "user": "user3546043",
+                    "text": "<span class=\"comment-copy\">And as for the first question, i was wondering if you could tell from the function if the nonce's passed to the function seem like they are a single byte or more than one byte? i think i worded that right. Btw, thanks again</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">@user3546043: each nonce is declared as an <code>int</code> so I presume that's 32 bits on your machine.  As for the other question, I'll think about it, but that's definitely worthy of another question.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

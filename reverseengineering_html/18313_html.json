@@ -1,0 +1,33 @@
+{
+    "title": "idapython - assign a struct to a stack variable",
+    "link": "https://reverseengineering.stackexchange.com/questions/18313/idapython-assign-a-struct-to-a-stack-variable",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I was wondering if anyone knows how to assign a struct to a stack variable using IDAPython (like when we do\n  <kbd>\n   Alt\n  </kbd>\n  +\n  <kbd>\n   Q\n  </kbd>\n  );  Doing this for addresses in .data is not a problem, but I can't figure out a way to do it over the stack struct that IDA creates for a given function.\n </p>\n <p>\n  There seems to be two APIs in\n  <code>\n   idaapi\n  </code>\n  to do this:\n </p>\n <pre><code>def set_member_tinfo2(*args):\n  \"\"\"\n  set_member_tinfo2(sptr, mptr, memoff, tif, flags) -> smt_code_t\n  \"\"\"\n\ndef set_member_tinfo(*args):\n\"\"\"\nset_member_tinfo(til, sptr, mptr, memoff, type, fields, flags) -> bool\n\"\"\"\nreturn _idaapi.set_member_tinfo(*args)\n</code></pre>\n <p>\n  The problem is that I don't know how to get a 'type' (\n  <code>\n   type_t\n  </code>\n  ) or 'tif' (\n  <code>\n   tinfo_t\n  </code>\n  ) from the struct I have in my locals.  The code I have so far is something like this:\n </p>\n <pre><code># 00000000167ED lea     r8, [rbp+190h+var_170]\n\nlea_addr = 0x167ED\n# Get the stack struct\ncurrent_func = idaapi.get_func(lea_addr)\nstack_id = idc.GetFrame(current_func)\nstack_struc = idaapi.get_struc(stack_id)\n\n# Get the stack operand offset value and stack member\nstack_member_offset = idc.GetOperandValue(lea_addr, 1)\nstack_member = stack_struc.get_member(stack_member_offset)\n\ntarget_struct_id = idaapi.get_struc_id(\"_CONFIG\")\ntarget_struc = idaapi.get_struc(target_struct_id )\n</code></pre>\n <p>\n  My goal is to assign the\n  <code>\n   _CONFIG\n  </code>\n  struct I have in my idb local to\n  <code>\n   var_170\n  </code>\n  .   I should call\n  <code>\n   set_member_tinfo2\n  </code>\n  passing a\n  <code>\n   tinfo_t\n  </code>\n  of my\n  <code>\n   _CONFIG\n  </code>\n  struct but I can't figure out how to get it.\n </p>\n <p>\n  In the idc module there is another function called 'SetMemberType' which looks simpler but I've tried this one in several ways without success. For example:\n </p>\n <pre><code>idc.SetMemberType(stack_id, stack_member_offset, idc.FF_STRU|idc.FF_DATA, target_struct_id, 0)\n</code></pre>\n <p>\n  It always returns False.\n </p>\n <hr/>\n <p>\n  Thanks @Bambu, I've actually tried\n  <a href=\"https://reverseengineering.stackexchange.com/a/18314\">\n   your method\n  </a>\n  but it didn't work for me either. What I've finally found that works is to first undefine the stack members that are defined by IDA (except for the ones you already defined and the base 'r' member) and then defining a new bytes member with the size of the struct. After that, change the type with\n  <code>\n   SetMemberType\n  </code>\n  .\n </p>\n <pre><code>def delete_all_function_stack_members(func_ea):\n    members, base = retrieve_stack_members(func_ea)\n    stack_id = idc.GetFrame(func_ea)\n    for k, v in members.items():\n        if k != base:\n            idc.DelStrucMember(stack_id, k)\n    g_functions_stack.add(func_ea)\n\ndelete_all_function_stack_members(current_func)\nAddStrucMember(stack_id, \"config\", stack_member_offset, FF_BYTE|FF_DATA, -1, GetStrucSize(target_struct_id))\nidc.SetMemberType(stack_id, stack_member_offset, idc.FF_STRU|idc.FF_DATA, target_struct_id, 1)\n</code></pre>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "n3k",
+    "time": "Jun 18, 2018 at 7:55",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  What I've finally found that works is to first undefine the stack members that are defined by IDA (except for the ones you already defined and the base 'r' member) and then defining a new bytes member with the size of the struct. After that, change the type with\n  <code>\n   SetMemberType\n  </code>\n  .\n </p>\n <pre><code>def delete_all_function_stack_members(func_ea):\n    members, base = retrieve_stack_members(func_ea)\n    stack_id = idc.GetFrame(func_ea)\n    for k, v in members.items():\n        if k != base:\n            idc.DelStrucMember(stack_id, k)\n    g_functions_stack.add(func_ea)\n\ndelete_all_function_stack_members(current_func)\nAddStrucMember(stack_id, \"config\", stack_member_offset, FF_BYTE|FF_DATA, -1, GetStrucSize(target_struct_id))\nidc.SetMemberType(stack_id, stack_member_offset, idc.FF_STRU|idc.FF_DATA, target_struct_id, 1)\n</code></pre>\n <p>\n  Note: refer to\n  <a href=\"https://hex-rays.com/products/ida/support/ida74_idapython_no_bc695_porting_guide.shtml\" rel=\"nofollow noreferrer\">\n   Porting from IDAPython 6.x-7.3, to 7.4\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "0xC0000022L",
+            "time": "Jul 14, 2023 at 23:10",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You can get a\n  <code>\n   tinfo_t\n  </code>\n  for your\n  <code>\n   _CONFIG\n  </code>\n  struct by using\n  <code>\n   parse_decl2\n  </code>\n  . Then applying it using\n  <code>\n   idaapi.set_member_tinfo2\n  </code>\n  .\n </p>\n <p>\n  After you get the\n  <code>\n   stack_struc\n  </code>\n  and\n  <code>\n   stack_member\n  </code>\n  you could do something like this:\n </p>\n <pre><code>tinfo = idaapi.tinfo_t()\nidaapi.parse_decl2(idaapi.cvar.idati, '_CONFIG;', tinfo, idaapi.PT_TYP)\nidaapi.set_member_tinfo2(stack_struc, stack_member, 0, tinfo, idaapi.SET_MEMTI_COMPATIBLE)\n</code></pre>\n <p>\n  Note: the\n  <code>\n   ;\n  </code>\n  at the end of\n  <code>\n   _CONFIG;\n  </code>\n  is required.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Bambu",
+            "time": "May 19, 2018 at 2:08",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

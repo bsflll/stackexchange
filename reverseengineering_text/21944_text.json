@@ -1,0 +1,26 @@
+{
+    "title": "PowerPC TOC and SDA",
+    "link": "https://reverseengineering.stackexchange.com/questions/21944/powerpc-toc-and-sda",
+    "content": "I'm trying to understand the concepts of the <pre><code>TOC</code></pre> and <pre><code>SDA</code></pre> in <pre><code>PowerPC</code></pre>. \nFrom what I understand, they are basically pointers to tables of global values, when <pre><code>TOC</code></pre> is stored in <pre><code>r2</code></pre>, and <pre><code>SDA</code></pre> in <pre><code>r13</code></pre>. \nBut what are the difference between them? I compiled a simple ppc project, and I see that only <pre><code>r2</code></pre> is used, but <pre><code>r13</code></pre> isn't. Is it something that supposed to be said explicitly to use <pre><code>SDA</code></pre>? \nMoreover, I see that all my global strings aren't actually accessed through <pre><code>r2</code></pre> at all. It looks like the only use of <pre><code>r2</code></pre> in my code is just to access stack variables. Does it make sense?  \nIn addition, Where are they supposed to be initialized? I didn't find in my code any place that <pre><code>r2</code></pre> is initialized, only used.\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "register",
+        "powerpc"
+    ],
+    "user": "macro_controller",
+    "time": "Aug 21, 2019 at 9:28",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "First, a bit of background on why these registers are needed. PPC is a RISC-like ISA, in that all instructions are of the same size (32 bits) and there is limited space for immediate values (usually 16 bits at most) that you would use for things like addresses. So how do you address more that 16 bits?\nOne option is to build addresses by 16-bit slices, e.g. something like:\n<pre><code> lis     r4,msg@ha     # load top 16 bits of &msg\n addi    r4,r4,msg@l   # add bottom 16 bits\n</code></pre>\nAnother is to use PIC (position-independent code) to address things relative to current address:\n<pre><code>  bcl 20, 4*cr7+so, loc_picbase #branch and link to next location \nloc_picbase:\n  mflr      r31 # load link register (lr) into r31. It will be equal to loc_picbase\n  addis     r2, r31, (_NXArgc - loc_picbase)@ha\n  stw       r28, (_NXArgc - loc_picbase)@l(r2)\n  <and so on>\n</code></pre>\nHowever, using either of these requires multiple instructions per data access and is not always feasible (e.g. first variant would require patching instructions if binary needs to be relocated which can't be done when running read-only code). So on some platforms they came up with the concept of TOC (Table of Contents), which is a fixed register having the same value for the whole module and from which all data is addressed using an offset. The register <pre><code>r2</code></pre> was reserved for this purpose and AFAIK is supposed to be set by the OS loader. Since offsets in PPC instructions are limited to 16 bits (-32768 to +32767), you can address about 64K of data around <pre><code>r2</code></pre> (which is usually placed in the middle of the data area for maximum coverage). If the module needs more data, offsets bigger than 16 bits are constructed in several steps, or multiple TOCs may be used (in this case different functions may use different TOCs).\nIn PPC64 ABI, the latter is achieved by so-called function descriptors which is pairs of pointers where one is the address of the function's code and the other is the TOC value expected by the function. Any time a function is called, the TOC is loaded from the descriptor before jumping to the function's code (unless the compiler knows that the target function uses the same TOC value, in which case the TOC reload can be skipped).\nIn embedded environment, there is usually no OS but a monolithic firmware, and this concept is applied to the whole firmware by using register <pre><code>r13</code></pre> for SDA (Small Data Area) and, if necessary, <pre><code>r2</code></pre> for an additional data region (SDA2 -Small Data Area 2). A so-called Zero data area (ZDA) may be also used for data placed near the address 0 (using special addressing modes from register <pre><code>r0</code></pre>).\nSome compilers (notably Green Hills) support additional data pointers (<pre><code>r14</code></pre>, <pre><code>r15</code></pre> etc.). \nIn embedded environment, the data registers (<pre><code>r2</code></pre>, <pre><code>r13</code></pre> etc.) should be initialized in the startup code, shortly after reset, as the rest of the firmware usually expects them to have proper values.\nP.S. usage of <pre><code>r2</code></pre> depends on the environment. It's quite possible that the target environment you're compiling for does not use TOC so you don't see it used (stack pointer on PowerPC is <pre><code>r1</code></pre>, not <pre><code>r2</code></pre>).\nSome references:\n\nIntroduction to assembly on the PowerPC (IBM)\nDebugging PowerPC ELF Binaries (Devpit)\nSystem V Application Binary Interface PowerPC™ Processor Supplement\nPowerPC Embedded Application Binary Interface\n64-bit PowerPC ELF Application Binary Interface Supplement\n",
+            "votes": "7",
+            "user": "Igor Skochinsky",
+            "time": "Aug 22, 2019 at 19:03",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

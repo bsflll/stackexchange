@@ -1,0 +1,55 @@
+{
+  "title": "How do I call a statically imported function from a Dll? call dword ptr ds <> not working",
+  "link": "https://reverseengineering.stackexchange.com/questions/13834/how-do-i-call-a-statically-imported-function-from-a-dll-call-dword-ptr-ds-no",
+  "content": "Disclaimer: I am relatively new to this whole RE thing. So I successfully crammed some instructions into the end of an existing DLL and redirected a call.\n\nNow I actually want to do things with a function argument before calling the original code and try to OutputDebugStringA it.\n\nOutputDebugStringA is statically imported by my Dll, so I try to do the following:\n\n```\ncall dword ptr ds:[<&OutputDebugStringA>]\n\n```\nThis is an instruction I copy from a usage in the DLL itself.\n\nSo this works and is successfully called. But, when I patch the Dll with this instruction, on the next run the address is invalid which leads to an Access Violation and crash. (See red line in picture)\n\n\n\nWhy is that so? Shouldn't the IAT entry of the function be always at the same place, relative to where the Dll was loaded? \n\nAnd how do I fix it? \n\nDo I need complicated hacks to find the base address of my module?\n\nOr is there some sort of relative far call instruction I am stupidly not aware of?\n\nThank you for your help.\n\nI think I got it now.\nSo I can't be sure that the IAT is always at the same address, not even relative to the ds segment (which makes it kinda useless in my opinion).\n\nI can however be sure that the IAT address is always a fixed relative amount away from the code I want to run.\n\nSo I googled PIC techniques under x86 and ended up with this code that seems to work fine so far.\n\n```\npush ebp\nmov ebp,esp\npush eax\npush ecx\npush edx\npush dword ptr ss:[ebp+C]\ncall <rcp-be-name.tmplbl>\npop ebx   ;@tmplbl\nlea eax,dword ptr ds:[ebx+80F] ;the relative offset\ncall dword ptr ds:[eax-5] ;dunno why 5\npop edx\npop ecx\npop eax\npush dword ptr ss:[ebp+C] ;the original arguments\npush dword ptr ss:[ebp+8] ;  ...\ncall rcp-be-name.644A97D0 ;the original function\nadd esp,8\npop ebp\nret\n\n```\nThanks a lot!\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "dll",
+    "pe",
+    "function-hooking",
+    "iat",
+    "call"
+  ],
+  "user": "Carraway",
+  "time": "Apr 2, 2017 at 10:07",
+  "comments": [
+    {
+      "user": "Martin",
+      "text": "DLLs are not always loaded at the same address",
+      "time": null
+    },
+    {
+      "user": "Carraway",
+      "text": "Thanks I guess, but I know that. So is the import address fixed in the original DLL call via the relocation table?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It appears you've already guessed what the actual issue is - your call instruction is using direct addressing and not relative addressing. This means that when a DLL changes it's location between executions you're still trying to execute the same absolute value, resulting in different types of errors depending on the content of the actual content in that address.\n\nSpecifically to your question - 0xFF 15 is an absolute, near, 4 byte immediate call. 0xFF is used for absolute calls, while 0x8E is used for relative calls (as you can see in your image, at the yellow highlighted line).\n\nReplacing the single byte 0xFF will turn the instruction to a relative instruction, meaning the call will be to $+5e01d0e4 instead of to 0x5e01d0e4. The dollar sign ($) is a conventional representation of \"the address of the next instruction\".\n\nBecause how the x86 CPU (and many other CPUs) works, it is easier to first advance to the next instruction, and only then carry out any EIP modifying operations, thus having relative operations modify the EIP values of the following instruction.\n\nReplacing the four last bytes with any signed integer will make the call instruction add that number (thus negative numbers are used to call a smaller address value) to the address of the next instruction. For example, the byte code FF 15 EA FF FF FF will be translated to a six byte long instruction call $-6, creating a call that calls itself, eventually faulting on a stack overflow.\n\nA method simpler than manually editing instruction byte code could be using olly's assemble command with a $ sign to indicate a relative instruction.\n\n",
+      "votes": "2",
+      "user": "NirIzr",
+      "time": "Oct 29, 2016 at 22:04",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Carraway",
+          "text": "So if I understand you correctly, I can't be sure that the IAT is always at the same address, not even relative to the ds segment (which makes it kinda useless in my opinion).  I can however be sure that the IAT address is always a fixed relative amount away from the code I want to run.  So how do I load this value then?  I can make a call 0x<theadress>, but that doesnt work because the IAT entry only contains the",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "The IAT is at a position relative to the start of the loaded image. This is not useless, this is precisely what makes it relocatable code easy by using relative addressing. I don't follow what you're still stuck on, please edit your question of you need more info (or explain clearly here)",
+          "time": null
+        },
+        {
+          "user": "Carraway",
+          "text": "sorry about that comment, i hit enter on accident. Edited the original post, everything seems to be working now.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

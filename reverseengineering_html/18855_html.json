@@ -1,0 +1,44 @@
+{
+    "title": "Understanding Program Arguments on the Stack in Assembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/18855/understanding-program-arguments-on-the-stack-in-assembly",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  To self-teach myself reverse engineering, I am writing small C programs and reversing them in order to understands how the compiler sees my code. However, I am having quite tough time understanding the stack concept w.r.t command line arguments.\n </p>\n <p>\n  So for a basic c code like this:\n </p>\n <pre><code>int main(int argc, char** argv){\n\n    if(argc < 2){\n        printf(\"1 argument needed!\");   \n    } else {\n        printf(\"\n -- %s Entered\", argv[1]);\n        printf(\"\n%s -- is the first argument\n\", argv[0]);\n    }\n    return 0;\n}\n</code></pre>\n <p>\n  The conversion is as follows:\n </p>\n <p>\n  <a href=\"https://i.sstatic.net/bnshZ.png\" rel=\"nofollow noreferrer\">\n   <img alt=\"IDA Pro Free DSM Code\" src=\"https://i.sstatic.net/bnshZ.png\"/>\n  </a>\n </p>\n <p>\n  The commented parts are where I am having a tough time:\n </p>\n <pre><code>var_10= qword ptr -10h\nvar_4= dword ptr -4\npush    rbp ; understandable due to convention\nmov     rbp, rsp ; same as above\nsub     rsp, 10h ; why the space allocation? \nmov     [rbp+var_4], edi ; ?\nmov     [rbp+var_10], rsi ; ?\n</code></pre>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "assembly",
+        "c",
+        "stack",
+        "amd64",
+        "arguments"
+    ],
+    "user": "Thomas",
+    "time": "Jul 21, 2018 at 5:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  First of all, you have to understand that there is a specification for all these things. These specifications differ from one assembly language to another and from one operating system to the other.\n </p>\n <p>\n  These global specification are called Application Binary Interface (ABI) and define, among other things, what we call the '\n  <em>\n   calling conventions\n  </em>\n  ' of functions. IDAPro seems to have found that your program is following the\n  <code>\n   cdecl\n  </code>\n  convention but I doubt it is correct, I think that the calling convention used here is\n  <code>\n   fastcall\n  </code>\n  within the\n  <code>\n   amd64\n  </code>\n  SystemV ABI (see\n  <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions\" rel=\"noreferrer\">\n   the wikipedia page about calling conventions\n  </a>\n  ). My guess is that you are using Linux...\n </p>\n <p>\n  So, the manipulation of\n  <code>\n   rpb\n  </code>\n  and\n  <code>\n   rsp\n  </code>\n  are just here to save the previous state of the stack-frame in order to restore it when you leave the function (you stack the content of\n  <code>\n   rbp\n  </code>\n  on the stack with the hope that you will be able to restore it when you leave the function at the end). But, you already understood this.\n </p>\n <p>\n  The space allocation (\n  <code>\n   sub rsp, 10h\n  </code>\n  ) come from the fact that you have to store one\n  <code>\n   int\n  </code>\n  (\n  <code>\n   argc\n  </code>\n  ) of 4 bytes and one pointer to a\n  <code>\n   char*\n  </code>\n  (\n  <code>\n   argv\n  </code>\n  ) of 8 bytes. I know, when added it is only 12 bytes and not 16 bytes (\n  <code>\n   10h\n  </code>\n  ). But, the access in memory for the CPU have been optimized when they are\n  <em>\n   aligned\n  </em>\n  (meaning that they start at an address which is a power of 2, or, if you consider hexadecimal representation, the address must end with a\n  <code>\n   0\n  </code>\n  ). So, the compiler decided to round-up the memory needed to\n  <strong>\n   align\n  </strong>\n  the data and be more efficient fetching it.\n </p>\n <p>\n  Then, you have the memory space available on the stack, now lets go fetch the data. So, for that you have to know what does the caller function before starting the function we are currently looking at.\n </p>\n <p>\n  In fact, the previous function, before calling the function we are in, has stored the arguments of our function in some registers. Here, it is important to agree that all the function (caller and callee) will use the same set of registers to pass the arguments from the caller to the callee.\n </p>\n <p>\n  So, usually, the first integer argument is stored in\n  <code>\n   rdi\n  </code>\n  and the second in\n  <code>\n   rsi\n  </code>\n  (the full list of registers is listed\n  <a href=\"https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI\" rel=\"noreferrer\">\n   here\n  </a>\n  . Here, as the first argument is\n  <code>\n   argc\n  </code>\n  an\n  <code>\n   int\n  </code>\n  , a 32-bit register is enough (4 bytes), so we use\n  <code>\n   edi\n  </code>\n  in place of\n  <code>\n   rdi\n  </code>\n  . And, as the second argument is a pointer (\n  <code>\n   argv\n  </code>\n  ), we need the full 64-bit register\n  <code>\n   rsi\n  </code>\n  (8 bytes).\n </p>\n <p>\n  What do we do with this? Well, we store preciously\n  <code>\n   argc\n  </code>\n  and\n  <code>\n   argv\n  </code>\n  within our stack-frame in the memory we just allocated before.\n </p>\n <p>\n  Note that the address stored in\n  <code>\n   rbp\n  </code>\n  will not change all along the life of the current stack-frame (as we need it at the end to perform a\n  <code>\n   leave\n  </code>\n  and restore the address of the\n  <code>\n   rbp\n  </code>\n  of the previous stack-frame). So, most of the compilers will use\n  <code>\n   rbp\n  </code>\n  as point of reference to call the variables which are local to the current stack-frame. Thus,\n  <code>\n   rbp+var_4\n  </code>\n  refer to\n  <code>\n   argc\n  </code>\n  and\n  <code>\n   rbp+var_10\n  </code>\n  refer to\n  <code>\n   argv\n  </code>\n  from now.\n </p>\n <p>\n  Well, that is about all you really need to know about the\n  <code>\n   fastcall\n  </code>\n  convention in Linux. Now, the program should be more understandble to you.\n </p>\n <p>\n  Hope this helped!\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "perror",
+            "time": "Jul 21, 2018 at 6:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Thomas",
+                    "text": "<span class=\"comment-copy\">awesome explanation!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Is <code>fastcall</code> used in *nix world?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">I use the terminology <code>fastcall</code> in a wider way that it should be. I meant: <i>a calling convention that uses registers better than the stack to pass arguments</i>. I said <code>fastcall</code> because it was one of the first to use regsiters and one of the most widely used. But, the registers used to pass arguments are changing between the Microsoft ABI and the SysemV ABI, so I guess that Unix is <b>not</b> using <code>fastcall</code>, even if the basic principles of <code>fastcall</code> (passing through registers) are used.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,46 @@
+{
+  "title": "Help Needed reversing a function inside a DLL [closed]",
+  "link": "https://reverseengineering.stackexchange.com/questions/18608/help-needed-reversing-a-function-inside-a-dll",
+  "content": "I have a broken installation of Metalogix Archive Manager (MAM). Sometimes, I need to go and retrieve attachments that this has archived when it was previously working.\n\nThe original attachment name can be anything.pdf. The attachment name for an archived PDF looks like this - 2_000f834l.pdf.zip\n\nThe HTTP request for the PDF above - http://mam/exchangePAMWS/GetAttachment.aspx?PARAM=003D05g0mg1g04k0fg1204w09w1404Y0gM1904g0fg0N0480cg0M0380dg0Q0340cM0R03o0cM0Q04o0dg0M0480e01403w0dw0M03k0cw0Q03o0d00T03s0d00M04809w1304Y0jw1904g0fg0Q03c0cg0T03k0d00O03g0800w\n\nI would like to know how I can extract the archived attachment name from that giant string.\n\nI've uploaded the GetAttachment.cs file referenced by the GetAttachment.aspx file, as well as the original DLL it came from.\n\nIf anyone is interested, I can send over the DLLs.\n\nEdit\n\nOk, I've found some things here using Visual Studio interactive mode.\n\nThe Decode6Bit function in EncodeUtils.cs is the key. I've ran that function using the PARAM value above -\n\n```\n> var txt = \"003D05g0mg1g04k0fg1204w09w1404Y0gM1904g0fg0N0480cg0M0380dg0Q0340cM0R03o0cM0Q04o0dg0M0480e01403w0dw0M03k0cw0Q03o0d00T03s0d00M04809w1304Y0jw1904g0fg0Q03c0cg0T03k0d00O03g0800w\";\n> Console.WriteLine(Decode6bit(txt))\nTYPE=BH&DOCID=1B10254135634F50B8D860524647740B&CONID=43175424\n\n```\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "207",
+  "tags": [
+    "dll",
+    "c#"
+  ],
+  "user": "Tyler Applebaum",
+  "time": "6 years ago",
+  "comments": [
+    {
+      "user": "Tyler Applebaum",
+      "text": "Whoops, sorry. New link here. I appreciate your interest.  drive.google.com/open?id=1MSFJ7be-Lvfg2lQmVWI6Ha465s7wbvkZ",
+      "time": null
+    },
+    {
+      "user": "Tyler Applebaum",
+      "text": "That link works for me...  imgur.com/a/1S6sSYO",
+      "time": null
+    },
+    {
+      "user": "Tyler Applebaum",
+      "text": "Ohhhh.... I see. That's an internal DNS name only. The URL is there as an example of a real URL that brings me to an attachment named 2_000f834l.pdf.zip.",
+      "time": null
+    },
+    {
+      "user": "Tyler Applebaum",
+      "text": "mam   It's internal only, so you can't access it. That has no bearing on the parameter. The interesting piece is the PARAM=xxxx bit that's passed to GetAttachment.aspx.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Open the Cryptography.dll file in dnSpy. The PARAM value can be decoded with this Decode6bit() function found in EncodeUtilscs:\n\n```\npublic static string Decode6bit(string input) {\n    string value = input.Substring(0, 4);\n    ushort num = Convert.ToUInt16(value, 16);\n    int length = input.Length;\n    string text = \"\";\n    ushort[] array = new ushort[8];\n    for (int i = 4; i < length; i += 8) {\n        for (int j = 0; j < 8; j++) {\n            char c = input[i + j];\n            ushort num2;\n            if (c == '>') {\n                num2 = 63;\n            } else if (c == '<') {\n                num2 = 62;\n            } else if (c >= 'a') {\n                num2 = (ushort)((byte)c - 97 + 10);\n            } else if (c >= 'A') {\n                num2 = (ushort)((byte)c - 65 + 36);\n            } else {\n                num2 = (ushort)((byte)c - 48);\n            }\n            array[j] = num2;\n        }\n        ushort num3 = (ushort)((int)array[0] << 10 | (int)array[1] << 4 | (array[2] & 60) >> 2);\n        ushort num4 = (ushort)((int)(array[2] & 3) << 14 | (int)array[3] << 8 | (int)array[4] << 2 | (array[5] & 48) >> 4);\n        ushort num5 = (ushort)((int)(array[5] & 15) << 12 | (int)array[6] << 6 | (int)array[7]);\n        text += (char)num3;\n        text += (char)num4;\n        text += (char)num5;\n    }\n    if (text.Length > (int)num) {\n        text = text.Substring(0, (int)num);\n    }\n    return text;\n}\n\n```\nAccording to the question:\n\n```\nInput: \"003D05g0mg1g04k0fg1204w09w1404Y0gM1904g0fg0N0480cg0M0380dg0Q0340cM0R03o0cM0Q04o0dg0M0480e01403w0dw0M03k0cw0Q03o0d00T03s0d00M04809w1304Y0jw1904g0fg0Q03c0cg0T03k0d00O03g0800w\";\nOutput: \"TYPE=BH&DOCID=1B10254135634F50B8D860524647740B&CONID=43175424\"\n\n```\nThe output string is mapped in server. After encoding/decoding the string, the output is appended to the URL and the required file is downloaded as follows. Open exchangePAMCommon.dll file in dnSpy. The URL is appended in MessageRetrieval.cs:\n\n```\nif (text != null) {\n    str = \"02BB015A_\" + EncodeUtils.EncodeXOR(text2, text);\n    requestUriString = protocol + downloadServer + \"/exchangePAMWS/GetFile.aspx?\" + str;\n}\nelse {\n    str = EncodeUtils.Encode6bit(text2);\n    requestUriString = protocol + downloadServer + \"/exchangePAMWS/GetFile.aspx?PARAM=\" + str;\n}\nhttpWebRequest = (HttpWebRequest)WebRequest.Create(requestUriString);\n\n```\n",
+      "votes": "2",
+      "user": "Biswapriyo",
+      "time": "Jul 6, 2018 at 5:55",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

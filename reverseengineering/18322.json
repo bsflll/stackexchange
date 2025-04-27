@@ -1,0 +1,61 @@
+{
+    "title": "Backtracing where a register gets initialized",
+    "link": "https://reverseengineering.stackexchange.com/questions/18322/backtracing-where-a-register-gets-initialized",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am currently trying to bypass a CRC check, that exists inline on many places in an application to check if memory pages in the .text section have been modified.</p>\n<p><a href=\"https://i.sstatic.net/mNzpW.png\" rel=\"nofollow noreferrer\"><img alt=\"CRC calculation routine\" src=\"https://i.sstatic.net/mNzpW.png\"/></a>\nShort explanation of the <code>crc32</code> instruction:</p>\n<blockquote>\n<p>Starting with an initial value in the first operand (destination operand), accumulates a CRC32 (polynomial 11EDC6F41H) value for the second operand (source operand) and stores the result in the destination operand.</p>\n</blockquote>\n<p>Okay so: <code>rsi</code> contains the pointer of the next memory page that gets scanned and <code>rax</code> is the offset/counter. <code>rdx</code> is usually 200 (200 loops).</p>\n<p><strong>My goal</strong>: find <em>where</em> <code>rsi</code> is set. There has to be some instruction like <code>mov rsi, next_memory_page_to_be_scanned</code>.</p>\n<p>Going further up in code:\n<a href=\"https://i.sstatic.net/uPPQW.png\" rel=\"nofollow noreferrer\"><img alt=\"init for the loop vars\" src=\"https://i.sstatic.net/uPPQW.png\"/></a></p>\n<p>So here are the loop vars initialized (<code>rdx,rax</code>).</p>\n<p>Going more up:<a href=\"https://i.sstatic.net/cNdLa.png\" rel=\"nofollow noreferrer\"><img alt=\"first instruction in yellow for crc\" src=\"https://i.sstatic.net/cNdLa.png\"/></a></p>\n<p>So here is one of the things I am stuck: the yellow marked part seems to be the first instructions I can bp that gets executed before CRC_CHECK. I mean some other place obviously calls it, but I don't know how to find that place.</p>\n<p>I tried to follow the return pointer: <a href=\"https://i.sstatic.net/pe4ej.png\" rel=\"nofollow noreferrer\"><img alt=\"return bs\" src=\"https://i.sstatic.net/pe4ej.png\"/></a></p>\n<p>but the return pointer points to nothing basically. Breakpointing one instruction above (<code>and [rcx], al</code>) won't trigger the bp (seems to not have anything todo with the CRC check). How do I backtrace this further?</p>\n<p>The value of <code>rsi</code> lays also not on the stack when I bp the CRC.</p>\n<p>Thanks!</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "743",
+    "tags": [
+        "ida",
+        "crc",
+        "stack",
+        "cheat-engine"
+    ],
+    "user": "Lyan",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">what about the two calls in the listing?  Or the caller of this function?</span>",
+            "time": null
+        },
+        {
+            "user": "Lyan",
+            "text": "<span class=\"comment-copy\">the 2 calls are not called, the function itself is not called either, at least when i bp the function at the start it is not called (at least not for the CRC calculation). the first instruction that is executed here / that you can bp is movsd qword ... (the yellow marked part)</span>",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">can you show us the bytes for the opcodes and addresses? This <code>and al,[rdx+r14*8-7BFAEFF1h]</code> looks strange and I suspect some obfuscation going on which IDA maybe fails to recognize and shows you the wrong disassembly.</span>",
+            "time": null
+        },
+        {
+            "user": "Lyan",
+            "text": "<span class=\"comment-copy\"><a href=\"https://i.imgur.com/wGE8XX5.png\" rel=\"nofollow noreferrer\">i.imgur.com/wGE8XX5.png</a> here are the bytes of this function</span>",
+            "time": null
+        },
+        {
+            "user": "josh",
+            "text": "<span class=\"comment-copy\">Are you sure that the code you are investigating is not a trap you have been guided to due to some Anti-Debug? Maybe you could modify the file with a hard written INT3 and see if the code arrives there without debugger. If yes, you could attach Ida at this point and see if it's the same as when debugging.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Jumping off of Igor's suggestion of a trace, have you tried a break and trace via Cheat Engine yet? If not, consider the following:</p>\n<ol>\n<li>Whether via byte array (requiring an AOB scan first; make sure you select read/write memory), module+offset, or symbol name (if applicable), find your way to the <code>crc32 edi, qword ptr [rsi+rax*8]</code> instruction in Cheat Engine's disassembler (the top half of the Memory Viewer).</li>\n<li>Right-click on the instruction and choose <code>Break and trace instructions</code>.</li>\n<li>In the subsequent window, check <code>Save stack snapshots</code> and <code>Step over instead of single step</code>, then click <code>OK</code>.</li>\n<li>Once the Tracer window populates with your trace, right-click within it and choose <code>Expand all</code>.</li>\n<li>Scroll to the farthest branch of the tree, of which the top-most instruction should be your <code>crc32 edi, qword ptr [rsi+rax*8]</code> instruction.</li>\n<li>Click the <code>Stack</code> button and keep the window that opens (Stack View), beside the Tracer window.</li>\n</ol>\n<p>Now work your way down the list of recorded instructions (which will take you back up through callers with each branch). You can watch the registers on the right-hand side, as well as the stack via the Stack View window. You can double-click on any instruction in the Tracer to take you to that instruction in the disassembler, where you can then read up through sub-routines from callers.</p>\n<p>If there isn't enough branching for you, then run the trace again and change the initial number of instructions traced from 1000 to whatever you'd like. Also, if you find your way into a caller's sub-routine and there are other calls from within it that you'd like to drill down into, simply run another break/trace at some point before the call, then <strong>do not</strong> select (or <strong>de-select</strong>, if it's already selected) <code>Step over instead of single step</code>.</p>\n<p>Finally as another tip, in the Memory Viewer, if you run <code>Tools -&gt; Dissect Code</code>, you can then select the base module and any other dependencies to run a bunch of automated tasks on, like finding all referenced strings and functions, and finding all xrefs to all routines!</p>\n<p>The xrefs one is great for being able to head to the prologue of any given function (right-click on any instruction and choose <code>Select current function</code>, then scroll to the top) and quickly see how many callers there are (of which you can double-click any of to go to them).</p>\n<p>This allows you to quickly see if a function is shared, thus potentially acting as a pivot point to either patch with a <code>ret</code> (or however you'd prefer to patch), or allowing you to choose which specific call instructions to that particular function you'd like to individually patch.</p>\n</div>",
+            "votes": "1",
+            "user": "dsasmblr",
+            "time": "Jul 21, 2018 at 18:42",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It sounds like the program is using some kind of obfuscation. You probably should step through it from the beginning or record an instruction trace to see how it ends up executing these instructions.</p>\n</div>",
+            "votes": "0",
+            "user": "Igor Skochinsky",
+            "time": "May 22, 2018 at 7:34",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

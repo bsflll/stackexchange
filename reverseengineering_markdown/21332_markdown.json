@@ -1,0 +1,45 @@
+{
+  "title": "eip register address not matching with address at breakpoint (breakpoint set at main function)",
+  "link": "https://reverseengineering.stackexchange.com/questions/21332/eip-register-address-not-matching-with-address-at-breakpoint-breakpoint-set-at",
+  "content": "I recently started reading a book about reverse engineering. In one of the examples it uses gdb (debugger) to disassemble the main. So I did it, and the output is below\n\n```\n(gdb) disass main\nDump of assembler code for function main:\n   0x0000118d <+0>: lea    ecx,[esp+0x4]\n   0x00001191 <+4>: and    esp,0xfffffff0\n   0x00001194 <+7>: push   DWORD PTR [ecx-0x4]\n   0x00001197 <+10>:    push   ebp\n   0x00001198 <+11>:    mov    ebp,esp\n   0x0000119a <+13>:    push   ebx\n   0x0000119b <+14>:    push   ecx\n   0x0000119c <+15>:    sub    esp,0x10\n   0x0000119f <+18>:    call   0x1090 <__x86.get_pc_thunk.bx>\n   0x000011a4 <+23>:    add    ebx,0x2e5c\n   0x000011aa <+29>:    mov    DWORD PTR [ebp-0xc],0x0\n   0x000011b1 <+36>:    jmp    0x11c9 <main+60>\n   0x000011b3 <+38>:    sub    esp,0xc\n   0x000011b6 <+41>:    lea    eax,[ebx-0x1ff8]\n   0x000011bc <+47>:    push   eax\n   0x000011bd <+48>:    call   0x1030 <puts@plt>\n   0x000011c2 <+53>:    add    esp,0x10\n   0x000011c5 <+56>:    add    DWORD PTR [ebp-0xc],0x1\n   0x000011c9 <+60>:    cmp    DWORD PTR [ebp-0xc],0x9\n   0x000011cd <+64>:    jle    0x11b3 <main+38>\n--Type <RET> for more, q to quit, c to continue without paging--\n   0x000011cf <+66>:    mov    eax,0x0\n   0x000011d4 <+71>:    lea    esp,[ebp-0x8]\n   0x000011d7 <+74>:    pop    ecx\n   0x000011d8 <+75>:    pop    ebx\n   0x000011d9 <+76>:    pop    ebp\n   0x000011da <+77>:    lea    esp,[ecx-0x4]\n   0x000011dd <+80>:    ret    \nEnd of assembler dump.\n\n```\nAnd now I put a breakpoint at main to check the eip register value and compare it with address at main function as shown below\n\n```\n(gdb) info register eip\neip            0x565561aa          0x565561aa <main+29>\n\n```\nAnd here comes the problem, eip register value is not matching with the address at main in my case (shown below),\n\n```\n0x000011aa <+29>:   mov    DWORD PTR [ebp-0xc],0x0\n\n```\nwhereas in the example it was mentioned that it will match. Please help me in solving this. Thanks in advance.\n\nUpdate : examining instruction at eip , address matches with eip but not with address in the memory dumb shown above\n\n```\n(gdb) x/i $eip\n=> 0x565561aa <main+29>:    mov    DWORD PTR [ebp-0xc],0x0\n\n```\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "842",
+  "tags": [
+    "disassembly",
+    "debugging",
+    "gdb"
+  ],
+  "user": "Finding_me",
+  "time": "May 18, 2019 at 15:02",
+  "comments": [
+    {
+      "user": "Paweł Łukasik",
+      "text": "\"a book about reverse engineering\" what book is that? Maybe it's relevant to check what exactly is written there.",
+      "time": null
+    },
+    {
+      "user": "Finding_me",
+      "text": "The name of the book is \"Hacking - The art of exploitation\" by Jon Erickson. The mentioned example above is from Pg. 26,27",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It is not a mismatch in memory addresses; it is a file offset of the instruction prior to runtime vs. the runtime memory address of the instruction.\n\nWhy the difference? The main reason is that the ELF binary here is a position-independent executable (PIE) and therefore the absolute memory addresses cannot be known until after the program has been loaded, since the program can be loaded anywhere in memory (position independence). Since the absolute memory addresses are not known until runtime, if gdb is used to disassemble position independent code (PIC) prior to the run command being executed, the file offsets will be printed instead.\n\nSo how do we know that the code is indeed position independent? We can tell just by looking at the the disassembly.\n\nThe first way we can tell is by looking at the leftmost column, where normally we would expect to see memory addresses near 0x8048000, the canonical entry point in x86 binaries compiled by GCC. However, the values we see here are near 0x0000118d, and so are more likely to be file offsets rather than memory addresses.\n\nMore compellingly, in position-independent code, instruction pointer-relative addressing is used instead of absolute addresses. This is what we see in the disassembly in your post:\n\n```\n <snip>\n 0x0000119f <+18>:    call   0x1090 <__x86.get_pc_thunk.bx>  <- get address of next instruction\n 0x000011a4 <+23>:    add    ebx,0x2e5c                      <- store location of GOT in ebx\n 0x000011aa <+29>:    mov    DWORD PTR [ebp-0xc],0x0         <- move 0 to GOT entry\n 0x000011b1 <+36>:    jmp    0x11c9 <main+60>                 \n 0x000011b3 <+38>:    sub    esp,0xc\n 0x000011b6 <+41>:    lea    eax,[ebx-0x1ff8]                <- load data relative to GOT location stored in ebx\n 0x000011bc <+47>:    push   eax\n 0x000011bd <+48>:    call   0x1030 <puts@plt>               <- function from DLL, address in PLT at runtime\n </snip>\n\n```\nAll addressing here is relative. The call to __x86.get_pc_thunk.bx is necessary, because the address of the next instruction will be used to calculate relative offsets to the instruction pointer.\n\nMore info:\n\nPosition Independent Code (PIC) in shared libraries\n\nWhat is PLT/GOT?\n\n",
+      "votes": "1",
+      "user": "julian",
+      "time": "Jun 28, 2019 at 4:45",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "I had the same problem following the \"Art of exploitation\" book. As @julian said, you will need to disassemble after you reached the breakpoint such as:\n\nNow the instruction pointer register (RIP because it's 64bit in my case) points to the same address as the main's breakpoint.\n\n",
+      "votes": "1",
+      "user": "Unix von Bash",
+      "time": "Sep 1, 2019 at 13:43",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

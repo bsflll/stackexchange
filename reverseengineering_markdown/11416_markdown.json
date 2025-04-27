@@ -1,0 +1,44 @@
+{
+  "title": "Unrecognized procedures in IDA Pro",
+  "link": "https://reverseengineering.stackexchange.com/questions/11416/unrecognized-procedures-in-ida-pro",
+  "content": "for hobby I'm just trying to reverse and old DOS game executable.\n\nI'm quite new with reversing so I'm having hard time understanding some bits about IDA Pro. I let the program choose the best-fit strategy to disassemble the executable and it seems to work fine but some procedures are left unrecognized (marked in red) as in the picture:\n\n\n\nNow I see that I can explicitly mark this as a function but then I'm not able to find any xref to it (also because I guess IDA would already have turned them into procedures if it was the case).\n\nSo I was wondering what is the exact purpose of these functions, are they called by dynamically generating the address to them or what? Like a CALL instruction to the content of a register.\n\nA side question: I see that the binary had been split into 4 segments category:\n\nWhile the first two, coming from a C/C++ environment are quite clear I'm trying to understand exactly what the other two are.\n\nIf I understood it correctly stub segments are just bridges to procedures which are far from the current executing segment, while overlay segments are segments which are replaced at runtime over the same piece of memory to let the program work with much more code than the addressable space. Is there any good tutorial about this kind of memory management in the old times?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "ida",
+    "dos"
+  ],
+  "user": "Jack",
+  "time": "Nov 27, 2015 at 15:07",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "There are various explanations for that.\n\nObfuscation, as Itsbriany said, but i don't think that was much of a thing in old DOS executables.\n\nUnneeded library functions. If your code links in, for example, the math library (those old processors typically didn't have math coprocessors for floating point), you'll typically get all of the math emulation. Your program might use sqrt for distance calculations, but never use sin, cos and similar trigonometrics, but they get linked in anway.\n\nFunction pointers. If your original C program had something like    int (*funcs())[]={func1, func2, func3}; int result=(func[index])();\nand these are the only references to func1, func2 and func3, then ida won't recognize them as being used. However, you'd find a data xref in them.\n\nC++ object methods, although when C++ started getting used, 32 bit processors were already common and you'd compile your program to a 32 bit binary using a dos extender. If methods never get called directly, only through the vtable of a class, then the same thing applies as with function pointers.\n\nDebugging functions in the original source code that just never get called in the finished binary. If the programmer did something like\n\n```\n#ifdef DEBUG\nsome_function(parm1, parm2, another_parm);\n#endif\n\n```\nand forgot to put some_function into #ifdef as well, then the finished binary will still have some_function, but no call to it.\n\nMore than one programmer working on independent parts of the code. One programmer might have been assigned to the task of reading/writing a config file, and he implemented read_config() and write_config(). Later, someone decided that the game should only use read_config(), and the configuration part should be done in a separate setup program. If both functions are in the same source file, they'll be compiled  into - and linked in from - one single object file anyway.\n\nI don't know about a good tutorial, but here's basic info about overlays:\n\nYou needed to identify parts of your code that didn't require each other when running. For example, your program might have a bunch of functions to navigate a world map, a different bunch of functions to navigate a dungeon, and a third bunch of functions to interact with a shopkeeper.\n\nYou'd compile those separately, so you get 4 files: main_game.exe, world.ovl, dungeon.ovl, and shopkeeper.ovl. (Oops, there was an 8 character limit to filenames.) main_game.exe would be loaded into low ram, and calculate a segment for the overlays to load in - all at the same address. The easiest way to do this is make a segment that has only one variable, which gets loaded last - the address of that variable would be the address to load the overlays to. Let's name it overlay_start.\n\nTo connect the main .exe to the overlays, each of the overlays would have a jump table at the start. For example, in world.ovl:\n\n```\n0000 jmp show_world_map\n0004 jmp draw_player_on_world_map\n0008 jmp draw_enemies_on_world_map\n....\n\n```\nand in dungeon.ovl:\n\n```\n0000 jmp show_dungeon_map\n....\n\n```\nNow you needed a bunch of functions to link into your main program to call these overlay functions, which all looked basically the same:\n\n```\nextern int (*overlay_start())[];\n\nvoid show_world_map() { load_overlay(\"world.ovl\"); overlay_start[0](); }\nvoid draw_player_on_world_map() { load_overlay(\"world.ovl\"); overlay_start[1](); }    \nvoid draw_enemies_on_world_map() { load_overlay(\"world.ovl\"); overlay_start[2](); }\n\nvoid show_dungeon_map() { load_overlay(\"dungeon.ovl\"); overlay_start[0](); }\n....\n\nvoid load_overlay(char *filename) {\n    /* omitting all the error checking, loops for more than 64KB, etc.) */\n    FILE *fp=fopen(filename, \"rb\");\n    fread(overlay_start, 1, SOME_LARGE_NUMBER, fp);\n    fclose(fp);\n}\n\n```\n(I omitted the function parameters in this example to keep it concise).\n\nDepending on your compiler, much of that could be auto-generated. And these functions, possibly including the load_overlay function, is typically what goes into the stub section. It's just a bunch of functions that keep the linker happy when linking main_game.exe, make sure the correct overlay is loaded, call the intended function, then return.\n\n",
+      "votes": "5",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Jack",
+          "text": "Thanks, I think I got it clear, actually I think the whole game just runs in real mode and pages are swapped accordingly by the OS (DOS). The game is said to require 2.7Mb of EMS, I studied a little the mechanics behind this. Is it possible that everything is just in real mode (so no extenders) and overlays are just swapped from EMS to conventional memory on requests made from the executable to DOS?",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "DOS doesn't handle EMS; instead, your EMS device driver does that. Which means you can't have DOS load the overlay into EMS directly, you still have to do it yourself. But of course, that's just a load_overlay function that's a bit more sophisticated. a) when an overlay gets loaded that's already in EMS, load it from there; b) when an overlay gets loaded that isn't in EMS, load it from disk; c) when an overlay is \"unloaded\", copy it to EMS first. This avoids some gory stuff as well like static variables being reset to 0 every time the overlay gets reloaded, and it provides a great speedup.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "The code you are looking at is likely packed because it has that stub segment. \n\nSoftware vendors and malware authors pack their executables to make reverse engineering more difficult since most of the binary will appear as \"compressed\" data (non-machine instructions). Only the very first instructions should be apparent and will likely not be in the .text segment.\n\nIf that is the case, then the binary will unpack itself during execution. This unpacking procedure will \"decompress\" the \"compressed\" data and reveal more valid machine instructions which will later be executed. The unpacking stub could also set global variables or dynamically allocate memory that will potentially hold function pointers to that procedure you are looking at.\n\nAdditionally, the code in the .stub segment should contain many mathematical instructions such as xor reg1, reg2 (where reg1 and reg2 differ), shr, shl, ror, rol, etc... with many jumps.\n\nAgain, you are not seeing any xrefs to that function because IDA cannot find that subroutine called in the disassembly because it is possibly referenced by a global variable or via a dynamic allocation on the heap during the unpacking procedure.\n\nThere is also a small possibility that the authors of that executable forgot to call that procedure. \n\n",
+      "votes": "1",
+      "user": "itsbriany",
+      "time": "Nov 28, 2015 at 0:44",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

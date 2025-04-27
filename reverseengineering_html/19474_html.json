@@ -1,0 +1,66 @@
+{
+    "title": "replacing static value with variable",
+    "link": "https://reverseengineering.stackexchange.com/questions/19474/replacing-static-value-with-variable",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to replace a static value:\n </p>\n <pre><code>MOV DWORD PTR SS:[EBP-30],4c\n</code></pre>\n <p>\n  With a value from a specific address:\n </p>\n <pre><code>MOV DWORD PTR SS:[EBP-30],400400 // MOV DWORD PTR SS:[EBP-30],OFFSET 400400\n</code></pre>\n <p>\n  But\n  <code>\n   SS:[EBP-30]\n  </code>\n  is not being set to the value from\n  <code>\n   0x400400\n  </code>\n  .\n </p>\n <p>\n  I'm new to this but I was thinking this would work:\n </p>\n <pre><code>MOV DWORD PTR SS:[EBP-30],DWORD PTR DS:[400400]\n</code></pre>\n <p>\n  But I guess it doesn't because\n  <strong>\n   ollydbg\n  </strong>\n  gives an error.\n </p>\n <p>\n  The value from\n  <code>\n   0x400400\n  </code>\n  is\n  <code>\n   int 100\n  </code>\n  or\n  <code>\n   64 00 00 00\n  </code>\n  . Why doesn't it work? And what are my options?\n </p>\n <p>\n  I was also thinking of doing something like:\n </p>\n <pre><code>MOV ECX,DWORD PTR DS:[400400]\nMOV DWORD PTR SS:[EBP-30],ECX\n</code></pre>\n <p>\n  But I don't know how to add a new line of instruction in\n  <strong>\n   ollydbg\n  </strong>\n  I was also afraid it would change all the addresses.\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "613",
+    "tags": [
+        "disassembly",
+        "ollydbg",
+        "pointer"
+    ],
+    "user": "majidarif",
+    "time": "Sep 27, 2018 at 18:04",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Let's split this up a bit. I'll skip over some stuff that you might already understand, but we may need to expand this if some stuff is not clear.\n </p>\n <hr/>\n <blockquote>\n  <p>\n   MOV DWORD PTR SS:[EBP-30],400400\n  </p>\n  <p>\n   MOV DWORD PTR SS:[EBP-30],DWORD PTR DS:[400400]\n  </p>\n </blockquote>\n <p>\n  The syntax is a bit wonky but we can understand that you want to encode a\n  <code>\n   MOV\n  </code>\n  with two memory operands.\nLet's take a look at some documentation\n </p>\n <p>\n  Ref:\n  <a href=\"https://www.felixcloutier.com/x86/MOV.html\" rel=\"noreferrer\">\n   https://www.felixcloutier.com/x86/MOV.html\n  </a>\n </p>\n <p>\n  There is no possible encoding for\n  <code>\n   MOV\n  </code>\n  that accepts\n  <code>\n   m32,m32\n  </code>\n  . With\n  <code>\n   m32\n  </code>\n  understood to be a 32 bit pointer.\n </p>\n <p>\n  It's not obvious this is the case, but unfortunately it is.\n </p>\n <p>\n  Ref:\n  <a href=\"https://stackoverflow.com/a/33799523/10279341\">\n   https://stackoverflow.com/a/33799523/10279341\n  </a>\n </p>\n <p>\n  This is a good answer if you care about\n  <em>\n   why\n  </em>\n  , but it is supplemental reading only, not critical to this situation.\n </p>\n <hr/>\n <p>\n  So, if we want to copy memory to memory with x86:\n </p>\n <p>\n  Ref:\n  <a href=\"https://stackoverflow.com/a/1299094/10279341\">\n   https://stackoverflow.com/a/1299094/10279341\n  </a>\n </p>\n <p>\n  A commonly accepted solution is to use a register as a temporary value store.\n </p>\n <p>\n  Take note that we need to save the state of the register we are using else we might accidentally alter the program state.\n </p>\n <blockquote>\n  <p>\n   MOV ECX,DWORD PTR DS:[400400]\n  </p>\n  <p>\n   MOV DWORD PTR SS:[EBP-30],ECX\n  </p>\n </blockquote>\n <p>\n  So this is on the right track. But we need to save\n  <code>\n   ECX\n  </code>\n  beforehand in case something else is using it.\n </p>\n <pre><code>0x00000000: 51                  push ecx\n0x00000001: 8b 0d 00 04 40 00   mov ecx, dword ptr [0x400400]\n0x00000007: 89 4d e2            mov dword ptr [ebp - 0x1e], ecx\n0x0000000a: 59                  pop ecx\n</code></pre>\n <p>\n  This should do that you want. We save\n  <code>\n   ECX\n  </code>\n  by pushing it onto the stack. Load the value at address\n  <code>\n   0x400400\n  </code>\n  into\n  <code>\n   ECX\n  </code>\n  . Then write the value of\n  <code>\n   ECX\n  </code>\n  into the memory at\n  <code>\n   [EBP-0x1E]\n  </code>\n  , then restore\n  <code>\n   ECX\n  </code>\n  to it's previous value.\n </p>\n <hr/>\n <p>\n  So how do we patch this into the binary image?\n </p>\n <p>\n  The above assembly is 11 bytes in length and our goal is to alter the instruction\n </p>\n <p>\n  <code>\n   0:  c7 45 e2 4c 00 00 00    mov    DWORD PTR [ebp-0x1e],0x4c\n  </code>\n </p>\n <p>\n  Which we can see is 7 bytes long.\n </p>\n <p>\n  We can get these extra 4 bytes by use of a \"code cave\". We will redirect execution into an unused bit of memory, execute our code, then jump back.\n </p>\n <p>\n  Ref:\n  <a href=\"https://www.codeproject.com/Articles/20240/The-Beginners-Guide-to-Codecaves\" rel=\"noreferrer\">\n   https://www.codeproject.com/Articles/20240/The-Beginners-Guide-to-Codecaves\n  </a>\n </p>\n <p>\n  In short, we're looking \"empty space\" that is allocated/mapped within the exe image, preferably in the .text section, but are not used by the program\n  <em>\n   under any circumstances\n  </em>\n  . This will occur in nearly every executable image due to SectionAlignment in Windows PE being 4096 by default.\n </p>\n <p>\n  The easiest way to implement this is to find unused bytes in the same region of memory that we are trying to modify.\n </p>\n <p>\n  A rudimentary way of finding/applying a code cave with ollydbg is shown here:\n </p>\n <p>\n  <a href=\"https://medium.com/@vysec.private/backdoor-101-f318110e1fcb\" rel=\"noreferrer\">\n   https://medium.com/@vysec.private/backdoor-101-f318110e1fcb\n  </a>\n </p>\n <hr/>\n <p>\n  After finding suitable memory for our cave, patch in the shellcode:\n </p>\n <pre><code>0x00000000: 51                  push ecx\n0x00000001: 8b 0d 00 04 40 00   mov ecx, dword ptr [0x400400]\n0x00000007: 89 4d e2            mov dword ptr [ebp - 0x1e], ecx\n0x0000000a: 59                  pop ecx\n</code></pre>\n <p>\n  using ollydbg's assembler.\n </p>\n <p>\n  Then change the original instruction of\n  <code>\n   mov DWORD PTR [ebp-0x1e],0x4c\n  </code>\n  to\n  <code>\n   JMP x\n  </code>\n  where\n  <code>\n   x\n  </code>\n  is your shellcode address, in the same module/image.\n </p>\n <p>\n  Overwrite the rest of the instruction bytes with 0x90 (NOP) if you want. So that we end up with:\n </p>\n <p>\n  <code>\n   c7 45 e2 4c 00 00 00\n  </code>\n  - Original instruction\n </p>\n <p>\n  <code>\n   e9 xx xx xx xx 90 90\n  </code>\n  - JMP rel32 plus 2 NOPs\n </p>\n <p>\n  Ref for x86 JMP:\n  <a href=\"https://c9x.me/x86/html/file_module_x86_id_147.html\" rel=\"noreferrer\">\n   https://c9x.me/x86/html/file_module_x86_id_147.html\n  </a>\n </p>\n <p>\n  after\n  <code>\n   pop ecx\n  </code>\n  back in our code cave assemble:\n  <code>\n   JMP y\n  </code>\n </p>\n <p>\n  where\n  <code>\n   y\n  </code>\n  is the address of the instruction directly after\n  <code>\n   mov DWORD PTR [ebp-0x1e],0x4c\n  </code>\n  . You should end up skipping over the NOP instructions when jumping out of the code cave, which is why I said they were optional.\n </p>\n <hr/>\n <p>\n  Summary,\n </p>\n <ol>\n  <li>\n   <p>\n    Assemble our shellcode, making note of correct x86 ASM and preserving program state.\n   </p>\n  </li>\n  <li>\n   <p>\n    If not enough space to patch the instruction in-line, idenfity a code cave.\n   </p>\n  </li>\n  <li>\n   <p>\n    Apply the code-cave and assemble the two\n    <code>\n     JMP\n    </code>\n    instructions to redirect execution (1) to the code-cave, (2) back to the\n    <em>\n     next\n    </em>\n    instruction from the original code.\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "majidarif",
+                    "text": "<span class=\"comment-copy\">does it matter that the value I'm trying to read is only 1-100? like the value is maxed at 100. so technically I can get away with reading it as a single byte.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Abigail",
+                    "text": "<span class=\"comment-copy\">it won't matter unless the bytes around the value are changed. eg 0x400401, 0x400402, contain other values not part of the value. <code>dword ptr [0x400400]</code> will read 4 bytes (little-endian) starting at <code>0x400400</code>. if you change it to <code>byte ptr</code>, it will only read the one byte.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Memory-to-memory\n  <code>\n   MOV\n  </code>\n  does not exist. You could try the following:\n </p>\n <pre><code>    MOV eax, DWORD PTR DS : [400400]\n    MOV DWORD PTR SS : [EBP - 30], eax\n</code></pre>\n <p>\n  Please check also if the absolute numbers are interpreted as hex values in your assembler.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "josh",
+            "time": "Sep 27, 2018 at 14:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "majidarif",
+                    "text": "<span class=\"comment-copy\">I was actually thinking of this but how do I do it in ollydbg? I'm not sure how to add a new line of instructions and it might change all the addresses?</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">If your intent is to patch an existing code, and the patch needs more bytes than the replaced code, you must be sure that either the code in the additional space is not needed any more, or you could insert (i.e. patch) a jmp to a free memory location, re-insert the \"destroyed\" code and jmp back to the original code where it can continue like before the patch. With respect to Olly, I don't know the answer, because I usually work in Ida.</span>",
+                    "time": null
+                },
+                {
+                    "user": "majidarif",
+                    "text": "<span class=\"comment-copy\">Thank you. Unfortunately although I think I get what you meant. I'm really new to this to know how to do it. When you say JMP to an free memory location. Do I replace the current instructions with JMP then use that to do those instructions are return back? But, how do I do that exactly? And how do I find a free memory?</span>",
+                    "time": null
+                },
+                {
+                    "user": "josh",
+                    "text": "<span class=\"comment-copy\">I think you got it right. How you do it technically depends. Try to become proficient with your tools. One possibility would be to create the machine code (usually not by hand, but from an assembler), then patch it in the exe file and test it in your debugger. Often the tricky part is to find a free mem location, large enough, and to not introduce new errors, by e.g. relying on absolute mem addresses (try to understand what \"ASLR\" means) etc. No standard recipes exist.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

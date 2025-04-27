@@ -1,0 +1,43 @@
+{
+    "title": "Inject ELF with an entierly self-contained code section that can statically call standard library functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/32867/inject-elf-with-an-entierly-self-contained-code-section-that-can-statically-call",
+    "content": "What I want to do\nWhat I want to do is inject an existing ELF binary with additional code that runs before the original .text section and then transfers control back to it.\nWhat I can already do\nNow, I have the following sorted:\n\nInsert new ELF section and section header\nInsert new ELF program header that loads the section\nModify entrypoint in the ELF header to point to my new section's VA entrypoint\nBe able to write POC assembly code, compile with NASM into headerless raw cpu instructions format\nReturn control back to original entrypoint\nAll the above works and runs well\n\nWhat I can't do\nWhat I haven't been able to do is use GCC instead of NASM and use the standard library. Take the following example code:\n<pre><code>#include <stdio.h>\n\nvoid foo() {\n    printf(\"hello world\");\n    // ignore the fact that this does not return control to the original ELF entry point\n}\n</code></pre>\nIf I were to compile this with <pre><code>gcc -fPIC -c -o hello.o</code></pre> and then yank the .text section from the generated object file with <pre><code>objcopy -O binary -j .text hello.o hello.bin</code></pre> and try to use that as a new section, it simply won't work. <pre><code>hello.bin</code></pre> will contain the following instructions when inspected with <pre><code>objdump</code></pre>:\n<pre><code>Disassembly of section .data:\n\n00000000 <.data>:\n   0:   55                      push   %rbp\n   1:   48 89 e5                mov    %rsp,%rbp\n   4:   48 8d 3d 00 00 00 00    lea    0x0(%rip),%rdi        # 0xb\n   b:   b8 00 00 00 00          mov    $0x0,%eax\n  10:   e8 00 00 00 00          callq  0x15\n  15:   90                      nop\n  16:   5d                      pop    %rbp\n  17:   c3                      retq\n</code></pre>\nThe above code has a couple of issues. It was yanked from an object file that expects to be linked and relocated into an executable binary that will have <pre><code>.plt</code></pre> and <pre><code>.got</code></pre> sections. Through these PLT stubs it will be able to call <pre><code>printf</code></pre> that will be located in the standard shared library loaded by <pre><code>ld</code></pre> somewhere in memory.\nWhat I suppose it boils down to\nI want GCC to produce an entirely self-contained object file that has a <pre><code>.text</code></pre> section that does not expect to be relocated, already contains <pre><code>libc</code></pre> statically and is position independent. So that it can just be put anywhere and do its thing.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "elf",
+        "gcc",
+        "instrumentation",
+        "nasm"
+    ],
+    "user": "PaperTsar",
+    "time": "Apr 4, 2024 at 21:44",
+    "comments": [
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "This is not a real answer, but you're going to want to split up the way you think about it a bit. GCC will produce an object file, but it's not going to be self-contained. This is because certain symbol types it can emit literally requre knowing the address of a segment. Your linker (ld), however, is directly responsible for performing these calculations, determining the layout, and putting segments together. You can use a linker script to get most of the way there (applying relos and an elf), but some crt's require rt linking and you'll want a static crt/libc that's more compartmentalized.\n",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "In summary, use the rt linker with its abilities to resolve symbols and apply relocations as suggested in the other answer. It'll likely be far easier for your needs and for your libc (depending on which one you're using). If you really want to do it the other way, you'll need to be aware of the segment address and stripping the relocations when copying out your segments.\n",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "Actually...wrote a blogpost that contains an ld-script you can probably use as a base that is referenced at reddit.com/r/ReverseEngineering/comments/1bnljpl/…\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Using LD_PRELOAD\nI suggest to use the ELF constructor instead:\n\nmark your entry point function with <pre><code>__attribute__((constructor))</code></pre>\ncompile your code as <pre><code>-shared</code></pre>\ninject it using the <pre><code>LD_PRELOAD</code></pre> environment variable\n\nYour function will be executed before the <pre><code>main</code></pre> function of the targeted executable. The ELF loader will take care of everything for you.\nThe manual approach\nAll your steps in \"What I can already do\" seems correct, but you probably don't have to add a new section, most (if not all) ELF loaders work with segments, not sections.\nThe problem with this line <pre><code>objcopy -O binary -j .text hello.o hello.bin</code></pre> is you only keep the program code: in your disassembly listing, you can see <pre><code>lea    0x0(%rip),%rdi</code></pre> is PIC but the actual data (\"hello world\" should in in .rodata) will be missing because it's not stored into the .text section.\nYou can use <pre><code>__attribute__((section(\".text\")))</code></pre> to move data inside the .text section, but keep in mind that .text is R-X by default, you will have to patch the segment to be RWX if you need non-const data.\nThe last part is \"relocations\" (which on ELF include resolving external symbols), assuming you just need external symbols: you will have find or rewrite <pre><code>dlopen</code></pre> and <pre><code>dlfunc</code></pre> to resolve symbols at runtime and it's OS dependent.\n",
+            "votes": "0",
+            "user": "wisk",
+            "time": "Apr 4, 2024 at 23:23",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

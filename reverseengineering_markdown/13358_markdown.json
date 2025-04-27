@@ -1,0 +1,63 @@
+{
+  "title": "How to Find All Switch Jump Tables in IDAPython",
+  "link": "https://reverseengineering.stackexchange.com/questions/13358/how-to-find-all-switch-jump-tables-in-idapython",
+  "content": "I'm using IDAPython on IDA 6.5 and I'm trying to get all the switch jump tables in a DLL. Mainly I'm interested in jump tables that are jumped indirectly:\n\n```\njmp     ds:off_65018790[ecx*4] ; switch jump\n\n```\nBasically, what interests me is:\n\nI already know how to get all the jmp addresses using IDAPython, but I don't know if it's a jmp to a jump table or just a normal jmp.\n\nIn most cases, IDA knows to identify those jump tables, so is there a way to get that info from the API?\n\nThanks a lot!\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "4k",
+  "tags": [
+    "ida",
+    "idapython",
+    "ida-plugin",
+    "disassemblers",
+    "idapro-sdk"
+  ],
+  "user": "Alex",
+  "time": "Aug 25, 2016 at 8:27",
+  "comments": [
+    {
+      "user": "w s",
+      "text": "Unfortunately I don't have IDA 6.5 installed, but as far as I remember idaapi.get_switch_info_ex(ea) already was there. The simplest way to see reference usage of this function is searching python code with call to this function on github.",
+      "time": null
+    },
+    {
+      "user": "Alex",
+      "text": "Thanks a lot! It was exactly what I needed. If you post it as an answer, I will mark it as answered :)",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Decided to add a small code snippet to show how to iterate through the .text segment, obtaining all the switch table locations and storing the jump targets in a dictionary.\n\n```\ntext_seg = idaapi.get_segm_by_name('.text')\njump_table = dict()\n\n# iterate through all items within the segment\nfor head_ea in idautils.Heads(text_seg.startEA, text_seg.endEA):\n    if idc.isCode(idc.GetFlags(head_ea)):\n        switch_info = idaapi.get_switch_info_ex(head_ea)\n        if (switch_info and switch_info.jumps != 0):\n            loc = switch_info.jumps\n            jump_table[loc] = list()\n            element_num = switch_info.get_jtable_size()\n            element_size = switch_info.get_jtable_element_size()\n            for num in range(0, element_num):\n                table_entry = loc+num*element_size\n                jump_table[loc].append(idc.GetManyBytes(table_entry), element_size)\n\n```\nUpdate: To build upon this for newer versions of IDA\n\n```\ndef find_jumps(si: ida_nalt.switch_info_t) -> list:\n    jtable = []\n    e_size = si.get_jtable_element_size()\n\n    for num in range(0, si.get_jtable_size()):\n        jtable.append(int.from_bytes(ida_bytes.get_bytes(si.jumps + (num * e_size), e_size), 'little') + si.elbase)\n\n    return jtable\n\nea = 0x0000000000000000 # some ea\nsi = ida_nalt.switch_info_t()\nif (ida_nalt.get_switch_info(si, ea) is not None): # jump table\n    jtable = find_jumps(si)\n\n```\nThis resolves the offsets to the with respect to elbase of the switch_info_t structure which IDA provides if get_switch_info is succesful. See: https://hex-rays.com/products/ida/support/idapython_docs/ida_nalt.html#ida_nalt.switch_info_t.elbase for more information, and cross reference this to the c++ support if need-be at https://hex-rays.com/products/ida/support/sdkdoc/structswitch__info__t.html\n\n",
+      "votes": "2",
+      "user": "Supernovah",
+      "time": "Nov 21, 2021 at 3:27",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "NirIzr",
+          "text": "getnseg receives a segment number, while SegByName returns a segment selector, these are not the same thing. Your first line is erroneous.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "Additionally, using idc.Dword feels insecure and assumes the switch code is indeed structured the way OP described, which isn't always the case.",
+          "time": null
+        },
+        {
+          "user": "chuazl",
+          "text": "Thanks Nirlzr, the above snippet comes from my old script I used on ARM32 binaries to extract out jumptables in order to rewrite them. I've updated it to fix the mistakes you've pointed out.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "To safely get all references from a certain EA, there's idc.XrefsFrom(ea, flags). You'll get an iterator for cross references from a certain EA (the switch-case's branch/jump instruction). switch-cases are easy to identify as they're always with more than two cross references targets.\n\nAccording to this the flags parameter is one of the following:\n\nThe object you'll get from each iteration is an ida_xref object, exposing the following attributes:\n\nThe valid cross reference types are, according to this:\n\n",
+      "votes": "0",
+      "user": "NirIzr",
+      "time": "Sep 9, 2016 at 11:07",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

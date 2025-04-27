@@ -1,0 +1,153 @@
+{
+  "title": "How can I analyse an executable with no read permission?",
+  "link": "https://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission",
+  "content": "I have a binary on a Linux (Kernel 2.6) which I can execute, but can't read (chmod 0711). Therefore no static analysis is possible.\n\n```\nuser1: $ ls -l bin \n-r-s--x--- user2 user1 bin\nuser1: $ file bin\nsetuid executable, regular file, no read permission\n\n```\nI'm looking for different dynamic techniques to gather as much information as possible.\n\nFor example strace works with this executable.\n\nUPDATE : I was able to resolve the issue. See answer.\n\nThank you all <3 this new reverseengineering community rocks!\n\n",
+  "votes": "37",
+  "answers": 5,
+  "views": "11k",
+  "tags": [
+    "linux",
+    "dynamic-analysis"
+  ],
+  "user": "samuirai",
+  "time": "Apr 13, 2017 at 12:49",
+  "comments": [
+    {
+      "user": "JMcAfreak",
+      "text": "Are you looking only for a dynamic analysis technique, or are you looking for a solution in general?",
+      "time": null
+    },
+    {
+      "user": "samuirai",
+      "text": "I guess only dynamical analysis techniques work here. But I am open to anything that can help to understand what the executable does. I have no \"physical\" access to filesystem and so forth.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "If strace works, try attaching with GDB and dumping memory (see here)",
+      "time": null
+    },
+    {
+      "user": "George V. Williams",
+      "text": "@IgorSkochinsky, I just tried it on my machine, no luck. GDB refuses to attach with: Could not attach to process. ... try again as the root user. It depends on ptrace (which gives the same error) so ltrace doesn't work either.",
+      "time": null
+    },
+    {
+      "user": "Gilles 'SO- stop being evil'",
+      "text": "@IgorSkochinsky If you run strace ./bin, it runs the program with no extra privileges. If you start the program normally, it runs with elevated privileges, and you then can't ptrace it without having elevated privileges yourself.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I initially thought you wouldn't be able to dump the program, but it turns out that you can — see the second section of this answer.\n\nMost of the usual methods won't work because the executable is setuid. If you start the program normally, it runs with elevated privileges (euid ≠ ruid), and most debugging facilities are reserved to root. For example, anything that relies on attaching to the program with ptrace is reserved to root. This includes just about anything you could do in a debugger. Linux lets you dump the memory of a running process (with ptrace or through /proc/$pid/maps and /proc/$pid/mem), but that too is disabled for a setuid executable.\n\nYou can run strace ./bin, and see what system calls the program makes. However, this runs the program without any extra privileges. It may well stop early and complain that it can't read a file, or that it isn't running as the right user.\n\nYou can see statistics like CPU usage, IO usage, network usage, memory usage, etc. in /proc/$pid: files like status, sched and net/netstat are world-readable (whether the program is actually started with extra privileges or not, the setuid restrictions apply). The one interesting thing I see is the program's network connections. The really juicy stuff, like memory contents (mem) and even open files (fd) is disabled either way. Preloading a library with LD_PRELOAD or running the program with a different LD_LIBRARY_PATH is also disabled either way. Nor will you get a core dump.\n\nSo what works? You can see open network connections, maybe one of them will give you a clue or will be spoofable. You can try to figure out what files the program accesses by modifying them when you can, or by running the program from another directory (try making a symbolic link).\n\nIf you have access to a chroot jail on the machine, try running the program from there. If you can run a virtual machine which implements shared folders (e.g. VMware or VirtualBox), see if you can access the program from there. This is all about subverting the security of the system: the permissions are designed to hinder you in your task.\n\nAn advanced technique is to observe the program under heavy load and try to deduce what it does from the time it takes. Pollute the disk caches and see what files become quickly accessible. See how the swap usage varies depending on what the program does (so you get an idea of how many different pages are in its working set, not just how much total memory it's using). A lot of trial and error will be required. When you know the code and are trying to obtain the data, this is a well-known side channel attack. When you don't know the code, I expect it to be very difficult to obtain useful information this way.\n\nI initially thought you couldn't dump the memory of the program because of the setuid bit (which usually wouldn't be a problem because you'd just copy the executable, but here this isn't possible because the executable is not readable). This turns out to be wrong. If you attach to the program with ptrace before calling execve (like running strace ./bin does), you do have access to ptrace in all its glory, including PTRACE_PEEKDATA and PTRACE_PEEKEXEC. That doesn't run the program setuid, so it may behave differently, but the code and static data loaded into memory are the same either way.\n\nKudos to samuirai for pointing this out.\n\nHere's an overview of how you can dump the program's memory:\n\nDougall pointed out a working proof-of-concept tool for ELF executables: xocopy.\n\n",
+      "votes": "28",
+      "user": "Community",
+      "time": "Apr 13, 2017 at 12:49",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "samuirai",
+          "text": "Actually I think I can use ptrace not as root. gdb works fine with other executables. The problem is that the executable is not readable, and therefore gdb won't load the file. I thought because I can execute it, I could run it under my privileges and debug it that way (and accept that privileges required running with setuid wont work). But again. gdb won't work because it's not readable.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@samuirai: you can't attach to the process once it's running?",
+          "time": null
+        },
+        {
+          "user": "samuirai",
+          "text": "@IgorSkochinsky: I tried it, but I am too slow. The executable finishes very fast.",
+          "time": null
+        },
+        {
+          "user": "samuirai",
+          "text": "Working PoC gist.github.com/Samuirai/5217680 and a small update in my question",
+          "time": null
+        },
+        {
+          "user": "Gilles 'SO- stop being evil'",
+          "text": "@samuirai Good idea deducing interesting addresses from registers. I'll try to upgrade my code to something that works this week-end.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I found a small tool which uses ptrace to single step instructions from a forked child which executed another program:\n\nhttp://pastebin.com/yHbkc0Je\n\nThis worked perfectly. I got a dump of all the instructions used. I know that it didn't run with the setuid privileges, but it will probably help me anyway. Now I only need something to disassemble the instruction trace.\n\nPoC (https://gist.github.com/Samuirai/5217680) based on this.\n\n```\n/*\nThis tool was developed through the awesome community effort on reverseengineering.stackexchange.com\n\nThe Thread: http://reverseengineering.stackexchange.com/questions/98/how-can-i-analyse-an-executable-with-no-read-permission\n\nSpecial thanks to:\n + igor-skochinsky who pointed at this Phrack article and gave the initial idea: http://www.phrack.com/issues.html?issue=63&id=12&mode=txt\n + gilles for his engagement and enthisiasm about this question and his code attempt\n + and all others who were involved\n\nThis new stackexchange reverseengineering community is F**KING AWESOME!!! <3\n\n*/\n#include <stdio.h>\n#include <sys/ptrace.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <sys/user.h>\n#include <sys/syscall.h>\n\nint main()\n{\n    pid_t pid;\n\n    pid = fork();\n    if(pid == 0) {\n        ptrace(PTRACE_TRACEME, 0, NULL, NULL);\n        execl(\"./bin\", \"./bin\", NULL);\n    }\n    else {\n        int status;\n        struct user_regs_struct regs;\n\n        // single stepping until it reached the real code segment\n        while(1) {\n\n            wait(&status);\n            if(WIFEXITED(status))\n                break;\n\n            // get registers for the instruction pointer\n            ptrace(PTRACE_GETREGS, pid, NULL, &regs);\n\n            // strace ./bin\n            // brk(0) = 0x804a000\n            if(regs.eip>0x804a000)\n            {\n                printf(\"in code section at EIP=%lx  \n\",regs.eip);\n                unsigned int i;\n\n                // Dump code\n                for(i=0; i<0x1000; i+=4) {\n                    long data = ptrace(PTRACE_PEEKTEXT, pid, regs.eip+i, 0);\n                    printf(\"%lx\",data);\n                }\n            }\n\n            // single step in child process\n            ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL);\n        }\n    }\n    return 0;\n}\n\n```\nAs Gilles pointed out, you can't read /proc/<pid>/maps to get the adresses of the code area, but I recognized that strace has this nice single line brk(0) = 0x804a000.\n\nI single step through the child process, until EIP is around this value; then, I dump 0x1000 bytes.\n\n",
+      "votes": "11",
+      "user": "asheeshr",
+      "time": "Jun 20, 2013 at 16:32",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "Why not just modify it to dump memory instead of tracing? There is already a read using PTRACE_PEEKTEXT, you just need to modify it to read all process memory. See some sample code here",
+          "time": null
+        },
+        {
+          "user": "user187",
+          "text": "On SE, we usually like to see (not too long) codes just in the answer, not behind a link. This is because pastebin doesn't guarantee to store the codes. Could you add the code to your answer please?",
+          "time": null
+        },
+        {
+          "user": "samuirai",
+          "text": "It's the same code from my question update. I will add the reference",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Using ptrace-based dynamic analysis tools on suid binaries makes them run without privileges. Because of this, a copy of the file running as your user is probably sufficient for analysis purposes.\n\nWhen I have had to do this, I used the xocopy tool, which uses ptrace to reconstruct ELF files when the header is mapped into memory (most compilers do this, possibly for use by the dynamic linker). I haven't tested the tool with ASLR, but you may be able to combine it with some of the techniques covered in other answers. Once the file has been dumped, it can be analysed statically, or run with any dynamic analysis tool.\n\n",
+      "votes": "9",
+      "user": "Dougall",
+      "time": "Mar 22, 2013 at 8:36",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Skylion",
+          "text": "Is there a 64bit version of this tool? It doesn't seem to work on 64 bit elf files. :/",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Here are some tools that might or might not work:\n\nI'll be interested to hear if you had any success with any of them.\n\n",
+      "votes": "5",
+      "user": "Igor Skochinsky",
+      "time": "Mar 20, 2013 at 21:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Gilles 'SO- stop being evil'",
+          "text": "None of these will work on a setuid executable.",
+          "time": null
+        },
+        {
+          "user": "cb88",
+          "text": "@Guiles it isn't setuid nor did he ever say it was.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@cb88 to be fair the quoted permissions do show the s flag. Though I guess it should have been mentioned explicitly.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Chances are you don't have permission to do any of that :P. that said you probably need to provide more specifics about what you can/can't do on this system.\n\n",
+      "votes": "1",
+      "user": "cb88",
+      "time": "Mar 20, 2013 at 21:47",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "samuirai",
+          "text": "That's right. I am just a normal user and can't access /proc. Though strace works and I thought that there exist other stuff I don't know about.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

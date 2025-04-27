@@ -1,0 +1,46 @@
+{
+    "title": "Returning a C function to its grandfather",
+    "link": "https://reverseengineering.stackexchange.com/questions/8464/returning-a-c-function-to-its-grandfather",
+    "content": "This is a homework assignment, so I'd appreciate it if I would get a hint only, not a full answer. I wrote this program which is supposed to print the following:\n<pre><code>Executing function_a\nExecuting function_b\nFinished!\n</code></pre>\nThe <pre><code>main()</code></pre> and <pre><code>function_a()</code></pre> functions were given, and I'm only allowed to change <pre><code>function_b()</code></pre> in the marked part.\n<pre><code>#include <stdio.h>\n#include <stdint.h>\n\nvoid function_b(void) {\n    char buffer[4];\n\n    // edit between here...\n    uint32_t * x = &buffer;\n    while (*(x++) != 0xa0b1c2d3);           // Find the beacon\n    *(uint32_t*)(&buffer + 6) = *(x + 2);   // Copy return address from caller\n    *(uint32_t*)(&buffer + 5) = *(x + 1);   // Copy frame pointer from caller\n    // ... and here\n\n    fprintf(stdout, \"Executing function_b\n\");\n}\n\nvoid function_a(void) {\n    int beacon = 0xa0b1c2d3;\n    fprintf(stdout, \"Executing function_a\n\");\n    function_b();\n    fprintf(stdout, \"Executed function_b\n\");\n}\n\nint main(void) {\n    function_a();\n    fprintf(stdout, \"Finished!\n\");\n    return 0;\n}\n</code></pre>\nThe problem is of course to make sure that 'Executed function_b' is not outputted. We have to manipulate the stack so that when returning from <pre><code>function_b()</code></pre> we don't go back to its actual parent <pre><code>function_a()</code></pre> but to its grandfather <pre><code>main()</code></pre>.\nThe part of the code I wrote finds the beacon from <pre><code>function_a()</code></pre> and then copies the return address and saved frame pointer of <pre><code>function_a()</code></pre> to the frame of <pre><code>function_b()</code></pre>. My program does the following:\n<pre><code>Executing function_a\nExecuting function_b\nFinished!\nSegmentation fault (core dumped)\n</code></pre>\nSo it does the right thing, except for the segfault. It fails when returning from the <pre><code>main()</code></pre> function. I used gdb to get this:\n<pre><code>(gdb) run\nStarting program: /.../exercise2c\nExecuting function_a\n\nBreakpoint 1, function_b () at exercise2c.c:9\n9       *(uint32_t*)(&buffer + 6) = *(x + 2);   // Copy return address from caller\n(gdb) backtrace\n#0  function_b () at exercise2c.c:9\n#1  0x0000000000400607 in function_a () at exercise2c.c:18\n#2  0x0000000000400630 in main () at exercise2c.c:23\n(gdb) info frame\nStack level 0, frame at 0x7fffffffdcb0:\n rip = 0x400593 in function_b (exercise2c.c:9); saved rip = 0x400607\n called by frame at 0x7fffffffdcd0\n source language c.\n Arglist at 0x7fffffffdca0, args: \n Locals at 0x7fffffffdca0, Previous frame's sp is 0x7fffffffdcb0\n Saved registers:\n  rbp at 0x7fffffffdca0, rip at 0x7fffffffdca8\n(gdb) frame 1\n#1  0x0000000000400607 in function_a () at exercise2c.c:18\n18      function_b();\n(gdb) info frame\nStack level 1, frame at 0x7fffffffdcd0:\n rip = 0x400607 in function_a (exercise2c.c:18); saved rip = 0x400630\n called by frame at 0x7fffffffdce0, caller of frame at 0x7fffffffdcb0\n source language c.\n Arglist at 0x7fffffffdcc0, args: \n Locals at 0x7fffffffdcc0, Previous frame's sp is 0x7fffffffdcd0\n Saved registers:\n  rbp at 0x7fffffffdcc0, rip at 0x7fffffffdcc8\n(gdb) step\n10      *(uint32_t*)(&buffer + 5) = *(x + 1);   // Copy frame pointer from caller\n(gdb) step\n12      fprintf(stdout, \"Executing function_b\n\");\n(gdb) frame 0\n#0  function_b () at exercise2c.c:12\n12      fprintf(stdout, \"Executing function_b\n\");\n(gdb) info frame\nStack level 0, frame at 0x7fffffffdcb0:\n rip = 0x4005b5 in function_b (exercise2c.c:12); saved rip = 0x400630\n called by frame at 0x7fffffffdcd0\n source language c.\n Arglist at 0x7fffffffdca0, args: \n Locals at 0x7fffffffdca0, Previous frame's sp is 0x7fffffffdcb0\n Saved registers:\n  rbp at 0x7fffffffdca0, rip at 0x7fffffffdca8\n(gdb) backtrace\n#0  function_b () at exercise2c.c:12\n#1  0x0000000000400630 in main () at exercise2c.c:23\n(gdb) continue\nContinuing.\nExecuting function_b\nFinished!\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x0000000000400654 in main () at exercise2c.c:26\n26  }(gdb) \nContinuing.\n\nProgram terminated with signal SIGSEGV, Segmentation fault.\nThe program no longer exists.\n</code></pre>\nYou can clearly see that <pre><code>function_b()</code></pre> indeed returns to <pre><code>main()</code></pre>, but for some reason that I don't understand <pre><code>main()</code></pre> crashes. The only way I could see that happen is that I messed with the stack frame of <pre><code>main()</code></pre>, which I didn't, or that I should have changed something there - but I wouldn't know what.\nWhat's going on here?\nNote: the program is compiled with GCC and the flags <pre><code>-g -fno-omit-frame-pointer -fno-stack-protector</code></pre>. I'm on a 64-bit machine.\n",
+    "votes": "5",
+    "answers": 2,
+    "views": "291",
+    "tags": [
+        "c",
+        "gdb",
+        "x86-64",
+        "callstack"
+    ],
+    "user": null,
+    "time": "Mar 14, 2015 at 19:55",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I'm on a 64-bit machine.\n\nYour code in <pre><code>function_b()</code></pre> treats pointers as 32-bit values instead of 64-bit values. You should be using <pre><code>uint64_t*</code></pre> instead of <pre><code>uint32_t*</code></pre>.\n",
+            "votes": "6",
+            "user": "Jason Geffner",
+            "time": "Mar 15, 2015 at 15:21",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "As Jason writes, I should use 64-bit pointers. Besides that, it also turns out that I had to copy four numbers from the stack frame. This is working code:\n<pre><code>uint64_t * my_ptr = &buf;\nint * x = my_ptr;\n\nwhile (*(++x)  != 0xa0b1c2d3);  // Find the beacon. We could of course simply have a look\nuint64_t * y = x + 1;           // with gdb where it's stored, but this works generically.\n\n*(my_ptr+7) = *(y+3);           // Copy frame information\n*(my_ptr+6) = *(y+2);\n*(my_ptr+5) = *(y+1);\n*(my_ptr+4) = *y;\n</code></pre>\nTypically you need to fiddle a bit with what addresses you have to copy. You can get a rough idea using gdb, as you did. The exact numbers depend on the functions and their variables.\n",
+            "votes": "1",
+            "user": null,
+            "time": "Mar 18, 2015 at 7:39",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">\"I'd appreciate it if I would get a hint only, not a full answer\" -- Yet you accepted your non-hint full-answer as the accepted response :\\</span>",
+                    "time": null
+                },
+                {
+                    "user": "user187",
+                    "text": "<span class=\"comment-copy\">I thought we agreed that I would edit my working code in, in the comments. Yet you rolled back my edit without explanation.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

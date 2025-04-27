@@ -1,0 +1,62 @@
+{
+  "title": "Disable ASLR on android 4.0.3",
+  "link": "https://reverseengineering.stackexchange.com/questions/3667/disable-aslr-on-android-4-0-3",
+  "content": "I would like that a shared library is always loaded at the same address on Android 4.0.3.\n\nI can't seem to disable the ASLR using:\n\n```\necho 0 > /proc/sys/kernel/randomize_va_space\n\n```\nRunning\n\n```\ncat /proc/sys/kernel/randomize_va_space\n\n```\nindeed shows 0, but after starting the application the shared library is always (still) loaded at a different address.\n\nEDIT:\n\nAbove behavior is seen when starting an activity that loads a shared object using command\n\n```\nam start -n <activity>\n\n```\nOTOH, when trying with a small native process written in C, the same shared library gets loaded to the same addresses when ASLR is disabled either with \n\n```\necho 0 > /proc/sys/kernel/randomize_va_space\n\n```\nor\n\n```\nsysctl -w kernel.randomize_va_space=0\n\n```\nI've compiled the application using android-ndk-r7c toolchain arm-linux-androideabi-4.4.3 without any special compiler switches (e.g. -fPIE or -pie).\n\nI've also tried something like described here, but the shared library still gets loaded at different addresses - I guess that per-process ASLR can not be disabled on Android.\n\nI have not managed to cross-compile the setarch.c from util-linux due to missing SYS_personality.\n\nEDIT2:\n\nFurther investigation resulted in a partial success. This is what I've done and the result is that the application started via \"am start -n \" loads shared library on mostly two different addresses:\n\nAfter 20 + start & kill sequences my application always loads shared library on one or another memory address. How come? Have no idea!\n\nNevertheless this should help debugging the shared library greatly since the shared library is usually loaded on one address several time in a row and then on another address next couple of times and bask to first address..\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "debugging",
+    "android"
+  ],
+  "user": "Hinko Kocevar",
+  "time": "Feb 13, 2014 at 21:03",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Have you tried: sysctl -w kernel.randomize_va_space=0 ?",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "@perror: this is effectively the same as the echo line given in the question.",
+      "time": null
+    },
+    {
+      "user": "perror",
+      "text": "Not exactly, because the ASLR is disabled in a permanent manner. But, I agree. Effects should be the same.",
+      "time": null
+    },
+    {
+      "user": "Hinko Kocevar",
+      "text": "@perror Yes I have. The effect is the same - cat /proc/sys/kernel/randomize_va_space shows and sysctl kernel.randomize_va_space show value 0, but the shared library is still loaded at different address.",
+      "time": null
+    },
+    {
+      "user": "jww",
+      "text": "Jon Oberheide's A look at ASLR in Android Ice Cream Sandwich 4.0 might be helpful.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "In fact, the ASLR is architecture dependent. I didn't managed to get the sources from Android, but I took a look at the various ARM implementation of the Linux kernel. \n\nIn ARM64, I found a perfectly valid implementation of the ASLR (in arch/arm64/kernel/process.c):\n\n```\nunsigned long arch_align_stack(unsigned long sp)\n{\n  if (!(current->personality & ADDR_NO_RANDOMIZE) && randomize_va_space)\n     sp -= get_random_int() & ~PAGE_MASK;\n  return sp & ~0xf;\n}\n\nstatic unsigned long randomize_base(unsigned long base)\n{\n  unsigned long range_end = base + (STACK_RND_MASK << PAGE_SHIFT) + 1;\n  return randomize_range(base, range_end, 0) ? : base;\n}\n\nunsigned long arch_randomize_brk(struct mm_struct *mm)\n{\n  return randomize_base(mm->brk);\n}\n\nunsigned long randomize_et_dyn(unsigned long base)\n{\n  return randomize_base(base);\n}\n\n```\nBut, looking at arch/arm/kernel/process.c, the ASLR seems to not trigger the ASLR at all, except for:\n\n```\nunsigned long arch_randomize_brk(struct mm_struct *mm)\n{\n   unsigned long range_end = mm->brk + 0x02000000;\n   return randomize_range(mm->brk, range_end, 0) ? : mm->brk;\n}\n\n```\nThis ARM version of Linux doesn't seems to take into account the trigger of randomize_va_space to control ASLR.\n\nIn place of this, the only way to control it seems to be the process personality flags (which are process-wide and NOT system-wide):\n\n```\n    $> setarch `uname -m` -R elf_exec\n\n```\nI will probably be able to say more if I can get the hand on the Android kernel source code.\n\n",
+      "votes": "3",
+      "user": "perror",
+      "time": "Jun 15, 2014 at 8:36",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Hinko Kocevar",
+          "text": "On my device uname -m returns \"armv7l\" and the busybox v1.21.0 based setarch I have onboard recognizes only linux32 and linux64 personalities. Also it does not even recognize the -R switch AFAIK. I'll try and use the real setarch, not busybox based to see if it helps. I have kernel version 3.0.8. Thanks for the effort on researching!",
+          "time": null
+        },
+        {
+          "user": "jww",
+          "text": "@perror - \"I didn't managed to get the sources from Android...\" - for Android, see fs/binfmt_elf.c. Also see A look at ASLR in Android Ice Cream Sandwich 4.0.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

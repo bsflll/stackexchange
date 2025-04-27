@@ -1,0 +1,39 @@
+{
+    "title": "idapython: how to get decompiler output corresponding to the indirect call",
+    "link": "https://reverseengineering.stackexchange.com/questions/30252/idapython-how-to-get-decompiler-output-corresponding-to-the-indirect-call",
+    "content": "For, e.g. disassembler or IDA view:\n\nDecompiler or Hex View:\n\nI can get the decompilation of whole function using something like:\n<pre><code>decompiled = ida_hexrays.decompile(ea)\n</code></pre>\nBut, in this way I get the complete decompilation, but not the part which is only highlighted.\nFor. e.g. I want something like - let's say for the instruction:\n<pre><code>.text:00000000004011BB                 call    rdx\n</code></pre>\nThe corresponding decompilation would only be:\n<pre><code>v4 = ((__int64 (__fastcall *)(_QWORD))a2)(v7) + v3;\n</code></pre>\nAny help is appreciated.\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "R4444",
+    "time": "Apr 11, 2022 at 22:35",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This probably takes more code than it should but here's an approach that could work:\nThe idea is to use the decompiled function's ctree to narrow down the pseudocode lines you care about. At a glance:\n\ndecompile the function containing your ea of interest\nuse <pre><code>citem_t::find_closest_addr()</code></pre> to find the item most closely matching the instruction at <pre><code>ea</code></pre>\nfind the citem's parent statement  (a <pre><code>cinsn_t</code></pre>) because the item you found could be anything (for example, a var reference that's an arg to a call that is itself an arg to a call.. etc)\nonce you have your statement, find the corresponding pseudocode lines that match this statement. That also is non-trivial.\n\neach line in the pseudocode (<pre><code>cfunc_t::get_pseudocode()</code></pre>) contains 'embedded' references to the citems that contribute to generating that line\nthe references are indices into the list of citems <pre><code>cfunc_t::treeitems</code></pre>\nYou can find a reasonably simple example in the Hex-Rays Block Highlighter plugin (disclaimer: mine)\n\n\n\nHere's some code that will find the parent statement for a given ea (steps 1 through 3 above):\n<pre><code>def find_parent_cinsn(cfunc, citem):\n    if not citem.is_expr():\n        return citem\n    cinsn = None\n    class cvisitor(ida_hexrays.ctree_visitor_t):\n        def __init__(self):\n            super().__init__(ida_hexrays.CV_FAST | ida_hexrays.CV_PARENTS)\n\n        def visit_expr(self, expr) -> int:\n            nonlocal cinsn\n            if expr.obj_id == citem.obj_id:\n                for parent in reversed(self.parents):\n                    if not parent.is_expr():\n                        cinsn = parent\n                        break\n                return 1  # Stop enumeration\n            return 0\n\n    cvisitor().apply_to(cfunc.body, None)\n    return cinsn\n\n\ndef pseudo_for_ea(ea):\n    cfunc = ida_hexrays.decompile(ea)\n    citem = cfunc.body.find_closest_addr(ea)\n    citem = find_parent_cinsn(cfunc, citem)\n\n    if citem:\n        print(\"Most likely statement for {:X}: {:X}  {}\".format(ea, citem.ea, citem.cinsn.opname))\n\n        # Now, cross-ref the pseudocode lines to the citem using the citem\n        # references embedded in each line of the cfunc's pseudocode\n        #\n        # cfunc.citems[] -> 0\n        #\n\n</code></pre>\nGood luck!\n",
+            "votes": "2",
+            "user": "vmallet",
+            "time": "Apr 13, 2022 at 17:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "R4444",
+                    "text": "<span class=\"comment-copy\">Hey, thanks for your answer! I designed in a way - assuming the first tag contains corresponds to the tag we receive from find_parent_cinsn citem <code>if citem:         for item in cfunc.get_pseudocode():             if format(citem.index, \"X\").zfill(16) in item.line.split()[0]:                 decomp = ida_lines.tag_remove(item.line)                 return len(re.findall('\\((.*?)\\)',decomp)[-1].split(\",\"))</code></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "There is an undocumented API for this: <pre><code>find_item_coords(item)</code></pre>\nThus you can do something like this in IDAPython:\n<pre><code>cfunc = ida_hexrays.decompile(ea)\nitem = cfunc.body.find_closest_addr(ea)\ncoord = cfunc.find_item_coords(item)\n</code></pre>\nThe <pre><code>coord</code></pre> returned is a <pre><code>(x, y)</code></pre> tuple denoting column and row number for the item in the pseudo code.\nHope this can help you.\n",
+            "votes": "0",
+            "user": "r4ve1",
+            "time": "Jul 10, 2023 at 15:40",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

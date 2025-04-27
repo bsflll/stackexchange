@@ -1,0 +1,54 @@
+{
+    "title": "Intel PIN: How to access the INS object from inside an analysis function?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12404/intel-pin-how-to-access-the-ins-object-from-inside-an-analysis-function",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  A typical PIN code snippet looks like this (taken from the\n  <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/76991/Pin/html/index.html#IAddressTrace\" rel=\"nofollow\">\n   official manual\n  </a>\n  ):\n </p>\n <pre><code>// This function is called before every instruction is executed\n// and prints the IP\nVOID printip(VOID *ip) { fprintf(trace, \"%p\n\", ip); }\n\n// Pin calls this function every time a new instruction is encountered\nVOID Instruction(INS ins, VOID *v)\n{\n    // Insert a call to printip before every instruction, and pass it the IP\n    INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)printip, IARG_INST_PTR, IARG_END);\n}\n</code></pre>\n <p>\n  I just can't figure out how to access the\n  <code>\n   ins\n  </code>\n  object from within\n  <code>\n   printip(VOID *p)\n  </code>\n  . The other way round seems easy, i.e. getting the IP from from the\n  <code>\n   ins\n  </code>\n  object:\n </p>\n <p>\n  <code>\n   INS_Address (INS ins)\n  </code>\n  (see\n  <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/76991/Pin/html/group__INS__BASIC__API__GEN__IA32.html#gd3b5f975c84b126531b38930b94b5544\" rel=\"nofollow\">\n   here\n  </a>\n  )\n </p>\n <p>\n  I tried passing a\n  <code>\n   INS *ins\n  </code>\n  pointer to\n  <code>\n   printip(VOID *ip, INS *ins)\n  </code>\n  ins via\n  <code>\n   IARG_PTR, &ins\n  </code>\n  but this ended in either casting errors or Segmentation faults.\n </p>\n <p>\n  How can I access the\n  <code>\n   ins\n  </code>\n  object (type\n  <code>\n   INS\n  </code>\n  ) from inside an analysis function?\n </p>\n <p>\n  <strong>\n   Side note:\n  </strong>\n  I got to this problem when trying to call\n  <code>\n   INS_Disassemble (INS ins)\n  </code>\n  for every executed instruction.\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "c++",
+        "pintool"
+    ],
+    "user": "langlauf.io",
+    "time": "Apr 12, 2016 at 17:45",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You may note that\n  <code>\n   printip\n  </code>\n  is a function pointer, it is lazily called internally by\n  <code>\n   Pin\n  </code>\n  ; moreover\n  <code>\n   ins\n  </code>\n  is an\n  <em>\n   automatic variable\n  </em>\n  (it is passed into\n  <code>\n   Instruction\n  </code>\n  from the stack). Consequently, passing\n  <code>\n   &ins\n  </code>\n  into\n  <code>\n   printip\n  </code>\n  (through\n  <code>\n   IARG_PTR\n  </code>\n  ), then using it will lead to segmentation faults.\n </p>\n <p>\n  <code>\n   Pin\n  </code>\n  declares\n  <code>\n   INS\n  </code>\n  by specializing the class template\n  <code>\n   INDEX\n  </code>\n  , as you can observe the following declaration in\n  <code>\n   type_core.TLH\n  </code>\n  :\n </p>\n <pre><code>/*! @ingroup INS_BASIC_API\nHandle for INS */  \ntypedef class INDEX<6> INS;\n</code></pre>\n <p>\n  where\n  <em>\n   constructors and assignment operators\n  </em>\n  of class template\n  <code>\n   INDEX\n  </code>\n  are both default. So,\n  <em>\n   in principle\n  </em>\n  ^^, we can always declare a persistent variable to share an object of\n  <code>\n   INS\n  </code>\n  between instrumentation and analysis functions, for example:\n </p>\n <pre><code>static INS per_ins;\n...\nVOID Instruction(INS ins, VOID *v)\n{\n  per_ins = ins;\n  ...\n}\n...\nVOID printip(VOID *ip)\n{\n  INS_Disassemble(per_ins);\n}\n</code></pre>\n <p>\n  This method does not work, unfortunately, this is an example for \"well-typed program still can go wrong\" in\n  <code>\n   C/C++\n  </code>\n  ^^. Since\n  <code>\n   Pin\n  </code>\n  does not guarantee that internal variables, accessed by an object of type\n  <code>\n   INS\n  </code>\n  , are persistent in\n  <em>\n   analysis time\n  </em>\n  , the result of calling\n  <code>\n   INS_Disassemble(per_ins)\n  </code>\n  in an\n  <em>\n   analysis function\n  </em>\n  can be meaningless.\n </p>\n <p>\n  For your case, you may not want to call\n  <code>\n   INS_Disassemble(ins)\n  </code>\n  each time\n  <code>\n   ins\n  </code>\n  executes. We don't need that, for example, if\n  <code>\n   ins\n  </code>\n  is in a loop then this function will be called multiple times (with the same\n  <code>\n   ins\n  </code>\n  ) to get the same result.\n </p>\n <p>\n  All\n  <strong>\n   static information\n  </strong>\n  of an instruction (e.g. the disassembled form of\n  <code>\n   ins\n  </code>\n  in this case) should be obtained in\n  <em>\n   instrumentation time\n  </em>\n  . Particularly,\n  <code>\n   INS_Disassemble\n  </code>\n  should be called single time only in some instrumentation function. One way to obtain the same effect as you want is:\n </p>\n <pre><code>static std::unordered_map<ADDRINT, std::string> str_of_ins_at;\n\nVOID Instruction(INS ins, VOID *v)\n{\n  str_of_ins_at[INS_Address(ins)] = INS_Disassemble(ins);\n  ...\n}\n\nVOID printip(VOID *ip, ADDRINT addr) \n{\n  std::string ins_str = str_of_ins_at[addr];\n  ...\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "Ta Thanh Dinh",
+            "time": "Apr 13, 2016 at 9:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Thank you for the detailed answer. I wanted to place the <code>INS_Disassemble(ins)</code> into the analysis function to check (manually by looking at it) if the analysis function works as intended. If I place the <code>INS_Disassemble(ins)</code> into the Instrumentation function, the output of <code>INS_Disassemble(ins)</code> is separated from the output of the analysis function. In other words: I wanted the output of the analysis function be entitled with the instruction to easily check if it is correct.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ta Thanh Dinh",
+                    "text": "<span class=\"comment-copy\">You are correct, we can always obtain opcode of an instruction using <code>PIN_SafeCopy</code> and <code>INS_Size</code>, then use whatever disassemble tool e.g. Capstone, or even Xed of Intel.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">Oh sorry, I deleted my comment regarding this approach because your idea to store the strings looked more elegant to me.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">But anyway, great explanation of what is going on with this <code>ins</code> object.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  typedef class INDEX<6> INS; is defined in types_core.TLH (types not type). The following code works for me to disassamble at analysis time.\n </p>\n <pre><code>void disasmIns(ADDRINT tid, ADDRINT insarg)\n{\n  INS ins;\n  ins.q_set(insarg);\n  std::cout << \"Disassembly: \" << INS_Disassemble(ins) << std::endl;\n}\n\nVOID Instruction(INS ins, VOID *v) {\n  INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)disasmIns, \n  IARG_FAST_ANALYSIS_CALL, IARG_ADDRINT, ins.q(), IARG_END);\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Heiner Litz",
+            "time": "Jul 19, 2017 at 19:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

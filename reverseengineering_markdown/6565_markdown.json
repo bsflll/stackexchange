@@ -1,0 +1,35 @@
+{
+  "title": "Locate member of a structure",
+  "link": "https://reverseengineering.stackexchange.com/questions/6565/locate-member-of-a-structure",
+  "content": "In an assembly line, I have a call to gethostbyname(...). I have read that the return value of that function can be a pointer to a hostent structure\n(of course, it could be also a null pointer but for my question I need the pointer to the hostent structure)\n\nI also take a look to the hostent structure which is the following:\n\n```\n   typedef struct hostent{\n    char FAR *h_name;\n    char FAR FAR **h_aliases;\n    short h_addrtype;\n    short h_length;\n    char FAR FAR **h_addr_list;\n   } HOSTENT, *PHOSTENT, FAR *LPHOSTENT;\n\n \n\n```\nSo, some lines later the following appears:\n\n```\n  mov edx, [eax+0Ch]\n\n```\nI know that the return value of a function is stored in eax. So, when eax points to hostent structure, then edx must point to one of the hostent structure members, because the offset is 0Ch.\n\nTo determine which of the member it is, i know that I must count the sizes of the members. And here comes my question:\n\nI hope someone can explain me that.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "262",
+  "tags": [
+    "assembly",
+    "struct",
+    "offset",
+    "pointer"
+  ],
+  "user": "user3097712",
+  "time": "Jun 17, 2020 at 9:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "FAR is just an attribute, not a data type.  Not even a standard attribute, but an attribute that was introduced with MS-DOS C compilers, to distinguish between 16-bit and 32-bit pointers, and carried over to windows 16 bit, windows 32 bit and, recently, windows 64 bit.\n\nWhat is stored in the structure is a pointer to a character (in fact, an array of characters), which has 4 bytes (in the case of a 32 bit program), or 8 bytes (in the case of a 64 bit program). You don't tell which you have, but mov edx, [eax+0Ch] implies 32 bit, as 64 bit registers have names like rdx and rax. So, your structure has this layout (note you also need to know shorts have 16 bit):\n\n```\noffset   bytes bits member\n00-03    4     32   h_name\n04-07    4     32   h_aliases\n08-09    2     16   h_addrtype\n0a-0b    2     16   h_length\n0c-0f    4     32   h_addr_list\n\n```\nNote that it's not always that easy, because compilers may introduce padding bytes between struct members for alignment reasons. If you have access to a C compiler, the safest thing is to use offsetof:\n\n```\nprintf(\"%02x  \n\", offsetof(struct hostent, h_addr_list));\n\n```\n",
+      "votes": "2",
+      "user": "Guntram Blohm",
+      "time": "Nov 3, 2014 at 8:04",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "A sample walkthrough containing few lines of code compiled in msvc++exp and windbagged in 32 bit machine\n\n```\nint _tmain(int argc, _TCHAR* argv[]) {\n    WSADATA wsaData;    \n    in_addr addr;\n    hostent *myhost;\n        if ((WSAStartup(MAKEWORD(2, 2), &wsaData)) == 0)\n        if ( ( myhost = gethostbyname(\"www.google.com\") ) != NULL) {\n            printf(\"host name = %s  \n\",myhost->h_name);\n            if (myhost->h_addrtype == AF_INET) {\n                addr.s_addr = *(u_long *) myhost->h_addr_list[0];\n                printf(\"IPv4 Addr = %s  \n\",inet_ntoa(addr));\n            }\n        }    \n        return 0;\n}\n\n```\nrun the compiled exe in windbg with a conditional break point as below\nexplanation being \n\n```\nbreak when ws2_32!gethostbyname is called\ngu is to go up back to caller (eax will hold * to hostent structure)\ndisplay the structure pointed by eax with a c++ expression evaluator  ?? and quit\n\n```\n.\n\n```\n:\\>cdb -c \"bp ws2_32!gethostbyname \\\"gu ; r eax; ?? (hostent *) @eax;q\\\";g\" ghostbyname.exe    \n0:000> cdb: Reading initial command 'bp ws2_32!gethostbyname \"gu ; r eax; ?? (ho\nstent *) @eax;q\";g'\neax=0016c3b8\nstruct hostent * 0x0016c3b8\n   +0x000 h_name           : 0x0016c3f8  \"www.google.com\"\n   +0x004 h_aliases        : 0x0016c3c8  -> (null)\n   +0x008 h_addrtype       : 0n2\n   +0x00a h_length         : 0n4\n   +0x00c h_addr_list      : 0x0016c3cc  -> 0x0016c3e4  \"J}???\"\nquit:\n\n:\\>\n\n```\nwindbg can also be used to ascertain size of individual members \n\n```\n0:000> ?? sizeof(((hostent *) @eax)->h_name)\nunsigned int 4\n0:000> ?? sizeof(((hostent *) @eax)->h_aliases)\nunsigned int 4\n0:000> ?? sizeof(((hostent *) @eax)->h_addrtype)\nunsigned int 2\n0:000> ?? sizeof(((hostent *) @eax)->h_length)\nunsigned int 2\n0:000> ?? sizeof(((hostent *) @eax)->h_addr_list)\nunsigned int 4\n0:000> ?? sizeof(hostent)\nunsigned int 0x10\n\n```\nwith sizes gleaned thus dumping it in raw format becomes easy to script in an unknown binary \n\n```\nr $t0 = ${$arg1}\n.printf /D \"<b>eax          \\t%p </b>  \n\",@$t0\n.printf /D \"<b>hostent *    \\t%p </b>  \n\",poi(@$t0)\n.printf /D \"<b>->h_name     \\t%ma</b>  \n\",poi(@$t0)\n.printf /D \"<b>->h_alias    \\t%p </b>  \n\",poi(poi(@$t0+0x4))\n.printf /D \"<b>->h_addrtype \\t%p </b>  \n\",low(poi(@$t0+0x8))\n.printf /D \"<b>->h_length   \\t%p </b>  \n\",hi(poi(@$t0+0x8))\n.printf /D \"<b>->h_addrlist \\t%p </b>  \n\",poi(poi(@$t0+0xc))\n.printf /D \"<b>->h_addrlist contains ip address in network byte order</b>  \n\"\ndb poi(poi(@$t0+0xc)) l10\n.printf /D \"<b>Ipv4 Address of google.com %d.%d.%d.%d  \n\" , \n\nby(poi(poi(@$t0+0xc))),by(poi(poi(@$t0+0xc))+1),by(poi(poi(@$t0+0xc))+2),by(poi(poi(@$t0+0xc))+3)\n\n```\nresult dumped in raw format without symbol support in an unknown binary\n\n```\n0:000> $$>a< ghostbyname.txt @eax\n\neax             0016c3b8 \nhostent *       0016c3f8 \n->h_name        www.google.com\n->h_alias       00000000 \n->h_addrtype    00000002 \n->h_length      00000004 \n->h_addrlist    0016c3e4 \n->h_addrlist contains ip address in network byte order\n0016c3e4  4a 7d ec d0 4a 7d ec d4-4a 7d ec d3 4a 7d ec d1  J}..J}..J}..J}..\nIpv4 Address of google.com 74.125.236.208\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Nov 3, 2014 at 10:59",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

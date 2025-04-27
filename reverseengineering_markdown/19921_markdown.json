@@ -1,0 +1,55 @@
+{
+  "title": "Writing ELF headers in Radare?",
+  "link": "https://reverseengineering.stackexchange.com/questions/19921/writing-elf-headers-in-radare",
+  "content": "Reading Keith Makan's, \"Introduction to the ELF Format : The ELF Header\", he modifies e_entry,\n\nAlso documented in man 5 elf, I'm wondering if Radare has any functionality to rewrite ELF-specific headers or if writing the bits manually is the current way to do this? For example, I know it'll show the entry point with ie.\n\n",
+  "votes": "7",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "radare2",
+    "elf"
+  ],
+  "user": "Evan Carroll",
+  "time": "Nov 19, 2018 at 22:14",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "You absolutely want to do this with radare2? If not, have a look at the bfd project (used by binutils).",
+      "time": null
+    },
+    {
+      "user": "Evan Carroll",
+      "text": "@0xC0000022L I'm not sure there is a way to do this, generally speaking I assume that Radare can't do something, and then I ask and I find out it can (a huge value of this site). I assume it can only parse ELF. If it can only parse ELF, I think a workaround is a great contribution because I'm pretty spankin new to RE, and I'm sure others are testing the waters just like me. If Radare grows the ability later, I will just come back and mark the newer answer as chosen.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Yes, obviously you can. radare2 has built-in features to handle binary headers. This including reading, parsing and modifying the headers of the binary. And this is not different for elf or pe files, it will work great with both.\n\n```\n$ ./example.elf\n[*] you ran this binary!\n\n$ r2 -w -nn example.elf\n[0x00000000]> .pf.elf_header.entry=0x0000063a\n[0x00000000]> q\n\n$ ./example.elf\n[*] wow how did you manage to call this?\n\n```\nAs described in the article you linked in your question, it is easy to create a binary with a function that should never be executed under regular circumstances. Here's the exact code that was used in the linked article:\n\n```\n$ cat example.c\n\n#include <stdio.h>\n\n\nvoid never_call (void) {\n    printf (\"[*] wow how did you manage to call this?  \n\");\n    return;\n}\n\nint main (int argc, char **argv) {\n    printf (\"[*] you ran this binary!  \n\");\n    return 0;\n}\n\n```\nAs you can see, the function never_call would, well... never be called. The program would execute the entrypoint which would execute the main function and will return.\n\nNow let's compile it using the command line used in the article, and execute the program:\n\n```\n$ gcc -Wall -o example.elf example.c\n$ ./example.elf\n[*] you ran this binary!\n\n```\nAs we said, only main() was executed. Now let's open the binary in radare2 to see the magic happens.\n\nFinding the address of the function \n\nAs you requested, we want to modify the entry point of the binary by modifying the pointed address in the elf header to be our never_call function. So first, we need to find the address of never_call in the binary.\n\n```\n$ r2 example.elf\n[0x00000530]> f~never_call\n0x0000063a 19 sym.never_call\n\n```\nWe can see that the function never_call is at address 0x0000063a. As you probably know by now, the f command is used to list the flags that was marked by radare2, this including symbols as functions names. Then, we used ~ which is r2's internal grep and grepped for the relevant function.\n\nParsing the ELF Header \n\nFirst, we need to seek to address 0 using s 0 and then and only then we can parse the header with a new command pf. The command pf is used to print formatted data such as structures, enums, and types. Let's load the format definition for elf64 using pfo elf64 and use the pf. command to list the format definitions:\n\n```\n[0x00002400]> s 0        # Seek to pos 0 in the binary\n\n[0x00000000]> pfo elf64  # Load a Format Definition File for elf\n\n[0x00000000]> pf.\npf.elf_header [16]z[2]E[2]Exqqqxwwwwww ident (elf_type)type (elf_machine)machine version entry phoff shoff flags ehsize phentsize phnum shentsize shnum shstrndx\n\npf.elf_phdr [4]E[4]Eqqqqqq (elf_p_type)type (elf_p_flags)flags offset vaddr paddr filesz memsz align\n\npf.elf_shdr x[4]E[8]Eqqqxxqq name (elf_s_type)type (elf_s_flags_64)flags addr offset size link info addralign entsize\n\n```\nOne of the loaded definitions is the elf_header which holds the structure for the elf64 header. We can print the header like this:\n\n```\n[0x00000000]> pf.elf_header\n     ident : 0x00000000 = .ELF...\n      type : 0x00000010 = type (enum elf_type) = 0x3 ; ET_DYN\n   machine : 0x00000012 = machine (enum elf_machine) = 0x3e ; EM_AMD64\n   version : 0x00000014 = 0x00000001\n     entry : 0x00000018 = (qword)0x0000000000000530\n     phoff : 0x00000020 = (qword)0x0000000000000040\n     shoff : 0x00000028 = (qword)0x0000000000001948\n     flags : 0x00000030 = 0x00000000\n    ehsize : 0x00000034 = 0x0040\n phentsize : 0x00000036 = 0x0038\n     phnum : 0x00000038 = 0x0009\n shentsize : 0x0000003a = 0x0040\n     shnum : 0x0000003c = 0x001d\n  shstrndx : 0x0000003e = 0x001c\n\n```\nAs you can see, radare2 printed the elf64 header in a readable format so now we can see that entry, at 0x18, points to 0x530 which is our original entrypoint function. We can verify it by using ie, a radare2 command to print the entrypooint:\n\n```\n[0x00000000]> ie\n[Entrypoints]\nvaddr=0x00000530 paddr=0x00000530 baddr=0x00000000 laddr=0x00000000 haddr=0x00000018 hvaddr=0x00000018 type=program\n\n```\nIndeed, you can see that the entry point is 0x530 and the haddr, which is the header address, is 0x18.\n\nModifying the entry point\n\nIn order to modify this entry, we would need to open the file in writing mode. We can simply execute oo+ from our current session in order to re-open the file in write mode, or use the -w argument to radare2.\n\nThen, we can simply use the pf command to write to the parsed structure the address of never_call function.\n\n```\n[0x00000000]> oo+\n[0x00000000]> pf.elf_header.entry=0x0000063a\nwv8 0x0000063a @ 0x00000018\n\n```\nThis printed us a radare2 command to execute which will modify this address in the header. We can either execute it ourselves or use the . command to \"interpret the output of the command as r2 commands\".\n\nSo instead of executing wv8 ..., we will simply do:\n\n```\n[0x00000000]> .pf.elf_header.entry=0x0000063a\n\n```\nAnd now entry should be overridden with 0x63a which is our never_call function.\n\n```\n[0x00000000]> pf.elf_header\n     ident : 0x00000000 = .ELF...\n      type : 0x00000010 = type (enum elf_type) = 0x3 ; ET_DYN\n   machine : 0x00000012 = machine (enum elf_machine) = 0x3e ; EM_AMD64\n   version : 0x00000014 = 0x00000001\n     entry : 0x00000018 = (qword)0x000000000000063a\n     phoff : 0x00000020 = (qword)0x0000000000000040\n     shoff : 0x00000028 = (qword)0x0000000000001948\n     flags : 0x00000030 = 0x00000000\n    ehsize : 0x00000034 = 0x0040\n phentsize : 0x00000036 = 0x0038\n     phnum : 0x00000038 = 0x0009\n shentsize : 0x0000003a = 0x0040\n     shnum : 0x0000003c = 0x001d\n  shstrndx : 0x0000003e = 0x001c\n\n[0x00000000]> pf.elf_header.entry\n     entry : 0x00000018 = (qword)0x000000000000063a\n\n```\nExecuting\n\nGreat! We can now exit radare and execute the program.\n\n```\n$ ./example.elf\n[*] wow how did you manage to call this?\n\n```\nThis long answer explained every step in the way but can really be narrowed to a simple command .pf.elf_header.entry=0x0000063a which sets the entry in the elf header to be the desired address. In the TL;DR version I demonstrated the use of -w to open the binary in write-mode and the use of -nn to load the binary structure (pfo elf64, etc...). So simply, opening radare2 like this r2 -w -nn example.elf and executing .pf.elf_header.entry=<address> would solve your problem.\n\nDon't be afraid to ask how to do things in radare2. Although it is quite a scary framework, it is really powerful and with proper knowledge, can do much more things than seems like at first.\n\n",
+      "votes": "15",
+      "user": "Evan Carroll",
+      "time": "Nov 21, 2018 at 6:34",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Evan Carroll",
+          "text": "Wow, this is really cool. From the UI standpoint, it would be nice if the .pf.elf_header.entry=0x0000063a didn't write to $$ but to @ 0. Got it right the second time though.",
+          "time": null
+        },
+        {
+          "user": "Evan Carroll",
+          "text": "I just used this to answer another question on the site, thanks again for answering all my questions on re.se. I'll keep them coming. =) reverseengineering.stackexchange.com/a/19936/22669",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I don't think this feature is supported according to the source code.\nEdit: I was wrong, sorry about that.\n\nHowever, if you really need a library/tool to do that, I recommend LIEF.\n\n",
+      "votes": "2",
+      "user": "wisk",
+      "time": "Nov 20, 2018 at 19:43",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

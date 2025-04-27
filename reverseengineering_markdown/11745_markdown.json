@@ -1,0 +1,37 @@
+{
+  "title": "Challenging variable-length integer encoding",
+  "link": "https://reverseengineering.stackexchange.com/questions/11745/challenging-variable-length-integer-encoding",
+  "content": "I have a piece of binary data I'm trying to investigate. My guess is that it should be part of simple filesystem-like index. There are 2 parts in the file. First part has a very simple format:\n\nNaturally, I expect to find increasing pointers to some files named with these strings later. However, the rest of the file is 0x5c47 bytes long and it looks like it has a number of records (int32, little endian = 0x4e0), then a sequence of records itselves. However, the trick is that obviously record length is not constant: (0x5c47 - 4) / 0x4e0 ~ 18.9254807. I see a certain pattern here, let me demonstrate:\n\n```\nE0 04 00 00\n\n```\nAs I said, it starts with number of records, 0x4e0 = 1248. Note that 1248 records is fairly close to number of strings I've found earlier (1256), but not exactly matching. Then I see some 14-byte long records:\n\n```\n90 00   |90 0D|90 16 02 90 22 90 2A 90 39|00\n90 46   |90 0D|90 16 02 90 22 90 2A 90 39|01\n90 53   |90 0D|90 16 02 90 22 90 2A 90 39|02\n90 61   |90 0D|90 16 02 90 22 90 2A 90 39|03\n90 6E   |90 0D|90 16 02 90 22 90 2A 90 39|04\n\n```\nLast byte seems to be record number counter. As for others, so far, only 2nd byte changes. However, next we see some 15-byte long records:\n\n```\n91 82 00|90 0D|90 16 02 90 22 90 2A 90 39|05\n91 97 00|90 0D|90 16 02 90 22 90 2A 90 39|06\n91 A4 00|90 0D|90 16 02 90 22 90 2A 90 39|07\n...\n91 14 01|90 0D|90 16 02 90 22 90 2A 90 39|0E\n\n```\nIt seems that there are some variable length integers involved, i.e. first value of a record starts with 90 00, 90 46, then it eventually overflows and becomes 91 82 00, 91 97 00, ... 91 26 01, etc. However, it's not the normal (BER, AKA VLQ, AKA Base128, etc) encoding for variable length integers I've used to. Let's check how contents of the record would expand once it will become 16-byte long record:\n\n```\n91 26 01|90 0D|90 16 02 90 22 90 2A 90 39|0F\n91 39 01|90 0D|90 16 02 90 22 90 2A 90 39|80 10\n91 4E 01|90 0D|90 16 02 90 22 90 2A 90 39|80 11\n91 6C 01|90 0D|90 16 02 90 22 90 2A 90 39|80 12\n91 8B 01|90 0D|90 16 02 90 22 90 2A 90 39|80 13\n...\n\n```\nWhoa, it was just 05, 06, 07, ... 0E, 0F (which presumably encoded record #0..15), then it jumped to 80 10 to designate record #16. First field seems to continue being 3-byte integer. Next switch to 17-byte long recods looks like that:\n\n```\n...\n91 7C 08|90 0D|90 16 02 90 22 90 2A 90 39|80 7D\n91 8A 08|90 0D|90 16 02 90 22 90 2A 90 39|80 7E\n91 98 08|90 0D|90 16 02 90 22 90 2A 90 39|81 7F 00\n91 A6 08|90 0D|90 16 02 90 22 90 2A 90 39|81 80 00\n91 B4 08|90 0D|90 16 02 90 22 90 2A 90 39|81 81 00\n91 C2 08|90 0D|90 16 02 90 22 90 2A 90 39|81 82 00\n...\n\n```\nThere are some vague resemblance with the trick that we've seen earlier with 90 becoming 91: here 80 becomes 81 presumably to designate switch from #126 = 0x7e (encoded as 80 7E) to #127 = 0x7f (encoded as 81 7F 00).\n\nFurther in the file there seems to be a major format switch for 18-byte long record which I guess lines up somewhat like that:\n\n```\n...\n91 5D 14|90 0D   |90 16   |02|90 22|90 2A   |90 39|81 5C 01\n91 6A 14|90 0D   |90 16   |02|90 22|90 2A   |90 39|81 5D 01\n91 77 14|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|00\n91 AA 14|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|01\n91 B5 14|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|02\n91 C0 14|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|03\n91 CB 14|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|04\n...\n\n```\nThis change expands many of the fields (and actually makes it somewhat cleared what the fields boundaries are) and resets last field back to 0.\n\nThere are some vague resemblance with the trick that we've seen earlier with 90 becoming 91: here 80 becomes 81 presumably to designate switch from #126 = 0x7e (encoded as 80 7E) to #127 = 0x7f (encoded as 81 7F 00). Records at the end of the file are 20 bytes long and look like that:\n\n```\n...\n91 32 34|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|81 7F 03\n91 3B 34|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|81 80 03\n91 44 34|91 86 14|91 8F 14|02|90 22|91 9B 14|90 39|81 81 03\n\n```\nMy best bet here is that many intermediate values have increased and 90 xx became 91 xx yy.\n\nTo summarize what I've learned so far, it looks like these records use variable-length encoded integers, encoding scheme is something like:\n\nDoes anyone know of any standard format / encoding scheme that looks like that? Any ideas on how to properly decode 90 xx and 91 xx yy values?\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "487",
+  "tags": [
+    "binary-analysis",
+    "file-format",
+    "binary-format"
+  ],
+  "user": "GreyCat",
+  "time": "Jan 12, 2016 at 10:07",
+  "comments": [
+    {
+      "user": "peter ferrie",
+      "text": "ASN1 looks a bit like this.  The 9x values might be 8x values with special typing (e.g. signed vs unsigned).",
+      "time": null
+    },
+    {
+      "user": "GreyCat",
+      "text": "@peterferrie ASN1's idea of variable-length integers is basically Base128 + a few bells & whistles like tags and types. Base128 implies that you'll have one byte for values <128. Here we definitely have more: we use 2 bytes per integer as early as 0x10. Thanks for the signed vs unsigned insight :)",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Each of the eight fields in the record has a one-byte header.\n\nIn the header, high nybble 8 means unsigned and high nybble 9 means signed (or possibly the other way around, can't be sure); low nybble is then the number of bytes needed to encode the number (not counting the header byte), decremented by one.\nIf the high nybble of the header is 0, that's a special code for very small unsigneds (more precisely: very small numbers of same type as 8) and in that case the low nybble is the entire number.\n\nNow, the tricky thing that's been making this hard is that (for types 8 and 9) the rest of the number is encoded using a method that signals the encoding length on its own, wastefully unaware that the header has already told us how many bytes will be needed for the encoding. My guess is that the header byte was \"invented\" for this application after this inner encoding was already decided upon.\n\nFor positive integers, that inner encoding is very similar to VLQ (thanks for dropping the names, I wasn't aware of them): output lowest 7 bits of the number as a single byte, and set the MSB of that byte to 1 if there are more bytes to follow, or to 0 if not; continue with the next 7 bits, etc.\nThe difference from VLQ is that the bit sequence 7F is treated as non-terminating, which may be an Obi-Wan bug in the encoder, or some kind of a genuine design decision that I don't really understand. (It can't be about signalling that the number shouldn't be sign-extended as negative, because then the same would apply for 40-7e.)\n\nIt would be interesting to see the 4th record from the end - it should end with the value 0x1fe, and I expect it would be encoded as 81 FE 03 (noting that 0x1ff is encoded as 81 7f 03, implying that this encoding never uses the value FF anywhere.)\n\nWe don't have examples of negative numbers in your sample, so we can't tell how they would be encoded.\n\n",
+      "votes": "3",
+      "user": "hemflit",
+      "time": "Jan 14, 2016 at 21:02",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

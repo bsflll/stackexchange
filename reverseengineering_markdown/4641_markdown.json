@@ -1,0 +1,60 @@
+{
+  "title": "Why is the ecx register used during an inc instruction",
+  "link": "https://reverseengineering.stackexchange.com/questions/4641/why-is-the-ecx-register-used-during-an-inc-instruction",
+  "content": "Here's code that performs some arithmetics.\n\n```\nint main(void) {\n    int i = 3;\n    i++;\n    i+= 2;\n    return 0;\n}\n\n```\nI compiled it using 32-bit tcc with the following command\n\n```\ntcc -o hello.exe hello.c\n\n```\nI, then, disassembled it using IDA free edition, and after some time staring at the start of the instructions I realized that the main function that I was looking for is in a subroutine, and going there I see this:\n\n```\nsub_401000 proc near\n\nvar_4= dword ptr -4\n\npush    ebp               \nmov     ebp, esp           \nsub     esp, 4            // allocate 4 bytes on the stack for var i\nnop\n\nmov     eax, 3            // i = 3 instructions\nmov     [ebp+var_4], eax  // \n\nmov     eax, [ebp+var_4]  // i++ instructions\nmov     ecx, eax          // \ninc     eax               // \nmov     [ebp+var_4], eax  //\n\nmov     eax, [ebp+var_4]  // i+=2 instructions\nadd     eax, 2            //   \nmov     [ebp+var_4], eax  //  \n\nmov     eax, 0           \njmp     $+5              \nleave\nretn\nsub_401000 endp\n\n```\nI've added my understanding of what's going on in comments on the right for the body of the method that I am interested in.\n\nFor example, incrementing the variable would involve moving a value onto a register and then operating on it. I would expect i++ to look something like\n\n```\nmov     eax, [ebp+var_4]\ninc     eax             \n\n```\nBut the actual instructions involved an extra move\n\n```\nmov     eax, [ebp+var_4]  \nmov     ecx, eax         // <----- ?\ninc     eax               \n\n```\nIn the add instruction, the extra move isn't there. When I modified the code with a decrement operation, I see that extra move as well.\n\nIs there some purpose for this move from eax to ecx ?\n\nUPDATE:\n\nI am still reading about registers, and from what I've read ecx is used as a counter, but from this code it isn't obvious what it's being used for, if anything.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "assembly",
+    "x86"
+  ],
+  "user": "MxLDevs",
+  "time": "Jun 19, 2014 at 20:49",
+  "comments": [
+    {
+      "user": "Jason Geffner",
+      "text": "possible duplicate of Why are values passed through useless copies?",
+      "time": null
+    },
+    {
+      "user": "Guntram Blohm",
+      "text": "The counter feature of ecx is used with rep/loop instructions, which is certainly not the case here. I'd guess it's an artifact of postincrement, where the value of the expression is the unchanged value. When the compiler compiles the i++ expression, it puts the old value into ecx in case some outer expression needs it; without optimizations, it never realizes there is no outer expression. Would be interesting to know if the instruction disappears when you use ++i instead.",
+      "time": null
+    },
+    {
+      "user": "MxLDevs",
+      "text": "@GuntramBlohm the instruction indeed does not appear if it were ++i instead.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "TCC was written to be fast and simple without most optimizations. It compiles the program in only one pass and use a very limited number of registers (eax, ecx and edx, I think). So don't suppose for it to be efficient and don't surprise when it does something \"stupidly\".\n\nhttp://bellard.org/tcc/tcc-doc.html#SEC31\n\nhttps://en.wikipedia.org/wiki/Tiny_C_Compiler#Compiled_program_performance\n\n",
+      "votes": "3",
+      "user": "phuclv",
+      "time": "Jun 20, 2014 at 8:38",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "The comment of Guntram Blohm is right. The original value of i is stored into ecx for a possible later use.\n\nISO/IEC 9899:TC3 (C99) ---\n6.5.2.4 Postfix increment and decrement operators:\n\nThe sequence points are described in Annex C of the document.\n\nTCC performs only few optimizations, the code is generated in a single pass and every C statement is compiled on its own. It seems that the compiler is almost as simple as possible so it does not store any state during the compilation if it is not necessary.\n\nWhen TCC encountered the sequence point before ++ it did not know about the ++ operation. Performing the side-effect of the ++ operator later after evaluating the ++ operation would mean to store a state information. It seems that the author of TCC selected the simplest approach - to perform the side-effect together with the evaluation of the ++ operator.\n\nThe original value of the i variable (before incrementing) can possibly be used again in the same expression so it is saved to the ecx register and the result of the postfix increment operation is stored to the variable on the stack immediately (mov [ebp+var_4], eax). It does not matter that the value in ecx is not used later. This is the disadvantage due to the simplicity of TCC. For example you can notice that the code loads the value of i from stack to eax even if the value is in eax already.\n\nExample of code which additionally uses the original value of i:\n\n```\nj = i++ + i * 3;\n\n```\nThe assembly code:\n\n```\n13: 8b 45 fc        mov eax, DWORD PTR [rbp-0x4]    // load i to eax\n16: 48 89 c1        mov ecx, eax                    // store the original value of i for later use\n19: 83 c0 01        add eax, 0x1                    // increment the value (the side effect of ++)\n1c: 89 45 fc        mov DWORD PTR [rbp-0x4], eax    // store it to i - everything between \"=\" and \"+\" is done at this point including the side-effect of i++\n1f: 8b 45 fc        mov eax, DWORD PTR [rbp-0x4]    // load i to eax (Now it is the incremented value.)\n22: ba 03 00 00 00  mov edx, 0x3                    // load value 3 for the multiplication\n27: 0f af c2        imul    eax, edx                // multiply\n2a: 01 c1           add ecx, eax                    // add the original value of i (the result of i++)\n2c: 89 4d f8        mov DWORD PTR [rbp-0x8], ecx    // store the result to j\n\n```\nAt 1f the incremented value of i is being used but it is also possible to use the original value of i there and still be in adherence with C99 because the sequence point after i++ was not encountered yet. In this case the sequence points are right before and after the statement.\n\n",
+      "votes": "4",
+      "user": "pabouk - Ukraine stay strong",
+      "time": "Jun 20, 2014 at 18:39",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "supercat",
+          "text": "A recursive-descent parser wouldn't need to do anything fancy to have a \"generate code for expression whose result is ignored\", \"generate code for expression and branch to X if zero and Y if zero (using a dummy value for X or Y to indicate fall-through)\", and have those fall through to \"generate code for expression whose result is used\", or a combination of \"generate code for expression whose result is used\" followed by \"test result against zero and branch to X or Y\".  Separating things out in that fashion would be the easiest way to efficiently handle...",
+          "time": null
+        },
+        {
+          "user": "supercat",
+          "text": "...things like comparison operations and short-circuit evaluation, so that if (a==b && c==d) doesn't get processed with code equivalent to if ( (((a==b)?1:0) ? ((c==d)?1:0) : 0) != 0).  Having the \"evaluate expression whose result is ignored\" look for expressions of the form \"++x\"., \"x++\", \"--x\", and \"x--\" and special-case those would be a simple optimization with a large payoff.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

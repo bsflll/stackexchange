@@ -1,0 +1,64 @@
+{
+    "title": "What is ObjectStublessClientXX in ole32dll?",
+    "link": "https://reverseengineering.stackexchange.com/questions/19062/what-is-objectstublessclientxx-in-ole32dll",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When I do dynamic reversing I saw usage with <code>ObjectStublessClientXX</code> in <code>ole32.dll</code> .</p>\n<p>What is that function? What does it do?</p>\n<p>Is there any way that it supposed to transfer message between 2 processes? I see that after those function called from <code>1.exe</code> so <code>2.exe</code> got a message</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "858",
+    "tags": [
+        "ida",
+        "windows",
+        "dll",
+        "dynamic-analysis"
+    ],
+    "user": "Keystone",
+    "time": "Aug 14, 2018 at 20:56",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">Is that the actual name or you have a specific number in place of XX?</span>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<span class=\"comment-copy\">@Keystone I noticed you don't usually <a href=\"https://stackoverflow.com/help/accepted-answer\">accept answers</a>. Is that intentional or are you just unaware of the meaning of accepting answers? May I interest you in accepting Biswapriyo's answer to this post, unless you find it lacking?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>COM is very abstract idea in Object Oriented Programming (OOP). To understand this well, you need some in-depth knowledge of <a href=\"https://en.wikipedia.org/wiki/Inheritance_(object-oriented_programming)\" rel=\"noreferrer\">Inheritance in OOP</a>, <a href=\"https://en.wikipedia.org/wiki/Virtual_method_table\" rel=\"noreferrer\">Virtual Method Table</a>, <a href=\"https://msdn.microsoft.com/en-us/library/ms809983.aspx#dbcomrem\" rel=\"noreferrer\">COM in separate process</a> and <a href=\"https://docs.microsoft.com/en-us/windows/desktop/com/marshaling-details\" rel=\"noreferrer\">Data Marshaling with COM</a>.</p>\n<p>Those subroutines are part of a COM Proxy/Stub DLL. Proxy DLL are used when the COM interfaces are defined/implemented in separate DLL files. Think these as a simple function call but with COM virtual tables. In case of dynamic linking, DLL has exported functions and EXE files call them. In case of proxy/stub COM, the underlying functions are defined in a separate DLL files. When an executable call any method the parameters are marshalled (i.e. packed/assembled) through Proxy DLL to the main DLL where all the real things happens. Proxy DLLs contain just the list of those methods, aka. Virtual Functions in Virtual Method Table (vtable or vtbl). So, the \"ObjectStublessClient\" are the virtual functions only. In simple C language, this can be compared as function pointers in a structure (with oversimplification).</p>\n<p>In IDA, go to View --&gt; Open subviews --&gt; Names or press <kbd>Shift</kbd> + <kbd>F4</kbd> to open 'Names Window'.\nSearch for 'ProxyVtbl', you can find defined virtual tables. Here is an example of <a href=\"https://docs.microsoft.com/en-us/windows/desktop/api/oleidl/nn-oleidl-iolecachecontrol\" rel=\"noreferrer\"><strong>IOleCacheControl interface</strong></a> in Ole32.DLL file.</p>\n<ul>\n<li>In IDA assembly view:</li>\n</ul>\n<pre><code>.rdata:00000001800CE9D0 ; $2F7D790A470334608EE0E1481017719B IOleCacheControlProxyVtbl\n.rdata:00000001800CE9D0 _IOleCacheControlProxyVtbl dq offset IOleCacheControl_ProxyInfo; header.piid\n.rdata:00000001800CE9D0                                         ; DATA XREF: .rdata:00000001800C9BF8↑o\n.rdata:00000001800CE9D0                 db 0D0h, 0AEh, 0Fh, 80h, 1, 3 dup(0); gap8\n.rdata:00000001800CE9D0                 dq offset IUnknown_QueryInterface_Proxy, offset IUnknown_AddRef_Proxy; Vtbl\n.rdata:00000001800CE9D0                 dq offset IUnknown_Release_Proxy, offset ObjectStublessClient3_0; Vtbl\n.rdata:00000001800CE9D0                 dq offset ObjectStublessClient4_0; Vtbl\n.rdata:00000001800CEA08                 align 10h\n</code></pre>\n<ul>\n<li>In oleidl.h file (C++ interface):</li>\n</ul>\n<pre><code>MIDL_INTERFACE(\"00000129-0000-0000-C000-000000000046\")\nIOleCacheControl : public IUnknown\n{\npublic:\n    virtual HRESULT STDMETHODCALLTYPE OnRun( \n        LPDATAOBJECT pDataObject) = 0;\n    \n    virtual HRESULT STDMETHODCALLTYPE OnStop( void) = 0;\n    \n};\n</code></pre>\n<ul>\n<li>In simple C language:</li>\n</ul>\n<pre><code>GUID IID_IOleCacheControl = { 0x00000129, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 };\n\ntypedef struct _IOleCacheControl IOleCacheControl, *PIOleCacheControl;\n\nstruct _IOleCacheControl {\n    \n    //0th IUnknown_QueryInterface_Proxy\n    HRESULT (__fastcall *QueryInterface )( \n        PIOleCacheControl* This,\n        GUID* riid, \n        PVOID* ppvObject\n        );\n    \n    //1st IUnknown_AddRef_Proxy\n    ULONG (__fastcall *AddRef )( \n        PIOleCacheControl* This\n        );\n    \n    //2nd IUnknown_Release_Proxy\n    ULONG (__fastcall *Release )( \n        PIOleCacheControl* This\n        );\n    \n    //3rd ObjectStublessClient3_0\n    HRESULT (__fastcall *OnRun )( \n        PIOleCacheControl* This,\n        IDataObject* pDataObject\n        );\n    \n    //4th ObjectStublessClient4_0\n    HRESULT (__fastcall *OnStop )( \n        PIOleCacheControl* This\n        );\n    \n};\n</code></pre>\n<p>The first three functions (QueryInterface, AddRef, Release) are inherited from (i.e. copied from) <a href=\"https://docs.microsoft.com/en-us/windows/desktop/api/unknwn/nn-unknwn-iunknown\" rel=\"noreferrer\">IUnknown interface</a>. Then other remaining virtual functions are named with their offsets. Hence <code>ObjectStublessClient3_0</code> is the <code>OnRun()</code> and <code>ObjectStublessClient4_0</code> is the <code>OnStop()</code> function pointers. I changed the calling conventions to <code>__fastcall</code> because Windows binary generally use that calling conventions.</p>\n<p>One can see a real example of this method in my repository <a href=\"https://github.com/Biswa96/WslReverse\" rel=\"noreferrer\">GitHub: WslReverse</a> where I show the hidden COM interface of LxssManager.DLL.</p>\n<h3>Further Readings:</h3>\n<ul>\n<li><a href=\"https://blogs.msdn.microsoft.com/eldar/2006/02/28/com-proxy-stub-dll-and-why-do-you-need-it/\" rel=\"noreferrer\">COM proxy stub dll and why do you need it</a></li>\n<li><a href=\"https://www.codeproject.com/Members/Lim-Bio-Liong?msg=1413206#xx1413206xx\" rel=\"noreferrer\">Concerning Proxy/Stub DLLs</a></li>\n<li><a href=\"https://msdn.microsoft.com/en-us/library/ms809983.aspx\" rel=\"noreferrer\">From CPP to COM</a></li>\n<li><a href=\"https://thrysoee.dk/InsideCOM+/ch12d.htm\" rel=\"noreferrer\">An Introduction to Marshaling</a></li>\n</ul>\n</div>",
+            "votes": "5",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Keystone",
+                    "text": "<span class=\"comment-copy\">thank you about your replay, I searched in name windows <code>ProxyVtbl</code> but not found anything,  do you say that <code>ObjectStublessClientXX</code> point to some virtual function that implement in another place? I want to find which function is point about.  Thank!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">@Keystone There are many COM vtable in ole32.dll. See <a href=\"https://i.sstatic.net/Jmr1y.png\" rel=\"nofollow noreferrer\">this image</a>. Look at the assembly view first to get the overall idea. If you double click on <code>ObjectSutblessClient</code> in assembly view IDA automatically opens that function.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Keystone",
+                    "text": "<span class=\"comment-copy\">what do you mean? In my process that I open with ida I dont see in the 'Names Window' anything that contain ProxyVtbl.  Do you want me to open ole32.dll with ida? That windows dll, I want to see which function my process will do when <code>ObjectStublessClientXX</code> called.  When I tried to debug I see that when my process enter to <code>ObjectStublessClientXX</code> I see there <code>ole32_objectstublessclientXX proc near </code> and then <code>mov ecx xx</code>   and <code>jmp address that is again ObjectStublessClientXX</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Book: IDA pro 2nd edition chapter 4.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Keystone",
+                    "text": "<span class=\"comment-copy\">friend, I already read that, and workinf lot with ida, maybe I dont explain myself well,  please look on my last replay, if you can please help me to find which function has been called  when I see <code>ObjectStublessClientXX</code> I will thank you</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

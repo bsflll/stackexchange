@@ -1,0 +1,65 @@
+{
+  "title": "Extracted router file execution",
+  "link": "https://reverseengineering.stackexchange.com/questions/19469/extracted-router-file-execution",
+  "content": "I am trying to run an executable file that I dug out from an extracted file system of a DSL modem router. So first of all I needed to either have a MIPS Linux box or take the emulation path. After some research and effort I got QEMU running a Debian MIPS system with network access and USB support to copy the file in the emulated file system: \n\n```\nqemu-system-mips -M malta -kernel vmlinux-2.6.32-5-4kc-malta -hda debian_squeeze_mips_standard.qcow2 -append \"root=/dev/sda1 console=tty0\" -net nic -net tap -usb -device usb-host,hostbus=1,hostaddr=8\n\n```\nSo I copied the file, changed the rwx attributes and tried to execute it, but without success\n\n```\nroot@debian-mips:~/myfiles/# ./generator\n-bash: ./generator: No such file or directory\n\n```\nThe file actually exists if I list the contents of the directory.\nAfter that I did notice some missing libraries :\n\n```\nroot@debian-mips:~/myfiles# ldd generator\n    libcrypto.so.0.9.8 => /usr/lib/libcrypto.so.0.9.8 (0x2aaad000)\n    libc.so.0 => not found\n    libd1.so.2 => /lib/libd1.so.2 (0x2ac2d000)\n    libz.so.1 => /usr/lib/libz.so.1 (0x2ac41000)\n    libc.so.6 => /lib/libc.so.6 (0x2ac67000)\n    /lib/ld-uClibc.so.0 => /lib/ld.so.1 (0x55550000)\n\n```\nSo I copied the missing libc.so.0 from the extracted router firmware files:\n\ncp libc.so.0 /usr/lib\n\nThen there was another missing file:\n\n```\nroot@debian-mips:~/myfiles# ldd generator\n    libcrypto.so.0.9.8 => /usr/lib/libcrypto.so.0.9.8 (0x2aaad000)\n    libc.so.0 => /usr/lib/libc.so.0 (0x2ac2d00)\n    libd1.so.2 => /lib/libd1.so.2 (0x2ac8f000)\n    libz.so.1 => /usr/lib/libz.so.1 (0x2aca3000)\n    libc.so.6 => /lib/libc.so.6 (0x2acc9000)\n    /lib/ld-uClibc.so.0 => /lib/ld.so.1 (0x55550000)\n    ld-uClibc.so.0 => not found\n\n```\nCopied it again from the router extracted firmware:\n\ncp ld-uClibc.so.0 /usr/lib\n\nEverything seemed OK at this point:\n\n```\nroot@debian-mips:~/myfiles# ldd generator\n    libcrypto.so.0.9.8 => /usr/lib/libcrypto.so.0.9.8 (0x2aaad000)\n    libc.so.0 => /usr/lib/libc.so.0 (0x2ac2d00)\n    libd1.so.2 => /lib/libd1.so.2 (0x2ac8f000)\n    libz.so.1 => /usr/lib/libz.so.1 (0x2aca3000)\n    libc.so.6 => /lib/libc.so.6 (0x2acc9000)\n    ld-uClibc.so.0 => /usr/lib/ld-uClibc,so,0 (0x2ae4b000)\n    /lib/ld-uClibc.so.0 => /lib/ld.so.1 (0x55550000)\n\n```\nHowever, I am still unable to execute the file.\nSome additional info about it:\n\n```\nroot@debian-mips:~/myfiles# file generator\ngenerator: ELF 32-bit MSB executable, MIPS, MIPS32 version 1 (SYSV), dynamically linked (uses shared libs), stripped\n\n```\nI did mess around a bit more with the library files deleting those i copied and tried something like this :\n\n```\nln -s /lib/libc.so.6 /lib/libc.so.0\n\nroot@debian-mips:~/myfiles# ldd generator\n    libcrypto.so.0.9.8 => /usr/lib/libcrypto.so.0.9.8 (0x2aaad000)\n    libc.so.0 => /lib/libc.so.0 (0x2ac2d000)\n    libd1.so.2 => /lib/libd1.so.2 (0x2adaf000)\n    libz.so.1 => /usr/lib/libz.so.1 (0x2adc3000)\n    /lib/ld-uClibc.so.0 => /lib/ld.so.1 (0x55550000)\n\n```\nStill the same disappointing \"no such file or directory message\"...\nAny kind of help would be appreciated cause it feels like a dead end after all this...\n\n@ SYS_V It appear that the Debian Mips distro didnt have strace and apt-get install was failing. I had to manually find it and dpkg it so after all that gives :\n\n```\n[11036.872000] ------------[ cut here ]------------\n\n[11036.884000] WARNING: at /build/linux-2.6-KrPu_f/linux-2.6-2.6.32/debian/build/source_mips_none/kernel/sched.c:2628 wake_up_process+0x48/0x50()\n\n[11036.904000] Modules linked in: ipv6 loop mtdchar uhci_hcd ehci_hcd cfi_cmdset_0001 cfi_probe gen_probe cfi_util sg physmap mtd psmouse i2c_piix4 usbcore se_mood chipreg serio_raw evdev map_funcs nls_base cdrom i2c_core\n\n[11037.180000] Call Trace:\n\n[11037.196000] [<8010bb24>] dump_stack+0x8/0x34\n\n[11037.208000] [<80138a10>] warn_slowpath_common+0x70/0xb0\n\n[11037.216000] [<8013534c>] wake_up_process+0x48/0x50\n\n[11037.232000] [<801116ac>] arch_ptrace+0x214/0x770\n\n[11037.244000] [<801457e8>] sys_ptrace+0x9c/0x260\n\n[11037.256000] [<80102210>] stack_done+0x20/0x3c\n\n[11037.268000]\n\n[11037.280000] ---[ end trace a7daf16cd1f695f3 ]---\n\n[11823.624000] CE: MIPS Increasing min_delta_ns to 51830 nsec\n\n[11823.624000] CE: MIPS Increasing min_delta_ns to 77744 nsec\n\n```\nand prompts right there infinitely and needs ctrl+c to return to linux prompt.\n\n",
+  "votes": "8",
+  "answers": 3,
+  "views": "1k",
+  "tags": [
+    "linux",
+    "embedded",
+    "mips",
+    "qemu"
+  ],
+  "user": "Cyrax",
+  "time": "Oct 1, 2018 at 23:55",
+  "comments": [
+    {
+      "user": "julian",
+      "text": "can you show us the the output of strace ./generator?",
+      "time": null
+    },
+    {
+      "user": "user464014",
+      "text": "Make sure all dependencies for .sos are resolved recursively",
+      "time": null
+    },
+    {
+      "user": "Hyeonseo Yang",
+      "text": "How did you dug it out?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As far as I understand, you need to execute just one MIPS binary.\nThere is an easy route and a hard (relatively) route.\n\nEasy route:\n\nFor executing just one MIPS binary, you might get away with Qemu Usermode emulation.\n\nI've written a blog post about this in detail.\n\nZerodayinitiative also have a great blog post about this.\n\nSince you are dealing with a binary compiled for MSB (Big Endian) systems, you need to extract the router's compressed filesytem from the firmware,then chroot into the extacted file system and run qemu-mips-static from inside the file system.\n\nThis toolset can be installed using sudo apt install qemu-user-static in Debian based systems.\n\nFor instance, if thegenerator MIPS binary you want to run was statically compiled, then you can execute the binary using the following comamnds, without fully emulating the firmware.\n\n```\ncd filesystem/\ncp $(which qemu-mips-static) .\nsudo chroot . ./qemu-mips-static bin/ls\n\n```\nNow, since your binary is a dynamically linked binary, we can specify the path to the missing library file using the LD_PRELOAD or LD_LIBRARY_PATH environment variable to qemu-user-static.\n\nEg:\n\n```\nsudo chroot . ./qemu-mips-static -E LD_LIBRARY_PATH=\"/lib/\" bin/ls\n\n```\nIf the generator binary doesn't require any network traffic or some weird state for the router to work correctly, then passing the LD_PRELOAD or LD_LIBRARY_PATH environment variables might just solve your issue.\n\nHowever, if the binary requires some specific state, that can only be acheived through full system emulation, then you have to go the harder route.\n\nHard route:\n\nI'm going to be honest with you.\n\nI've tried emulating firmwares using QEMU and from my personal experience, it was very hard.\nSo, for easier emulation experience, we have to rely on tools like Firmware Analysis Toolkit and Firmadyne.\n\nThis topic was also covered in detail on my blog post. Read that if you want an elaborate explanation and some basic troubleshooting tips.\n\nFirmware Analysis Toolkit is the easiest to work with and it is an automator script for Firmadyne.\nEither clone FAT from the github repo, or you can just download AttifyOS‘s Virtual machine file for a pre-configured environment.\n\nOnce FAT has been installed, copy the firmware file into FAT’s directory. We just need to edit the fat.config file and enter the sudo password in it.\n\nRunning FAT is a ONE-TIME PROCESS and once the initial extraction and emulation is succesful, we can run further emulations from Firmadyne’s folder.\n\nNow run the python script named fat.py and pass the firmware’s name to it.\nEg:\n\n```\n./fat.py firmware.tar\n\n```\nIf everything went right, then you will see a login console to the emulated router!\n\n\nLogin to the router with the console or access the emulated router's web interface by the IP address shown by FAT.\n\nFor the subsequent executions, run firmadyne/scratch/<image-id>/run.sh script; where the image-id is the number shown, when running FAT for the first time.\n\n",
+      "votes": "1",
+      "user": "secnigma",
+      "time": "Feb 9, 2022 at 17:01",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Try to compare your firmware binary and any \"malta\" binary using readelf to find differences. \n\nExample:\n\n```\n$ readelf -a gdb | more\nELF Header:\n  Magic:   7f 45 4c 46 01 02 01 00 00 00 00 00 00 00 00 00\n  Class:                             ELF32\n  Data:                              2's complement, big endian\n  Version:                           1 (current)\n  OS/ABI:                            UNIX - System V\n  ABI Version:                       0\n  Type:                              EXEC (Executable file)\n  Machine:                           MIPS R3000\n  Version:                           0x1\n  Entry point address:               0x431fd0\n  Start of program headers:          52 (bytes into file)\n  Start of section headers:          4016720 (bytes into file)\n  Flags:                             0x5, noreorder, cpic, mips1\n...\n\n```\n",
+      "votes": "0",
+      "user": "julian",
+      "time": "Sep 26, 2018 at 22:14",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Igor Matyuh",
+          "text": "I have enough reputation to comment myself only :)  @Cyrax:  vmlinux-2.6.32-5-4kc-malta is quite specific ELF-file. I meant compare your extracted file (generator) with any regular file (/bin/bash) from your debian-mips environment.  Pay attention to string \"Requesting program interpreter\" in \"Program Headers\" section for both files.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "A simpler way, since you have the firmware image, is to chroot into the device's root file system (e.g. # chroot path/to/firmware /bin/sh). This will alleviate any dynamic loading issues that may be tedious to fix.\n\nThe only requirement is that you have the qemu binary installed for the correct architecture.\n\n",
+      "votes": "0",
+      "user": "multithr3at3d",
+      "time": "May 16, 2020 at 17:23",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

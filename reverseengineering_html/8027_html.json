@@ -1,0 +1,66 @@
+{
+    "title": "How to find location of environment variables in 64 bit binaries at runtime?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8027/how-to-find-location-of-environment-variables-in-64-bit-binaries-at-runtime",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In the main function, program authors can choose to receive the char * array as a parameter to main that points to the environment variables\n </p>\n <pre><code>int main(int argc, char **argv, char **envp) {\n...\n}\n</code></pre>\n <p>\n  The point being here is the envp pointer is wanted, but not from the perspective of the program author with the source. The question is, at runtime, how can one know the location of the environment variables, even if the binary being run is stripped?\n </p>\n <p>\n  Basically, I've figured out how to do this reliably on 32 and 64 bit linux for argv; I can know how many command arguments there are, where they are and what they are. And I can do this for envp on 32 bits, but not 64 bits. Does anybody know a technique to do this reliably for 64 bits at runtime in linux on stripped binaries?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "646",
+    "tags": [
+        "linux",
+        "dynamic-analysis",
+        "x86-64"
+    ],
+    "user": "Adam Miller",
+    "time": "Jan 16, 2015 at 4:28",
+    "comments": [
+        {
+            "user": "Ditmar Wendt",
+            "text": "<html><body><span class=\"comment-copy\">\n Aren't they simply at the top stackframe?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Adam Miller",
+            "text": "<html><body><span class=\"comment-copy\">\n Yeah, but what constitutes precisely\n <i>\n  where\n </i>\n is, I think, affected by compiler and libc version, and other variables. If the software author uses int main(void), does the compiler choose to pass 0 to _init? What does it do about environment variables and command line parameters in that case? It's not consistent across even 32/64 bits because how many bytes an int is by default isn't really reliable.  The question concerns how to make a tool to do this in a fully automated fashion by injecting a hook at _init.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The global variable\n  <a href=\"http://refspecs.linux-foundation.org/LSB_4.0.0/LSB-Core-generic/LSB-Core-generic/baselib---environ.html\" rel=\"nofollow\">\n   __environ\n  </a>\n  holds a pointer to the start of the list.\nIn my tests* it was exported by libm.so\n </p>\n <pre><code>#include <stdio.h>\n#include <stdlib.h>\n#include <dlfcn.h>\n\n// Slightly modded from http://linux.die.net/man/3/dlopen\nstatic char*** _findEnviron()\n{\n    void *handle;\n        char *error,\n        ***ret = NULL; //! Pointer to a ** list\n\n    handle = dlopen(\"libm.so\", RTLD_LAZY);\n        if (!handle) {\n        fprintf(stderr, \"%s\n\", dlerror());\n        return NULL;\n        }\n\n    dlerror();    /* Clear any existing error */\n\n    ret = dlsym(handle, \"__environ\");\n\n    if ((error = dlerror()) != NULL)  {\n        fprintf(stderr, \"%s\n\", error);\n        dlclose(handle);\n        return NULL;\n    }\n\n    dlclose(handle);\n\n    return ret;\n}\n\nvoid print(char** p)\n{\n    while(p && *p)\n    {\n        printf(\"%p --> %s\n\", *p, *p);\n        ++p;\n    }\n}\n\nint main(int argc, char** argv, char** envp)\n{\n    char** pEnviron = NULL;\n\n    printf(\"Find %p\n\", envp);\n    pEnviron = *_findEnviron();\n    printf(\"Found %p\n\", pEnviron);\n\n    print(envp);\n    printf(\"---\n\");\n    print(pEnviron);\n\n    getc(stdin);\n}\n</code></pre>\n <ul>\n  <li>\n   <ol>\n    <li>\n     Debian 2.6.32; ldd (Debian EGLIBC 2.13-38+deb7u8) 2.13\n    </li>\n    <li>\n     CentOS7 3.10.0; ldd (GNU libc) 2.17\n    </li>\n   </ol>\n  </li>\n </ul>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "user45891",
+            "time": "May 21, 2015 at 21:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Adam Miller",
+                    "text": "<span class=\"comment-copy\">I'm running in the context of a dynamic binary instrumentation tool. I don't want source code that would work in the target. I have to explore the stack manually, otherwise I would just use argc, argv and envp. Thanks for your effort though.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user45891",
+                    "text": "<span class=\"comment-copy\">Can your tool run code inside that process? Or can your tool be instrumented in any way.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Adam Miller",
+                    "text": "<span class=\"comment-copy\">It doesn't really make sense to use your code the way you think because the compiler doesn't have the information required for the source code that you've written in order to produce meaningful assembler in the context of any target. That's why the question is hard.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Adam Miller",
+                    "text": "<span class=\"comment-copy\">Also, the context from which I'm speaking is using pintools, and pin uses basically two processes inside of one. The pintools have their own command line arguments and environment variables, which is likely the result this will produce.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  As it turns out-and while this doesn't exactly constitute a reliable, cross compiler, cross os, cross 32/64 bit solution, it works on my machine-they are on the stack, and if you navigate just past the location of argc on the stack you can see that the pointer to environment variables is argc*sizeof(uintptr_t) + argv, and argv is contiguous to argc naturally.\n </p>\n <p>\n  You can programmatically read the environment variables by continuously doing strcpy (I know it's crap api, but they\n  <em>\n   are\n  </em>\n  null terminated). Wait until you get a null byte back and no string at all-that signifies the end.\n </p>\n <p>\n  It's not the same quality of answer I might have hoped, but for now it suffices.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Adam Miller",
+            "time": "Jan 21, 2015 at 12:53",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

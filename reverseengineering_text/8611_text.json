@@ -1,0 +1,59 @@
+{
+    "title": "Extracting a private key from memory",
+    "link": "https://reverseengineering.stackexchange.com/questions/8611/extracting-a-private-key-from-memory",
+    "content": "I'm trying to extract a private key used to encrypt communications in a game modification (SA-MP, closed source, runs on Windows), which uses RakNet for it's communications and presumably encryption. Language I'm using is Python, and I would like to automate getting the key, although manual is OK too. I'm a bit stumped on how to continue, though!\nAs RakNet source is now available on GitHub, the encryption is described here: https://github.com/OculusVR/RakNet/blob/master/DependentExtensions/cat/crypt/tunnel/KeyAgreement.hpp#L38\nI'm quite sure I can get the challenge (\"52A0106B14E27E13\" for example, though, what good is that?) with WireShark.\nI tried debugging the game with ollydbg, but the game simply crashes if I try to debug when the key is generated. I also tried using CheatEngine to scan the memory, but GTA:SA is such a large game that the program froze after a couple of scans, so I never got any usable results.\n",
+    "votes": "4",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "windows",
+        "c++",
+        "memory",
+        "executable"
+    ],
+    "user": "Joona",
+    "time": "Mar 31, 2015 at 20:25",
+    "comments": [
+        {
+            "user": "rev",
+            "text": "if the source's available, you can statically reverse the game and find where is it storing the private key (because you have the source, now you only need to locate it in the binary). then you just write a python script to read that memory, and done.\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "The source code of the class in question seems there's one function <pre><code>void GenerateKey(BigTwistedEdwards *math, IRandom *prng, Leg *key);</code></pre> that creates the key in the Leg class. I'd assume this is created with <pre><code>key=new Leg</code></pre> somewhere, so it won't be one single address. Maybe, if you find the GenerateKey function in the binary, you can add a few calls to <pre><code>CreateFile</code></pre>, <pre><code>WriteFile</code></pre> and <pre><code>CloseFile</code></pre> to the end of it to get the key, and maybe the executable detects if a debugger is present, but doesn't detect if the executable itself is modified.\n",
+            "time": null
+        },
+        {
+            "user": "Joona",
+            "text": "@AcidShout Sadly source for the game and modification are not available (only RakNet).\n",
+            "time": null
+        },
+        {
+            "user": "Joona",
+            "text": "@GuntramBlohm <pre><code>Leg</code></pre> seems to be a <pre><code>typedef uint32_t</code></pre> or <pre><code>typedef uint64_t</code></pre> (defined in Legs.hpp and Platform.hpp). I might be terribly misunderstanding this, but I think this line generates the key?\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "@Joona I'm not familiar with the source. Yes, that line generates a key, but it is repeated until the surrounding <pre><code>do .. while</code></pre> finds the key to be acceptable, so it's at the end of the loop where you know the key is the correct one.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Making this an answer because the comment history got too long.\nThe source code of the class in question seems there's one function <pre><code>void GenerateKey(BigTwistedEdwards *math, IRandom *prng, Leg *key)</code></pre> that creates the key in the <pre><code>Leg</code></pre> class. I'd assume this is created with key=new Leg somewhere, so it won't be one single address. (In fact, <pre><code>Leg</code></pre> might be a <pre><code>uint32</code></pre> or a <pre><code>uint64</code></pre>, and <pre><code>Leg *key</code></pre> is a pointer to an array of these integral values).\nMaybe, if you find the <pre><code>GenerateKey</code></pre> function in the binary, you can add a few calls to <pre><code>CreateFile</code></pre>, <pre><code>WriteFile</code></pre> and <pre><code>CloseFile</code></pre> to the end of it to get the key, and maybe the executable detects if a debugger is present, but doesn't detect if the executable itself is modified.\nIt seems that <pre><code>KeyAgreement.cpp</code></pre> is the file that holds the <pre><code>GenerateKey</code></pre> function. It generates a key until the <pre><code>do .. while</code></pre> loop finds the key acceptable, so the end of that <pre><code>do .. while</code></pre> loop is where you want to place your breakpoint (if you can debug the executable) or add a call to a function that writes the key to a file.\nNow, we need to find the <pre><code>GenerateKey</code></pre> function in the executable, or in one of its DLLs. You can use any tool that lists DLL exports in the hope that one of your DLLs exports <pre><code>KeyAgreementCommon::GenerateKey</code></pre>. If you're lucky, you'll find it there, and you're done. Dependeny Walker is a good tool for this.\nAssuming the function is compiled into the main .exe, or in a .dll but not exported, it's a bit harder. Fortunately, <pre><code>KeyAgreement.cpp</code></pre> holds a bunch of nice character arrays with very distinct signatures, which should be unique and easy to find. You could try one of these:\n\nadd the <pre><code>Q_XXX</code></pre> arrays to signsrch and run it over all .exes and .dlls\nload your .exe and the .dlls into a hex editor individually, and run a byte search for the <pre><code>Q_XXX</code></pre> arrays over them, until you find the correct one.\n\nNext, you want to know where these bytes are used. The easiest way to do this is load the file you found to be the correct one into Ida Pro, find your character array there, and check the XREFs. There should be only one of them, that comes from <pre><code>KeyAgreementCommon::InstantiateMath</code></pre>. The function after this should be <pre><code>KeyAgreementCommon::GenerateKey</code></pre>, if your developers didn't change the source code.\nIf they did change the source code, maybe they shuffled around the functions a bit. (And maybe they decided they didn't want to use anything but the 384 bit version, so they threw away the 256 bit and 512 bit arrays. This is why i said search for all 3 of them.) Now we want to find the <pre><code>GenerateKey</code></pre> function when we only know the <pre><code>InstantiateMath</code></pre> function.\nFortunately, both of them are declared public in the .hpp file. Which means they should occur in the class vtable somewhere. Check Ida for a data x-reference to the <pre><code>InstatiateMath</code></pre> function. This should be the vtable entry. The same vtable should hold the addresses of the <pre><code>Initialize</code></pre> and <pre><code>GenerateKey</code></pre> function, so check the functions that are referenced next to the <pre><code>InstantiateMath</code></pre> reference.\n",
+            "votes": "1",
+            "user": "Guntram Blohm",
+            "time": "Apr 1, 2015 at 9:33",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Joona",
+                    "text": "<span class=\"comment-copy\">I tried Dependency Walker, but it freezes after gtasa.exe is launched (which happens before samp.dll is loaded), and loading samp.dll alone does not seem to produce any useful results.  So I tried the hex editor you linked and IDA to scan with the hex values (which is probably where I'm going wrong), for example \"F5 83 71 B3 F0\" (with and without 00's) for the Q_256. This didn't net me any results either. Please point out what I'm doing wrong. :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

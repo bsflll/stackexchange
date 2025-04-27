@@ -1,0 +1,42 @@
+{
+  "title": "Could not find ld-linux-x86-64.so.2 in strace output",
+  "link": "https://reverseengineering.stackexchange.com/questions/15758/could-not-find-ld-linux-x86-64-so-2-in-strace-output",
+  "content": "I did a ldd on /bin/cat and I see that dynamic loader library /lib64/ld-linux-x86-64.so.2 is a part of it.\n\n```\nldd /bin/cat\n    linux-vdso.so.1 (0x00007ffe743f4000)\n    libc.so.6 => /lib64/libc.so.6 (0x00007fde4f0a1000)\n    /lib64/ld-linux-x86-64.so.2 (0x000056057639c000)\n\n```\nHowever my problem started when I performed an strace over this binary (strace -o cat.trace /usr/bin/ls /etc/motd) and could not find it being loaded. I was assuming that it should be the first one to be loaded by kernel.\n\n```\nexecve(\"/usr/bin/ls\", [\"/usr/bin/ls\", \"/etc/motd\"], 0x7ffe9e6a8d38 /* 56 vars */) = 0\nbrk(NULL)                               = 0x5650331a2000\nmmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f39527b9000\naccess(\"/etc/ld.so.preload\", R_OK)      = -1 ENOENT (No such file or directory)\nopen(\"/etc/ld.so.cache\", O_RDONLY|O_CLOEXEC) = 3\nfstat(3, {st_mode=S_IFREG|0644, st_size=95294, ...}) = 0\nmmap(NULL, 95294, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7f39527a1000\nclose(3)                                = 0\nopen(\"/lib64/libselinux.so.1\", O_RDONLY|O_CLOEXEC) = 3\nread(3, \"\\177ELF\\2\\1\\1\\0\\0\\0\\0\\0\\0\\0\\0\\0\\3\\0>\\0\\1\\0\\0\\0000c\\0\\0\\0\\0\\0\\0\"..., 832) = 832\nfstat(3, {st_mode=S_IFREG|0755, st_size=153176, ...}) = 0\nmmap(NULL, 2253688, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f3952370000\nmprotect(0x7f3952393000, 2097152, PROT_NONE) = 0\nmmap(0x7f3952593000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x23000) = 0x7f3952593000\nmmap(0x7f3952595000, 4984, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x7f3952595000\nclose(3)                                = 0\nopen(\"/lib64/libcap.so.2\", O_RDONLY|O_CLOEXEC) = 3\nread(3, \"\\177ELF\\2\\1\\1\\0\\0\\0\\0\\0\\0\\0\\0\\0\\3\\0>\\0\\1\\0\\0\\0P\\25\\0\\0\\0\\0\\0\\0\"..., 832) = 832\nfstat(3, {st_mode=S_IFREG|0755, st_size=18608, ...}) = 0\nmmap(NULL, 2113840, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x7f395216b000\nmprotect(0x7f395216f000, 2093056, PROT_NONE) = 0\nmmap(0x7f395236e000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x3000) = 0x7f395236e000\nclose(3)                                = 0\nopen(\"/lib64/libc.so.6\", O_RDONLY|O_CLOEXEC) = 3\nread(3, \"\\177ELF\\2\\1\\1\\3\\0\\0\\0\\0\\0\\0\\0\\0\\3\\0>\\0\\1\\0\\0\\0P\\10\\2\\0\\0\\0\\0\\0\"..., 832) = 832\n\n```\nAs can be seen from ldd output, a supplementary question here is - how could ldd predict the load address of a dynamically linked/loaded library before loading of library? In theory as I studied, the memory is a shared resource and then multiple libraries should be able to be loaded at same memory locations (not simultaneously though).\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "binary-analysis",
+    "dynamic-analysis",
+    "dynamic-linking"
+  ],
+  "user": "ultimate cause",
+  "time": "Jul 4, 2017 at 19:10",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "A very similar question to this can be found on stackoverflow: How does execve call dynamic linker/loader (ld-linux.so.2)\n\nThe reason there is no strace output associated with the dynamic linker is that control is passed to the dynamic linker during process creation by the kernel. In other words, the dynamic linker is not invoked from userspace via a system call. No system call means no strace output.\n\nFrom the generic SYSV ABI, Chapter 5: \"Program Loading and Dynamic Linking\"::\n\nThe term \"system\" used above refers to the kernel.\n\n```\n$ readelf -l /bin/cat\n\nElf file type is EXEC (Executable file)\nEntry point 0x402602\nThere are 9 program headers, starting at offset 64\n\nProgram Headers:\n  Type           Offset             VirtAddr           PhysAddr\n                 FileSiz            MemSiz              Flags  Align\n  PHDR           0x0000000000000040 0x0000000000400040 0x0000000000400040\n                 0x00000000000001f8 0x00000000000001f8  R E    8\n  INTERP         0x0000000000000238 0x0000000000400238 0x0000000000400238\n                 0x000000000000001c 0x000000000000001c  R      1\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]\n\n```\nIt is significant that INTERP is a program header, as program headers are used by the kernel when mapping the binary into memory to create a running process. It can be inferred that the presence of the pathname of the dynamic linker in a program header has implications for process creation by the kernel.\n\nResponse to comment:\n\nWrong, at least according to the NetBSD process startup documentation:\n\nFor a better answer, you will have to ask a separate question about this specifically, and with the strace output included.\n\nldd calls the dynamic linker, which loads a dynamically-linked program's dynamic dependencies. From the ldd man page:\n\nIn some cases ldd will even execute the binary:\n\nldd does indeed result in a program's dynamic dependencies being loaded into virtual memory.\n\n",
+      "votes": "3",
+      "user": "julian",
+      "time": "Jul 5, 2017 at 14:04",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ultimate cause",
+          "text": "This makes sense. Thanks. A followup question is - I tried the same stuff on NetBSD machine and there I see the mapping of ld.so as the first step. So this should essentially means that this is implementation dependent whether we will see the dynamic linker in strace or not. Right? A second part of my question is - how does ldd mentions the base address of a library even without loading it? Please read last part of my question.",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "@RIPUNJAYTRIPATHI A response to your comment has been added",
+          "time": null
+        },
+        {
+          "user": "ultimate cause",
+          "text": "thanks  for your effort. I was under assumption  that ldd does not executes or loads the binaries. However regarding NetBSD, I did an strace on version 7.1 and I  see that ld.so was  mmap'ed  as  first  step. Let me know if I could send you my strace proof  as personal message.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "title": "Frida hook multiple processes",
+  "link": "https://reverseengineering.stackexchange.com/questions/30349/frida-hook-multiple-processes",
+  "content": "There was such a situation. I run the frida hook on the process like this:\n\n```\nfrida -f '..\\hack2\\hackme.exe'  -l .\\start.js\n\n```\nIn the script itself I do this\n\n```\nvar moduleData = Process.getModuleByName(\"hackme.exe\");\n\n```\nthen comes the code which, as a result of which, I launch a function that launches another process - level2.exe.\n\nIt would be convenient if you could hook this process directly from this script.\ncalling Process.findModuleByName(\"level2.exe\"); is always null. The only way I see now is to write a Python script that will monitor the launch of the second process and run the hook in different threads. Perhaps there is a simpler solution without resorting to such extreme measures?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "windows",
+    "python",
+    "frida"
+  ],
+  "user": "user123",
+  "time": "Apr 30, 2022 at 12:14",
+  "comments": [
+    {
+      "user": "Robert",
+      "text": "In difference to a common debugger the Frida JavaScript code is running inside the hooked process, this means you can not simply access a different process. BTW: findModuleByName can only find libraries loaded into the current process, therefore it will never find level2.exe unless it is not started/executed but loaded as library into the current process. I don't see a different way than hooking the seconds process using an external Python script.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This is called child-gating and frida has a very good example\n\nHere is a demo with a simple application. A simple C program with a fork and we try to hook puts for both child and parent.\n\n```\n(test3) [frida-example] cat test.c\n#include <stdio.h>\n#include <sys/types.h>\n#include <unistd.h>\nint main() {\n  puts(\"before\");\n  pid_t pid = fork();\n  if (pid) {\n    puts(\"parent\");\n  } else {\n    puts(\"child\");\n  }\n}\n(test3) [frida-example] make test\ncc     test.c   -o test\n\n```\nWith the example - adding changes\n\n```\n    def _start(self):\n        argv = [\"./test\"]\n        print(\"✔ spawn(argv={})\".format(argv))\n        pid = self._device.spawn(argv, env={}, stdio='pipe')\n        self._instrument(pid)\n\n```\nand\n\n```\n    def _instrument(self, pid):\n        print(\"✔ attach(pid={})\".format(pid))\n        session = self._device.attach(pid)\n        session.on(\"detached\", lambda reason: self._reactor.schedule(lambda: self._on_detached(pid, session, reason)))\n        print(\"✔ enable_child_gating()\")\n        session.enable_child_gating()\n        print(\"✔ create_script()\")\n        script = session.create_script(\"\"\"\\\nInterceptor.attach(Module.getExportByName(null, 'puts'), {\n  onEnter: function (args) {\n    send({\n      type: 'puts',\n      path: Memory.readUtf8String(args[0])\n    });\n  }\n});\n\"\"\")\n\n```\nthen by running\n\n```\n(test3) [frida-example] python hook.py\n✔ spawn(argv=['./test'])\n✔ attach(pid=1968)\n...\n✔ resume(pid=1968)\n⚡ message: pid=1968, payload={'type': 'puts', 'path': 'before'}\n⚡ message: pid=1968, payload={'type': 'puts', 'path': 'parent'}\n...\n⚡ child_added: Child(pid=1977, parent_pid=1968, origin=fork)\n✔ attach(pid=1977)\n...\n✔ resume(pid=1977)\n⚡ child_removed: Child(pid=1977, parent_pid=1968, origin=fork)\n⚡ message: pid=1977, payload={'type': 'puts', 'path': 'child'}\n...\n⚡ detached: pid=1977, reason='process-terminated'\n\n```\nWe hooked both the instances of child and parent\n\n",
+      "votes": "1",
+      "user": "sudhackar",
+      "time": "Jun 8, 2022 at 9:58",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

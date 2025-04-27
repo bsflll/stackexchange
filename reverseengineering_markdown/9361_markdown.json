@@ -1,0 +1,77 @@
+{
+  "title": "Find the right layer header for a corrupt pcap",
+  "link": "https://reverseengineering.stackexchange.com/questions/9361/find-the-right-layer-header-for-a-corrupt-pcap",
+  "content": "So the problem is that i have a corrupt pcap file. You can find a the pcap file [here][1]. \nFirst i did the file command on it : the.pcap: tcpdump capture file (little-endian) - version 2.4, capture length 24)\n\nSo i thought Wireshark could open it easily and then i might be able to find any key/flag by analyzing the packets.\nBut opening it with wireshark just gave me an error \"network type 216 unknown or unsupported\". So first, i did some research on the different layers types for a pcap.Here is the link to the different value of layer header. As expected the type with the value 216 has no reference so i need to change the 216 value to the right one? But how ? how can i know which one is appropriate ? \n\nAfter googling a little bit i've seen that we can change the type's value manually.\n\n```\n00000000  D4 C3 B2 A1  02 00 04 00   00 00 00 00  00 00 00 00   ................\n00000010  18 00 00 00  D8 00 00 00   8E 6E 6E 52  A9 CB 00 00 \n\n```\nBelow you can see the first bytes of the pcap file and the byte D8 is the type's value which here is equal to 216. Should i try to edit a program which modify the original pcap file with all the existing type value and see which one works ? or is there any way to directly to know which value is the right one ? \n\nIf someone has some hint, it would be great. Thanks again and bye.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "digital-forensics",
+    "networking",
+    "wireshark"
+  ],
+  "user": "creuchmeuch",
+  "time": "Oct 12, 2015 at 16:26",
+  "comments": [
+    {
+      "user": "Guntram Blohm",
+      "text": "How did you create the pcap file? This could be anything from a file that isn't pcap to the 2nd part of a file that has been cut in the middle to an unkonwn compression to a file that got corrupted in transfer, so without much more information, and possibly a link to the file, we won't be able to help you much.",
+      "time": null
+    },
+    {
+      "user": "creuchmeuch",
+      "text": "Thank you for the fast answer i will reedit my question. With a link to the file and the different tests i have done. This is not a pcap file that i created, it s an exercise. So i would say it's not surprising that there is a problem with that pcap file. ( i ll give a link). Thanks again.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "That's because nobody's contributed support for DLT_LINUX_EVDEV to Wireshark.\n\nThere does not appear to be anything at all corrupt about that file; if it were corrupt, Wireshark would have indicated that.  \"network type XXX unknown or unsupported\" doesn't mean the file is corrupt, it just means that Wireshark doesn't happen to handle that particular link-layer header type value.\n\nLet's look at the header:\n\nD4 C3 B2 A1: That's a little-endian pcap magic number.  So far, so good.\n\n02 00: That's a little-endian major version number of 2.\n\n04 00: That's a little-endian minor version number of 4.  2.4 is the current pcap file format version number; so far, so good.\n\n00 00 00 00: That's the time zone offset, which is usually 0.\n\n00 00 00 00: That's the time stamp accuracy, which is usually 0.\n\n18 00 00 00: That's a little-endian snapshot length of 0x18 or 24.\n\nD8 00 00 00: That's a little-endian link-layer header type of 0xD8, or 216, or DLT_LINUX_EVDEV.\n\nWhat follows are records for packets:\n\n8E 6E 6E 52: That's a little-endian seconds-since-January 1, 1970 00:00:00 UTC value of 0x526E6E8E, or 1382968974, or Mon Oct 28 07:02:54 2013 Pacific Standard Time - i.e., a bit more than a year and a half ago.\n\nA9 CB 00 00: That's a little-endian microseconds-since-that-second value of 0xCBA9, or 52137.\n\n18 00 00 00: That's a little-endian count of bytes captured, with a value of 0x18, or 24.\n\n18 00 00 00: That's a little-endian count of bytes that were actually in the message (the capture process can truncate data past a certain point; that's what the snapshot length in the file indicates), with a value of 0x18, or 24.\n\nAnd the 24 bytes of packet data are:\n8E 6E 6E 52\n00 00 00 00\nA9 CB 00 00\n00 00 00 00\n04 00 04 00\n1C 00 00 00\n\n\"EVDEV\" refers to the evdev driver in Linux, which allows various providers of user input (keyboards, mice, tablets, trackpads, joysticks, etc.) to plug into it, and it merges the streams of input events into a single stream that can be read by programs such as the X server or the Weston server for Wayland.\n\nIts events are described in the Linux \"input.h\" header as\n\n```\nstruct input_event {\n    struct timeval time;\n    __u16 type;\n    __u16 code;\n    __s32 value;\n};\n\n```\nso that's a 64-bit(?) seconds-since-January 1, 1970, 00:00:00 UTC, a 64-bit microseconds since that second, a 16-bit type, a 16-bit code, and a 32-bit value.\n\nAll, unfortunately, in host byte order, according to the discussion on the tcpdump-workers mailing list.  This host is, apparently, little-endian.\n\nAnd the time stamp duplicates the one in the pcap record header.\n\nSo we have:\n\n8E 6E 6E 52 00 00 00 00 - 0x526E6E8E, or the same time stamp as in the packet record header;\n\nA9 CB 00 00 00 00 00 00 - 0xCBA9, or the same microseconds-since-that-second as in the packet record header;\n\n04 00 - 0x0004, or a type of 4, or \"EV_MSC\" according to the Linux header, and which is \"Used to describe miscellaneous input data that do not fit into other types\" according to the Linux event codes documentation;\n\n04 00 - 0x0004, or a code of 4, or \"MSC_SCAN\" for EV_MSC messages according to the Linux header;\n\n1C 00 00 00 - 0x1C, or a value of 30.\n\nAnd then we have the next packet:\n\n8E 6E 6E 52 - same second\n\nA9 CB 00 00 - same microsecond\n\n18 00 00 00 - same length, not surprising as all evdev messages are 24 bytes long\n\n18 00 00 00 - again, same length\n\n8E 6E 6E 52 00 00 00 00 - same (duplicate) second\n\nA9 CB 00 00 00 00 00 00 - same (duplicate) microsecond\n\n01 00 - 0x0001, or type \"EV_KEY\", \"Used to describe state changes of keyboards, buttons, or other key-like devices\"\n\n1C 00 - 0x001C, or 28, which is \"KEY_ENTER\", the meaning of which should be obvious (although the one on the laptop on which I'm typing this says \"return\" in larger letters below and only says \"enter\" in smaller letters above :-))\n\n00 00 00 00 - value of 0\n\nand so on.\n\nSo I'm absolutely 100% certain that it is a pcap file, and isn't even a corrupted one; it just happens to contain messages that Wireshark doesn't understand.\n\nThe link type, in the sense of \"link-layer header type\", appears only once, in the file's header, so there's no reason to expect anything else to be a link type in the file - pcap simply doesn't support different link types in one single capture file, unless a hack like DLT_PPI is used.  So that part of the argument against it being a pcap file is invalid.\n\nAs for addresses, there's no guarantee that a given DLT_ type has any addresses, and evdev events don't, so that doesn't apply, either.\n\nIn any case, if you want to open it in Wireshark, you'll need to find or write a dissector for it.\n\n",
+      "votes": "4",
+      "user": null,
+      "time": "Jul 16, 2015 at 23:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Guntram Blohm",
+          "text": "Seems my automatic assumption - tcp capture file == network trace - was wrong. Thank you for teaching me something new.",
+          "time": null
+        },
+        {
+          "user": "josh",
+          "text": "Great analysis!!",
+          "time": null
+        },
+        {
+          "user": "creuchmeuch",
+          "text": "Wow this analysis was great i really need to read more documentation about evdev and the different link layer header type. Thank you very much !",
+          "time": null
+        },
+        {
+          "user": "creuchmeuch",
+          "text": "I finally success the exercise thank you again!  But may i ask how you knew it was DLT_LINUX_EVDEV ? i mean i couldn't link the 216 type value with that type of link header.",
+          "time": null
+        },
+        {
+          "user": "user13039",
+          "text": "I looked in the libpcap source's pcap/bpf.h file and, being a libpcap core developer, I looked in my mail archives for the discussion of it.  Then I looked at the Linux source.  (The person who proposed it didn't offer a detailed precise description or a link to such a description, so we didn't put it in the list of link-layer types; people shouldn't ask for link-layer types if they don't have a precise description, but sometimes they do, unfortunately.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I'm quite sure this isn't a pcap file at all, despite what file says, and the D8 doesn't seem to be a network type at all.\n\nFirst, because D8 (216) isn't a valid link type according to http://www.tcpdump.org/linktypes.html.\n\nSecond, because hexdumping a bit more of the file yields this:\n\n```\n00000000  d4 c3 b2 a1 02 00 04 00 00 00 00 00 00 00 00 00   ................\n00000010  18 00 00 00 d8 00 00 00 8e 6e 6e 52 a9 cb 00 00   .........nnR....\n00000020  18 00 00 00 18 00 00 00 8e 6e 6e 52 00 00 00 00   .........nnR....\n00000030  a9 cb 00 00 00 00 00 00 04 00 04 00 1c 00 00 00   ................\n00000040  8e 6e 6e 52 a9 cb 00 00 18 00 00 00 18 00 00 00   .nnR............\n00000050  8e 6e 6e 52 00 00 00 00 a9 cb 00 00 00 00 00 00   .nnR............\n00000060  01 00 1c 00 00 00 00 00 8e 6e 6e 52 a9 cb 00 00   .........nnR....\n00000070  18 00 00 00 18 00 00 00 8e 6e 6e 52 00 00 00 00   .........nnR....\n00000080  a9 cb 00 00 00 00 00 00 00 00 00 00 00 00 00 00   ................\n\n```\nIf you restructure this a bit, focussing on the 8e 6e 6e 52 (.nnR) sequence:\n\n```\n0000 d4 c3 b2 a1 02 00 04 00\n0008 00 00 00 00 00 00 00 00\n0010 18 00 00 00 d8 00 00 00 8e 6e 6e 52             a9 cb 00 00\n0020 18 00 00 00 18 00 00 00 8e 6e 6e 52 00 00 00 00 a9 cb 00 00 \n0034 00 00 00 00 \n0038 04 00 04 00 1c 00 00 00 8e 6e 6e 52             a9 cb 00 00\n0048 18 00 00 00 18 00 00 00 8e 6e 6e 52 00 00 00 00 a9 cb 00 00\n005c 00 00 00 00\n0060 01 00 1c 00 00 00 00 00 8e 6e 6e 52             a9 cb 00 00\n0070 18 00 00 00 18 00 00 00 8e 6e 6e 52 00 00 00 00 a9 cb 00 00\n\n```\nyou see that a) there is clearly a pattern to the file, and b), if the first d8 is a link type, then 1c  and 00  should be link types as well. But it doesn't make any sense for link types that vary so much, and have the same content, to be included in one single capture file.\n\nAlso, there's nothing that resembles anything like a source and destination ip address, or at least mac address if the protocol wasn't tcp/ip.\n\nMaybe someone just saved the payload of a tcp connection, and somehow made a mistake when saving it, giving it a tcpdump header. But i'm 99% sure this isnt a corrupted tcpdump file; this seems to be something very different.\n\nNow if you told me that this file was created 25 years ago on ARCNET hardware running an IPX protocol, i might reconsider, since arcnet didn't have mac addresses, just network card numbers between 1-255 which had to be configured using dip switches, and IPX reused the network card number for addressing. But unless you have a good explanation how the file was created, and which kind of packets and payload it should contain, which could explain the structure, i'd say this isn't tcpdump or pcap at all, and patching a byte or two won't help you open it in wireshark.\n\n",
+      "votes": "2",
+      "user": "Guntram Blohm",
+      "time": "Jul 16, 2015 at 14:10",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "creuchmeuch",
+          "text": "Oh i see, i'm sorry but as i don't know many things about network i was fooled by the file command. Anyway your answer helps me, i'll now try  to see that file differently. Thanks again and have a good day.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

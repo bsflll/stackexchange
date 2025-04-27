@@ -1,0 +1,59 @@
+{
+    "title": "How to find paths from current offset to given address using radare2?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16254/how-to-find-paths-from-current-offset-to-given-address-using-radare2",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>According to Radare2 documentation, this is the command to find paths:</p>\n<pre><code>agt [addr]            find paths from current offset to given address\n</code></pre>\n<p>But when I try the command, after running <code>aaaaa</code> analysis, I get the following error:</p>\n<pre><code>[0x00430044]&gt; agt 0x0042aa98 &gt; agtoutput.dot\nUnable to find source or destination basic block\n</code></pre>\n<p>I can confirm that the two addresses are functions and I can graph each function individually.  Also, <code>0x00430044</code> does lead to <code>0x0042aa98</code>. I can see that from the gdb trace.  I looked at the <a href=\"https://github.com/radare/radare2/blob/master/libr/core/canal.c\" rel=\"nofollow noreferrer\">radare2 canal.c code</a>  and found that it's looking through the <code>RAnalFunction-&gt;bbs</code> for the provided addresses. I tried ensuring that bbs was populated with those addressings by running <code>abb $s</code> </p>\n<pre><code>abb [length]         analyze N bytes and extract basic blocks \n</code></pre>\n<p>and feeding the output back into r2.  I ran <code>abb $s</code> from various locations to see if it would add the basic blocks to the bbs list. The various locations were <code>0x0</code>, <code>0x00430044</code>, and <code>0x0042aa98</code>.  But nothing worked, I always get the \"Unable to find source or destination basic block\" error message.  I could be way off and going down rabbit holes, but the \"find paths\" feature would be so useful, and I'd really like to get it working? Any help on using the <code>agt</code> feature as documented would be appreciated.</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "radare2",
+        "call-graph"
+    ],
+    "user": "Z. Cass",
+    "time": "Sep 5, 2017 at 7:45",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">Did you try using official support options?</span>",
+            "time": null
+        },
+        {
+            "user": "Z. Cass",
+            "text": "<span class=\"comment-copy\">When you say official support options, do you mean aaa, instead of aaaaa?  I just tried after your comment and I go the same result.  Also just rebuilt from the latest radare2 git.  I had previously been using a build that was about a month old.</span>",
+            "time": null
+        },
+        {
+            "user": "Z. Cass",
+            "text": "<span class=\"comment-copy\">What are official support options</span>",
+            "time": null
+        },
+        {
+            "user": "Z. Cass",
+            "text": "<span class=\"comment-copy\">I get the impression that this feature is not fully implemented.  I looked through the code (canal.c) and found a \"bug\" which would make the agt call never work.  I fixed the bug locally, so I got past the initial error, but the \"r_core_anal_graph_to\" function then basically returns no results.  So sad :-(, this would be a great feature.  Not sure why this option is in the help menu since it doesn't seem to work at all.  Unless, I'm missing something.</span>",
+            "time": null
+        },
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">If you know it's a bug then open an issue in r2 repo or even better if you have the fix then send them a pull-request. I'm assuming you're running r2 from git.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Seems like the feature is not implemented yet. As you can see in <a href=\"https://github.com/radare/radare2/blob/master/libr/core/canal.c#L2331\" rel=\"nofollow noreferrer\">this function</a>:  </p>\n<pre><code>...\nif (root &amp;&amp; dest) {\n    if (dest == root) {\n        eprintf (\"Source and destination are the same\\n\");\n        return NULL;\n    }\n    eprintf (\"ROOT BB 0x%08\"PFMT64x\"\\n\", root-&gt;addr);\n    eprintf (\"DEST BB 0x%08\"PFMT64x\"\\n\", dest-&gt;addr);\n    list = r_list_new ();\n    printf (\"=&gt;  0x%08\"PFMT64x\"\\n\", root-&gt;jump);\n} else {\n    eprintf (\"Unable to find source or destination basic block\\n\");\n}\nreturn list;\n...\n</code></pre>\n<p>Feel free to <a href=\"https://github.com/radare/radare2/issues\" rel=\"nofollow noreferrer\">open an issue</a> in the official repository, or better -- to try implementing it by yourself for the good of all of us.</p>\n<p>Last thing, don't use <code>aaaaa</code>, it doesn't even exists and any analysis command after <code>aaa</code> is experimental and can cause you with bugs. You don't have to analyze so deeply anyway.  </p>\n<p>For more information about analysis in radare2 please see <a href=\"https://reverseengineering.stackexchange.com/a/16115/18698\">this answer</a>.</p>\n</div>",
+            "votes": "3",
+            "user": "Megabeets",
+            "time": "Sep 5, 2017 at 7:53",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When I realized that this feature was not implement, I made a workaround to get what I want.  I output the full program call graph then made a very simple python script that uses networkx to find paths between nodes. This is not ideal but gets the job done.</p>\n<p>In radare2, I output the full program call graph to a .dot file:</p>\n<pre><code>agC &gt; agCfullProgramCallGraph.dot\n</code></pre>\n<p>Then I have a python script that takes that graph and finds the paths for the connected nodes I'm interested in.</p>\n<pre><code>#!/usr/bin/env python\n\"\"\"\nGiven a .dot graph, a source node, target node, this script prints out new graphs with all the paths between\n\n\"\"\"       \nimport networkx as nx\nfrom pygraphviz import *\nclass DotGraphvizUtil(object):\n\n    def find_paths(self, dot_file_path, source, target):\n        agraph = AGraph(dot_file_path)\n        graphviz_graph = nx.nx_agraph.from_agraph(agraph)\n\n        paths = nx.all_simple_paths(graphviz_graph, source=source, target=target)\n\n        i = 0\n\n        for path in paths:\n            subgraph = nx.subgraph(graphviz_graph,path)\n            print(path)\n            nx.nx_agraph.write_dot(subgraph,\"srcTargetGraph{}.dot\".format(i))\n            i =+ 1\n\n        if i == 0:\n            print(\"No paths found from {} {}\".format(source, target))    \n\nif __name__ == '__main__':\n    dot_file = \"agCfullProgramCallGraph.dot\"\n    dotGraph = DotGraphvizUtil()\n    dotGraph.find_paths(dot_file_path=dot_file, source='0x004669bc', target='0x00466828')\n</code></pre>\n</div>",
+            "votes": "3",
+            "user": "Z. Cass",
+            "time": "Sep 5, 2017 at 23:26",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

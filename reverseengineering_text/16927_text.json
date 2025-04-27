@@ -1,0 +1,59 @@
+{
+    "title": "Password Bruteforce using angr",
+    "link": "https://reverseengineering.stackexchange.com/questions/16927/password-bruteforce-using-angr",
+    "content": "I am having a binary which takes an input from user and checks every bit of our character using the check_value function which does some stuff. The disassembly of the interested function is:\n<pre><code>.text:000000000005620B loc_5620B:                              ; CODE     XREF: main+A1j\n.text:000000000005620B                 movzx   edi, byte ptr [rbx+rdx]\n.text:000000000005620F                 mov     rsi, [r8+rdx*8]\n.text:0000000000056213                 call    check_value\n.text:0000000000056218                 inc     rdx\n.text:000000000005621B                 and     ecx, eax\n.text:000000000005621D                 cmp     rdx, 3Bh   <----**This condition**\n.text:0000000000056221                 jnz     short loc_5620B\n.text:0000000000056223                 test    cl, cl\n.text:0000000000056225                 lea     rdi, aYouDidnTGetItM ; \"You didn't get it, much sadness :(\"\n.text:000000000005622C                 jz      short loc_5623E\n.text:000000000005622E                 lea     rdi, aYouGotItCorrec ; \"You got it! correct! awesome!\"\n.text:0000000000056235                 call    _puts\n.text:000000000005623A                 xor     eax, eax\n.text:000000000005623C                 jmp     short loc_56248\n</code></pre>\nWhat I understand is the <pre><code>cmp</code></pre> instruction is where the execution is getting diverted and I want to do a straight bruteforce. How can i do using either a <pre><code>gdb</code></pre> script or <pre><code>angr</code></pre> framework?\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "gdb",
+        "angr"
+    ],
+    "user": "ashish",
+    "time": "Dec 7, 2017 at 15:28",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "By the context I think this is the rabbithole problem from CSAW ctf finals. The correct solution was not to bruteforce although you'd be tempted to as it was trivial to brute-force. The <pre><code>check_value</code></pre> function was called for each char in the input which was supposed to be 0x3b chars long.\n<pre><code>for(i=0; i<59; ++i){\n    flag &= check_value(input[i], roots[i])\n}\n</code></pre>\nwhere roots is an array for roots to binary trees which were traversed in <pre><code>check_value</code></pre>. I solved it onsite and if you want to look at how I did it check here.\n",
+            "votes": "2",
+            "user": "sudhackar",
+            "time": "Dec 7, 2017 at 16:57",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">You can also checkout other writeups at <a href=\"https://ctftime.org/task/4915\" rel=\"nofollow noreferrer\">ctftime.org/task/4915</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "ashish",
+                    "text": "<span class=\"comment-copy\">@sudhacker, yes I saw your writeup which included SMT solver but I thought a bruteforce would work in this case.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">yea check out this one <a href=\"https://anee.me/rabbithole-csaw-ctf-2017-finals-f7d70f3726f3\" rel=\"nofollow noreferrer\">anee.me/rabbithole-csaw-ctf-2017-finals-f7d70f3726f3</a>. He bruteforced it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "ashish",
+                    "text": "<span class=\"comment-copy\">yes, I tried that but sadly it didn't work!</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">As I mentioned flag is the <code>and</code> of all calls to <code>check_value</code>. Every call must return 1(true) in order for you to have the correct flag. You can set a bp there and iterate byte by byte so that each call returns 1.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Brute forcing is often not the way to go unless you know something about your input that would limit the space of what it needs to check considerably. I think you're best bet here it to understand what is going on in the machine code especially given how straightforward the disassembly looks. \nLet's break it down.\n<pre><code>movzx   edi, byte ptr [rbx+rdx]\nmov     rsi, [r8+rdx*8]\ncall    check_value\n</code></pre>\nHere we can see the program is moving two values into the <pre><code>rsi</code></pre> and <pre><code>edi</code></pre> registers. They are both indexed with <pre><code>rdx</code></pre> so rdx is probably an index counter. <pre><code>edi</code></pre> is loaded with a byte so it's probably part of the password/value that is being checked. Therefore, <pre><code>rbx</code></pre> is a pointer to the password/value itself.\n<pre><code>inc     rdx\nand     ecx, eax\ncmp     rdx, 3Bh\njnz     (5 instructions above)\n</code></pre>\nIncrements the index counter, looks at the return value (<pre><code>eax</code></pre>) from check_value and clears register <pre><code>ecx</code></pre> if the return value is zero. Finally, it compares the counter to 0x3b (59 decimal) and repeats everything above it not equal to it. From this, we can gather that our secret password/value is 59 bytes and that check_value must likely return 1 (true) for every byte if the value is correct.\n<pre><code>test    cl, cl\nlea     rdi, aYouDidnTGetItM\njz      short loc_5623E\nlea     rdi, aYouGotItCorrec\ncall    _puts\n</code></pre>\nHere we can see we are getting either one of two messages put depending on the value of <pre><code>cl</code></pre>. If <pre><code>ecx</code></pre> is zero from the loop above, <pre><code>cl</code></pre> will be zero and the <pre><code>jz</code></pre> jump will be taken leaving us with the message \"You didn't get it, much sadness :(\" but if <pre><code>ecx</code></pre> is non-zero, we get \"You got it! correct! awesome!\" which is then displayed on the console with the <pre><code>puts</code></pre> function.\nSo, from just breaking this down a bit we can see exactly what this function is doing. \nExtrapolating a bit from missing disassembly in your listing above (what sets <pre><code>ecx</code></pre> before your listing starts and what prints out the didn't-get-it-message after your listing ends), the C code for this might looks something like\n<pre><code>bool passwordOkay = True;\nfor (index = 0; index != 59; ++index) {\n    byte = password[index]\n    secondVal = table[index]\n    passwordOkay &= check_value(byte, secondVal);\n}\nif (passwordOkay)\n    printf(\"You got it! correct! awesome!\");\nelse\n    printf(\"You didn't get it, much sadness :(\");\n</code></pre>\nYou should apply the same technique within the <pre><code>check_value</code></pre> function to reverse exactly hot to defeat this checker.\n",
+            "votes": "1",
+            "user": "cimarron",
+            "time": "Dec 7, 2017 at 16:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

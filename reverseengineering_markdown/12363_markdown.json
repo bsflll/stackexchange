@@ -1,0 +1,56 @@
+{
+  "title": "Intel Pin memory operations tracking",
+  "link": "https://reverseengineering.stackexchange.com/questions/12363/intel-pin-memory-operations-tracking",
+  "content": "I am using Intel Pin in order trace memory activity of an executable on Windows. What I have found, that most of the memory operands (Read or Write) operates with 2 or 4 bytes. So I decided to modify original Pin's pinatrace example, in order to see which Assembly opcodes produces which memory activity.\n\n```\nVOID Instruction(INS ins, VOID *v)\n{\n\n        UINT32 memOperands = INS_MemoryOperandCount(ins);\n        fprintf(trace,\"  \n[%s]  \n\",(INS_Disassemble(ins)).c_str()); \n        for (UINT32 memOp = 0; memOp < memOperands; memOp++)\n        { \n             .....\n\n```\nWhat it basically does (I hope), is just writes disassembled opcode BEFORE the memory operands it produces. But then I looked in the file (W is for write, R is for read):\n\nAs we can see, opcodes that are supposed to work with memory (e.g. mov) do not produce memory operands. While memory traces are connected as blocks after ret/call/jnz etc.\n\nQuestion: What kind of memory operands does Intel Pin trace? Is it about calls to virtual memory/RAM/CPU registers? Could it be possible, that memory activity goes in blocks due to CPU's pipeline?\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "disassembly",
+    "binary-analysis",
+    "memory",
+    "pintool"
+  ],
+  "user": "aGGeRReS",
+  "time": "Apr 7, 2016 at 13:49",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "So, finally I came up with the solution that works how I want and results seem to be valid according to this reference of instruction tables\n\n```\nfprintf(trace,\"  \n[%s]  \n\",(INS_Disassemble(ins)).c_str()); //(INS_Disassemble(ins)).c_str()\nfflush(trace);\n   \nfor (UINT32 memOp = 0; memOp < memOperands; memOp++)\n{\n    if (INS_MemoryOperandIsRead(ins, memOp))\n    {\n        fprintf(trace,\"R\");\n        icount++;\n    }\n\n    if (INS_MemoryOperandIsWritten(ins, memOp))\n    {\n        fprintf(trace,\"W\");\n        icount++;\n    }\n}\n\n```\nAnd it produces the following output:\n\n```\n[mov eax, dword ptr [ebp+0x10]]\nR\n[mov byte ptr [ebx+0x2], 0x0]\nW\n[mov byte ptr [ebx+0x7], 0x0]\nW\n\n```\nI cannot be sure that it is the true sequence of executable under analysis because I do output in the instrumentation phase, but the code can probably be modified it the way to write opcode inside another  INS_InsertPredicatedCall, so it will be recorded when it will be executed.\n\n",
+      "votes": "1",
+      "user": "canihavesomecoffee",
+      "time": "Nov 3, 2020 at 15:18",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "If you want to limit your print-out to just memory read/write instructions, your fprintf() needs to be inside the if (INS_MemoryOperandIsRead(ins, memOp)) { ... } block and inside the if (INS_MemoryOperandIsWritten(ins, memOp)) { ... } block (and you'll need to include some logic to not print the same instruction more than once).\n\nFor example:\n\n```\n// Is called for every instruction and instruments reads and writes\nVOID Instruction(INS ins, VOID *v)\n{\n    // Instruments memory accesses using a predicated call, i.e.\n    // the instrumentation is called iff the instruction will actually be executed.\n    //\n    // On the IA-32 and Intel(R) 64 architectures conditional moves and REP \n    // prefixed instructions appear as predicated instructions in Pin.\n    UINT32 memOperands = INS_MemoryOperandCount(ins);\n\n    BOOL printed = FALSE;\n\n    // Iterate over each memory operand of the instruction.\n    for (UINT32 memOp = 0; memOp < memOperands; memOp++)\n    {\n        if (INS_MemoryOperandIsRead(ins, memOp))\n        {\n            if (!printed)\n            {\n                fprintf(trace,\"  \n[%s]  \n\",(INS_Disassemble(ins)).c_str()); \n                printed = TRUE;\n            }\n\n            INS_InsertPredicatedCall(\n                ins, IPOINT_BEFORE, (AFUNPTR)RecordMemRead,\n                IARG_INST_PTR,\n                IARG_MEMORYOP_EA, memOp,\n                IARG_END);\n        }\n        // Note that in some architectures a single memory operand can be \n        // both read and written (for instance incl (%eax) on IA-32)\n        // In that case we instrument it once for read and once for write.\n        if (INS_MemoryOperandIsWritten(ins, memOp))\n        {\n            if (!printed)\n            {\n                fprintf(trace,\"  \n[%s]  \n\",(INS_Disassemble(ins)).c_str()); \n                printed = TRUE;\n            }\n\n            INS_InsertPredicatedCall(\n                ins, IPOINT_BEFORE, (AFUNPTR)RecordMemWrite,\n                IARG_INST_PTR,\n                IARG_MEMORYOP_EA, memOp,\n                IARG_END);\n        }\n    }\n}\n\n```\n",
+      "votes": "0",
+      "user": "Jason Geffner",
+      "time": "Apr 7, 2016 at 14:00",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "aGGeRReS",
+          "text": "This is an interesting suggestion. But when I tried I received the following:  > [pop ebx] >  > [pop edi] >  > [pop esi] >  > [pop ebp] >  > [ret 0x10]  >  > RRRRR >  > [mov byte ptr [ebp-0x19], al] >  > [mov dword ptr [ebp-0x4], ebx] >  > [call 0x7770c290]  >  > WWW  >  > [call 0x776f2165]   >  > W   >  > [push ebp] >  > [mov eax, dword ptr fs:[0x18]]",
+          "time": null
+        },
+        {
+          "user": "aGGeRReS",
+          "text": "Well, comment formatting doesn't work well, but as you can see - there are still opcodes with no memory operations.  Do you exactly know what kind of memory operations (to what kind of memory) Pin traces?",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "Every instruction you printed above does indeed involve a memory read or write. pops and rets read from the stack memory, the movs write to memory, the calls read from memory, and the push writes to the stack memory.",
+          "time": null
+        },
+        {
+          "user": "aGGeRReS",
+          "text": "Allright, thank you. But they all work with data stored in RAM (not taking CPU's cache into account, since pages are synchronized), am I right? And why there is no read operations after calls so far?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

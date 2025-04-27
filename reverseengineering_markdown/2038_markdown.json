@@ -1,0 +1,37 @@
+{
+  "title": "How are stripped shared libraries linked against?",
+  "link": "https://reverseengineering.stackexchange.com/questions/2038/how-are-stripped-shared-libraries-linked-against",
+  "content": "Lately I've been reversing the Android framework for the Nexus S mobile phone.\n99% of the source code is of course open, but there are few propriety shared libraries which needs to be downloaded in order to compile the operating system.\nThese shared libraries are stripped from symbols and suddenly I came to understand that I don't really understand how stripped libraries are linked against. How can the linker match referenced library functions if the symbols don't exist?\n\n",
+  "votes": "12",
+  "answers": 1,
+  "views": "5k",
+  "tags": [
+    "linux",
+    "elf",
+    "libraries"
+  ],
+  "user": "Mellowcandle",
+  "time": "May 17, 2013 at 7:56",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Even stripped libraries still must retain the symbols necessary for dynamic linking. These are usually placed in a section named .dynsym and are also pointed to by the entries in the dynamic section.\n\nFor example, here's the output of readelf on a stripped Android library:\n\n```\nSection Headers:\n  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n  [ 0]                   NULL            00000000 000000 000000 00      0   0  0\n  [ 1] .hash             HASH            000000b4 0000b4 000280 04   A  2   0  4\n  [ 2] .dynsym           DYNSYM          00000334 000334 0005b0 10   A  3   6  4\n  [ 3] .dynstr           STRTAB          000008e4 0008e4 00042f 00   A  0   0  1\n  [ 4] .rel.dyn          REL             00000d14 000d14 000008 08   A  2   2  4\n  [ 5] .rel.plt          REL             00000d1c 000d1c 000100 08   A  2   6  4\n  [ 6] .plt              PROGBITS        00000e24 000e24 000214 04  AX  0   0  4\n  [ 7] .text             PROGBITS        00001038 001038 00210c 00  AX  0   0  8\n  [ 8] .rodata           PROGBITS        00003144 003144 000a70 00   A  0   0  4\n  [ 9] .ARM.extab        PROGBITS        00003bb4 003bb4 000024 00   A  0   0  4\n  [10] .ARM.exidx        ARM_EXIDX       00003bd8 003bd8 000170 00  AL  7   0  4\n  [11] .dynamic          DYNAMIC         00004000 004000 0000c8 08  WA  3   0  4\n  [12] .got              PROGBITS        000040c8 0040c8 000094 04  WA  0   0  4\n  [13] .data             PROGBITS        0000415c 00415c 000004 00  WA  0   0  4\n  [14] .bss              NOBITS          00004160 004160 000940 00  WA  0   0  4\n  [15] .ARM.attributes   ARM_ATTRIBUTES  00000000 004160 000010 00      0   0  1\n  [16] .shstrtab         STRTAB          00000000 004170 000080 00      0   0  1\n\n```\nYou can see that even though it's missing the .symtab section, the .dynsym is still present. In fact, the section table can be removed as well (e.g. with sstrip) and the file will still work. This is because the dynamic linker only uses the program headers (aka the segment table):\n\n```\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  EXIDX          0x003bd8 0x00003bd8 0x00003bd8 0x00170 0x00170 R   0x4\n  LOAD           0x000000 0x00000000 0x00000000 0x03d48 0x03d48 R E 0x1000\n  LOAD           0x004000 0x00004000 0x00004000 0x00160 0x00aa0 RW  0x1000\n  DYNAMIC        0x004000 0x00004000 0x00004000 0x000c8 0x000c8 RW  0x4\n\n```\nThe DYNAMIC segment corresponds to the .dynamic section and contains information for the dynamic linker:\n\n```\nDynamic section at offset 0x4000 contains 21 entries:\n  Tag        Type                         Name/Value\n 0x00000001 (NEEDED)                     Shared library: [liblog.so]\n 0x00000001 (NEEDED)                     Shared library: [libcutils.so]\n 0x00000001 (NEEDED)                     Shared library: [libc.so]\n 0x00000001 (NEEDED)                     Shared library: [libstdc++.so]\n 0x00000001 (NEEDED)                     Shared library: [libm.so]\n 0x0000000e (SONAME)                     Library soname: [libnetutils.so]\n 0x00000010 (SYMBOLIC)                   0x0\n 0x00000004 (HASH)                       0xb4\n 0x00000005 (STRTAB)                     0x8e4\n 0x00000006 (SYMTAB)                     0x334\n 0x0000000a (STRSZ)                      1071 (bytes)\n 0x0000000b (SYMENT)                     16 (bytes)\n 0x00000003 (PLTGOT)                     0x40c8\n 0x00000002 (PLTRELSZ)                   256 (bytes)\n 0x00000014 (PLTREL)                     REL\n 0x00000017 (JMPREL)                     0xd1c\n 0x00000011 (REL)                        0xd14\n 0x00000012 (RELSZ)                      8 (bytes)\n 0x00000013 (RELENT)                     8 (bytes)\n 0x6ffffffa (RELCOUNT)                   1\n 0x00000000 (NULL)                       0x0\n\n```\nThe two entries here necessary for symbol resolution are STRTAB and SYMTAB. They together make up the dynamic symbol table:\n\n```\nSymbol table '.dynsym' contains 91 entries:\n   Num:    Value  Size Type    Bind   Vis      Ndx Name\n     0: 00000000     0 NOTYPE  LOCAL  DEFAULT  UND \n     1: 00001038     0 SECTION LOCAL  DEFAULT    7 \n     2: 00003144     0 SECTION LOCAL  DEFAULT    8 \n     3: 00003bb4     0 SECTION LOCAL  DEFAULT    9 \n     4: 0000415c     0 SECTION LOCAL  DEFAULT   13 \n     5: 00004160     0 SECTION LOCAL  DEFAULT   14 \n     6: 00000000     0 FUNC    GLOBAL DEFAULT  UND clock_gettime\n     7: 000026e1    88 FUNC    GLOBAL DEFAULT    7 ifc_init\n     8: 00000001    20 FUNC    GLOBAL DEFAULT  UND strcpy\n     9: 00002d6d   140 FUNC    GLOBAL DEFAULT    7 open_raw_socket\n     [...]\n\n```\nYou can see that it contains both UND (undefined) symbols - those required by the library and imported from other .so, and the \"normal\" global symbols which are exported by the library for its users. The exported symbols have their addresses inside the library listed in the Value column.\n\n",
+      "votes": "21",
+      "user": "Igor Skochinsky",
+      "time": "May 11, 2013 at 12:53",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Mellowcandle",
+          "text": "Thanks for your answer. It's probably correct but it seems that I need to do some reading in order to understand the subject.",
+          "time": null
+        },
+        {
+          "user": "MarcusJ",
+          "text": "If that's the case, why include symbols in the first place? it's just a duplicate.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

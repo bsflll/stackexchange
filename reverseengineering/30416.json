@@ -1,0 +1,57 @@
+{
+    "title": "Help with Ghidra and rewriting assembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/30416/help-with-ghidra-and-rewriting-assembly",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm learning reversing and for that I use Ghidra.\nThere is program I'm trying to modify so I can recompile it and make it work.\nI have a code that ghidra decompile like this: <code>data=function(4)</code>\nGoing inside the function I think to make it work I need to pass a zero.\nIn the assembly I can read:</p>\n<pre><code>PUSH RBP\nMOV RBP,RSP\nMOV EDI,0x4\nCALL function\nMOV qword ptr [data],RAX\n</code></pre>\n<p>What I understand from that (and I'm propably wrong)\nis that  the <code>MOV EDI,0x4</code> is the 4 given in the function so I tried to rewrite it in Ghidra with <code>0x0</code> and it replace the:</p>\n<pre><code>bf 04 00 00 00 with bf 00 00 00 00\n</code></pre>\n<p>I thought it would be enough and I exported as an ELF but when I start the program I get a segmentation fault so I guess I'm doing something wrong with the memory.</p>\n<pre><code>    (gdb) x/10xi $rip\n=&gt; 0x555555401888:      mov    (%rax),%rax\n   0x55555540188b:      test   %rax,%rax\n   0x55555540188e:      jne    0x55555540189a\n   0x555555401890:      mov    $0x0,%eax\n   0x555555401895:      jmp    0x55555540199d\n   0x55555540189a:      movq   $0x0,-0x50(%rbp)\n   0x5555554018a2:      mov    -0x60(%rbp),%rax\n   0x5555554018a6:      mov    %rax,%rdi\n   0x5555554018a9:      call   0x5555554008f0 &lt;strlen@plt&gt;\n   0x5555554018ae:      mov    %rax,-0x48(%rbp)\n</code></pre>\n<p>I would like some help to understand what I'm doing wrong.</p>\n<p>thanks</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "assembly",
+        "ghidra"
+    ],
+    "user": null,
+    "time": "Jul 20, 2022 at 8:43",
+    "comments": [
+        {
+            "user": "sudhackar",
+            "text": "<span class=\"comment-copy\">Can you diff the two ELF files - before and after editing and post a diff here too? Also can you attach the ELF with gdb and post the crashing instruction?</span>",
+            "time": null
+        },
+        {
+            "user": "user41095",
+            "text": "<span class=\"comment-copy\">(gdb) run Results : Program received signal SIGSEGV, Segmentation fault. 0x0000555555401888 in ?? ()</span>",
+            "time": null
+        },
+        {
+            "user": "user41095",
+            "text": "<span class=\"comment-copy\">command : diff &lt;(objdump -d elffile) &lt;(objdump -d elffileWithZero ) Result : 2c2 &lt; elffile: format de fichier elf64-x86-64 --- &gt; elffileWithZero: format de fichier elf64-x86-64 222c222 &lt; b50: bf 04 00 00 00 mov $0x4,%edi --- &gt; b50: bf 00 00 00 00 mov $0x0,%edi –</span>",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "<span class=\"comment-copy\">Also can you disassemble the bytes where the application crash? Or just attach the original ELF file?</span>",
+            "time": null
+        },
+        {
+            "user": "user41095",
+            "text": "<span class=\"comment-copy\">Bytes view in ghidra  c3 55 48 89 e5 bf 00 00 00 00 e8 19 0b 00 00 48 89 05 b7 24 20 00 48 8d 3d 82 ff ff ff</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You need to understand the consequences of patching an instruction. What gets changed by the instruction - both data and control flow.\nBased on the comments I think you are trying to patch this part</p>\n<pre><code>.text:0000000000000B4C                 push    rbp\n.text:0000000000000B4D                 mov     rbp, rsp\n.text:0000000000000B50                 mov     edi, 4\n.text:0000000000000B55                 call    sub_1673\n</code></pre>\n<p>to</p>\n<pre><code>.text:0000000000000B4C                 push    rbp\n.text:0000000000000B4D                 mov     rbp, rsp\n.text:0000000000000B50                 mov     edi, 0\n.text:0000000000000B55                 call    sub_1673\n</code></pre>\n<p>Based on this you can see what will change when <code>sub_1673</code> gets executed.</p>\n<pre><code>...\n.text:000000000000167C                 mov     [rbp+nmemb], rdi\n.text:0000000000001680                 cmp     [rbp+nmemb], 0\n.text:0000000000001685                 jnz     short loc_1691\n.text:0000000000001687                 mov     eax, 0\n.text:000000000000168C                 jmp     loc_1736\n...\n.text:0000000000001736                 add     rsp, 28h\n.text:000000000000173A                 pop     rbx\n.text:000000000000173B                 pop     rbp\n.text:000000000000173C                 retn\n</code></pre>\n<p>Based on the calling convention 0 will be copied to <code>rdi</code>. It is then compared to 0 and then a jump is taken if its non zero. If its zero the function returns with a return value of zero. Something like</p>\n<pre><code>int sub_1673(size_t a1) {\n    if(!a1) return 0;\n    ....\n}\n</code></pre>\n<p>If the value was non-zero some memory is allocated and the pointer is saved to some global variable. In your case - after the patch the variable stays 0 and the application crashes while read NULL(0) address.</p>\n</div>",
+            "votes": "1",
+            "user": "sudhackar",
+            "time": "May 23, 2022 at 4:40",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user41095",
+                    "text": "<span class=\"comment-copy\">thanks it clarified what is happening and what do to</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

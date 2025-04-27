@@ -1,0 +1,39 @@
+{
+    "title": "What checksum algorithm is this?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25894/what-checksum-algorithm-is-this",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to control an air conditioning unit. The app and the unit communicate using the <a href=\"https://github.com/mjg59/python-broadlink\" rel=\"nofollow noreferrer\">Broadlink protocol</a>. I can decode the settings it's sending and replay them.</p>\n<p>The payload is 32 bytes but only the middle 15 ever change (prefixed with <code>19 00 bb 00 06 80 00 00 0f 00 01 01</code> and suffixed with zeros). I think the last two bytes are some kind of checksum, but I'm unsuccessful in recreating it.</p>\n<p>Here's a sample (<a href=\"https://pastebin.com/ph6Bg8aD\" rel=\"nofollow noreferrer\">more</a>):</p>\n<pre><code>9f e4 07 60 00 20 00 00 00 00 00 00 00 87 19 \n9f e4 07 60 00 20 00 00 20 00 00 00 00 67 19 \n9f e4 2d 60 00 20 00 00 20 00 00 00 00 41 19 \n97 e4 87 60 00 20 00 00 20 00 00 00 00 ef 18 \n97 e4 07 60 00 20 00 00 20 00 00 00 00 6f 19 \n9f e4 87 60 00 20 00 00 20 00 00 00 00 e7 18 \na7 e4 07 60 00 20 00 00 20 00 00 00 00 5f 19 \na7 e4 07 60 00 80 00 00 20 00 00 00 00 5e b9 \na7 e4 07 40 00 20 00 00 20 00 00 00 00 5f 39 \na7 e4 07 20 00 20 00 00 20 00 00 00 00 5f 59 \na7 e4 07 20 40 20 00 00 20 00 00 00 00 1f 59\n</code></pre>\n<p>I think it's related to a sum because the same number of bits change in the sum, but I've calculated the difference and the XOR between the sum and the actual checksum and they aren't constant. Also tried reversing the bits with no luck.</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "310",
+    "tags": [
+        "crc",
+        "protocol"
+    ],
+    "user": "Enosh",
+    "time": "Sep 15, 2020 at 13:11",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "<span class=\"comment-copy\">If it is an app usually the easiest way to understand how the CRC is calculated is by decompiling the app.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'll give a stab at this. It's hard to tell without more context and information, it appears that the last two bytes are a little endian value added to the sum to make it equal some number. Possibly <code>0xff17</code> if it sums every single value. Without knowing more information, it's impossible to tell which bytes it's checking but assuming we check everything, I think they are used something like this:</p>\n<pre><code>def calculate(x):\n    for arr in x:\n        diff = 0x80EA # sum of the first 6 little endian words\n        diff += (arr[12] + (arr[13] &lt;&lt; 8)) # add seventh little endian word\n        diff += (arr[14] + (arr[15] &lt;&lt; 8)) # add eighth little endian word                                                                            \n        diff += (arr[16] + (arr[17] &lt;&lt; 8)) # add ninth little endian word   \n        # diff += (arr[18] + (arr[19] &lt;&lt; 8)) these values are all zeros...\n        diff += (arr[20] + (arr[21] &lt;&lt; 8)) # add eleventh little endian word\n        diff += (arr[22] + (arr[23] &lt;&lt; 8)) # add twelfth little endian word\n        diff += arr[24]\n        checksum = (arr[25] + (arr[26] &lt;&lt; 8) &amp; 0xffff) # grab checksum                                                                               \n        print(hex((diff+checksum) &amp; 0xffff))\n</code></pre>\n<p>When I run this with you list of 171 samples as input, I only get three unique values, and they're all within a byte of each other.</p>\n<pre><code>~/ python3 test.py | sort | uniq | wc\n      3       3      21\n~/ python3 test.py | sort | uniq -c\n     21 0xff16\n    146 0xff17\n      4 0xff18\n</code></pre>\n<p>Assuming you are correct about the first 12 bytes not changing, perhaps these are due to transmission error (that's the point of a checksum, right?) or I am missing something in checksum algorithm.</p>\n<p>As a side note, the first two bytes <code>19 00</code> may refer to the payload length in bytes.</p>\n</div>",
+            "votes": "0",
+            "user": "Shane Reilly",
+            "time": "Sep 15, 2020 at 18:32",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I think there may be some noise on the line. Lauren Labell has a tool to try and automate reversing checksums: <a href=\"https://github.com/laurenlabell/checksum_finder\" rel=\"nofollow noreferrer\">https://github.com/laurenlabell/checksum_finder</a></p>\n<p>Here's what it generated:</p>\n<pre><code>#  start: 0 end: 0 check: 13 foldOp: &lt;built-in function sub&gt; finalOp: &lt;built-in function add&gt; magicValue: 0xaa\n# ================================================================================\n# Generated Code\n# --------------------------------------------------------------------------------\n\n\n\nimport operator\n\ndef twosComp(n):\n    return -n\n\ndef onesComp(n1, n2):\n    mod = 1 &lt;&lt; 8\n    result = n1 + n2\n    return result if result &lt; mod else (result + 1) % mod  \n\ndef pad(xs,w):\n    n = len(xs)\n    target_n = (-(-n//w)) * w\n    delta = target_n - n\n    xs_padded = xs+[0]*delta\n    return xs_padded\n\ndef chunk(xs,w):\n    xs_chunked = [xs[i:i+w] for i in range(0,len(xs),w)]\n    return xs_chunked\n\ndef to_int(x):\n    return int.from_bytes(bytes(x),'big')\n\n\ndef preprocess(hex_str,w):\n    hex_str = ''.join(hex_str.split(' '))\n    xs = [x for x in bytes.fromhex(hex_str)]\n    xs_padded = pad(xs,w)\n    xs_chunked = chunk(xs_padded,w)\n    xs_ints = [to_int(x) for x in xs_chunked]\n    return xs_ints\n\n\ndef calculate_checksum(payload):\n    magicValue = 0xaa\n    mask = 0xFF\n\n    checksum = 0\n    for element in payload:\n        checksum = operator.sub(checksum,element)\n    checksum =  operator.add(checksum,magicValue)\n    return checksum &amp; mask\n\ndef validate_message(rawmsg):\n    msgStart = 0\n    msgEnd = 0\n    checksumPos = 13 \n    width = 1\n\n    msg = preprocess(rawmsg,width)\n    payload = msg[msgStart:]\n    checksum = msg[checksumPos]\n    payload[checksumPos] = 0\n\n    return calculate_checksum(payload) == checksum\n\n# ================================================================================\n# Unit Tests\n# --------------------------------------------------------------------------------\n\nprint(validate_message('9f e4 07 60 00 20 00 00 00 00 00 00 00 87 19'),'9f e4 07 60 00 20 00 00 00 00 00 00 00 87 19')\nprint(validate_message('9f e4 2d 60 00 20 00 00 20 00 00 00 00 41 19'),'9f e4 2d 60 00 20 00 00 20 00 00 00 00 41 19')\nprint(validate_message('97 e4 07 60 00 20 00 00 20 00 00 00 00 6f 19'),'97 e4 07 60 00 20 00 00 20 00 00 00 00 6f 19')\nprint(validate_message('a7 e4 07 60 00 20 00 00 20 00 00 00 00 5f 19'),'a7 e4 07 60 00 20 00 00 20 00 00 00 00 5f 19')\nprint(validate_message('a7 e4 07 20 40 20 00 00 20 00 00 00 00 1f 59'),'a7 e4 07 20 40 20 00 00 20 00 00 00 00 1f 59')\n\n# --------------------------------------------------------------------------------\n# End Generated Code\n# --------------------------------------------------------------------------------\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "pythonpython",
+            "time": "Nov 23, 2020 at 1:38",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

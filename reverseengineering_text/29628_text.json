@@ -1,0 +1,38 @@
+{
+    "title": "IDA Pro - configure register clobbering",
+    "link": "https://reverseengineering.stackexchange.com/questions/29628/ida-pro-configure-register-clobbering",
+    "content": "TL;DR:\nThe __fastcall convention in IDA Pro assumes that all the registers which could be used for transferring parameters are clobbered after a call (tested on x86, clobbered regs are <pre><code>eax</code></pre>, <pre><code>edx</code></pre>, <pre><code>ebx</code></pre>, <pre><code>ecx</code></pre>). I'm wondering how can I change that.\nFull explanation:\nI have a chunk of code (used Watcom name mangling):\n<pre><code>cseg01:00062A6B                 mov     edx, [ebp+tng1]\ncseg01:00062A6E                 mov     eax, [ebp+this1]\ncseg01:00062A71                 call    W?MyMethod$_Whatever$n_x__pn$SubObject$$\ncseg01:00062A76                 call    W?MySubMethod$_SubObject$n_pn$Thing$$_l\ncseg01:00062A7B                 cmp     eax, 0Ah\n</code></pre>\nThe functions are:\n<pre><code>SubObject *__fastcall Whatever::MyMethod(Whatever *__hidden this);\nint __fastcall SubObject::MySubMethod(SubObject *__hidden this, Thing *tng);\n</code></pre>\nIDA Pro produces:\n<pre><code>(v3 = Whatever::MyMethod(this1), SubObject::MySubMethod(v3, v4) < 10)\n</code></pre>\nSo the proper code clearly is:\n<pre><code>(this1->MyMethod()->MySubMethod(tng1) < 10)\n</code></pre>\nThe problem is — IDA did not use <pre><code>tng1</code></pre> as the 2nd argument of <pre><code>MySubMethod()</code></pre> — instead, it defined a separate variable <pre><code>v4</code></pre> with an unset value.\nBecause we use <pre><code>__fastcall</code></pre> for both functions, first arg is passed through <pre><code>eax</code></pre>, second by <pre><code>edx</code></pre>. The code so happens to set the value of <pre><code>edx</code></pre> before the first call, even though it's really an argument for the second call. IDA seem to assume that <pre><code>MyMethod()</code></pre> overwrote (or with proper nomenclature, clobbered) the value of <pre><code>EDX</code></pre>).\nI tried __usercall and __userpurge, and it had no impact on the code — IDA still assumes <pre><code>EDX</code></pre> was clobbered by the first call.\nIs there a way to configure/change that behavior, making IDA know that function calls does not clobber registers?\nI remember fixing it in the past, so there is a way, just can't remember what it was exactly...\nAlso, it would be nice to configure that on a project level instead of defining a custom calling convention for every function.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "884",
+    "tags": [
+        "ida",
+        "x86",
+        "register",
+        "calling-conventions"
+    ],
+    "user": "mefistotelis",
+    "time": "Nov 30, 2021 at 8:17",
+    "comments": [
+        {
+            "user": "mefistotelis",
+            "text": "Oh right, the clobbering is configured per-function using __spoils. Details here: hex-rays.com/products/ida/support/idadoc/1361.shtml But I don't think there's project-wide setting for it. Or is there?\n",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "I'm not sure defining a calling convention is necessary. I think defining the prototype of <pre><code>mySubMethod</code></pre> to accept two arguments (I assume it accepts one now) will do the trick. I think the main issue here is not with clobbering but with incorrectly identifying the number of arguments in <pre><code>mySubMethod</code></pre>\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "In the absence of an explicit <pre><code>__spoils</code></pre> declaration on the called function's prototype, Hex-Rays makes decisions about which registers should be spoiled at a call site based on the compiler that has been chosen for the binary, which can be viewed and modified under <pre><code>Options->Compiler</code></pre>. Your first step should be to ensure that the <pre><code>Compiler</code></pre> dropdown box says \"Watcom C++\".\nThe authors of Hex-Rays need to implement support for each compiler's ABI separately. That is to say, if you were to reverse engineer the part of Hex-Rays that chose the standard clobber set to be used throughout call analysis, you'd find that the logic made use of <pre><code>if</code></pre>-statements that were checking the database's compiler settings (as described in the previous paragraph).\nUnfortunately, as of the last time I reverse engineered that part of Hex-Rays, they had not yet implemented support for Watcom's ABI. It's possible this has changed in the meantime -- again, your first step should be to set the compiler to Watcom and see what happens. I get the impression they might have added it in 7.3, based on the following changelog:\n\nBUGFIX: TYPES: corrected the list of spoiled registers for watcom files\n\nHowever, if setting the compiler doesn't work, then there's nothing you can do as a user to fix this without manually annotating each function's <pre><code>__spoils</code></pre> set. If so, this would be a great time to contact Hex-Rays support with your license key, and a copy of the binary if possible, and ask them if they can implement ABI support for Watcom in the decompiler. It may not happen in the next release, but if enough customers have enough requests involving Watcom binaries, it'll happen. After all, it's probably not that much work on their end to implement it, and it's a nice feature to have out-of-the-box.\n",
+            "votes": "0",
+            "user": "Rolf Rolles",
+            "time": "Nov 30, 2021 at 14:07",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

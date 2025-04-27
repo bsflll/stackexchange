@@ -1,0 +1,111 @@
+{
+    "title": "How do I see the parameters passed to RegOpenKeyEx, and set a conditional breakpoint?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1979/how-do-i-see-the-parameters-passed-to-regopenkeyex-and-set-a-conditional-breakp",
+    "content": "I have WinDbg attached to a process I don't have the source code for. I've set a breakpoint with <pre><code>bm ADVAPI32!_RegOpenKeyExW@20</code></pre>. The output of dv is:\n<pre><code>Unable to enumerate locals, HRESULT 0x80004005\nPrivate symbols (symbols.pri) are required for locals.\nType \".hh dbgerr005\" for details.\n</code></pre>\nThe output of kP is:\n<pre><code>0:000> kP\nChildEBP RetAddr  \n001ae174 5b73a79c ADVAPI32!_RegOpenKeyExW@20\n001ae1cc 5b77bb20 msenv!?ReadSecurityAddinSetting@@YG_NPAGK@Z+0x8a\n001ae468 5b781aad msenv!?    QueryStatusCmd@CVSCommandTarget@@QAEJPBVCIcmdGuidCmdId@@PBU_GUID@@KQAU_tagOLECMD@@PAU_tagOLECMDTEXT@@@Z+0x254\n001ae49c 5b786073 msenv!?IsCommandVisible@CVSShellMenu@@QAEJPBVCIcmdGuidCmdId@@_N@Z+0xbf\n001ae4e4 5b785fd2 msenv!?IsCommandVisible@CSurfaceCommandingSupport@@UAGJABU_COMMANDTABLEID@@_NPAH@Z+0xa0\n. . .\n</code></pre>\nWhat can I do to look at the values of the paramaters passed (particularly the second one: LPCTSTR lpSubKey)? Also, what can I do to set a conditional breakpoint based on the value?\nI have the Visual Studio debugger as well as WinDbg. I'm willing to try other tools as well.\n",
+    "votes": "12",
+    "answers": 5,
+    "views": "6k",
+    "tags": [
+        "debugging-symbols",
+        "windbg"
+    ],
+    "user": "Justin Dearing",
+    "time": "May 1, 2013 at 20:49",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This is doable in WinDbg, but the syntax isn't the greatest. The other answers are probably better if you're just looking to get a result quickly. That said, here's how you'd do it.\nRegOpenKeyExW is an stdcall function, and it looks like you're on a 32-bit version of Windows, so when you enter the function the first argument will be at <pre><code>ESP+4</code></pre>, the second at <pre><code>ESP+8</code></pre>, etc. The signature for it is:\n<pre><code>LONG WINAPI RegOpenKeyEx(\n  _In_        HKEY hKey,\n  _In_opt_    LPCTSTR lpSubKey,\n  _Reserved_  DWORD ulOptions,\n  _In_        REGSAM samDesired,\n  _Out_       PHKEY phkResult\n);\n</code></pre>\nSo at <pre><code>ESP+8</code></pre> you'll find a pointer to a null-terminated Unicode string (<pre><code>lpSubKey</code></pre>). You can test this out by setting an unconditional breakpoint on RegOpenKeyExW and then using <pre><code>du poi(esp+8)</code></pre> to print the string.\nTo do the next piece – stopping when the value of <pre><code>lpSubKey</code></pre> is equal to some pattern, you can check out MSDN's documentation, which contains an example of doing exactly that. I don't have access to a Windows machine at the moment, but the following should do what you want (adapted from the MSDN example):\n<pre><code>bp advapi32!RegOpenKeyExW \"$$<c:\\\\commands.txt\"\n</code></pre>\nAnd then create <pre><code>c:\\commands.txt</code></pre> with the following contents:\n<pre><code>.if (poi(esp+8) != 0) { as /mu ${/v:SubKey} poi(esp+8) } .else { ad /q ${/v:SubKey} }\n.if ($spat(@\"${SubKey}\", \"Foo*\") == 0)  { gc } .else { .echo SubKey }\n</code></pre>\nYou can replace <pre><code>\"Foo*\"</code></pre> in the above with any valid string wildcard.\nBreaking this down, the first <pre><code>.if</code></pre> sets up an alias named <pre><code>SubKey</code></pre> equal to the contents of the unicode string at <pre><code>esp+8</code></pre>. The second line matches that string against the pattern <pre><code>\"Foo*\"</code></pre>; if it doesn't match, then <pre><code>gc</code></pre> is used to continue execution without stopping. If it does match, <pre><code>.echo SubKey</code></pre> prints out the string, and then breaks.\n",
+            "votes": "13",
+            "user": "Brendan Dolan-Gavitt",
+            "time": "May 1, 2013 at 22:18",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Great answer. I despise the arcane syntax of WinDbg script, but you really nailed it :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Justin Dearing",
+                    "text": "<span class=\"comment-copy\">That's cool. I take it that without access to the headers, there is no way to predict the parameter types, so if I wanted to make a windbg plugin to automate this, I'd need all the header versions.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Brendan Dolan-Gavitt",
+                    "text": "<span class=\"comment-copy\">Yes, unfortunately that's correct. Inside MS they have access to private symbols, which give them the types of arguments. You can sometimes see this because some of the built-in WinDbg extensions fail when run outside of Microsoft...</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@JustinDearing: the book <a href=\"http://undocumented.rawol.com/\" rel=\"nofollow noreferrer\">\"Undocumented Windows 2000 Secrets\" by Sven B. Schreiber</a> IIRC has implemented a scheme which requires a table of \"format strings\" and will then be able to give you the parameters. The book exists now as a free of charge PDF file. Also, I'm tempted to undelete my answer, but then I'm unsure about your exact requirements.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Justin Dearing",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L a friend of mine brought that book to my attention during our <a href=\"https://groups.google.com/forum/#!forum/nynj-winternals-studygroup\" rel=\"nofollow noreferrer\">windows internals study group</a>. I have it downloaded. I will look there. The other option  I was considering was using Rohit's XML which has all the header info.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I have had hands down the best experiences with PaiMei, or in particular PyDbg for these purposes. The book \"Grayhat Python\" brought it to my attention and I decided to give it a try.\nThe script\nHere's a somewhat generic skeleton I've been using in my dynamic analysis (dynamic-analysis) efforts. I have adjusted it so it'll hook the Unicode version of the function you are interested in hooking.\nHowever, the answer may not be spot on, since you can achieve breaking conditionally, but you'll have to add the interactive debugger part to the script. If you wanted to vreak instead of continuing, you'd have to tell the debugger to do just that by modifying the line <pre><code>return DBG_CONTINUE</code></pre>.\n<pre><code>import sys\nimport ctypes\nimport traceback\ntry:\n    from pydbg import *\n    from pydbg.defines import *\n    from utils import hooking\nexcept:\n    print \"ERROR: you need pydbg and utils.hooking from PAIMEI.\"\n    sys.exit(-1)\n\nreg = None\n\nclass reg_pydbg(pydbg):\n    @staticmethod\n    def __getlen(mbi, address):\n        # What's the maximum number of bytes we can read?\n        _maxlen = 64*1024\n        absmaxlen = (mbi.BaseAddress + mbi.RegionSize) - address\n        if absmaxlen > _maxlen:\n            return _maxlen\n        return absmaxlen\n\n    def rootkey_const(self, key):\n        if 0x80000000 == key:\n            return \"HKCR\"\n        elif 0x80000001 == key:\n            return \"HKCU\"\n        elif 0x80000002 == key:\n            return \"HKLM\"\n        elif 0x80000003 == key:\n            return \"HKU\"\n        elif 0x80000004 == key:\n            return \"HKEY_PERFORMANCE_DATA\"\n        elif 0x80000050 == key:\n            return \"HKEY_PERFORMANCE_TEXT\"\n        elif 0x80000060 == key:\n            return \"HKEY_PERFORMANCE_NLSTEXT\"\n        elif 0x80000005 == key:\n            return \"HKEY_CURRENT_CONFIG\"\n        elif 0x80000006 == key:\n            return \"HKEY_DYN_DATA\"\n        elif 0x80000007 == key:\n            return \"HKEY_CURRENT_USER_LOCAL_SETTINGS\"\n        return \"0x%08X\" % (key)\n\n    def readmem(self, address, len = 0):\n        try:\n            mbi = self.virtual_query(address)\n        except:\n            return None, \"%08X <invalid ptr>\" % (address)\n\n        if mbi.Protect & PAGE_GUARD: # no way to display contents of a guard page\n            return None, \"%08X <guard page>\" % (address)\n\n        if 0 == len: # try to make a good guess then\n            len = self.__getlen(mbi, address)\n\n        try:\n            explored = self.read_process_memory(address, len)\n        except:\n            return None, \"%08X <ReadProcessMemory failed>\" % (address)\n\n        return explored, None\n\n    def readstring(self, address, unicodeHint = False, returnNone = False):\n        if 0 == address:\n            if returnNone:\n                return None\n            return \"<nullptr>\"\n\n        explored, retval = self.readmem(address)\n\n        if not explored:\n            if returnNone:\n                return None\n            return retval\n\n        explored_string = None\n\n        if not unicodeHint:\n            explored_string = self.get_ascii_string(explored)\n\n        if not explored_string:\n            explored_string = self.get_unicode_string(explored)\n\n        if not explored_string:\n            explored_string = self.get_printable_string(explored)\n\n        return explored_string\n\ndef exit_RegOpenKeyExW(dbg, args, ret):\n    keyname = dbg.readstring(args[1], True)\n    print \"RegOpenKeyExW(%s, %s, ...) -> %s (%d)\" % (dbg.rootkey_const(args[0]), keyname, ctypes.FormatError(ret), ret)\n    return DBG_CONTINUE\n\nclass reghooks:\n    fct2hook = {\n        \"advapi32.dll\" :\n            {\n            \"RegOpenKeyExW\"                     : { \"args\" : 5, \"entry\" : None, \"exit\" : exit_RegOpenKeyExW },\n            },\n    }\n\n    hooked = {}\n    hookcont = None\n    dbg = None\n\n    def __init__ (self, dbg):\n        self.hookcont = hooking.hook_container()\n        self.hooked = {}\n        self.dbg = dbg\n        dbg.set_callback(LOAD_DLL_DEBUG_EVENT, self.handler_loadDLL)\n\n    def hookByDLL(self, dll):\n        if not dll.name.lower() in self.hooked:\n            for key,value in self.fct2hook.items():\n                if key.lower() == dll.name.lower():\n                    self.hooked[dll.name.lower()] = 1\n                    print \"%s at %08x\" % (dll.name, dll.base)\n                    for func,fctprops in value.items():\n                        entry = None; exit = None; args = 0\n                        if \"entry\" in fctprops and None != fctprops[\"entry\"]:\n                            print \"\\tentry hook \" + func\n                            entry = fctprops[\"entry\"]\n                        if \"exit\" in fctprops and None != fctprops[\"exit\"]:\n                            print \"\\texit hook \" + func\n                            exit = fctprops[\"exit\"]\n                        if \"args\" in fctprops and None != fctprops[\"args\"]:\n                            args = fctprops[\"args\"]\n                        if None != entry or None != exit:\n                            funcaddr = self.dbg.func_resolve(dll.name, func)\n                            self.hookcont.add(self.dbg, funcaddr, args, entry, exit)\n        else:\n            self.hooked[dll.name.lower()] += 1\n        return\n\n    @staticmethod\n    def handler_loadDLL(dbg):\n        global reg\n        dbg.hide_debugger()\n        last_dll = dbg.get_system_dll(-1)\n        reg.hookByDLL(last_dll)\n        return DBG_CONTINUE\n\ndef main():\n    dbg = reg_pydbg()\n    dbg.load(\"C:\\\\Windows\\\\regedit.exe\")\n    global reg\n    reg = reghooks(dbg)\n    dbg.run()\n\nif __name__ == \"__main__\":\n    main()\n</code></pre>\nExample output\n<pre><code>>C:\\Python26\\python.exe hookreg.py\nadvapi32.dll at 75840000\n        exit hook RegOpenKeyExW\nRegOpenKeyExW(HKCU, Software\\Microsoft\\Windows\\CurrentVersion\\Applets\\Regedit, ...) -> The operation completed successfully. (0)\nRegOpenKeyExW(HKLM, SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontLink\\SystemLink, ...) -> The operation completed successfully. (0)\nRegOpenKeyExW(HKLM, SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\LanguagePack\\DataStore_V1.0, ...) -> The operation completed successfully. (0)\nRegOpenKeyExW(HKLM, SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\LanguagePack\\SurrogateFallback, ...) -> The operation completed successfully. (0)\n</code></pre>\nExplanation\nThe important parts are:\n<pre><code>\"RegOpenKeyExW\" : { \"args\" : 5, \"entry\" : None, \"exit\" : exit_RegOpenKeyExW },\n</code></pre>\nand the function <pre><code>exit_RegOpenKeyExW</code></pre>. You could also modify the above to hook only upon entry <pre><code>RegOpenKeyExW</code></pre> instead of upon exit or to do both. Depends on what you want to achieve.\nI have used this method to decode buffers (<pre><code>SCSI_PASS_THROUGH_DIRECT</code></pre> and <pre><code>SCSI_PASS_THROUGH</code></pre>) sent via <pre><code>DeviceIoControl</code></pre>, so the above is by far not the most complex thing you can do.\nOn another note, I have also hooked stuff like opening files (or registry keys) and kept lists of the returned handles along with the string form of what they are. This way I could implement quite complex human-readable logging scenarios.\nRationale\nThe reason stuff like the nested dictionary exists is so that it can be easily extended to hook whatever function from whatever DLL I please. Of course it could be hardcoded as well, but I have had scenarios where I was hooking dozens of functions.\n",
+            "votes": "5",
+            "user": "0xC0000022L",
+            "time": "May 2, 2013 at 13:52",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "With OllyDbg you can do it like this \n<pre><code>F:\\odbg110>regedit & tasklist /fi \"imagename eq rege*\"\n\nImage Name                   PID Session Name     Session#    Mem Usage\n========================= ====== ================ ======== ============\nregedit.exe                 2820 Console                 0      2,512 K\n\nF:\\odbg110>ollydbg -P 2820\n\nF:\\odbg110>\n</code></pre>\nIn OllyDbg hit Alt+g (goto) type <pre><code>advapi32.RegOpenKeyExW</code></pre> and hit Enter. If you are on Windows XP SP3 it should look something like this:\n<pre><code>77DD6AAF ADVAPI32.RegOpenKeyExW U>/$  8BFF          MOV     EDI, EDI\n</code></pre>\nHit Ctrl+F4 (conditional log breakpoint)\nIn the \"condition\" edit box enter say (no wild cards needs a valid escaped pattern)\n<pre><code>UNICODE [[esp+8]]  ==  \"system\\\\CurrentControlSet\\\\Services\\\\Beep\" \n</code></pre>\nIn the \"explanation\" edit box enter any explanation you want like \n<pre><code>log RegOpenKeyExW subkey\n</code></pre>\nIn the expression edit box enter\n<pre><code>[esp+8]\n</code></pre>\nIn the \"Decode Value\" select \"pointer to Unicode string\"\n<pre><code>pause program on condition\nlog value of expression always\nlog function arguments on condition \n</code></pre>\n(all of this can be done without pausing the debuggee) (dynamic break insertions)\nNow go to <pre><code>regedit</code></pre> and play with it a little and select the \"Beep Service\"\nOllyDbg will break and will have the function arguments logged too; and you will have all other strings logged too without pause, like below\n<pre><code>Log data\nAddress    Message\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswMonFlt\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswRdr\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswRvrt\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswSnx\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswSP\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswTdi\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\aswVmm\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\avast! Antivirus\"\n77DD6AAF   COND: log reop Subkey = 0007FBC8 \"SYSTEM\\CurrentControlSet\\Services\\Beep\"\n77DD6AAF   CALL to RegOpenKeyExW from regedit.01008B23\n             hKey = HKEY_LOCAL_MACHINE\n             Subkey = \"SYSTEM\\CurrentControlSet\\Services\\Beep\"\n             Reserved = 0\n             Access = 2000000\n             pHandle = regedit.01019098\n77DD6AAF   Conditional breakpoint at ADVAPI32.RegOpenKeyExW\n</code></pre>\n",
+            "votes": "4",
+            "user": "0xC0000022L",
+            "time": "May 5, 2013 at 2:13",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">please use <a href=\"http://reverseengineering.stackexchange.com/editing-help\">the formatting properly</a>. Both your answers so far had horrible formatting issues in their original form.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Download Rohitab's API Monitor and set the API capture filter on just RegOpenKeyEx. Below are just example screenshots of how it works and the information it provides.\nFrom what you described, this should do exactly what you need.\n",
+            "votes": "3",
+            "user": "Mick",
+            "time": "May 1, 2013 at 21:14",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Justin Dearing",
+                    "text": "<span class=\"comment-copy\">This does show me the parameter values. However, it does not let me conditionally break based on them. My problem is the app is constantly reading many registry values. I only care when it reads certain ones.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mick",
+                    "text": "<span class=\"comment-copy\">Correct, conditional breakpoints are not currently supported. FWIW, the author mentioned on the site's forums that he plans to add that to an upcoming release.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mick",
+                    "text": "<span class=\"comment-copy\">Additionally, API Monitor does allow you to search through the captured API data. While not exactly what you are looking for (conditional breakpoints), a little bit of CTRL+F and F3 will get you there.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Although it doesn't support breakpoints, Process Monitor is an excellent tool to monitor registry access. Using Filters you can easily choose which keys you want to include, exclude, highlight etc. It also allows you to view the stack trace of any event.\n\nProcess Monitor is an advanced monitoring tool for Windows that shows\n  real-time file system, Registry and process/thread activity. It\n  combines the features of two legacy Sysinternals utilities, Filemon\n  and Regmon, and adds an extensive list of enhancements including rich\n  and non-destructive filtering, comprehensive event properties such\n  session IDs and user names, reliable process information, full thread\n  stacks with integrated symbol support for each operation, simultaneous\n  logging to a file, and much more. Its uniquely powerful features will\n  make Process Monitor a core utility in your system troubleshooting and\n  malware hunting toolkit.\n",
+            "votes": "2",
+            "user": "Remko",
+            "time": "May 15, 2013 at 12:46",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Justin Dearing",
+                    "text": "<span class=\"comment-copy\">I do use ProcessMonitor.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

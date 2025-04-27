@@ -1,0 +1,52 @@
+{
+  "title": "What does state mean in unwinding?",
+  "link": "https://reverseengineering.stackexchange.com/questions/24811/what-does-state-mean-in-unwinding",
+  "content": "I'm looking at UnwindMapEntry. Here is it's declaration:\n\n```\n//\n// UnwindMapEntry - Description of each state transition for unwinding\n//  the stack (i.e. calling destructors).\n//\n// The unwind map is an array, indexed by current state.  Each entry specifies\n// the state to go to during unwind, and the action required to get there.\n// Note that states are represented by a signed integer, and that the 'blank'\n// state is -1 so that the array remains 0-based (because by definition there\n// is never any unwind action to be performed from state -1).  It is also\n// assumed that state indices will be dense, i.e. that there will be no gaps of\n// unused state indices in a function.\n//\n\ntypedef const struct _s_UnwindMapEntry {\n    __ehstate_t toState;                    // State this action takes us to\n#if _EH_RELATIVE_FUNCINFO\n    int         action;                     // Image relative offset of funclet\n#else\n    void        (__cdecl * action)(void);   // Funclet to call to effect state change\n#endif\n} UnwindMapEntry;\n\n```\nSorry if it's obvious for you but what does toState means? It is not clear for me by reading the description above.\n\nAlso there is this structure for a tryblockmaprntry which is also involved somehow:\n\n```\n//\n// HandlerMapEntry - associates a handler list (sequence of catches) with a\n//  range of eh-states.\n//\ntypedef const struct _s_TryBlockMapEntry {\n    __ehstate_t     tryLow;             // Lowest state index of try\n    __ehstate_t     tryHigh;            // Highest state index of try\n    __ehstate_t     catchHigh;          // Highest state index of any associated catch\n    //....\n\n```\nWhat's catchHigh - is it always tryHigh + 1?\n\nOK It seems the catchHigh is continuing the state inside the catch block - because you can have exception there too. But still I don't see it's purpose - like when this field makes any difference.\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "429",
+  "tags": [
+    "x86",
+    "seh",
+    "msvc"
+  ],
+  "user": "rec",
+  "time": "May 3, 2020 at 15:04",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "the __ehstate_t type is defined as int. toState is the index of the next handler in the array that needs to be unwind.\n\nAction is the operation that needs to be done in order to reach the next state (the value of toState). This happens until toState reaches -1, which is the \"blank\" state that ends the unwinding process.\n\nThe state is incremented by one every time you enter a try block or otherwise create an object that must be destructed in the unwinding process if an exception is thrown before the program called its destructor.\n\nExample:\n\nSay there is a function int F1(){}\n\nAt the beginning of the function, the state for the current scope is -1 as there are no actions to take if an exception occurs.\n\nSomewhere after the beginning of F1 an object of type ClassA is created. This calls the constructor ClassA::ClassA(). At this point if an exception is thrown, there is a ClassA object that needs to be deleted before the catch block is called. The initialization of the object incremented the state to 0.\n\nNow comes a try block - the state is now 1. Should an exception be thrown here, the handler will have to leave the try block (state->0) and call ClassA::~ClassA() on the object that was created before (state->-1). If the execution reaches the end of the try block an no exception occurred, the state is decremented (state->0 again).\n\ntryLow is the target outmost state that a handler must get to before it calls the catch block. In our example, when entering the try block (state = 1), the tryLow value will be -1. The handler will have to get to state -1, that is, leaving the try block and calling ClassA::~ClassA() and only then call the catch block.\n\nFor reverse engineering purposes, there is a great post at OpenRCE:\n\nhttp://www.openrce.org/articles/full_view/21\n\n",
+      "votes": "4",
+      "user": "Yotamz",
+      "time": "Apr 24, 2020 at 15:15",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "rec",
+          "text": "Can you elaborate with an example algorithm of how it's done. Also if possible to include tryLow, tryLow and catchHigh. In the meantime I'll be continuing to try to understand this myself by looking into the msvct crt sources.",
+          "time": null
+        },
+        {
+          "user": "Yotamz",
+          "text": "Edited my answer.",
+          "time": null
+        },
+        {
+          "user": "rec",
+          "text": "Also there is sometime a filler of UnwindMapEntry <-1, 0> - any ideas what that is for?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@rec: that's for empty transitions in the state machine (nothing to destruct).",
+          "time": null
+        },
+        {
+          "user": "Yotamz",
+          "text": "I guess this is a representation of the relevant UnwindMapEntry with a toState (-1) and an action function pointer (NULL).",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

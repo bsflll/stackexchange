@@ -1,0 +1,36 @@
+{
+    "title": "How to View the Address Referenced by QWORD PTR",
+    "link": "https://reverseengineering.stackexchange.com/questions/17755/how-to-view-the-address-referenced-by-qword-ptr",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm following a tutorial to get a better understanding of how things are passed around through stack frames, but they're working on a x86 system and I'm on x64. </p>\n<p>when they've reached the step</p>\n<pre><code>   sub    esp, 0x10\n=&gt; mov    eax, DWORD PTR [ebp+0xC]\n   add    eax, 0x4\n</code></pre>\n<p>They're able to see the address the pointer is pointing to. Checking the value, they get the address</p>\n<pre><code>0xbffff6d6\n</code></pre>\n<p>Then running x/s on that address returns the string value, which in this case should be the location of the program '/root/Desktop/00byte'</p>\n<p>Where things are different for me is on x64 my instructions say</p>\n<pre><code>   sub    rsp, 0x10\n   mov    DWORD PTR [rbp-0x4], edi\n   mov    QWORD PTR [rbp-0x10], rsi\n=&gt; mov    rax, QWORD PTR [rbp-0x10]\n   add    rax, 0x8\n</code></pre>\n<p>We've both assembled the same code and set our breakpoints on the same line, but on different platforms and I wanted to know how I'd be able to get the address from this point. I had assumed running</p>\n<pre><code>x/x $rax\n</code></pre>\n<p>would return the address of the pointer but instead it returns </p>\n<pre><code>0x55\n</code></pre>\n<p>Am I wrong to think the address of the pointer is stored in rax at this point? And if so, how would I get the address from this point.</p>\n<p>I can provide more information if needed. We're both using gcc to compile and gdb to debug and using the same arguments when building the program.</p>\n<p>I also tried checking the value in $rbp-16 but that only returns:</p>\n<pre><code>0xa8\n</code></pre>\n<p>So I'm not sure where the address is stored at this point in a way that I could examine based on the instructions I have.</p>\n<p>*here's the code, we both put our breakpoints after the line where main() is declared:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;string.h&gt;\nvoid echo(char *message)\n{\nchar buffer[100];\nstrcpy(buffer,message);\nprintf(buffer);\n}\nint main(int argc, char *argv[])\n{\necho(argv[1]);\n}\n</code></pre>\n<p>an argument is passed to the program and I'm observing how that argument moves through the stack.</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "assembly"
+    ],
+    "user": "sanigirl",
+    "time": "Mar 21, 2018 at 3:55",
+    "comments": [
+        {
+            "user": "arrowd",
+            "text": "<span class=\"comment-copy\">This argument gets passed via register. Take a look at x64 calling conventions.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><strong>[ebp+0x0c]</strong> is an argument to the function<br/>\n<strong>[rbp-0x10]</strong> is a local to the function   </p>\n<p>so first of all you are comparing different things</p>\n<p>i assume you are on the main() function because your echo function() takes only one argument so you cant refer a valid argument with [ebp+0xc] in that case  </p>\n<p>if you are on main then [ebp+0x0c] is <strong>char  **argv</strong> </p>\n<p>i am on windbg and i can get it like </p>\n<pre><code>0:000&gt; da  @@c++(*(char **)argv)\n004e8ac0  \"x86.exe\"\n</code></pre>\n<p>you are on gdb it appears and you can use x/s *(char **)argv or may be (ebp+0xc) \nplay with it </p>\n<p>the diassembly of the function main would be similar to (disassemble main in gdb instead of uf .)</p>\n<pre><code>0:000&gt; uf .\n    9 00f91040 55              push    ebp\n    9 00f91041 8bec            mov     ebp,esp\n   10 00f91043 b804000000      mov     eax,4\n   10 00f91048 c1e000          shl     eax,0\n   10 00f9104b 8b4d0c          mov     ecx,dword ptr [ebp+0Ch] &lt;&lt;&lt; (char **)argv\n   10 00f9104e 8b1401          mov     edx,dword ptr [ecx+eax] &lt;&lt;&lt;&lt;&lt;&lt;&lt;\nargv[1] pointer arithmetic ecx = 4 same as your add eax,4\n   10 00f91051 52              push    edx\n   10 00f91052 e8a9ffffff      call    x86!echo (00f91000)\n   10 00f91057 83c404          add     esp,4\n   11 00f9105a 33c0            xor     eax,eax\n   11 00f9105c 5d              pop     ebp\n   11 00f9105d c3              ret\n</code></pre>\n<p>the function echo needs the first argument passed to the binary  </p>\n<pre><code>0:000&gt; ?? (char *)argv[0]\nchar * 0x00258b4c\n \"x86.exe\"\n0:000&gt; ?? (char *)argv[1]\nchar * 0x00258b54\n \"this is the first argument passed saniboy\"\n</code></pre>\n<p>which incidentally you can also print with x/s in gdb  </p>\n<pre><code>0:000&gt; da /c 100 @edx\n00258b54  \"this is the first argument passed saniboy\"\n</code></pre>\n<p>the same code compiled for x64 and disassembled main as follows</p>\n<pre><code>0:000&gt; uf x64!main\n\n    9 00000001`40001060 4889542410      mov     qword ptr [rsp+10h],rdx\n    9 00000001`40001065 894c2408        mov     dword ptr [rsp+8],ecx\n    9 00000001`40001069 4883ec28        sub     rsp,28h\n   10 00000001`4000106d b808000000      mov     eax,8\n   10 00000001`40001072 486bc001        imul    rax,rax,1\n   10 00000001`40001076 488b4c2438      mov     rcx,qword ptr [rsp+38h]\n   10 00000001`4000107b 488b0c01        mov     rcx,qword ptr [rcx+rax]\n   10 00000001`4000107f e87cffffff      call    x64!echo (00000001`40001000)\n   11 00000001`40001084 33c0            xor     eax,eax\n   11 00000001`40001086 4883c428        add     rsp,28h\n   11 00000001`4000108a c3              ret\n</code></pre>\n<p>x64 passes first 4 arguments via registers and does not use stack for passing arguments </p>\n<p>you can find a similar document to this microsoft specific document on <a href=\"https://msdn.microsoft.com/en-us/library/zthk2dkh.aspx\" rel=\"nofollow noreferrer\">passing parameters</a></p>\n<p>so your first argument will be in rcx  </p>\n<p>x/s $rcx </p>\n<p>you cannot go and compare line by line they wont match </p>\n</div>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Mar 21, 2018 at 4:41",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "sanigirl",
+                    "text": "<span class=\"comment-copy\">Thank you for this explanation! I know I'm late on the response+accepting the answer so apologies for that. I've learned a lot since I posted this question and your answer makes complete sense now. It seems overwhelming at first but once you get used to reading it it's not so bad!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

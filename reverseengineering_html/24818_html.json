@@ -1,0 +1,53 @@
+{
+    "title": "What code produces FuncInfoV1 with zero TryBlocks and zero UnwindMap?",
+    "link": "https://reverseengineering.stackexchange.com/questions/24818/what-code-produces-funcinfov1-with-zero-tryblocks-and-zero-unwindmap",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Topic is C++ exceptions internal representation in WIndows x86 binaries compiled with msvc.\n </p>\n <p>\n  I've found a code that straight up doesn't have nothing (all fields of\n  <code>\n   FuncInfo\n  </code>\n  zero) except the\n  <code>\n   EHFlags\n  </code>\n  set to 5.\n </p>\n <p>\n  Here is the dissasembly:\n </p>\n <pre><code>.text:00407010 ; Attributes: bp-based frame\n.text:00407010\n.text:00407010 ; int __cdecl std::_Deallocate<8,0>(void *block, unsigned int __formal)\n.text:00407010 ??$_Deallocate@$07$0A@@std@@YAXPAXI@Z proc near\n.text:00407010                                         ; CODE XREF: std::_Deallocate<8,0>(void *,uint)↑j\n.text:00407010\n.text:00407010 var_C           = dword ptr -0Ch\n.text:00407010 block           = dword ptr  8\n.text:00407010 __formal        = dword ptr  0Ch\n.text:00407010\n.text:00407010 ; FUNCTION CHUNK AT .text:00458370 SIZE 0000001B BYTES\n.text:00407010\n.text:00407010 ; __unwind { // ??$_Deallocate@$07$0A@@std@@YAXPAXI@Z_SEH\n.text:00407010                 push    ebp\n.text:00407011                 mov     ebp, esp\n.text:00407013                 push    0FFFFFFFFh\n.text:00407015                 push    offset ??$_Deallocate@$07$0A@@std@@YAXPAXI@Z_SEH\n.text:0040701A                 mov     eax, large fs:0\n.text:00407020                 push    eax\n.text:00407021                 mov     eax, ___security_cookie\n.text:00407026                 xor     eax, ebp\n.text:00407028                 push    eax\n.text:00407029                 lea     eax, [ebp+var_C]\n.text:0040702C                 mov     large fs:0, eax\n.text:00407032                 cmp     [ebp+__formal], 1000h\n.text:00407039                 jb      short loc_40704B\n.text:0040703B                 lea     eax, [ebp+__formal]\n.text:0040703E                 push    eax             ; unsigned int *\n.text:0040703F                 lea     ecx, [ebp+block]\n.text:00407042                 push    ecx             ; void **\n.text:00407043                 call    j_?_Adjust_manually_vector_aligned@std@@YAXAAPAXAAI@Z ; std::_Adjust_manually_vector_aligned(void * &,uint &)\n.text:00407048                 add     esp, 8\n.text:0040704B\n.text:0040704B loc_40704B:                             ; CODE XREF: std::_Deallocate<8,0>(void *,uint)+29↑j\n.text:0040704B                 mov     edx, [ebp+__formal]\n.text:0040704E                 push    edx             ; __formal\n.text:0040704F                 mov     eax, [ebp+block]\n.text:00407052                 push    eax             ; block\n.text:00407053                 call    j_??3@YAXPAXI@Z ; operator delete(void *,uint)\n.text:00407058                 add     esp, 8\n.text:0040705B                 mov     ecx, [ebp+var_C]\n.text:0040705E                 mov     large fs:0, ecx\n.text:00407065                 pop     ecx\n.text:00407066                 mov     esp, ebp\n.text:00407068                 pop     ebp\n.text:00407069                 retn\n.text:00407069 ; } // starts at 407010\n.text:00407069 ??$_Deallocate@$07$0A@@std@@YAXPAXI@Z endp\n</code></pre>\n <p>\n  And the\n  <code>\n   FuncInfo\n  </code>\n  data is:\n </p>\n <pre><code>FuncInfo <19930522h, 0, 0, 0, 0, 0, 0, 0, 5>\n</code></pre>\n <p>\n  Here is the code snippet straight up from CRT source files(xmemory):\n </p>\n <pre><code>//template <size_t _Align>\nvoid _Deallocate(void* _Ptr, size_t _Bytes) noexcept {\n    // deallocate storage allocated by _Allocate when !_HAS_ALIGNED_NEW || _Align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__\n#if defined(_M_IX86) || defined(_M_X64)\n    if (_Bytes >= std::_Big_allocation_threshold) { // boost the alignment of big allocations to help autovectorization\n        std::_Adjust_manually_vector_aligned(_Ptr, _Bytes);\n    }\n#endif // defined(_M_IX86) || defined(_M_X64)\n\n    ::operator delete(_Ptr, _Bytes);\n}\n</code></pre>\n <p>\n  I tried tinkering with it  and I found that that the main cause for the weird FuncInfo in that case is the call to\n  <code>\n   std::_Adjust_manually_vector_aligned\n  </code>\n  which is defined in the same file as:\n </p>\n <pre><code>// FUNCTION TEMPLATE _Adjust_manually_vector_aligned\ninline void _Adjust_manually_vector_aligned(void*& _Ptr, size_t& _Bytes) {\n    // adjust parameters from _Allocate_manually_vector_aligned to pass to operator delete\n    _Bytes += _Non_user_size;\n\n    const uintptr_t* const _Ptr_user = reinterpret_cast<uintptr_t*>(_Ptr);\n    const uintptr_t _Ptr_container   = _Ptr_user[-1];\n\n    // If the following asserts, it likely means that we are performing\n    // an aligned delete on memory coming from an unaligned allocation.\n    _STL_ASSERT(_Ptr_user[-2] == _Big_allocation_sentinel, \"invalid argument\");\n\n    // Extra paranoia on aligned allocation/deallocation; ensure _Ptr_container is\n    // in range [_Min_back_shift, _Non_user_size]\n#ifdef _DEBUG\n    constexpr uintptr_t _Min_back_shift = 2 * sizeof(void*);\n#else // ^^^ _DEBUG ^^^ // vvv !_DEBUG vvv\n    constexpr uintptr_t _Min_back_shift = sizeof(void*);\n#endif // _DEBUG\n    const uintptr_t _Back_shift = reinterpret_cast<uintptr_t>(_Ptr) - _Ptr_container;\n    _STL_VERIFY(_Back_shift >= _Min_back_shift && _Back_shift <= _Non_user_size, \"invalid argument\");\n    _Ptr = reinterpret_cast<void*>(_Ptr_container);\n}\n</code></pre>\n <p>\n  This is far as I went into this.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "365",
+    "tags": [
+        "x86",
+        "decompilation",
+        "seh",
+        "msvc"
+    ],
+    "user": "rec",
+    "time": "Apr 25, 2020 at 14:50",
+    "comments": [
+        {
+            "user": "rec",
+            "text": "<html><body><span class=\"comment-copy\">\n Also btw I found a case where there is no unwind table either. Mind blown.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n If you add it to the question (with code) I’ll reopen it.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "rec",
+            "text": "<html><body><span class=\"comment-copy\">\n Related\n <a href=\"https://reverseengineering.stackexchange.com/questions/23024/vc-6-c-exception-handling-ntryblocks-0-ptryblockmap-0-howwhy\">\n  asks for zero unwind map\n </a>\n . Here we ask for zero unwind and zero tryblockmap.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n yes, so I reopened it\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "rec",
+            "text": "<html><body><span class=\"comment-copy\">\n Yes I know but I made the other question appear in the linked tab. So other people can see it too.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So,\n  <code>\n   EHFlags\n  </code>\n  bits are defined as follows (see\n  <code>\n   ehdata_values.h\n  </code>\n  ):\n </p>\n <pre><code>#define FI_EHS_FLAG             0x00000001\n#define FI_DYNSTKALIGN_FLAG     0x00000002\n#define FI_EHNOEXCEPT_FLAG      0x00000004\n</code></pre>\n <p>\n  i.e. 5 is\n  <code>\n   FI_EHS_FLAG|FI_EHNOEXCEPT_FLAG\n  </code>\n </p>\n <p>\n  In\n  <code>\n   crt\\src\\vcruntime\\frame.cpp\n  </code>\n  we can find this snippet:\n </p>\n <pre><code>auto tryBlockMap = T::TryBlockMap(pFuncInfo, pDC);\nif (tryBlockMap.getNumTryBlocks() != 0\n    //\n    // If the function has no try block, we still want to call the\n    // frame handler if there is an exception specification\n    //\n    || (T::getMagicNum(pFuncInfo) >= EH_MAGIC_NUMBER2 && (T::getESTypes(pFuncInfo) != nullptr))\n    || (T::getMagicNum(pFuncInfo) >= EH_MAGIC_NUMBER3 && (T::isNoExcept(pFuncInfo) != 0)))\n{\n</code></pre>\n <p>\n  It seems the comment is a little outdated and should read \"if there is an exception specification\n  <em>\n   or noexcept specified\n  </em>\n  \".\n </p>\n <p>\n  From\n  <a href=\"https://en.cppreference.com/w/cpp/language/noexcept_spec\" rel=\"nofollow noreferrer\">\n   cppreference\n  </a>\n  :\n </p>\n <blockquote>\n  <p>\n   Non-throwing functions are permitted to call potentially-throwing\n  functions. Whenever an exception is thrown and the search for a\n  handler encounters the outermost block of a non-throwing function, the\n  function std::terminate is called.\n  </p>\n </blockquote>\n <p>\n  So it seems the otherwise empty FuncInfo is used here as a flag to mark a\n  <code>\n   noexcept\n  </code>\n  function so if an exception does happen after all, the program is properly terminated.\n </p>\n <p>\n  Here's a small sample which produces such FuncInfo:\n </p>\n <pre><code>int f() noexcept\n{\n    static const int arr[5] = {1,2,3,4,6};\n    for (int i = 0; i < sizeof(arr)/sizeof(*arr); i++)\n    {\n        std::cout << arr[i] << std::endl;\n    }\n\n    return 0;\n}\n\nint main()\n{\n return f();\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "May 4, 2020 at 11:40",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

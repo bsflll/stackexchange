@@ -1,0 +1,31 @@
+{
+    "title": "Undefined instruction in Go binary compiled for ARM",
+    "link": "https://reverseengineering.stackexchange.com/questions/17665/undefined-instruction-in-go-binary-compiled-for-arm",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm reverse engineering an ARM binary written in Go, and the following code sequence occurs fairly often (from <em>runtime.cgoIsGoPointer</em>):</p>\n<pre><code>BL  runtime.panicindex\nDCD 0xF7FABCFD\n</code></pre>\n<p>or, from <em>runtime.panicmem</em>:</p>\n<pre><code>BL  runtime.gopanic\nDCD 0xF7FABCFD\n</code></pre>\n<p>0xF7FABCFD is an undefined instruction, so I'm curious what it's purpose is.  I think the answer may be related to <a href=\"https://stackoverflow.com/questions/11140136/whats-the-purpose-of-the-ud2-opcode-in-the-linux-kernel\">this question</a>, because compiling for x86 produces the following sequence of instructions in the corresponding functions:</p>\n<pre><code>callq runtime.panicindex\nud2\n</code></pre>\n<p>and</p>\n<pre><code>callq runtime.gopanic\nud2\n</code></pre>\n<p>It looks like the linux kernel uses different instructions for this purpose.  From <a href=\"https://elixir.bootlin.com/linux/v4.14.26/source/arch/arm/include/asm/bug.h#L9\" rel=\"nofollow noreferrer\">arch/arm/include/asm/bug.h</a>:</p>\n<pre><code>/*\n * Use a suitable undefined instruction to use for ARM/Thumb2 bug handling.\n * We need to be careful not to conflict with those used by other modules and\n * the register_undef_hook() system.\n */\n#ifdef CONFIG_THUMB2_KERNEL\n#define BUG_INSTR_VALUE 0xde02\n#define BUG_INSTR(__value) __inst_thumb16(__value)\n#else\n#define BUG_INSTR_VALUE 0xe7f001f2\n#define BUG_INSTR(__value) __inst_arm(__value)\n#endif\n</code></pre>\n<p>But there is reference to 0xf7fabcfd in some of the Go internals.  From <a href=\"https://golang.org/src/cmd/internal/obj/arm/asm5.go#L2744\" rel=\"nofollow noreferrer\">cmd/internal/obj/arm/asm5.go</a>:</p>\n<pre><code>// This is supposed to be something that stops execution.\n// It's not supposed to be reached, ever, but if it is, we'd\n// like to be able to tell how we got there. Assemble as\n// 0xf7fabcfd which is guaranteed to raise undefined instruction\n// exception.\ncase 96: /* UNDEF */\n        o1 = 0xf7fabcfd\n</code></pre>\n<p>Anyway, can anyone confirm this suspicion and/or shed more light into why this is done?  Also, why not just use 0xe7f001f2 like the linux kernel does?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "740",
+    "tags": [
+        "disassembly",
+        "arm"
+    ],
+    "user": "recvfrom",
+    "time": "Mar 12, 2018 at 16:05",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The (32-bit) ARM architecture has a instruction with opcode <code>UDF</code> whose encodings are guaranteed to be permanently undefined.\nThere are 3 encodings of this instructions one each for Thumb, Thumb-2, and ARM.\nIn hex these are -</p>\n<pre><code>Thumb   0xDE**       \nThumb2  0xF7F*A***   \nARM     0xE7F***F*   \n*'s are ignored by the processor so can be any value.\n</code></pre>\n<p>There is also another ARM encoding that the architecture guarantees to be permanently undefined, albeit without giving it an opcode.  This is -</p>\n<pre><code>ARM     0x*7F***F*\n*'s are ignored by the processor so can be any value.\n</code></pre>\n<p>(Note that the <code>UDF</code> instruction is a special case of this encoding with the condition bits set to <code>AL</code> or <code>1110</code>.)</p>\n<p>The Linux code you quote is using the UDF opcode encodings for Thumb and ARM. </p>\n<p>The Go code is using the ARM encoding which doesn't have an opcode.</p>\n<p>Given the <code>*</code> bits are ignored by the processor and can be picked at the programmer's discretion, I would expect someone to choose their own values rather than spend time trying to find where other people have used the instruction any picking the same values as them.</p>\n<p>Indeed, the Linux code you quote explicitly explains that the value was chosen to avoid conflicts with other deliberate uses of undefined instructions with Linux's undefined instruction hook mechanism.  So, if the Go authors were aware of the Linux usage here, I'd still expect them to choose different values.</p>\n</div>",
+            "votes": "1",
+            "user": "Ian Cook",
+            "time": "Mar 16, 2018 at 20:06",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "recvfrom",
+                    "text": "<span class=\"comment-copy\">That makes sense - so, a unique undefined instruction is desirable because it's effectively a marker noting what body of code wanted to indicate that an error occurred (and if the Go code shared the same undefined instruction as is used by BUG_INSTR, it'd be more difficult to distinguish between errors raised by either.)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

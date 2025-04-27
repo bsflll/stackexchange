@@ -1,0 +1,85 @@
+{
+  "title": "Is there a method for \"guessing\" the addresses for unknown areas in bare metal firmware binaries?",
+  "link": "https://reverseengineering.stackexchange.com/questions/16612/is-there-a-method-for-guessing-the-addresses-for-unknown-areas-in-bare-metal-f",
+  "content": "Imagine this:\n\nYou have a binary for a piece of ARM firmware. You are nearly 100% it is ARM, and that it runs on the bare metal. You obtained this firmware from a manufacturers update page. \n\nHowever, you are uncertain of the exact model of chip the binary is intended for. You are unable to find the developer's guide or spec sheet for the chip. \n\nThe binary has no known headers, and research suggests that it is not compressed or encrypted. The large section of strings at the bottom of the binary suggests it is a single flat binary file, and not several records compressed together. There are no indications of a file system. \n\nYou should reasonably be able to disassemble the code but a few factors are missing to prevent you from retrieving control-flow, and creating a sensical disassembly. \n\n1) You do not know where the initial entry point is. \n2) You do not know if there is a ram section, and what address it might start and end at. \n3) You do not know if there is a rom section, and what address it might start and end at.  \n\nGiven these, or similar circumstances, how might a reverse engineer deduce the initial entry point, and location/size of areas like ROM? \n\nI imagine detecting reads and writes from a memory mapped chip of some sort would be possible to infer from a valid disassembly, just by highlighting common memory regions which are frequently referenced, and classifying them into sections. I am hoping someone has come up with an automated method for this sort of analysis. \n\nE.G \n\n\"The range 0x7-0x9 is frequently referenced. It may be ROM. The highest address is 0x7998, the area appears to occupy 8 Mbs.\" \n\nThe other area, identifying the entry point, has stumped me so far. Without the documentation for the chip is it possible to infer the initial entry point of the code? This is especially frustrating on chips where the bootloader appears to be stored in ROM separate from the main firmware. \n\nCan the structure of such a firmware image be implied without developer documentation?  \n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "disassembly",
+    "firmware"
+  ],
+  "user": "MrSynAckSter",
+  "time": "Oct 24, 2017 at 5:08",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "What I usually do: \n\nNow you have two lists of address differences, if you find a sequence of consecutive differences which is in both lists, you have found your base address.\n\nThis works most of the time, but you can run in to the problem that both lists may be incomplete. For instance the address list will not have absolute pointers for each function, or maybe you disassembled some functions incorrectly. Maybe you will have better luck focussing on the string addresses.\n\nI usually do this list matching by hand, in vim using regex searches. On some occasions I have written small scripts to help finding a match. ... but i can't find those right now, i will update my post if i find them again.\n\nThe firmware file being discussed: DVDO Matrix6 Firmware 01.01 from dvdo.\n\nI took a look at other binaries from the same site, and found references to the LPC1758 - an ARM based chip.\n\nIndeed IDA does not immediately recognize the binary. The reason is that this binary has only Thumb instructions. IDA expects arm binaries to start with ARM32 code.\nThumb code can be recognised from a hex dump by the presence of byte sequences like 70 47 (BX LR), 00 bf (NOP), *0 b5 (PUSH {...}\n\nSo after changing the segment type T to 1 using Alt-G. I could disassemble the file.\n\nFinding the offset:\n\nThese two commands will generate a list of dwords occurring in the file, and a list of strings occurring in the file:\n\n```\nod -Ax -t x4 Matrix6_Version_01/M6FW0101.BIN | perl -pe 's/^\\w+\\s+//' | tr \" \" \"  \n\" | sort|uniq  > dwordlist.txt\nstrings -10 -o -t x \"Matrix6_Version_01/M6FW0101.BIN\" > stringlist.txt\n\n```\nNow look at the first real text in the stringlist:\n\n```\n28eaa pGSAC Initiation task finished\n28eca SAC Audio Format Discovery task finished\n28ef4 SAC volume has changed\n28f0c Audio System Logical Address not assigned\n28f37 CBUS MUTE received\n28f4b CBUS UN-MUTE received\n28f62 CBUS VOL UP received\n28f78 CBUS VOL DOWN received\n\n```\nYou may notice that the first 2 characters of the first string, pG is actually a 70 47 or BX LR instruction.\n\nNow i would load both files in Vim, and in both run this vim-perl script:\n\n```\n:perldo s/^\\w+/($x,$p)=(hex($&),$x); sprintf(\"%s(%8x)\", $&, $x-$p)/e\n\n```\nThis will lead to a string list looking partially like this:\n\n```\n28eaa(    25dd) pGSAC Initiation task finished\n28eca(      20) SAC Audio Format Discovery task finished\n28ef4(      2a) SAC volume has changed\n28f0c(      18) Audio System Logical Address not assigned\n28f37(      2b) CBUS MUTE received\n28f4b(      14) CBUS UN-MUTE received\n28f62(      17) CBUS VOL UP received\n28f78(      16) CBUS VOL DOWN received\n\n```\nnow, skipping the first two, because of the incorrect pG start, I search in dwordlist.txt, for consecutive lines with respectively 2a, 18 and 2b, using this regex search:\n\n```\n/ 2a)  \n.* 18)  \n.* 2b)\n\n```\nThis leads me to the following lines matching in both files:\n\n```\n0002ebc3(      80)\n0002eeac(     2e9)       28eaa(    25dd) pGSAC Initiation task finished\n0002eeca(      1e)       28eca(      20) SAC Audio Format Discovery task finished\n0002eef4(      2a)       28ef4(      2a) SAC volume has changed\n0002ef0c(      18)       28f0c(      18) Audio System Logical Address not assigned\n0002ef37(      2b)       28f37(      2b) CBUS MUTE received\n0002ef4b(      14)       28f4b(      14) CBUS UN-MUTE received\n0002ef62(      17)       28f62(      17) CBUS VOL UP received\n0002ef78(      16)       28f78(      16) CBUS VOL DOWN received\n0002ef8c(      14)\n\n```\nSubtracting 0x28eaa from 0x2eeac leads me to an offset of 0x6000.\n\n",
+      "votes": "7",
+      "user": "Willem Hengeveld",
+      "time": "Oct 25, 2017 at 19:56",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "MrSynAckSter",
+          "text": "I assume you were working off a linear dissassembler like objdump for the initial disassembly? My worry is discerning a legitimate disassembly from one that is somehow corrupt.",
+          "time": null
+        },
+        {
+          "user": "Willem Hengeveld",
+          "text": "I would use IDA for both the initial and final disassembly.  since that automates much of the function finding. Maybe aided with some idapython scripts to coerce IDA to explore more  unreached code.",
+          "time": null
+        },
+        {
+          "user": "MrSynAckSter",
+          "text": "Hmm yes but in a lot of these situations IDA doesn't find the functions in the first place. Hence all the worry about finding the right addresses for the import. In a typical binary like this (for me) IDA will find 2-5 functions and they will be wrong.",
+          "time": null
+        },
+        {
+          "user": "Willem Hengeveld",
+          "text": "Maybe you are looking at an encrypted firmware image? can you post a sample?",
+          "time": null
+        },
+        {
+          "user": "Willem Hengeveld",
+          "text": "I think this method would work for any CPU which stores absolute offsets to strings in a binary.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I cover some of this in my Recon 2010 presentation (starting around page 48).\n\nTo summarize the approaches:\n\n",
+      "votes": "3",
+      "user": "Igor Skochinsky",
+      "time": "Oct 24, 2017 at 7:46",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "MrSynAckSter",
+          "text": "I don't suppose any automation exists in this direction? It sounds like not.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "I'm not reversing hundreds of binaries each day so I've been doing it mostly manually so far....",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "would maddie stone's IDAPython Embedded Toolkit be useful for this kind of task?",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "@SYS_VL I think her scripts mostly deal with already correctly loaded code, but maybe she has something for this too, I'm not sure... FWIW string table (or function table) search could certainly be automated",
+          "time": null
+        },
+        {
+          "user": "julian",
+          "text": "Thanks, good to know. That doesn't really sound like \"life-changing magic\" but I haven't tried using it yet",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

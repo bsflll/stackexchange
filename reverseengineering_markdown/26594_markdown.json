@@ -1,0 +1,81 @@
+{
+  "title": "Opening an undocumented 90s graphics format",
+  "link": "https://reverseengineering.stackexchange.com/questions/26594/opening-an-undocumented-90s-graphics-format",
+  "content": "I've managed to extract some graphics files from an archive of an old game. Haven't found anything about it online, so I'm trying my luck here, prehaps someone knows a similar format that can help me. It's a somehow encrypted/compressed graphics format that uses an external palette. I've managed to display a different graphics format from the game, .raw files, that were very similar to NetPBM files. This format however isn't as straight forward.\n\nFile extension: .cgf\nFile magic: CGFF\nfile: data\nbinwalk -E: 0.5 or 0.75, depends on \"compression type\", pretty much uniform across file\nbinwalk -X: DEFLATE streams, sometimes only 1 bit long (?)\n\nHeader structure is as follows. Names are an educated guess on what the field could be. Every field is 4 bytes long, numbers are signed ints stored in little endian.\nEach line is 4 bytes in the file:\n\n```\nString CGFF (file magic)\nCompression type, either \"1\" or \"9\" across all files\nNumber of layers\nNumber of layers, multiplied by 24\nFile size. If my guess is right, this is probably an unsigned int\n\"0\" across all files but one, where it is \"250\"\n\"0\" across all files\nX Position                                      |\nY Position                                      |\nWidth                                           |\nHeight                                          |\n\"38\" across all files                           |\nOffset into the file starting after the headers |\n\n```\nThe last 6 entries seem to make up a unit that repeats once for every layer.\n\nHere's how I got to my guesses:\n\nRegarding the file structure, 1-files have higher entropy and don't really show any pattern. In 9-files however, most of the time a byte is followed by 0xff, rarely by something else. It's not RLE, I've tried that.\n\nAs requested, here's two hexdumps. One 9-compressed, one 1-compressed.\nhttps://pastebin.com/NGY79UgU\n\nOh right, I should say how these are supposed to look like. \"Cursor.cgf\" should contain a two hand-like cursors, one pointing and one grabbing. Regarding \"Kid.cgf\", the data says it contains 8 layers. Given the minigame the file loads in, this should contain 4 grinning mouths and 4 pairs of eyes.\n\nI also forgot to mention that both images have transparency, this could however be implemented using the palette the game loads.\n\nNOTE: I can't guarantee that these files are complete. They may contain garbage at the end or be incomplete. As I said, chances are good that the archive's stored file lengths are wrong, as I found a palette that contained the .wav header of the next file after extraction.\n\nHere's how some of the layers of the files given should look like when correctly loaded. Three \"Kid.cgf\"-layers are lined in red, while one of the \"Cursor.cgf\"-layers is lined in green. Boxes are not exact.\n\n\nI managed to point the game to an extracted file instead of an archived file and it loads just fine. After also writing a program that fully parses the header, extracting the layer data into seperate files and some minor experiments, here's my results on a type 1 image:\n\nI'll keep experimenting and update accordingly.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "451",
+  "tags": [
+    "file-format",
+    "unknown-data"
+  ],
+  "user": "mindoverflow",
+  "time": "Jan 2, 2021 at 14:47",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "The comments have been moved to chat.",
+      "time": null
+    },
+    {
+      "user": "pythonpython",
+      "text": "Thanks for moving.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The images are packed, data is little-endian where it matters.\n\nGeneral format:\n\n```\nstruct CGFHeader {\n  uint32_t magic;\n  uint32_t flags;\n  uint32_t frame_count;\n  uint32_t frame_metadata_size;\n  uint32_t frame_payload_size;\n  uint32_t unk1;\n  uint32_t unk2; \n};\n\n```\nThen repeated frame_count times, starting at +0x1c:\n\n```\nstruct FrameMeta {\n  uint32_t unk1;\n  uint32_t unk2;\n  uint32_t width;\n  uint32_t height;\n  uint32_t unk3;\n  uint32_t payload_offset;\n};\n\n```\nFor frame N, the payload data starts at sizeof(CGFHeader) + cgf_header.frame_count*sizeof(FrameMeta) + frame_meta[N].payload_offset (i.e. at the corresponding payload_offset, based immediately after the metadata structs).\n\nEach line/row of the packed image data is packed independently. Each line is prefixed by a uint32_t of that line's length (including the length field). Process the packed data as follows:\n\nRead a method uint8_t and a length uint8_t (referred to n below), and process per the below table.\n\nKeep processing method uint8_t and a length uint8_t bytes from the packed data until you have the full line width.\n\nIn order to interpret the actual color values, you'll need the corresponding palette. The two formats you've mentioned:\n\nRough python3 example of processing, dumping frames to 0.png, 1.png, etc in subdirectory:\n\n```\nimport errno\nimport os\nimport struct\nimport sys\n\nfrom PIL import Image\n\nclass HugoPalette(object):\n  def __init__(self, rawdat):\n    assert(len(rawdat) >= 12)\n    assert(rawdat[0:4] == b'CPAL') # palette\n    self.alpha_map = None\n    self.entries = None\n    num_entries = int(rawdat[4:7])\n    assert(rawdat[7:9] == b'X3') # rgb triples\n    if rawdat[9:12] == b'STD': # palette\n      assert(len(rawdat) >= 12 + num_entries*3)\n      self.entries = []\n      offset = 12\n      for n in range(num_entries):\n        self.entries.append(struct.unpack_from(\"BBB\" ,rawdat, offset))\n        offset = offset + 3\n    elif rawdat[9:14] == b'ALPHA': # palette and alphamap\n      assert(len(rawdat) >= 14 + num_entries*3 + 0x100000)\n      self.entries = []\n      offset = 14\n      for n in range(num_entries):\n        self.entries.append(struct.unpack_from(\"BBB\" ,rawdat, offset))\n        offset = offset + 3\n      self.alphamap = rawdat[14 + num_entries*3:14 + num_entries*3 + 0x100000] # not sure how to interpret\n    else:\n      raise NotImplementedError(\"unknown palette type\")\n\n\nclass HugoImage(object):\n  def __init__(self, width, height, rawdat, offset):\n    self.width = width\n    self.height = height\n\n    rows = []\n    for n in range(height):\n      (packed_line_length,) =  struct.unpack_from(\"<L\", rawdat, offset)\n      assert(len(rawdat) >= offset + packed_line_length)\n      packed_line = rawdat[offset+4:offset+packed_line_length]\n      line = []\n      index = 0\n      # unpacking:\n      # 00 nn                   = skip nn pixels [nn=00: skip to end of line]\n      # 01 nn pp aa [pp aa ...] = insert nn entries from trailing pp, replacing alpha with aa\n      # 02 nn pp aa             = repeat pp for nn pixels, replacing alpha with aa\n      # 03 nn pp [pp ...]       = insert nn entries from trailing pp\n      # 04 nn pp                = repeat pp for nn pixels\n      while True:\n        method = packed_line[index]\n        pixel_count = packed_line[index+1]\n        index = index + 2\n        if method == 0:\n          if pixel_count == 0:\n            while(len(line) < self.width):\n              line.append((0, 0))\n            break\n          line.extend([(0,0)]*pixel_count)\n        elif method == 1:\n          for p in range(pixel_count):\n            line.append((packed_line[index], packed_line[index+1]))\n            index = index + 2\n        elif method == 2:\n          line.extend([(packed_line[index], packed_line[index+1])]*pixel_count)\n          index = index + 2\n        elif method == 3:\n          for p in range(pixel_count):\n            line.append((packed_line[index],0xff))\n            index = index + 1\n        elif packed_line[index] == 4:\n          line.extend([(packed_line[index], 0xff)]*pixel_count)\n          index = index + 1\n      assert(len(line) == self.width)\n      rows.append(line)\n      offset = offset + 4 + index\n    self.rows = rows\n\ndef load_images(rawdat):\n  HEADER_STRUCT_SIZE=0x1c\n  METADATA_STRUCT_SIZE=0x18\n  offset = 0\n  assert(len(rawdat) >= offset + HEADER_STRUCT_SIZE)\n  (magic, _, count, metadata_size, payload_size, _, _) = struct.unpack_from(\"<LLLLLLL\", rawdat, offset)\n  offset = offset + HEADER_STRUCT_SIZE\n  assert(magic == 0x46464743)\n  assert(metadata_size == count * METADATA_STRUCT_SIZE)\n  metadata = []\n  for n in range(count):\n    assert(len(rawdat) >= offset + METADATA_STRUCT_SIZE)\n    metadata.append(struct.unpack_from(\"<LLLLLL\", rawdat, offset))\n    offset = offset + METADATA_STRUCT_SIZE\n  images = []\n  for im in metadata:\n    images.append(HugoImage(im[2], im[3], rawdat, offset + im[5]))\n  return images\n\n\ndef main(args):\n  if len(args) != 3:\n    print(f\"usage: python3 {args[0]} palette.pal image.cgf\")\n    sys.exit(1)\n  with open(args[1], \"rb\") as infile:\n    dat = infile.read()\n  pal = HugoPalette(dat)\n\n  with open(args[2], \"rb\") as infile:\n    dat = infile.read()\n  images = load_images(dat)\n\n  output_dir = args[2] + \".extracted\"\n  output_index = 0\n\n  try:\n    os.makedirs(output_dir)\n  except OSError as e:\n    if e.errno != errno.EEXIST:\n      raise\n\n  for i in images:\n    img = Image.new('RGBA', (i.width, i.height))\n    for y in range(i.height):\n      for x in range(i.width):\n        (index, alpha) = i.rows[y][x]\n        pal_entry = pal.entries[index]\n        col = (pal_entry[0], pal_entry[1],pal_entry[2], alpha)\n        img.putpixel((x,y), col)\n    img.save(os.path.join(output_dir, str(output_index) + \".png\"), \"PNG\")\n    output_index = output_index + 1\n\nif __name__ == '__main__':\n  main(sys.argv)\n\n```\n",
+      "votes": "3",
+      "user": "booto",
+      "time": "Jan 4, 2021 at 23:20",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "mindoverflow",
+          "text": "How did you figure this out? Incredible work, thanks a lot!",
+          "time": null
+        },
+        {
+          "user": "mindoverflow",
+          "text": "Finally found the time to implement it and test it with more files. Works great for most files, the one that fail are probably incomplete which is a fault on my part. Interestingly enough, the CPAL254X3ALPHA palettes work the same way as the ...X3STD palettes, I should be able to figure the details out myself. Thanks again!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Some interesting structure if you break the files by value 0x26.\n\nHow did you derive the number of layers?\n\nI don't think these are compressed. There's lots of redundancy in the data which compression would destroy. You also wouldn't see the same values in the compressed result of two different inputs.\n\nWhat is the game system?\n\nWhat are the pixel sizes of the displayed kid.cgf and cursor.cgf on the device?\n\n\n\n",
+      "votes": "0",
+      "user": "pythonpython",
+      "time": "Dec 21, 2020 at 1:37",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "I appreciate you taking the time to tend to the question, but your \"answer\" contains almost more questions than the real question here. However, I understand that it is impossible to put a screenshot into a comment and there is a limit to what can be done in comments. So I am converting your non-answer into a community wiki. Use that - for now - to figure out the details about the subject matter and write up an alternative answer once you are ready to answer.",
+          "time": null
+        },
+        {
+          "user": "mindoverflow",
+          "text": "Thanks for the effort! I don't know what you mean by \"game system\", also getting the pixel size of these particular images is difficult, but I can try. I've found \"Background.cgf\" files with the values 640 and 480 stored as singed little endian ints (4 bytes) at offsets 32/0x20 and 36/0x24 respectively, so I assume these fields contain the image's size.",
+          "time": null
+        },
+        {
+          "user": "mindoverflow",
+          "text": "About the layers: Observation from ingame sprites. I've written about it in the question, but here's another example: The same minigame loads \"Present.cgf\", containing a value of 8. There are 8 different present sprites in that minigame. All \"Cursor.cgf\" files have a value of 2: One for the default image and one used when hovering above something clickable. \"Keycursor.cgf\" has a value of 3. There are 3 unlockable keys.",
+          "time": null
+        },
+        {
+          "user": "mindoverflow",
+          "text": "The cursor's about 32x23 px, matching the fields in cursor.cgf. No luck with \"Kid.cgf\" though",
+          "time": null
+        },
+        {
+          "user": "pythonpython",
+          "text": "Do these sprites have transparency? the 0x26000000 values made me think it's the Alpha set to 15% part of an ARGB32 pixel.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

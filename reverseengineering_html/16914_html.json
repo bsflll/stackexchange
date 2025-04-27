@@ -1,0 +1,77 @@
+{
+    "title": "Simple Debugger and Hardware BreakPoints in x64 Windows 10",
+    "link": "https://reverseengineering.stackexchange.com/questions/16914/simple-debugger-and-hardware-breakpoints-in-x64-windows-10",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have coded a very simple Debugger for x64, I am using currently Win10.\n </p>\n <p>\n  I am trying to set some Hardware Breakpoints to be trapped by my Debugger Loop as follows:\n </p>\n <pre><code>inline void SETBITS(DWORD64 *dw, int lowBit, int bits, int newValue) {\n\n     int mask = (1 << bits) - 1;\n     *dw = (*dw & ~(mask << lowBit)) | (newValue << lowBit);\n\n}\n\nBOOL SetHardwareBP(HANDLE hThread, __int64 Address, DWORD Length, int Condition)\n{\n\n    CONTEXT context = { CONTEXT_DEBUG_REGISTERS };\n    int i;\n    if (!GetThreadContext(hThread, &context)) return -1;\n\n    // find available hardware register\n\n    for (i = 0; i < 4; i++)\n    {\n    if ((context.Dr7 & (1 << (i * 2))) == 0)\n    {\n        *(&context.Dr0 + i) = Address;\n\n        SETBITS(&context.Dr7, 16 + i * 4, 2, Condition);\n        SETBITS(&context.Dr7, 18 + i * 4, 2, Length);\n        SETBITS(&context.Dr7, i * 2, 1, 1);\n\n        if (!SetThreadContext(hThread, &context))\n            return -1;\n\n        return i;\n    }\n  }\n\n   return -1;\n}\n\nint SetDebugPrivileges(void) {\n\n      TOKEN_PRIVILEGES priv = { 0 };\n      HANDLE hToken = NULL;\n\n      if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {\n        priv.PrivilegeCount = 1;\n        priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;\n\n        if (LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &priv.Privileges[0].Luid)) {\n        if (AdjustTokenPrivileges(hToken, FALSE, &priv, 0, NULL, NULL) == 0) {\n            printf(\"AdjustTokenPrivilege Error! [%u]\n\", GetLastError());\n        }\n    }\n\n       CloseHandle(hToken);\n  }\n       return GetLastError();\n}\n\n\nvoid ThreadsLoop(DWORD mPID) {\n\n   HANDLE         hProcessSnap = NULL;\n\n   SetDebugPrivileges();\n   hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);\n\n   if (hProcessSnap == INVALID_HANDLE_VALUE) return;\n\n    else\n    {\n    THREADENTRY32 the;\n    the.dwSize = sizeof(THREADENTRY32);\n\n    BOOL bret = Thread32First(hProcessSnap, &the);\n    while (bret)\n    {\n\n\n        if (the.th32OwnerProcessID == mPID)\n        {\n\n            HANDLE hthread = OpenThread(THREAD_ALL_ACCESS, false, the.th32ThreadID);\n            SuspendThread(hthread);\n\n                           //call with length and condition set to 0 for a Code Execution type\n            int hr = SetHardwareBP(hthread, addr, 0, 0);\n            ResumeThread(hthread);\n\n            CloseHandle(hthread);\n        }\n        bret = Thread32Next(hProcessSnap, &the);\n    }\n    CloseHandle(hProcessSnap);\n}\n}\n</code></pre>\n <p>\n  I am calling\n  <code>\n   ThreadsLoop(pi.dwProcessId);\n  </code>\n  where pi is the the PROCESS_INFORMATION structure returned from my initial call:\n </p>\n <pre><code>CreateProcess(pname, NULL, NULL, NULL, false, DEBUG_ONLY_THIS_PROCESS, NULL,NULL, &si, &pi);\n</code></pre>\n <p>\n  None of the Hardware Breakpoints is Hit. I did several attempts changing the DR0-DR7 (and condition and length variables above) setup without luck. All calls to SetThreadContext returned successfully.\n </p>\n <p>\n  I did the same test with a Software Breakpoint via the following code and works perfect:\n </p>\n <pre><code>BYTE p[] = { 0xcc }; \nSIZE_T d = 0;\nWriteProcessMemory(pi.hProcess, (void*)addr, p, sizeof(p), &d);\n</code></pre>\n <p>\n  What could be wrong in this code/approach?\n </p>\n <p>\n  Thanks\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "debuggers",
+        "breakpoint"
+    ],
+    "user": "fred26",
+    "time": "Dec 5, 2017 at 21:03",
+    "comments": [
+        {
+            "user": "EWD-0-",
+            "text": "<html><body><span class=\"comment-copy\">\n Has \"SETBITS\" function implemented in a way that changes the DR7 value and then you set it by calling SetThreadContext?...\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "EWD-0-",
+            "text": "<html><body><span class=\"comment-copy\">\n To make it more clear you send some inputs to the functions, and receiving NO output and just setting the context which has the same DR7 :) I think you now understand what's wrong...\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "fred26",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks for pointing out this. I fixed the code. Still the breakpoints not working.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "EWD-0-",
+            "text": "<html><body><span class=\"comment-copy\">\n Now again you have a problem... Look again. You're changing the pointer itself not the value which the pointer points to.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "fred26",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks, I fixed it. It was a typo. The code, is still not BP.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  There are some issues you have to fix\n </p>\n <ol>\n  <li>\n   <p>\n    Please take a look at\n    <a href=\"http://winappdbg.sourceforge.net/HowBreakpointsWork.html\" rel=\"nofollow noreferrer\">\n     This\n    </a>\n    where is explains which event is triggered in the hardware breakpoint case. You have to add\n    <strong>\n     EXCEPTION_SINGLE_STEP\n    </strong>\n    in\n    <strong>\n     DebuggerThreadProc()\n    </strong>\n    function\n   </p>\n  </li>\n  <li>\n   <p>\n    You need to be attached to the target process in order to be able to debug it. For this you need to use\n    <a href=\"https://msdn.microsoft.com/en-us/library/windows/desktop/ms679295(v=vs.85).aspx\" rel=\"nofollow noreferrer\">\n     DebugActiveProcess\n    </a>\n   </p>\n  </li>\n  <li>\n   <p>\n    This one is quite a semantic error. As you create the target process in the same app you already have an open handle to both the process and the main thread so there is NO need to create snapshot and searching for the target! This is completely redundant. Please remove all these parts and pass the handles as input to those functions.\n   </p>\n  </li>\n  <li>\n   <p>\n    Always keep in mind to\n    <strong>\n     close\n    </strong>\n    the handles you've opened.\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "EWD-0-",
+            "time": "Dec 12, 2017 at 14:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "RbMm",
+                    "text": "<span class=\"comment-copy\">your <b>2.</b> is wrong. not need call <code>DebugActiveProcess</code> if we create process with <code>DEBUG_ONLY_THIS_PROCESS</code> or <code>DEBUG_PROCESS</code> flags. also need handle not only  <code>EXCEPTION_SINGLE_STEP</code> but also <code>STATUS_WX86_SINGLE_STEP</code> - this will be if we debug wow64 process</span>",
+                    "time": null
+                },
+                {
+                    "user": "EWD-0-",
+                    "text": "<span class=\"comment-copy\">Last one first, during the questions I've asked it was mentioned that the target is x64. If not, there are other APIs which has to be added to make it compatible not only STATUS_WX86_SINGLE_STEP. Other thing which I didn't mention here but in the chat is that though the values might be the same it's better to use EXCEPTION_BREAKPOINT instead of STATUS...</span>",
+                    "time": null
+                },
+                {
+                    "user": "RbMm",
+                    "text": "<span class=\"comment-copy\">the <code>STATUS_WX86_SINGLE_STEP</code> (and <code>STATUS_WX86_BREAKPOINT</code> on breakpoint) come when exception was in wow64 code. and debugger is 64bit process. if we debug x64 process we of course never get this exception codes. however always better handle it too, for not restrict self for x64 apps only. <i>there are other APIs which has to be added to make it compatible</i> dont know what you mean, but x64 debugger perfect can debug both 32 and 64 processes with single code base without any special api calls</span>",
+                    "time": null
+                },
+                {
+                    "user": "EWD-0-",
+                    "text": "<span class=\"comment-copy\">As Igor also mentioned in chat, consider Wow64Get/SetThreadContext as an example. I think the best way is to add your points as another answer... Better than in the comments.</span>",
+                    "time": null
+                },
+                {
+                    "user": "EWD-0-",
+                    "text": "<span class=\"comment-copy\">And about starting with DEBUG_ONLY_THIS_PROCESS/DEBUG_PROCESS you're right, this is ALSO another way to receive dbg events. The \"2\" is not wrong it's one of the ways and the one you've mentioned another way.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

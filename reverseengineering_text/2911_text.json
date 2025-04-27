@@ -1,0 +1,37 @@
+{
+    "title": "Understanding this Buffer Overflow exploitation",
+    "link": "https://reverseengineering.stackexchange.com/questions/2911/understanding-this-buffer-overflow-exploitation",
+    "content": "some days ago I took this piece of code from opensecuritytraining.info to test a buffer overflow exploitation:\n<pre><code>#include <stdio.h>\n\nchar *secret = \"pepito\";\n\nvoid go_shell(){\n    char *shell = \"/bin/sh\";\n    char *cmd[] = { \"/bin/sh\", 0 };\n    printf(\"¿Quieres jugar a un juego?...\n\");\n    setreuid(0);\n    execve(shell,cmd,0);\n}\n\nint authorize(){\n    char password[64];\n    printf(\"Escriba la contraseña: \");\n    gets(password);\n    if (!strcmp(password,secret))\n        return 1;\n    else\n        return 0;\n}\n\nint main(){\n    if (authorize()){\n        printf(\"Acceso permitido\n\");\n        go_shell();\n    } else{\n        printf(\"Acceso denegado\n\");\n    }\n    return 0;\n}\n</code></pre>\nThe first test before injecting a shellcode was trying to execute the go_shell function without knowing the password, overflowing the return address of main function and pointing it to the location of go_shell.\nAs far as I understand the stack is divided as below:\n<pre><code>[STACK] {Return_address}{EBP}{password_buffer(64)}...\n</code></pre>\nSo If I store in password_buffer 68 bytes plus the address of go_shell it should overwrite the return address and execute the desired function.\n<pre><code>[STACK] {4bytes (Location of go_shell)}{EBP(4 Bytes of junk)}{password_buffer(64)(64 bytes of junk)}...\n</code></pre>\nThe problem here is that I need to fill the buffer with 76 bytes of junk plus 4 bytes of the address to actually override the return address and point %eip to go_shell. What I don't understand is where do those additional 8 bytes come from?\nThis is the GDB output before injecting 74 A (0x41) + the address in a breakpont at line if (!strcmp(password,secret)):\n<pre><code>EBP:\n0xbffff4a8: 0x41414141  0x0804851c\n\nAAAA + memory_address\n</code></pre>\nAnd continuing to go_shell execution (Breakpoint at void go_shell(){ ):\nEIP now points to the last return address overwrited:\n<pre><code>(gdb) x/2x $eip\n0x804851c <go_shell>:   0x83e58955  0x45c728ec\n</code></pre>\nAny help understanding this?\nRegards.\n",
+    "votes": "9",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "c",
+        "exploit",
+        "buffer-overflow"
+    ],
+    "user": "Nucklear",
+    "time": "Oct 12, 2013 at 14:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "If you look at the disassembly of authorize() I'm sure you'll find that the compiler is pushing and restoring more registers than just EBP or aligning the stack. I would recommend that you always look at the disassemly when dealing with overflows of various kinds. The compiler and decompiler, if you use one, hides a lot of details. The disassembly never lies and allows you to make a prediction without resorting to dynamic analysis. I'm a strong proponent of learning with static methods when you're just starting out.\nAnyways, whether there's more registers, a stack canary, stack alignment or something else, the disassembly of authorize() will reveal the answer to your question.\nFor your reference this is the dissembly of the authorize() function using GCC 4.7.3 with -O2.\n\npush    ebx\nsub     esp, 58h\nlea     ebx, [esp+5Ch+password]\nmov     [esp+5Ch+arg0], \"Escriba la contrase\"\ncall    _printf\nmov     [esp+5Ch+arg0], ebx\ncall    _gets\nmov     eax, secret\nmov     [esp+5Ch+arg0], ebx\nmov     [esp+5Ch+arg1], eax\ncall    _strcmp\ntest    eax, eax\nsetz    al\nadd     esp, 58h\nmovzx   eax, al\npop     ebx\nretn\n\nYou'll notice that it doesn't use push to move arguments, ebp is unused as a stack frame and the compiler aligns the stack since sum of stack changes is 0x60; return value misaligns by 4, push ebx by 4 more, then sub esp, 0x58 results in 0x60.\n",
+            "votes": "13",
+            "user": "Peter Andersson",
+            "time": "Oct 12, 2013 at 16:22",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">Awesome explanation, thank you very much.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">Since your response I was trying to figure out what happens in the memory but I don't get it. This is a preview of the memory before and after injecting the payload <a href=\"http://pastebin.com/raw.php?i=ajCqxvGJ\" rel=\"nofollow noreferrer\">pastebin.com/raw.php?i=ajCqxvGJ</a> Could you develop your last explanation? Regards.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,46 @@
+{
+    "title": "NTAPI calls made by VirtualAlloc",
+    "link": "https://reverseengineering.stackexchange.com/questions/8238/ntapi-calls-made-by-virtualalloc",
+    "content": "I wrote a Pintool that intercepts system calls based on their system call number. I'm currently on a windows 7 machine and I'm using the system calls listed here as a reference.\nI'm tracing a hello world style executable that does the following :-\n<pre><code>int (*dyncode)(int);\ndyncode = (int(*)*int)) VirtualAlloc(NULL, 4096, MEM_COMMIT, PAGE_EXECUTE_READWRITE);\n</code></pre>\nI went through the system calls being invoked and it doesn't seem to me that the NTProtectVirtualMemory system call is being invoked. It would be helpful to know which system calls are invoked when the VirtualAlloc function is called. From the results I see so far, no system calls show up for <pre><code>VirtualAlloc</code></pre> even though I can see them appear for calls to <pre><code>VirtualFree</code></pre>.\nWhat I'm trying to do is intercept all system calls that allocate regions with executable privileges.\n[EDIT]\nA bit more of context. The reason I'm trying to intercept system calls is because I had initially written the pintool for linux and I had resorted to hooking system calls as opposed to libc calls(as I did not want to miss direct mprotect system calls). However, it seems this approach wouldn't work for Windows so I've resorted to using IMG_Instrument PIN functions to look for and instrument VirtualAlloc.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "windows",
+        "pintool"
+    ],
+    "user": null,
+    "time": "Oct 4, 2018 at 4:39",
+    "comments": [
+        {
+            "user": "rev",
+            "text": "Just as a note: syscall IDs are different across systems in userland (maybe not at kernel level), so that table won't help you much. If you want to catch the calls for <pre><code>VirtualAlloc</code></pre> for a specific process, inject your DLL inside, hook <pre><code>VirtualAlloc</code></pre> ( which looks like this ; you can use <pre><code>GetProcAddress(kernel32_handle, \"VirtualAlloc\")</code></pre> for the offset at runtime ) and intercept. If you want to do it system-wide, you can do it using a driver... or injecting your DLL into every process. Do tell me if you need help doing it for a single process.\n",
+            "time": null
+        },
+        {
+            "user": "user1743",
+            "text": "Thank you very much, this helps. I've not yet used using a DLL for hooking, but I've modified my pintool to look for VirtualAlloc whenever a new IMG is loaded and hook that. For now that seems to work. Thank you, again.\n",
+            "time": null
+        },
+        {
+            "user": "user1743",
+            "text": "@AcidShout I've added in a bit more context into the question too. I'm just curious though, when you say \"syscall IDs vary across systems in userland\" did you mean for different versions of Windows(across service packs too)? Thanks.\n",
+            "time": null
+        },
+        {
+            "user": "rev",
+            "text": "yes, they vary even between different service packs. I don't know what's your system, but mine's Windows 7 x64 Ultimate SP1, and the syscall ID for <pre><code>ZwResumeThread</code></pre> is <pre><code>0x4F</code></pre> (<pre><code>ntdll.dll</code></pre>, x64). It is probably different on your system. While it is possible for the IDs to be the same, you shouldn't rely on that if you want portability. I'm not sure about ring0, though.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "NtProtectVirutalMemory is not a part of VirtualAlloc call it is a part of VirtualProtect call\nyou can verify your pintool trace with this windbg conditional breakpoint on any executable that allocates memory\n0:000> bl\n 0 e 7c809af1     0001 (0001)  0:**** kernel32!VirtualAlloc \"bp /1 @$ra \\\"g\\\";wt\"\n<pre><code>0:000> $$ break on valloc set a one time condtional break on return address on the stack (condition == keep executing as is) and trace the call\n0:000> g\n</code></pre>\nresult\n<pre><code>Tracing kernel32!VirtualAlloc to return address 76fdc3ac\n    9     0 [  0] kernel32!VirtualAlloc\n    3     0 [  1]   kernel32!VirtualAllocEx\n   19     0 [  2]     kernel32!_SEH_prolog\n   16    19 [  1]   kernel32!VirtualAllocEx\n    1     0 [  2]     ntdll!ZwAllocateVirtualMemory\n    2     0 [  2]     ntdll!NtAllocateVirtualMemory\n    2     0 [  3]       ntdll!KiFastSystemCall\n    1     0 [  2]     ntdll!NtAllocateVirtualMemory\n   22    25 [  1]   kernel32!VirtualAllocEx\n    9     0 [  2]     kernel32!_SEH_epilog\n   23    34 [  1]   kernel32!VirtualAllocEx\n   11    57 [  0] kernel32!VirtualAlloc\n\n68 instructions were executed in 67 events (0 from other threads)\n\nFunction Name                               Invocations MinInst MaxInst AvgInst\nkernel32!VirtualAlloc                                 1      11      11      11\nkernel32!VirtualAllocEx                               1      23      23      23\nkernel32!_SEH_epilog                                  1       9       9       9\nkernel32!_SEH_prolog                                  1      19      19      19\nntdll!KiFastSystemCall                                1       2       2       2\nntdll!NtAllocateVirtualMemory                         2       1       2       1\nntdll!ZwAllocateVirtualMemory                         1       1       1       1\n\n1 system call was executed\n\nCalls  System Call\n    1  ntdll!KiFastSystemCall\n</code></pre>\nedit \na trace result for VirtualProtect with call stack and raw Dword dump of esp\n0:001> bl\n 0 e 7c801ad4     0001 (0001)  0:**** kernel32!VirtualProtect \"dd esp l8;kb 3;bp /1 @$ra \\\"g\\\";wt\"\ndd esp l8\n<pre><code>009df560  03042c08 00b10000 00002ab0 00000002\n009df570  009df588 00000440 00832758 009df54c\n</code></pre>\nkb 3\n<pre><code>ChildEBP RetAddr  Args to Child              \n009df55c 03042c08 00b10000 00002ab0 00000002 kernel32!VirtualProtect\n009df58c 030420f7 008124b0 0084a610 00832758 dbghelp!idd2me+0x3d8\n009dfa3c 03041c5a 00000440 00832758 00832758 dbghelp!modload+0x367\n</code></pre>\nwt\n<pre><code>Tracing kernel32!VirtualProtect to return address 03042c08\n    9     0 [  0] kernel32!VirtualProtect\n   14     0 [  1]   kernel32!VirtualProtectEx\n    1     0 [  2]     ntdll!ZwProtectVirtualMemory\n    2     0 [  2]     ntdll!NtProtectVirtualMemory\n    2     0 [  3]       ntdll!KiFastSystemCall\n    1     0 [  2]     ntdll!NtProtectVirtualMemory\n   23     6 [  1]   kernel32!VirtualProtectEx\n   11    29 [  0] kernel32!VirtualProtect\n\n40 instructions were executed in 39 events (0 from other threads)\n\nFunction Name                               Invocations MinInst MaxInst AvgInst\nkernel32!VirtualProtect                               1      11      11      11\nkernel32!VirtualProtectEx                             1      23      23      23\nntdll!KiFastSystemCall                                1       2       2       2\nntdll!NtProtectVirtualMemory                          2       1       2       1\nntdll!ZwProtectVirtualMemory                          1       1       1       1\n\n1 system call was executed\n\nCalls  System Call\n    1  ntdll!KiFastSystemCall\n</code></pre>\n",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Feb 14, 2015 at 19:48",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,40 @@
+{
+  "title": "extracting data from binary file",
+  "link": "https://reverseengineering.stackexchange.com/questions/13891/extracting-data-from-binary-file",
+  "content": "I have a binary file and a text file of the corresponding data, and I know the location in the binary file where the data are contained. However, I am unable to determine in what manner the data are encoded. The data do not appear to be stored as float16, float32, float64, signed/unsigned int of various length, or char, based on analysis of the hexdump. Perhaps the section containing the data has been compressed by some algorithm, or perhaps the numbers are stored in a representation with which I am unfamiliar.\n\nThe human-readable data are as follows:\n\n```\n20.0,0.001\n21.0,0.001\n22.0,0.001\n23.0,0.001\n24.0,0.002\n25.0,0.002\n26.1,0.002\n27.0,0.004\n28.0,0.002\n29.0,0.002\n30.0,0.003\n31.0,0.004\n(etc)\n\n```\nI have 70 such lines, each containing two numbers of the precision shown in the table. The corresponding data section comprises 2312 hexadecimal digits, or 1156 bytes. There is a repeating pattern of characters ascending the ASCII table followed by @ signs (e.g., 4@ = '0x3440', 5@ = '0x3540', 6@ ='3640', etc.). This \"motif\" occurs every 16 bytes and there are 70 occurrences. One challenge is that although there is a monotonic progression in the ASCII value of the byte preceding the @ ('0x40'), it does not always increase (i.e., there are stationary points, sometimes followed by a jump that skips over one of the ASCII characters; for instance 4@ ... 5@ ... 6@ ...6@ ... 8@ ... 9@ ...). Based on the 16-byte periodicity of this motif, I assume each row in the human-readable table is represented in the binary file by 16 consecutive bytes. Thus, the total size of the binary data table would be 16*70 = 1120 bytes. The complete data table is 1156 bytes, so I further assume the unexplained 36 bytes contain header information. Indeed, I can account for most of the header: 15 bytes containing a data descriptor in plain text, 16 bytes of zeros which appears to serve as an offset, and one byte ('0x46' = 70 in decimal) which appears to encode the number of lines in the table.\n\nMy problems are currently the following:\n\nAn example of the hexadecimal contents (xxd dump) corresponding very nearly to the contents above and aligned to show the progression of '0x40' = @ that I mentioned previously is shown below. This table begins with the '0x46' (decimal 70), to which I alluded previously as being a part of the header and representing the number of lines in the data table. The hex digits before the colon simply give the offset of the line from the beginning of the file; the middle section shows eight bytes (16 hex digits) of data; the right part of the table shows the ASCII-printable values for the hex data (. signifies ASCII-unprintable values, mostly 0x00).\n\n```\n00000180: 4600 0000 0000 0000 0000 3440 0000 0000  F.........4@....\n00000190: 0000 583f 0000 0000 0000 3540 0000 0000  ..X?......5@....\n000001a0: 0000 503f c3f5 285c 8f02 3640 0000 0000  ..P?..(\\..6@....\n000001b0: 0000 553f 3e0a d7a3 70fd 3640 0000 0000  ..U?>...p.6@....\n000001c0: 0000 453f 0000 0000 0000 3840 0000 0000  ..E?......8@....\n000001d0: 0040 5d3f 85eb 51b8 1e05 3940 0000 0000  .@]?..Q...9@....\n000001e0: 0000 5e3f cdcc cccc cc0c 3a40 0000 0000  ..^?......:@....\n000001f0: 0000 633f f628 5c8f c2f5 3a40 0000 0000  ..c?.(\\...:@....\n00000200: 00c0 703f 3e0a d7a3 70fd 3b40 0000 0000  ..p?>...p.;@....\n00000210: 0000 5a3f 0000 0000 0000 3d40 0000 0000  ..Z?......=@....\n00000220: 0020 613f 48e1 7a14 ae07 3e40 0000 0000  . a?H.z...>@....\n00000230: 00c0 643f c3f5 285c 8f02 3f40 0000 0000  ..d?..(\\..?@....\n\n```\nI would like advice on how to proceed with this particular problem, mainly determining whether compression is a factor and how the numbers are represented in the binary file, since I can thus far detect no obvious correspondence between the rows of human-readable data and the repeating 16-byte motifs that I described.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "14k",
+  "tags": [
+    "binary-analysis"
+  ],
+  "user": "user001",
+  "time": "Nov 10, 2016 at 4:13",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "This data actually is in standard x86 double (8 byte) representation, with the first 4 byte something else (46 00 00 00 probably being 70 as you said) and the data starting at offset 0x184 in the binary file.\n\nWhat probably confused you is the fact that the human-readable data is rounded, and the binary file has a better precision. So, for example, your 23.0 is actually 22.99, which is why 3640 occurs twice, and the next value, 24.00, has 38 40.\n\nWhen I convert your hex back to binary (edit out the offset and character dump, then xxd -r -p < x.hex > x.bin), then run the following perl program over it:\n\n```\nopen(F, \"<$ARGV[0]\");\nbinmode F;\n\nseek(F, 4, 0);\n\nwhile (read(F, $dbl, 8)) {\n    read(F, $dbl2, 8);\n    printf(\"%15.10f  %15.10f   \", unpack(\"d\", $dbl), unpack(\"d\", $dbl2));\n    printf(\"%4.1f  %5.3f  \n\", unpack(\"d\", $dbl), unpack(\"d\", $dbl2));\n}\n\n```\nI get this:\n\n```\n20.0000000000     0.0014648438   20.0  0.001\n21.0000000000     0.0009765625   21.0  0.001\n22.0100000000     0.0012817383   22.0  0.001\n22.9900000000     0.0006408691   23.0  0.001\n24.0000000000     0.0017852783   24.0  0.002\n25.0200000000     0.0018310547   25.0  0.002\n26.0500000000     0.0023193359   26.1  0.002\n26.9600000000     0.0040893555   27.0  0.004\n27.9900000000     0.0015869141   28.0  0.002\n29.0000000000     0.0020904541   29.0  0.002\n30.0300000000     0.0025329590   30.0  0.003\n31.0100000000     0.0000000000   31.0  0.000\n\n```\nAs you see, the right 2 columns are the numbers in your precision and match (except the last 0.004 which isn't in your file), while the first 2 columns are in high precision and, sometimes, have a value that is slightly less than the next integer.\n\nI found this by converting 20.0 to double and checking the hex:\n\n```\nperl -e \"print pack('d', 20.0);\" | xxd\n0000000: 0000 0000 0000 3440                      ......4@\n\n```\nthen just starting at the fitting offset in your file and converting stuff back.\n\n",
+      "votes": "5",
+      "user": "Guntram Blohm",
+      "time": "Nov 10, 2016 at 6:53",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user001",
+          "text": "I cannot thank you enough. I am a novice at this, and I tried to grep for various representations of the human-readable numbers (e.g., the representations of decimal 20.0 provided by this converter) on a hexstream of the file. Thus, for the number 20.0, I would try something like xxd -p file.dat | tr -d ' ' data.hex; egrep -obi \"41A00000|4034000000000000|40034000000000000000000000000000\" file.hex, but obtained no results. It seems that the IEEE-754 floating point standard was not appropriate in this case? Thanks again",
+          "time": null
+        },
+        {
+          "user": "Guntram Blohm",
+          "text": "Generally, i have found hexdumping a file and searching for hex bytes to be more helpful than binary grep; of course, this causes other problems like when the hex wraps around to the next line. But if you already assume some specific position, comparing the expected hex value with what's there is better, in most cases, due to endianness issues - the 4034000000000000 you've been grepping for is there, just with the byte order swapped. Also, especially with floating point, you might see the pattern in the file almost matches what you expect, but not 100%, this may be to rounding errors.",
+          "time": null
+        },
+        {
+          "user": "user001",
+          "text": "Thanks, that's really helpful. I didn't consider endianness or rounding issues in my first pass at decoding this.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

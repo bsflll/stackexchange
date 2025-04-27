@@ -1,0 +1,50 @@
+{
+  "title": "Harman Kardon firmware reverse engineering",
+  "link": "https://reverseengineering.stackexchange.com/questions/27580/harman-kardon-firmware-reverse-engineering",
+  "content": "First of all, I'm very new to reverse engineering, but I know about hex, binary, opcodes, et cetera.\n\nI'm trying to reverse engineer a Harman Kardon firmware file, because I think there are some API calls hidden in the firmware that may be useful for home automation.\n\nFor some reason, binwalk only says there is a XML file in the firmware (but doesn't extract it). And there seems to be some MIPS16e instructions in it, which I don't know how to extract.\n\nbinwalk -AB output:\n\n```\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n504842        0x7B40A         MIPS16e instructions, function prologue\n777848        0xBDE78         XML document, version: \"1.0\"\n\n```\nI also checked the file for other texts (which are in it). Therefore, I think it isn't encrypted.\nThe \"XML document\" is only this: <?xml version=\"1.0\" encoding=\"UTF-8\"?><harman><avr><common><status><name>.\n\nAfter that, only other random texts, which can be seen in the menu of the device, are showed.\n\nI don't know if it is okay to dump the firmware here, so I won't unless someone asks for it.\n\nHow to proceed in reverse engineering this?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "firmware",
+    "firmware-analysis",
+    "binwalk"
+  ],
+  "user": "Lars Jansen",
+  "time": "Apr 29, 2021 at 7:31",
+  "comments": [
+    {
+      "user": "lucky thandel",
+      "text": "can u provide us the file?",
+      "time": null
+    },
+    {
+      "user": "Lars Jansen",
+      "text": "Here you go: drive.google.com/file/d/1JRncIgYMKWy5xCbeQye-P0va4NVG1Mkm/…",
+      "time": null
+    },
+    {
+      "user": "Francesco",
+      "text": "which chip contains the firmware???",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "If you run strings on your firmware file, you can typically get a lot of helpful information. In this case, since I don't know what your device is other than a Harman Kardon \"something,\" I searched through the strings in a text editor until I found the line\n\nJust to double-check the firmware does belong to the Harman Kardon AVR151/1510, I downloaded the latest release from their website and did a binary diff between that firmware and the firmware you linked. Strangely enough, the firmware you linked and the one on Harman Kardon's website are only different by the first byte in the file; the rest of the bytes in each file are identical.\n\nFinding out what processor is in there can be tricky. You could take it apart and look, but you probably don't need to (and if it's under warranty, that can be a risky proposition, but then again so can modifying the firmware...) For a lot of devices, you can get internal photos by searching FCC [device name] because devices using the radio spectrum in the US have to go through FCC certification. The FCC page for this family of receivers provides internal photos, but they're too low-res to figure out what ICs are in there. A good next step is searching AVR151 teardown and AVR151 repair since, for most devices, someone's opened it up and tried to repair it. In this case, I found a youtube video of someone performing a board level repair on the AVR151 and at about 8m44s, you can see a shot of the main logic board showing all the components on it:\n\n\n\nThe STM32 on the bottom left seems to be the main programmable IC on the board, with the part number STM32F205Z6T6 (pdf). The Analog Devices chip goes to the HDMI ports on the back panel and is an ADV7623 HDMI transceiver (you can also find a couple references to the ADV7623 in the strings output for the firmware file.) The ESMT chip is an SDRAM, and the CS497024 is an audio DSP. The chips on the right side that are cut off are another audio DSP and a Frontier Silicon Chorus FS1230, which looks like an SoC meant for integrated audio tuners and other devices, since it connects to an RF front-end as well as displays, non-volatile storage, networking, etc. (pdf). I believe it is also programmable, but beyond that data brief PDF, I can't find much information on the chip.\n\nIf you look at the datasheet for the STM32F205Z6T6, it's got 1MB of flash memory, but the firmware file you posted is 3MB, so chances are there's more than just STM32 firmware in that file. If you analyze the entropy in the posted firmware, you see a couple distinct regions of high entropy (image, linked because it's very tall)* separated by blank space represented as white blocks, so my guess is there's a region of code for the bootloader, another region for the main firmware for the STM32F205, and probably some data that could be written to non-volatile storage, firmware/configuration for the FS1230, or any number of other things, and not necessarily in that order.\n\nIf you look at the file at offset 0xFFFFF (1MB, or the size of the STM32F205 flash), you'll see there's a pretty sharp break between blank data and the start of some new data, so I'd guess that this may be where the firmware stops and the other data begins. That said, the same thing happens at offset 0x1FFFFF (2MB), so you'll have to do some further analysis. See:\n\n\n\n\n\nIf you really want to dig deeper, the description in the youtube video I linked earlier claims to provide the factory service manual for the AVR151, though I'm not sure how it was obtained so I'll refrain from linking it here; likewise, with the information here, coupled with the provided firmware, I think you should have a pretty good start. I believe Igor Skochinsky is correct in saying that at least some of this provided firmware file is code for that STM32F205 (or at least, I'd be surprised if it wasn't), though I didn't go too in-depth with loading it into some toolset and playing with it any further.\n\nMy gut feeling is that most of the interesting stuff happens in that FS1230 and information on that chip is difficult to come by, so you may have a tough time deciphering  what's going on there or determining how to modify the firmware or reverse engineer it without a datasheet or reference manual. That said, there's a lot of interesting strings in the binary file and you now know quite a bit about what's inside the AVR-151, so I think you should have quite a bit to go on.\n\n*special thanks to scanlime for the technique of generating a pgm file for visualizing file entropy:\n\n",
+      "votes": "4",
+      "user": "Cheibriados",
+      "time": "May 8, 2021 at 22:18",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Seems to be a Cortex-M (ARM Thumb-2 code), load base 0x8000000. My guess it's some STM32 model.\n\n\n\n",
+      "votes": "2",
+      "user": "Igor Skochinsky",
+      "time": "May 7, 2021 at 14:27",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

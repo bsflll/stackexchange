@@ -1,0 +1,44 @@
+{
+    "title": "Dumping dll out of process",
+    "link": "https://reverseengineering.stackexchange.com/questions/17836/dumping-dll-out-of-process",
+    "content": "So there is executable malware, what when opened downloads dll from server or so and injects into target process. I checked properties of the target process in process hacker and clicked on .NET assemblies and under AppDomain: Plugins I found that dll, but there was no path of it, just name, so I suppose that its in memory of target process. \nSo Is there a way to export that dll out of the target process? I have very rare touched with this stuff, is there any tutorials in situations like this? I suppose I need programs like ollydbg, IDA, WinDBG.., right? \nAnyways I hope someone could help with this.\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "11k",
+    "tags": [
+        "malware",
+        "dll"
+    ],
+    "user": "YiiCA",
+    "time": "Mar 28, 2018 at 19:24",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I had written up a lengthy answer about some of the subtleties of dumping executables and DLLs before I realized that you may have simpler solutions available. Since you say it's downloading the DLL off of the network, perhaps you can just read the raw contents of the DLL from the network traffic? If the traffic, and the DLL, are unencrypted, this should be easy (you can use Ethereal, for example). If the traffic is encrypted (say, via HTTPS) but the DLL is not, perhaps you can place a breakpoint inside of the HTTPS library to retrieve the unencrypted traffic. If the DLL is encrypted separately from or regardless of the network traffic's encryption or lack thereof, then these ideas won't give you an unencrypted DLL, so you might have to fall back on the idea of dynamically dumping the DLL out of memory at some point. Thus, my original answer follows.\nGiven that EXEs and DLLs share the same file format, and are loaded within a process' address space in an identical fashion, the same tools and procedures for dumping an EXE out of memory also apply to dumping a DLL out of memory. Many tools exist such as Scylla, LordPE, ImpRec and its dump plugin, etc. You can find a list over on Tuts4You.\nOne complication in dumping executable images out of memory is that, if you want the end result to be a working EXE that you can run (or in this case, a working DLL that can be loaded into memory), you need to be meticulous about the precise time to dump. When programs execute, they tend to modify global data structures to indicate that things have been initialized already. For example, the program might check to see if some pointer value stored in the global data section is NULL, and if so, allocate memory and overwrite that NULL pointer with the allocation. Thus, if you were to dump the EXE or DLL after this happened, the next time you ran the program or loaded the DLL, that global data item would point to a piece of memory that no longer exists in memory. The dumped program will probably crash as a result of this. That's why manual unpacking is so fixated on finding the \"original entrypoint\", or OEP: you want to pause execution after the packer finishes its business, before the program starts overwriting its data section. Another related issue is relocations; Windows' loader will modify the process image if it is loaded at a base address other than its preferred one. If you dump after relocations are applied, your dump will reflect those changes.\n(Note that reconstructing a working EXE or DLL is not always the goal. For example, if you just wanted to take a quick peek at the contents of the EXE or DLL in IDA, you could get away with stopping the process at any time and dumping the EXE or DLL. This involves fewer steps than recreating a working image, so it's easier.)\nThe reason I bring this up is because, depending upon the manner of DLL injection, the operating system may process the relocations and call the entrypoint of the DLL immediately upon injection into the other process. If you want to dump the DLL and obtain a working image, this is bad for you due to what I described two paragraphs ago.\nIf the injecting program uses <pre><code>CreateRemoteThread</code></pre> to force a call to <pre><code>LoadLibrary</code></pre> in the victim process, then it must've written the DLL to disk, so you can just copy it without having to worry about the precise time to dump.\nIf the injecting program uses some other method like reflective DLL injection, that means it bypasses the operating system's loader and manually fixes up the DLL (processing relocations, loading imports, and forwarding exports). You'll want to dump the DLL out of the injecting program after it decrypts the DLL, but before it applies the fixes just mentioned. You might start by setting a breakpoint on <pre><code>WriteProcessMemory</code></pre> and <pre><code>NtWriteVirtualMemory</code></pre> in the injecting process to try to locate the code that performs DLL injection, and working backwards to find where the DLL is retrieved from the network and fixed up. Once you've found that, set a breakpoint before the code that fixes up the DLL's image and dump the not-yet-fixed DLL onto disk at that point.\nThese are just my high-level thoughts. More specific questions could yield more specific answers.\n",
+            "votes": "5",
+            "user": "Rolf Rolles",
+            "time": "Mar 28, 2018 at 20:33",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "YiiCA",
+                    "text": "<span class=\"comment-copy\">tools from tuts4you didn't. I tried !sos.DumpDomain in windbg <a href=\"https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/debugging-managed-code\" rel=\"nofollow noreferrer\">docs.microsoft.com/en-us/windows-hardware/drivers/debugger/…</a>  Got few unknow modules, maybe these are these dll's? is there any way to export them?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">You seem to have ignored my answer entirely. I'd suggest reading it again.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "No need for IDA or any other debugger.\nSuppose you know which process had an injection, two possible ways:\n\nOpen process hacker, double click on the process and to the memory tab. Look for memory section with RWX permissions (sometimes RX, but mostly RWX). double click on it and see if it looks like a dll (start with \"MZ\" magic). or a shell code (\"55 8b\" is usually function prologue). Save this memory section to the disk and remember what is its start address at the memory of the process. Use pe_unmapper to convert it back to raw PE format (pe_unmapper FILE_NAME START_ADDRESS)\nUse process dumper\n",
+            "votes": "2",
+            "user": "Hod Gavriel",
+            "time": "Mar 31, 2018 at 11:52",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

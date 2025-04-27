@@ -1,0 +1,59 @@
+{
+  "title": "Functions in Ida are divided into many local functions, how to remove unnecessary transitions?",
+  "link": "https://reverseengineering.stackexchange.com/questions/33319/functions-in-ida-are-divided-into-many-local-functions-how-to-remove-unnecessar",
+  "content": "I am solving the crackme And so you need to get the key, but I am doing reverse engineering for the first time and therefore I do not know how to do it, the functions in the crackme are divided into many local ones with transitions, which makes it difficult to analyze the application because it is difficult to see all the logic at once due to the fact that there are many local functions and each has one action.\nCould someone write at least some information about this, because as I already said, I am a complete 0 in this.\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "161",
+  "tags": [
+    "ida",
+    "disassembly"
+  ],
+  "user": "Bak",
+  "time": "Nov 26, 2024 at 19:58",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Looks like the function is obfuscated - the pattern is pretty simple\nthe jz and jnz which are useless are jumping to the same block - so doesn't matter if the zf is set or unset - the line would be executed\n\n\n\nHere you can see that jz jumps to jnz or call - the jnz would also go to call either directly or after a nop(which would not happen). This means the call instruction is eventually executed and the rest is bogus code.\n\nYou can write an IDApython script to nop this pattern out - this could clean up the bogus control flow here.\nAlthough I am pretty sure the decompilation is almost clean\n\nThe script could look something like this\n\n```\nfrom idautils import *\nfrom idaapi import *\nfrom idc import *\n\ndef find_redundant_jumps(head):\n    while head != BADADDR:\n        # Check if the current instruction is 'jz'\n        if print_insn_mnem(head) == \"jz\":\n            jz_target = get_operand_value(head, 0)  # Get the jump target\n            \n            # Get the next instruction\n            next_ins = next_head(head)\n            if next_ins != BADADDR and print_insn_mnem(next_ins) == \"jnz\":\n                jnz_target = get_operand_value(next_ins, 0)  # Get the jump target\n                \n                # Check if both jump targets are the same\n                if jz_target == jnz_target:\n                    print(f\"jz at {hex(head)}, jnz at {hex(next_ins)}, target: {hex(jz_target)}\")\n                    # patch with NOP - 2 + 2 + 1\n                    patch_bytes(head, b'\\x90'*5)\n\n        head = next_head(head)\n\n# start from where the cursor is\nfind_redundant_jumps(here())\n\n```\nI see that there are other obfuscation patterns - you can extend this script to clean those as well.\n\nA bit more detailed info\n\nEvery function is .text has been redirected to an address in .AkNw2Lq\n\nAdditionally all functions .AkNw2Lq are obfuscated with the technique mentioned above and more. You'll need to look for patterns where the next instruction does exact opposite of the current instruction and clean them up. This answer is not a full writeup but to an extent just noping such ops will reduce the decompilation to a cleaner version\n\nClick on an instruction where you see such obfuscation and run this\n\n```\nfrom idautils import *\nfrom idaapi import *\nfrom idc import *\n\nopposite = {\n    'jz': 'jnz',\n    'jnz': 'jz',\n    'add': 'sub',\n    'sub': 'add',\n    'neg': 'neg',\n    'not': 'not',\n    'pushf': 'popf',\n    'popf': 'pushf',\n    'inc': 'dec',\n    'dec': 'inc',\n    'shr': 'shl',\n    'shl': 'shr',\n    'sar': 'shl',\n    'xor': 'xor',\n    'bswap': 'bswap',\n}\n\ndef find_and_fix(head):\n    while head != BADADDR:\n        # Check if the current instruction is known to be redundant\n        if print_insn_mnem(head) in opposite:\n            # Get the next instruction\n            next_ins = next_head(head)\n            \n            # Check if the next instruction is the opposite of the current instruction\n            if next_ins != BADADDR and print_insn_mnem(next_ins) == opposite[print_insn_mnem(head)]:\n                    if all(get_operand_value(next_ins, i) == get_operand_value(head, i) for i in range(2)):\n                        patch_bytes(head, b'\\x90'*((next_ins - head)*2))\n\n        head = next_head(head)\n\n# start from where the cursor is\nfind_and_fix(here())\n\ndef pushf_popf(head):\n     while head != BADADDR:\n          if print_insn_mnem(head) == 'pushf':\n               curr_head = head\n               while print_insn_mnem(curr_head) != 'popf':\n                    curr_head = next_head(curr_head)\n               patch_bytes(head, b'\\x90'*((curr_head - head)+2))\n          head = next_head(head)\n\n\npushf_popf(here())\n\n```\nAfter running this I see another pattern for obfuscating some ops.\n\nTLDR - the binary has a new segment that has code copied from .text with each line re-written to do bogus ops with some redundant opposite operations. The python script cleans these ops and tries to make the decompilation cleaner. The script keeps scanning until disassembly is possible. Another trick is adding weird bytes in the code - which this script does not fix.\n\n",
+      "votes": "3",
+      "user": "hold-me",
+      "time": "Nov 29, 2024 at 6:02",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "the busybee",
+          "text": "While this cleans up a single function, this does not answer how to resolve many little functions into one.",
+          "time": null
+        },
+        {
+          "user": "hold-me",
+          "text": "@thebusybee the functions are not divided as far as I can see - All functions in .text have been re-routed to a new segment with obfuscated version of the same code.",
+          "time": null
+        },
+        {
+          "user": "the busybee",
+          "text": "Do you see more than we in the screenshot?",
+          "time": null
+        },
+        {
+          "user": "hold-me",
+          "text": "@thebusybee Yes - I downloaded the sample - cleaned it with the script above to get a very good decompilation with very few minor fixes.",
+          "time": null
+        },
+        {
+          "user": "Bak",
+          "text": "@hold-me Bro, you are the best. Thanks.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I'm not going to solve this, but I'm going to question your approach a bit.\n\nAfter inspecting this executable I observe there the following\n\nReverse engineering it straight forward, while theoretically possible, looks not too-much practical. Should you choose this approach you'll need to understand and reverse the obfuscations back with patching one by one: for example patching instruction sequences pushf+popf, xor dst, value + xor dst value, inc dst + dec dst, jz destination + jnz same_destination that actually doing nothing, with nops and observing intermediate results. This can be done with scripting capabilities of your favorite disassembler/decompiler, for example IDAPython for IDA you're using (btw ChatGPT generates such a scripts quite good when asked properly, and hold-me did exactly that in his great answer while I wrote mine).\n\nIf I would try to solve this crackme I'd try to use angr to avoid all the burden. You can see some examples of its usage for crackmes here, in its official documentation or other tutorials like this.\n\nThis excellent tool uses so called concolic execution approach (first link from those internets of yours, search for more) and able, for example, to find a code path that avoids execution of specific address like this one - it finds a solution that avoids printing \"failing\" result and passes through print of the \"good\" one.\n\n",
+      "votes": "1",
+      "user": "w s",
+      "time": "Nov 27, 2024 at 14:36",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

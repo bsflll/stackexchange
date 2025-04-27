@@ -1,0 +1,83 @@
+{
+  "title": "Unpacking xamarin mono dll from libmonodroid_bundle.app.so",
+  "link": "https://reverseengineering.stackexchange.com/questions/16508/unpacking-xamarin-mono-dll-from-libmonodroid-bundle-app-so",
+  "content": "I have an apk that was written in xamarin. The meta data suggests there are lots of dlls files this application uses. I found a file called libmonodroid_bundle_app.so which when disassembled in IDA appears to be a packer/unpacker with functions like inflate, my_inflate, install_dll_config_files etc.\n\nI want to unpack whatever dll files are contained in this, can anyone give any suggestions how I can do this? There is an x86 compiled .so file, so perhaps I can execute it in windows somehow.\n\nedit: It appears it is packed with zlib. There are nice named headers in the file so I will try exporting the raw data then using a zlib library to decompress.\n\n",
+  "votes": "2",
+  "answers": 4,
+  "views": "3k",
+  "tags": [
+    "android",
+    "arm",
+    "dll",
+    "packers"
+  ],
+  "user": "rollsch",
+  "time": "Oct 8, 2017 at 1:42",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "if you figure it out,  post an answer so others can learn how to do it.",
+      "time": null
+    },
+    {
+      "user": "rollsch",
+      "text": "Found the mkbundle source to create the source of the so. Should be easy to write an unpacker as it just uses a simple deflate stream. Will put it up on github when complete. github.com/mono/mono/blob/master/mcs/tools/mkbundle/mkbundle.cs",
+      "time": null
+    },
+    {
+      "user": "rollsch",
+      "text": "Ok I unpacked them, but I had to hard code some offsets as I couldn't figure out how to pull them out of the ELF. Eg I had the _data segment aligned on 64 byte boundary with every word with an offset of -0x1000 and every second dword with an offset of -0xD60, the 0x1000 was easy to figure out from the ELF header as it contained this offset, but the D60 I could not figure out where it came from.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Thanks to the original poster who figured it out (and the other suggestion for foremost). I had to audit some of our own xamarin apps and wanted to unpack the code so I have what an attacker would be able to get to.\nAfter decompiling the .so and checking out the headers, I'm certain it's possible to derive the magic offset from the file (with the number of dlls you have). After spending a couple of hours though, it turned out quicker to just extract all of the gzip streams in the file :)\nSo, thank you all, here's what code I ended up with to get work done:\n\n```\nusing System;\nusing System.IO;\nusing System.IO.Compression;\nusing System.Collections.Generic;\nusing System.Text;\n\nusing Kaitai; //http://formats.kaitai.io/elf/csharp.html\n\npublic class unpack {\nstatic void Main(string[] args)\n    {\n        var unpacked = \"unpacked\";\n        Directory.CreateDirectory(unpacked);\n\n        var path = @\"path\\libmonodroid_bundle_app.so\";\n        var bytes = File.ReadAllBytes(path);\n\n        var elf = Elf.FromFile(path);\n\n        var rodata = elf.Header.SectionHeaders.FirstOrDefault(x => x.Name.Equals(\".rodata\"));\n        if(rodata == null)\n        {\n            Console.WriteLine(\".rodata not found\");\n            Console.ReadKey();\n            return;\n        }\n\n        int dllCount = 0;\n\n        //read in all the packed file names\n        var packedFiles = new List<string>();\n        uint addr = (uint)rodata.Addr;\n        while(true)\n        {\n            //up to 16 bytes of alignment\n            uint i;\n            for(i = 0; i < 16; i++)\n                if(bytes[addr + i] != 0)\n                    break;\n\n            if(i == 16)\n                break; //We found all the files\n            else\n                addr += i;\n\n            var name = GetString(bytes, addr);\n            if(string.IsNullOrWhiteSpace(name))\n                break;\n\n            //We only care about dlls\n            if(!name.EndsWith(\".dll\"))\n                break;\n\n            packedFiles.Add(name);\n            addr += (uint)name.Length + 1u;\n            ++dllCount;\n        }\n\n\n        var data = elf.Header.SectionHeaders.FirstOrDefault(x => x.Name.Equals(\".data\"));\n        if(data == null)\n        {\n            Console.WriteLine(\".data not found\");\n            Console.ReadKey();\n            return;\n        }\n\n        int ixGzip = 0;\n\n        //Read in all the packed file pointers and sizes and then decompress and dump them\n        addr = (uint)(data.Offset);\n        for(int i = 0; i < packedFiles.Count; )\n        {\n            ixGzip = findNextGZIPIndex(bytes, ixGzip);\n            if(ixGzip > 0)\n            {\n                var ptr = ixGzip;\n                var length = GetBigEndianUInt32(bytes, addr + 8);\n\n                var compressedbytes = new byte[length];\n                if(ptr + length <= bytes.LongLength)\n                {\n                    Array.Copy(bytes, ptr, compressedbytes, 0, length);\n                    try\n                    {\n                        var decompbytes = Decompress(compressedbytes);\n                        File.WriteAllBytes($@\"{unpacked}\\{packedFiles[i]}\", decompbytes);\n                        addr += 0x10; //sizeof assembly_bundle struct\n                        i++;\n                    }\n                    catch(Exception e)\n                    {\n                        Console.WriteLine($\"Failed to decompress file: {packedFiles[i]} {e}\");\n                    }\n                }\n            }\n        }\n    }\n\n    private static int findNextGZIPIndex(byte[] bytes, int ixGzip)\n    {\n        for(int j = ixGzip + 2; j < bytes.Length; j++)\n        {\n            if(bytes[j - 1] == 0x1f && bytes[j] == 0x8b)\n            {\n                ixGzip = j - 1;\n                return ixGzip;\n            }\n        }\n\n        return 0;\n    }\n\n    static byte[] Decompress(byte[] data)\n    {\n        using(var compressedStream = new MemoryStream(data))\n        using(var zipStream = new GZipStream(compressedStream, CompressionMode.Decompress))\n        using(var resultStream = new MemoryStream())\n        {\n            zipStream.CopyTo(resultStream);\n            return resultStream.ToArray();\n        }\n    }\n\n    public static uint GetBigEndianUInt32(byte[] bytes, uint address)\n    {\n        uint byte1 = (uint)bytes[(int)address + 3] << 24;\n        uint byte2 = (uint)bytes[(int)address + 2] << 16;\n        uint byte3 = (uint)bytes[(int)address + 1] << 8;\n        uint byte4 = (uint)bytes[(int)address];\n        return (byte1 + byte2 + byte3 + byte4);\n    }\n\n    public static string GetString(byte[] bytes, uint address)\n    {\n        int maxLength = 255;\n        //Search for a null char up to the limit\n        for(int i = (int)address; i < address + maxLength; i++)\n        {\n            if(bytes[i] == 0)\n            {\n                maxLength = i - (int)address;\n                break;\n            }\n        }\n\n        var buffer = new byte[maxLength];\n        Array.Copy(bytes, address, buffer, 0, maxLength);\n        return Encoding.ASCII.GetString(buffer);\n    }\n}\n\n```\n",
+      "votes": "4",
+      "user": "Zulakis",
+      "time": "Jan 29, 2018 at 19:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "rollsch",
+          "text": "Just our of curiosity has this led you to use some form of obfuscator on your dll files prior to packing?",
+          "time": null
+        },
+        {
+          "user": "JR-Fire",
+          "text": "Kind of - I needed to verify what the obfuscatirs accomplished for our internal audit :) Basically, you don't want obfuscation as it's sort of useless, you'd much prefer not to have anything in an app that's not safe to be public :) But, we still use some obfuscation, mainly to prevent constantly having to explain why the code is not obfuscated to external \"audits\" (the nearly-free-we-want-to-sell-our-very-great-secure-tool kind)",
+          "time": null
+        },
+        {
+          "user": "rollsch",
+          "text": "The main reason I see for obfuscation is to stop people blatantly stealing an entire compilable project. Most obfuscators means simply making the time taken to reverse engineer on par with writing from scratch. If you achieve that time delay most the time you prevent theft. Though if your code is valuabke enough then as your said an obfuscator is useless.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "This works very well cross-platform. Make sure to install these python packages:\n\n```\nsudo pip install pyelftools\nsudo pip install yara-python\n\n```\nthis will export all dlls from libmonodroid_bundle_app.so:\n\n```\nfrom elftools.elf.elffile import ELFFile\nfrom zipfile import ZipFile\nfrom cStringIO import StringIO\nimport gzip, string\n\ndata = open('libmonodroid_bundle_app.so').read()\nf = StringIO(data)\nelffile = ELFFile(f)\nsection = elffile.get_section_by_name('.dynsym')\n\nfor symbol in section.iter_symbols():\n  if symbol['st_shndx'] != 'SHN_UNDEF' and symbol.name.startswith('assembly_data_'):\n    print symbol.name\n    dll_data = data[symbol['st_value']:symbol['st_value']+symbol['st_size']]\n    dll_data = gzip.GzipFile(fileobj=StringIO(dll_data)).read()\n    outfile = open(symbol.name[14:].replace('_dll', '.dll'), 'w')\n    outfile.write(dll_data)\n    outfile.close()\n\n```\nAdapted from https://github.com/maldroid/maldrolyzer/blob/master/plugins/z3core.py\n\n",
+      "votes": "3",
+      "user": "Zulakis",
+      "time": "Jan 29, 2018 at 23:13",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Here is my solution to unpack the files in C#.\n\nI could not figure out how the 64 byte alignment works so I hard coded an offset of 0xD60 for the words that did not lie on the alignment boundary. I believe this is the offset of the next free page.\n\nIf anyone else wants to use this solution they will either need to find the page offset manually using IDA etc or figure out how to get it dynamically.\n\nI use the katai struct library to parse the elf file.\n\n```\nusing Kaitai; //http://formats.kaitai.io/elf/csharp.html\n\nstatic void Main(string[] args)\n{\n\n    var path = @\"C:\\path\\libmonodroid_bundle_app.so\";\n    var bytes = File.ReadAllBytes(path);\n\n    var elf = Elf.FromFile(path);\n\n    var rodata = elf.Header.SectionHeaders.FirstOrDefault(x => x.Name.Equals(\".rodata\"));\n    if (rodata == null)\n    {\n        Console.WriteLine(\".rodata not found\");\n        Console.ReadKey();\n        return;\n    }\n\n    //read in all the packed file names\n    var packedFiles = new List<string>();\n    uint addr = (uint)rodata.Addr;\n    while (true)\n    {\n        //up to 16 bytes of alignment\n        uint i;\n        for (i = 0; i < 16; i++) if (bytes[addr + i] != 0) break;\n\n        if (i == 16) break; //We found all the files\n        else addr += i;\n\n        var name = GetString(bytes, addr);\n        if (string.IsNullOrWhiteSpace(name)) break;\n\n        //We only care about mono dlls\n        if (!name.EndsWith(\".dll\")) break;\n\n        packedFiles.Add(name);\n        addr += (uint)name.Length + 1u;\n    }\n\n\n    var data = elf.Header.SectionHeaders.FirstOrDefault(x => x.Name.Equals(\".data\"));\n    if (data == null)\n    {\n        Console.WriteLine(\".data not found\");\n        Console.ReadKey();\n        return;\n    }\n\n    //Read in all the packed file pointers and sizes and then decompress and dump them\n    addr = (uint) (data.Offset);\n    for (int i = 0; i < packedFiles.Count; i++)\n    {\n        //0xD60 is a magic offset due to 64 byte alignment. I am not sure how to dynamically generate this\n        //offset hence this solution will need you to manually find this offset to work with other SO files.\n        var ptr = GetBigEndianUInt32(bytes, addr+0xD60);    \n        var length = GetBigEndianUInt32(bytes, addr+8);\n\n        var compressedbytes = new byte[length];\n        Array.Copy(bytes, ptr, compressedbytes, 0, length);\n        try\n        {\n            var decompbytes = Decompress(compressedbytes);\n            File.WriteAllBytes($@\"{packedFiles[i]}\", decompbytes);\n        }\n        catch (Exception e)\n        {\n            Console.WriteLine($\"Failed to decompress file: {packedFiles[i]} {e}\");\n        }\n        addr += 0x10; //sizeof assembly_bundle struct\n    }\n\n\n\n\n}\n\nstatic byte[] Decompress(byte[] data)\n{\n    using (var compressedStream = new MemoryStream(data))\n    using (var zipStream = new GZipStream(compressedStream, CompressionMode.Decompress))\n    using (var resultStream = new MemoryStream())\n    {\n        zipStream.CopyTo(resultStream);\n        return resultStream.ToArray();\n    }\n}\n\npublic static uint GetBigEndianUInt32(byte[] bytes, uint address)\n{\n    uint byte1 = (uint)bytes[(int)address + 3] << 24;\n    uint byte2 = (uint)bytes[(int)address + 2] << 16;\n    uint byte3 = (uint)bytes[(int)address + 1] << 8;\n    uint byte4 = (uint)bytes[(int)address];\n    return (byte1 + byte2 + byte3 + byte4);\n}\n\npublic static string GetString(byte[] bytes, uint address)\n{\n    int maxLength = 255;\n    //Search for a null char up to the limit\n    for (int i = (int)address; i < address + maxLength; i++)\n    {\n        if (bytes[i] == 0)\n        {\n            maxLength = i - (int)address;\n            break;\n        }\n    }\n\n    var buffer = new byte[maxLength];\n    Array.Copy(bytes, address, buffer, 0, maxLength);\n    return Encoding.ASCII.GetString(buffer);\n}\n\n```\n",
+      "votes": "2",
+      "user": "rollsch",
+      "time": "Oct 8, 2017 at 23:54",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "If you want to extract these packed files (assuming that they are, indeed, packed), I would suggest using a File Carver forensics tool - I use a Unix-based program, foremost.\n\nFile Carvers can search inside other files and attempt to find file headers, or signatures, that denote the start of a file.\n\nIf you succeed in finding files inside of whatever files you search, you might find that they aren't yet accessible because you remarked that they were compressed with zlib - easy! Just rename that file to somename.zip and extract it, or write some code to extract them all yourself if you really want to.\n\nBest of luck!\n\n",
+      "votes": "1",
+      "user": "Alpha",
+      "time": "Oct 8, 2017 at 14:45",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

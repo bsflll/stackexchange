@@ -1,0 +1,59 @@
+{
+    "title": "Garbage Assembly Code Generationat at random offsets",
+    "link": "https://reverseengineering.stackexchange.com/questions/26231/garbage-assembly-code-generationat-at-random-offsets",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Recently I've been working on a project. The main purpose of the project is to generated statically undetectable PE samples. Where each time one generates a PE sample, each generated sample is going to be significantly different than the previous one. I'll be using <em>shikata_ga_nai</em> (<a href=\"https://github.com/rapid7/metasploit-framework/blob/master/modules/encoders/x86/shikata_ga_nai.rb\" rel=\"nofollow noreferrer\">https://github.com/rapid7/metasploit-framework/blob/master/modules/encoders/x86/shikata_ga_nai.rb</a>) to achieve polymorphism. However I'm currently working to improve on <em>garbage assembly generation</em>. There are a lot of possibilities to create garbage assembly. However most of the encoders, including shikata_ga_nai generate garbage assembly at a fixed relative position - meaning the garbage instructions are placed at the end of the code or the beginning. Is there anyway to scatter these garbage instructions across the code WITHOUT messing up the conditional/unconditial <code>jmp</code> and <code>call</code> instructions with relative offsets?</p>\n<p>For the sake of simplicity take the below piece of assembly as an example of a code that my PE file is going to execute</p>\n<p>Payload</p>\n<pre><code>0x42:   0F B7 2C 17             movzx   ebp, word ptr [rdi + rdx]\n0x46:   8D 52 02                lea     edx, [rdx + 2]\n0x49:   AD                      lodsd   eax, dword ptr [rsi]\n0x4a:   81 3C 07 57 69 6E 45    cmp     dword ptr [rdi + rax], 0x456e6957\n0x51:   75 EF                   jne     0x42\n</code></pre>\n<p>Let's say the garbage instruction I want to insert is <code>cmovne  rsi, rsi</code>. If I insert this instruction at the beginning or the end of the code the logic of it doesn't change.</p>\n<p>However If I insert <code>cmovne  rsi, rsi</code> before the <code>cmp</code> instruction the <code>0x4a</code> offset, when the conditional jmp instruction at the <code>0x55</code> will execute, it's going to skip the instructions located at <code>0x42</code>-&gt; <code>0x42:  movzx   ebp, word ptr [rdi + rdx]</code> and start executing at address <code>0x46</code> -&gt; <code>lea     edx, [rdx + 2]</code> becase the offset it's trying to jmp is relative to the <code>rip</code>.</p>\n<p>(<strong>Old offset</strong> -&gt; <code>0x42</code>+ <strong>garbage instruction length</strong> -&gt; <code>0x4</code>= <strong>New WRONG offset</strong> -&gt; <code>0x46</code> )</p>\n<p>Garbage padded payload</p>\n<pre><code>0x42:   0F B7 2C 17             movzx   ebp, word ptr [rdi + rdx]\n0x46:   8D 52 02                lea     edx, [rdx + 2]\n0x49:   AD                      lodsd   eax, dword ptr [rsi]\n0x4a:   48 0F 45 F6             cmovne  rsi, rsi\n0x4e:   81 3C 07 57 69 6E 45    cmp     dword ptr [rdi + rax], 0x456e6957\n0x55:   75 EF                   jne     0x46\n</code></pre>\n<p>Is there any approach I can take to resolve this?</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "272",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "pe",
+        "x86-64"
+    ],
+    "user": "rustam Shirinov",
+    "time": "Nov 3, 2020 at 10:36",
+    "comments": [
+        {
+            "user": "Olvin Roght",
+            "text": "<span class=\"comment-copy\">There's no simple solution. But it sounds like <a href=\"https://meta.stackexchange.com/q/66377/513348\">XY problem</a>. I see no benefits you can get inserting NOP in the middle of code shifting all instructions.</span>",
+            "time": null
+        },
+        {
+            "user": "rustam Shirinov",
+            "text": "<span class=\"comment-copy\">It's not just the nops. The example I gave here was for the sake of simplicity. Final product will have subroutines in them that doesn't have any effect the course of the program but is random enough to confuse the EDR/AV that implements static detection.</span>",
+            "time": null
+        },
+        {
+            "user": "rustam Shirinov",
+            "text": "<span class=\"comment-copy\">Also there's a clear problem here at least for me. The problem is the offsets get shifted during instruction insertion. All I'm doing is asking for the solution. I don't have any idea how to overcome this issue. Also any alternatives are welcome.</span>",
+            "time": null
+        },
+        {
+            "user": "Olvin Roght",
+            "text": "<span class=\"comment-copy\">No, I don't say that problem doesn't exist, I understand it, but implementing universal solution would take a while, that's why common way to inject code into existing subroutine is replacing current instructions with branch to initialized memory where code of injection written.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Assemblers are faced with a similar problem: the user writes textual labels such as <code>@loop</code>, and references them in conditional branch instructions such as <code>jbe @loop</code>. However, the assembler does not know ahead of time how far the branch is from the label (in order to generate the displacement for the branch). It only learns that after generating machine code for the rest of the instructions.</p>\n<p>What to do about this? Re-introduce symbolic labels. Instead of representing the <code>jne</code> as <code>jne 0x42</code> -- which has the address directly inside of it -- represent it as <code>jne top_of_loop</code>. Then, after you've added garbage instructions, compute the length from the <code>jne</code> to <code>top_of_loop</code>.</p>\n</div>",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Nov 3, 2020 at 19:04",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "rustam Shirinov",
+                    "text": "<span class=\"comment-copy\">The <code>jne 0x42</code> instruction is placed there beforehand. I don't have any control over code that's already been compiled. But if I understood correctly with your suggestion I can locate the <code>jmp</code>s before adding the garbage assembly, replace their hardcoded values with labels, add garbage assembly and finally assemble the whole code into garbage-infused new equally functional code?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">Roughly, yes. Locating the jumps might require actual disassembly because the bytes that denote a conditional or unconditional jump might also appear in the middle of other instructions. But, yes, if you keep track of how far a jump is away from its destination, you can change the relative displacement value in its encoding if it gets closer or further away.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

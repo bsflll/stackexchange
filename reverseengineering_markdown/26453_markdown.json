@@ -1,0 +1,54 @@
+{
+  "title": "Decoding algorithm with checksum",
+  "link": "https://reverseengineering.stackexchange.com/questions/26453/decoding-algorithm-with-checksum",
+  "content": "I'm a newbie, so I'm asking for your help.\n\nI have to decode dumped data from an appliance because I wanted to try understand the data.\n\nThe data are in this format and some information are known:\n\n7E 00 20 10 75 00 00 00 07 5F C7 6F 4F 01 05 C8 .. .. .. (some other bytes that are the same for each packet)\n\n7e = start framing (Does not change)\n\n20 = length of packet (Does not change)\n\n10 75 = packet type (Does not change)\n\n00 00 00 07 = incremental number, when it reach 00 00 00 FF, the next is 00 00 01 00\nwhen checksum is failed the appliance retries with same number.\n\n5F C7 6F 4F hex timestamp (unix timestamp converted in hexadecimal)\n\n01 ALTERNATING VALUE 01 or 21 (this value alternate on each received packet)\n\n05 MISTERY BYTE, i'll explain later\n\nC8 checksum calculated with the sum of incremental number plus hex timestamp, then mod 256 and subtracted with 0x03 when the alternating value is 21 or 0x23 when alternating value is set to 01. When the resulting value is negative you have to discard all FF FF and take the last byte.\n\nThe problem is the mistery byte.\n\nAt first glance seems to be:\n\nWhen last byte of timestamp is greather than checksum, the mistery byte is: 06, else is 05.\nBut sometimes this value is \"07\"\n\nHere another example:\n\n7E 00 20 10 75 00 00 00 08 5F C7 71 73 21 06 0F .. .. ..\n\nchecksum calculation method:\n00 + 00 + 00  + 08 + 5F + C7 + 71 = 0x212 (decimal 530)\n\n530 mod 256 = 18\n\ndecimal 18 to hex = 12\n\nbecause the alternating value is 21, i have to subtract 0x3 -> 12 - 0x03  = checksum = 0F\n\nnow the last byte of checksum 73 is greather than 0F so the result of mistery byte seems correct to be 06\n\nthe problem comes when mistery field is sometimes 07. I think that this value is not merely a comparing with last byte of timestamp with checksum, but i missed something.\n\n7E 00 20 10 75 00 00 00 87 5F C7 7B ED 21 07 12\n\n7E 00 20 10 75 00 00 00 88 5F C7 7B FF 01 07 05\n\nHere some other example that seems 06 alternate with 07:\n\n7E 00 20 10 75 00 00 00 D0 5F C7 80 89 01 06 DC\n\n7E 00 20 10 75 00 00 00 D1 5F C7 80 8F 21 07 03\n\n7E 00 20 10 75 00 00 00 D2 5F C7 80 95 01 06 EA\n\n7E 00 20 10 75 00 00 00 D3 5F C7 80 96 21 07 0C\n\n7E 00 20 10 75 00 00 00 D4 5F C7 80 9B 01 06 F2\n\nbut soon there are 07 for a lot of rows\n\n7E 00 20 10 75 00 00 00 D9 5F C7 80 A9 21 07 25\n\n7E 00 20 10 75 00 00 00 DA 5F C7 80 AA 01 07 07\n\n7E 00 20 10 75 00 00 00 DB 5F C7 80 AA 21 07 28\n\nsome examples with \"05\" mistery byte.\n\n7E 00 20 10 75 00 00 01 09 5F C7 82 00 21 05 AF\n\n7E 00 20 10 75 00 00 01 0A 5F C7 82 05 01 05 95\n\n7E 00 20 10 75 00 00 01 0B 5F C7 82 26 21 05 D7\n\n7E 00 20 10 75 00 00 01 0C 5F C7 82 2C 01 05 BE\n\nAny clue of what this mistery byte is used for?\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "621",
+  "tags": [
+    "disassembly",
+    "decryption",
+    "crc",
+    "dumping",
+    "memory-dump"
+  ],
+  "user": "Daniel Davis",
+  "time": "Dec 6, 2020 at 14:06",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Looks like it's just addition for the checksum, so nice job on that.\n\nThe mystery byte is part of the checksum.\n\nThe accumulator is 2 bytes.\n\n```\ndata = \"\"\"0000AAAAAA7E00201075000000075FC76F4F0105C8\n0000AAAAAA7E00201075000000875FC77BED210712\n0000AAAAAA7E00201075000000885FC77BFF010705\"\"\".strip().split(\"  \n\")\n\nimport struct\n\nfor i,l in enumerate(data):\n    xs = bytes.fromhex(l)\n    body = xs[:-2]\n    xsum = xs[-2:]\n\n    v = 187\n    for b in body:\n        v+=b\n\n    \n    print(\"msg\",i,\"body\",body.hex(),\"checksum\",xsum.hex(),\"calcxsum\",struct.pack(\">H\",v).hex())\n\n```\nRun:\n\n```\n$ python3 xsumtest.py \nmsg 0 body 0000aaaaaa7e00201075000000075fc76f4f01 checksum 05c8 calcxsum 05c8\nmsg 1 body 0000aaaaaa7e00201075000000875fc77bed21 checksum 0712 calcxsum 0712\nmsg 2 body 0000aaaaaa7e00201075000000885fc77bff01 checksum 0705 calcxsum 0705\n\n```\n",
+      "votes": "3",
+      "user": "pythonpython",
+      "time": "Dec 6, 2020 at 20:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Daniel Davis",
+          "text": "Thanks. I guessed part of the algorithm by myself, observing similitude with other checksum calculation method.  Here the complete payloads pastebin.com/mkXc3Wkd  (i can't execute your script, tried with python3.7.3 and i receive IndexError: list assignment index out of range)",
+          "time": null
+        },
+        {
+          "user": "pythonpython",
+          "text": "Do you have more messages which have a different length? I think the mystery byte is part of a 2byte flag field.",
+          "time": null
+        },
+        {
+          "user": "pythonpython",
+          "text": "Updated answer , it's a 2byte checksum with a 1byte stride with an initialization of 187. haha.",
+          "time": null
+        },
+        {
+          "user": "Daniel Davis",
+          "text": "Thank you, very helpful!",
+          "time": null
+        },
+        {
+          "user": "pythonpython",
+          "text": "If you have any more binary messages you'd be comfortable sharing, I'd appreciate it. I'm working on some research to automate these sorts of tasks.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

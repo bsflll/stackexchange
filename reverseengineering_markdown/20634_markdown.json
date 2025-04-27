@@ -1,0 +1,74 @@
+{
+  "title": "Finding lua C functions compiled binary",
+  "link": "https://reverseengineering.stackexchange.com/questions/20634/finding-lua-c-functions-compiled-binary",
+  "content": "So i am trying to \"hack\" a game however not for cheating purposes. I am looking to extend the games scripting functionality through a DLL that can look for processes and return them. The game I am looking to do this for is Train Simulator (i know, don't laugh) and the game uses lua to script all of the engine functionality within the game. All the 3rd party devs get to see is the lua script that they write.\n\nInside the games lua there is core functions. The main ones:\n\n```\nfunction Initialise()\n\nend\n\nfunction Update(time) -- time is the interval since the last update\n\nend\n\n```\nThere is also C functions that are used as such:\n\n```\nCall(\"SetControlValue\", name, index, value)\nor\nCall(\"GetIsPlayer\")\n\n```\nThese return different values.\n\nWhat i have so far with my DLL is as follows:\n\n```\n#include <windows.h>\n\n\nBOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)\n{\n    switch (ul_reason_for_call)\n    {\n    case DLL_PROCESS_ATTACH:\n        /* The DLL is being loaded for the first time by a given process.\n        Perform per-process initialization here.  If the initialization\n        is successful, return TRUE; if unsuccessful, return FALSE. */\n        MessageBoxA(0, \"TSDll has been attached !\", \"Train Sim Dll\", MB_ICONEXCLAMATION | MB_OK);\n        break;\n    }\n    return TRUE;\n}\n\n```\nAnd this works. In my train sim engine script i am using the loadlib library to load the DLL.\n\n```\nlibinit, err = loadlib(\"plugins\\\\TSDll.dll\", \"libinit\")\nif _G[\"libinit\"] then \n    Print(\"TSDll Library Loaded!\")\n    libinit()\nelse\n    Print(\"loadlib on TSDll failed: \")\n    Print(err)\nend\n\n```\nAnd i get this result:\n\n\nSo the dll initialises properly.\n\nThe problem i face is that the Lua library is directly built in to the game binary (as far as i know) which means i am unable to reference lua.dll for fundamental functions such as lua_pushstring. Does anyone here know how i can find the address of these functions. I know a dll like this has been made before but the person who did it has been very secretive about how it has been done.\n\nThanks,\nDan\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "disassembly",
+    "c++",
+    "dll-injection",
+    "game-hacking",
+    "lua"
+  ],
+  "user": "DanH50049",
+  "time": "Feb 16, 2019 at 21:50",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "What tools have you been using to reverse engineer your target? It stands to reason if you were using IDA that FLIRT/signatures could be of help. However, you may need to figure out first whether you are dealing with Lua or LuaJIT and (roughly) which version. The strings utility should be of help here.",
+      "time": null
+    },
+    {
+      "user": "DanH50049",
+      "text": "I haven't been using anything to reverse engineer yet, that is what i am trying to figure out how to do.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As you said, the Lua engine is embedded directly into the game. It's inside plugins/GameManagerVC.dll (or GameManagerVC64.dll in case of 64-bit).\nSo, first step will be finding out, which version of Lua it is. So put this DLL into Ghidra or IDA Pro. The most easiest way of figuring out, what version of Lua it uses, is by searching for \"Lua\" string in string list (In case of IDA Pro Views > Open Subviews > Strings). In case of Train Simulator, we found Lua 5.0.2. Then we should download the Lua 5.0.2 source code, so we can search for functions. The easiest way of search for functions, is by picking some function, which have some strings, and search those strings in your disassembled file. Then rename them, look for references, etc. This way, you shold be able to find all functions, you're looking for.\n\n",
+      "votes": "1",
+      "user": "GAMELASTER",
+      "time": "Apr 22, 2021 at 9:17",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "A DLL placement attack could be a useful for this. If you only have a handful of functions in the target DLL you could figure out the prototypes and simply forward the ones you aren't interested in but intercept the calls you are interested in. I have used this successfully in the past and it seems this could be applicable here.",
+          "time": null
+        },
+        {
+          "user": "GAMELASTER",
+          "text": "@0xC0000022L yes, this method can spare a lot of time, although, in this DLL, lua functions are not exported, thus, this method is not possible.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "That's one aspect I find annoying about this question. I still have no clue how I could get those DLLs to take a look. So this question has a very narrow audience.",
+          "time": null
+        },
+        {
+          "user": "DanH50049",
+          "text": "It is incredibly specific but I tried to make it as broad as possible. I have disassembled GameManagerVC.dll however I am unsure what is am looking for in order to push a string back or something similar.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "The best way you can get access to Lua when it's statically linked to the game is by writing a detour to the lua_gettop() method in the Lua library. I actually wrote a guide explaining how to do this with the Microsoft Research Detours Package. See my guide here, which explains how to hook the method and the lua_State here.\n\n```\ntypedef int(__cdecl *gettop)(unsigned long);\ngettop lua_gettop_p = (gettop)0x18121A870; // Might change if the game updates\n\nunsigned long lua_State = 0;\n\n// This is our version of the gettop function from IDA\nDWORD _gettop(__int64 state)\n{\n    // If Lua State is not already set then log it and set it\n    if (lua_State == 0) {\n        lua_State = state;\n    }\n\n    // This is from the decompiled function and cannot be changed\n    return (unsigned long)(*((QWORD *)state + 2) - *((QWORD *)state + 3)) >> 4;\n}\n\n// Here we setup the detour to \"replace\" the games function with ours\nDetourTransactionBegin();\nDetourUpdateThread(GetCurrentThread());\nDetourAttach(&(LPVOID&)lua_gettop_p, (PBYTE)_gettop);\nDetourTransactionCommit();\n\n```\n",
+      "votes": "0",
+      "user": "Zack Eckersley Pallett",
+      "time": "Apr 19, 2022 at 19:11",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "sudhackar",
+          "text": "Hello and welcome to re.se. Good Answer but in its current state is mostly dependent on that notion link. If notion goes down the answer is worthless. Can you edit the answer to add more details such that it's relevant and works without depending on any link outside of re.se.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

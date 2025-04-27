@@ -1,0 +1,41 @@
+{
+    "title": "Track execution of bytes in a Linux executable",
+    "link": "https://reverseengineering.stackexchange.com/questions/16573/track-execution-of-bytes-in-a-linux-executable",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Given a binary executable file (in this case, a compiled C file which finds the gcd of 2 numbers), is there a tool which profiles the execution of this file and could generate some sort of call graph of that execution, specifically the order of instructions/bytes being called/accessed (i.e. a list of positions of instructions/bytes within that file)?</p>\n<p>I know that <em>ltrace</em> and <em>strace</em> tools trace the library and system calls, respectively, but what I'm asking for is specifically the bytes located in the file itself.</p>\n<p>I tried using <em>perf</em> to sample the PC, but I didn't find a way to limit its sampling to the file itself or to have it track the exact bytes themselves. I also found that it couldn't sample it fast enough for such a short program. <em>oprofile</em> seemed to have a similar issue.</p>\n<p>I used \n<em>radare2</em> to generate a call-graph of the executable, but that created the full call-graph and was independent of any arguments/execution, nor does it give exact positions of the instructions.</p>\n<p>I'd like to use this tool to compare the execution of two binaries i.e. show the difference in execution between ./gcd 5 10 and ./gcd 128 24</p>\n<p>Does a tool like this exist?</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "659",
+    "tags": [
+        "binary-analysis",
+        "executable",
+        "binary",
+        "call-graph"
+    ],
+    "user": "Revenant013",
+    "time": "Oct 17, 2017 at 15:06",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\"><a href=\"https://software.intel.com/sites/landingpage/pintool/docs/71313/Pin/html/index.html#IAddressTrace\" rel=\"nofollow noreferrer\">software.intel.com/sites/landingpage/pintool/docs/71313/Pin/…</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It seems what you need is an <em>instruction tracer</em>. PIN from Intel is one example of a framework which allows you to make tracing tools. It uses <em>dynamic binary instrumentation</em> to achieve reasonable speeds and you can likely use one of the examples shipped with the library with little or no modification. Many debuggers also support instruction trace recording (usually by software stepping every instruction which is rather slow but generally reliable). Some may even have support for <em>differential debugging</em> which records several executions and shows differences between them.</p>\n<p>If you have a recent Intel CPU, you may be able to take advantage of <a href=\"http://halobates.de/blog/p/410\" rel=\"nofollow noreferrer\">Intel Processor Trace (PT)</a> with <code>perf</code>.</p>\n</div>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Oct 18, 2017 at 9:37",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As <a href=\"https://reverseengineering.stackexchange.com/users/60/igor-skochinsky\">@IgorSkochinsky</a> suggests, you can use dynamic binary instrumentation (DBI).</p>\n<p>One alternative to PIN is <a href=\"http://dynamorio.org/\" rel=\"nofollow noreferrer\">DynamoRIO</a>.</p>\n<pre><code>$ ./drbuild.sh  # build script (below)\n$ gcc gcd.c -o gcd\n\n# run one\n$ $ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd 5 10\n5\n\n$ ls  # so we know which log is from our first run\ndrbuild.sh  drcov.gcd.18958.0000.proc.log  dynamorio  gcd  gcd.c\n\n# run two\n$ $ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd 128 24\n8\n</code></pre>\n<p>Now that we have built DynamoRIO with <a href=\"https://www.dropbox.com/s/1gki8k1y5axexw4/drbuild.sh?dl=0\" rel=\"nofollow noreferrer\"><code>drbuild.sh</code></a>, compiled <a href=\"https://www.dropbox.com/s/zvwkyvq5qg73p2p/gcd.c?dl=0\" rel=\"nofollow noreferrer\"><code>gcd.c</code></a>, run <a href=\"https://www.dropbox.com/s/54a7mwtu9r0igla/gcd?dl=0\" rel=\"nofollow noreferrer\"><code>gcd</code></a>, and generated <a href=\"https://www.dropbox.com/s/fp0sqvjiedi6agw/drcov.gcd.18958.0000.proc.log?dl=0\" rel=\"nofollow noreferrer\"><code>drcov.gcd.18958.0000.proc.log</code></a> and <a href=\"https://www.dropbox.com/s/27gaow6ymluiqmi/drcov.gcd.18960.0000.proc.log?dl=0\" rel=\"nofollow noreferrer\"><code>drcov.gcd.18960.0000.proc.log</code></a>, we can compare the \"BB Table\" field between the logs for runs one (2177) and two (2183) to immediately see that more basic blocks (counting duplicity) were executed on the second run, as we should expect due to the <code>while()</code> in <code>gcd_iter()</code>.</p>\n<p>Basic blocks are grouped by module and identified by their offsets into that module. For example, <code>module 0</code> contains all basic blocks in the <code>gcd</code> binary. The line containing <code>module[  0]: 0x0000043b</code> means that the basic block at <code>module 0 start (0x08048000) + 0x0000043b</code> was encountered. From <a href=\"https://www.dropbox.com/s/xerf2rjiivk5sww/cfg_part.png?dl=0\" rel=\"nofollow noreferrer\">this cfg</a>, we can see that <code>0x0804843b</code> is the first basic block in the <code>gcd_iter()</code> function.</p>\n<p>If the first argument to <code>gcd_iter()</code> is negative, execution falls through to <code>0x08048444</code>, which negates that argument; otherwise, we jump to <code>0x8048447</code>. The logs for the first two runs, in which all arguments are positive, align with this expectation.</p>\n<pre><code>$ grep -F 'module[  0]:' drcov.gcd.18958.0000.proc.log\n...\nmodule[  0]: 0x0000043b,   9\nmodule[  0]: 0x00000447,   6\n...\n</code></pre>\n<p>Running <code>gcd</code> with a negative first argument shows how DynamoRIO's output is dynamic.</p>\n<pre><code>$ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd -5 10\n$ grep -F 'module[  0]:' drcov.gcd.18970.0000.proc.log\n...\nmodule[  0]: 0x0000043b,   9\nmodule[  0]: 0x00000444,   9\n...\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "devtty1er",
+            "time": "Feb 15, 2018 at 15:45",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

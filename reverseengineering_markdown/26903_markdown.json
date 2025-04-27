@@ -1,0 +1,33 @@
+{
+  "title": "How do you build a virtual machine to interpret machine code?",
+  "link": "https://reverseengineering.stackexchange.com/questions/26903/how-do-you-build-a-virtual-machine-to-interpret-machine-code",
+  "content": "How does the parser parse the machine code? Does it go byte by byte? How does it know how many bytes to read when parsing an instruction? Does it have some sorts of tables of bytes to translate the machine code via table directly into assembly like AST?\n\nI am starting to understand how to generate the machine code from Assembly, but how do you go from machine code to assembly essentially, from machine code to an AST used by a VM? What are the general principles?\n\nAre there any open source projects that demonstrate this for x86? I have seem many \"x86 vms\" on GitHub which interpret assembly instructions, but none that interpret machine code directly. I guess this would be some sort of reverse engineering project (maybe this is one?), but not sure where to look. Even something which takes the machine code and converts it to assembly string would be valuable to see, something similar to objdump, but ideally in JavaScript/Node.js :)\n\nThis looks like a good start, is this standard?\n\n```\nvoid\nxed_instruction_length_decode(xed_decoded_inst_t* ild)\n{\n    prefix_scanner(ild);\n#if defined(XED_AVX) \n    if (xed3_operand_get_out_of_bytes(ild)) \n        return;\n    vex_scanner(ild);\n#endif\n#if defined(XED_SUPPORTS_AVX512) || defined(XED_SUPPORTS_KNC)\n\n    // evex scanner assumes it can read bytes so we must check for limit first.\n    if (xed3_operand_get_out_of_bytes(ild))\n        return;\n\n    // if we got a vex prefix (which also sucks down the opcode),\n    // then we do not need to scan for evex prefixes.\n    if (!xed3_operand_get_vexvalid(ild) && chip_supports_avx512(ild)) \n        evex_scanner(ild);\n#endif\n\n    if (xed3_operand_get_out_of_bytes(ild))\n        return;\n#if defined(XED_AVX)\n    // vex/xop prefixes also eat the vex/xop opcode\n    if (!xed3_operand_get_vexvalid(ild) &&\n        !xed3_operand_get_error(ild)     )\n        opcode_scanner(ild);\n#else\n    opcode_scanner(ild);\n#endif\n    modrm_scanner(ild);\n    sib_scanner(ild);\n    disp_scanner(ild);\n    imm_scanner(ild);\n}\n\n```\nIt looks like a lot of processing to figure out the instructions.\n\nBut alas, some of the functions source code are missing, like xed3_operand_get_out_of_bytes...\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "172",
+  "tags": [
+    "assembly",
+    "x86",
+    "machine-code",
+    "vm"
+  ],
+  "user": "Lance Pollard",
+  "time": "Jan 30, 2021 at 4:16",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "The title asks about virtual machine but the body seems to be about a disassembler, can you fix one or the other so it’s more clear what exactly you’re looking for?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "yes the parser can parse byte by byte\nan x86 instruction is MAX 15 Bytes\n\nso if it sees 15 bytes of 0x66 (PREFIX BYTE )one followed by another\nit will discard 13 bytes , consider the 14th byte as VALID PREFIX\nand disassemble the 14th&15th byte\n(same for all LEGACY_PREFIX(2e,...67) ,REX_FAMILY on x64 (0x40,0x4f)\n\nsee for a python poc\n\n```\nfrom capstone import *\nCODE = [\nb\"\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x66\\x90\\x90\",\nb\"\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x41\\x90\\x90\",\nb\"\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x2e\\x90\\x90\"\n]\nprint(\"  \nCODE[0] parsed notice the Address of Successive instructions\")\nfor i in (Cs(CS_ARCH_X86,CS_MODE_64).disasm(CODE[0],0x10000000)):\n    print(\"0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str))\nprint(\"  \nCODE[1] parsed notice the Address of Successive instructions\")\nfor i in (Cs(CS_ARCH_X86,CS_MODE_64).disasm(CODE[1],0x10000000)):\n    print(\"0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str))\nprint(\"  \nCODE[2] parsed notice the Address of Successive instructions\")\nfor i in (Cs(CS_ARCH_X86,CS_MODE_64).disasm(CODE[2],0x10000000)):\n    print(\"0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str)) \n\n\n:\\>python dis64.py\n\nCODE[0] parsed notice the Address of Successive instructions\n0x10000000:     nop\n0x1000000f:     nop\n\nCODE[1] parsed notice the Address of Successive instructions\n0x10000000:     xchg    eax, r8d\n0x1000000f:     nop\n\nCODE[2] parsed notice the Address of Successive instructions\n0x10000000:     nop\n0x1000000f:     nop\n\n```\nparsing the opcode is complex procedure (cisc instructions for x86/x86_64)\n\nmanually decoding a random stream of bytes\n\na simple one byte opcode with 4 byte immediate\n\n```\n>>> \"{0:040b}\".format(0x3dffffffff)\n'0011110111111111111111111111111111111111'\n========================================================\n  0x3d       0xff       0xff       0xff       0xff\n76543210 | 76543210 | 76543210 | 76543210 | 76543210\n00111101 | 11111111 | 11111111 | 11111111 | 11111111\n------ds | modregrm sib immediate etc follows\n\n```\nsimple naive parser action will be like\n\n```\nfirst 6 bits 001111  using a look up table this is a CMP mnemonic \n\n(0x3c,al,imm8 or 0x3d eax,imm32)\n\n7th bit dbit = 0 a register\n8th bit sbit = 1 so 32 bit register so takes a  32 bit wide immediate \n\nso this will be \nCMP EAX,0xffffffff\n\n```\nchecking with some known implementations\n\n```\nwindbg\n0:000> eb . 3d ff ff ff ff;u . l 1\nntdll!LdrpDoDebuggerBreak+0x2c:\n778b05a6 3dffffffff      cmp     eax,0FFFFFFFFh\n0:000>\n\nobjdump\n:\\>echo \"\\x3dffffffff\" | xxd -r -p > foo.bin\n:\\>xxd -g 1 foo.bin\n00000000: 3d ff ff ff ff                                   =....\n:\\>objdump.exe -b binary -mi386 -D foo.bin\n\nfoo.bin:     file format binary\nDisassembly of section .data:\n00000000 <.data>:\n   0:   3d ff ff ff ff          cmp    $0xffffffff,%eax\n\n```\nyou can also use capstone,gdb,llvm,distorm,xed,.......as above\n\n",
+      "votes": "2",
+      "user": "blabb",
+      "time": "Jan 30, 2021 at 14:43",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

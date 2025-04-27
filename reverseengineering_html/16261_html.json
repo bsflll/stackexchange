@@ -1,0 +1,46 @@
+{
+    "title": "Should the Delay Import Directory contain virtual addresses?",
+    "link": "https://reverseengineering.stackexchange.com/questions/16261/should-the-delay-import-directory-contain-virtual-addresses",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The\n  <a href=\"http://github.com/uxmal/reko\" rel=\"nofollow noreferrer\">\n   Reko decompiler\n  </a>\n  crashes while trying to load the PE delay import directory of a particular binary I'm looking at. For 32-bit executables, the PE spec states that the directory consists of a sequence of records where offset 4 contains:\n </p>\n <blockquote>\n  <p>\n   [the] RVA of the name of the DLL to be loaded. The name resides in the read-only data section of the image (\n   <code>\n    szName\n   </code>\n   )\n  </p>\n </blockquote>\n <p>\n  When I use dumpbin to look at the image, I see that the PE header\n </p>\n <pre><code>      185000 [     2C6] RVA [size] of Delay Import \n</code></pre>\n <p>\n  And the\n  <code>\n   .didata\n  </code>\n  section's raw data is:\n </p>\n <pre><code>00585000: 00 00 00 00 90 51 58 00 00 00 00 00 A0 50 58 00  .....QX......PX.\n00585010: B4 50 58 00 C8 50 58 00 DC 50 58 00 00 00 00 00  �PX.�PX.�PX..... \n(etc)\n</code></pre>\n <p>\n  Notice that at 00585004, the\n  <code>\n   szName\n  </code>\n  field has what looks to me a virtual address (00585190) and\n  <em>\n   not\n  </em>\n  a RVA (which would have been 00185190). Still, dumpbin manages to interpret this as:\n </p>\n <pre><code>USER32.DLL\n          00000000 Characteristics\n          00000000 Address of HMODULE\n          005850A0 Import Address Table\n          005850B4 Import Name Table\n          005850C8 Bound Import Name Table\n          005850DC Unload Import Name Table\n                 0 time date stamp\n</code></pre>\n <p>\n  where it follows the 00585190 to find the string\n  <code>\n   USER32.DLL\n  </code>\n  .\n </p>\n <p>\n  So how should the entries in the Delay Import Directory be interpreted? Should a PE loader first attempt to read the\n  <code>\n   szName\n  </code>\n  field as an RVA, and only when it discovers that it isn't a valid RVA, attempt to read it as VA?\n </p>\n <p>\n  Note that for small EXE files, which get loaded at address 0x0040000, the range of valid RVA's will be\n  <code>\n   [0x00000000..MAX_RVA)\n  </code>\n  while the range of valid virtual addresses will be\n  <code>\n   [0x00400000..MAX_RVA + 0x00400000]\n  </code>\n  , so RVA's and VA's could theoretically be distinguished by looking at their numerical values. But once the binary size exceeds 0x00400000 bytes (4194304 bytes) these ranges overlap and you can't tell the difference anymore.\n </p>\n <p>\n  Update:\nInterestingly, many PE viewers and editors crash or go off the rails on this binary. Dumpbin, IDA, and -- most significantly -- the Windows loader don't crash. Wonder what algorithm they are using to avoid dying on this binary?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "pe32"
+    ],
+    "user": "John Källén",
+    "time": "Sep 4, 2017 at 22:47",
+    "comments": [
+        {
+            "user": "c00000fd",
+            "text": "<html><body><span class=\"comment-copy\">\n I know it's been a while. I found this thru Google. I'm trying to see if my software that deals with PE format can handle a binary file that you described. Can you please upload it to some file sharing service and give us a link? It'd be very helpful. Thanks.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Willi Ballenthin",
+            "text": "<html><body><span class=\"comment-copy\">\n @c00000fd this file has delayed imports with VAs (not RVAs)\n <a href=\"https://www.virustotal.com/gui/file/471ce36855fec6b44398b9b1e3cfb9e74b122fb2cc20fdf6603ebda39f86dddf/detection\" rel=\"nofollow noreferrer\">\n  virustotal.com/gui/file/…\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Delayed imports are not processed by the system loader, so the programmer can put into it any kind of data, as long as they're prepared to handle it. By convention (mostly because Visual C++ did it), delayed imports are expected to use the same format as \"normal\" imports, but since this is not enforced by the OS it's not a requirement, and a specific program can use its own format or put any garbage into it.\n </p>\n <p>\n  IIRC the issue with szName comes from the first implementation of the delayed imports (VC 6.0) which by mistake used full addresses instead of RVAs. This can be seen in the source code of the delayed import helper shipped with Visual C++ (\n  <code>\n   delayhlp.cpp\n  </code>\n  ):\n </p>\n <pre><code>// For our own internal use, we convert to the old\n// format for convenience.\n//\nstruct InternalImgDelayDescr {\n    DWORD           grAttrs;        // attributes\n    LPCSTR          szName;         // pointer to dll name\n    HMODULE *       phmod;          // address of module handle\n    PImgThunkData   pIAT;           // address of the IAT\n    PCImgThunkData  pINT;           // address of the INT\n    PCImgThunkData  pBoundIAT;      // address of the optional bound IAT\n    PCImgThunkData  pUnloadIAT;     // address of optional copy of original IAT\n    DWORD           dwTimeStamp;    // 0 if not bound,\n                                    // O.W. date/time stamp of DLL bound to (Old BIND)\n    };\n</code></pre>\n <p>\n  (note how it says \"old format\" and most field, including\n  <code>\n   szName\n  </code>\n  , are full pointers and not RVAs).\n </p>\n <p>\n  The issue is also mentioned in the MSDN article\n  <a href=\"https://msdn.microsoft.com/en-us/library/2b054ds4.aspx\" rel=\"nofollow noreferrer\">\n   <em>\n    Changes in the DLL Delayed Loading Helper Function Since Visual C++ 6.0\n   </em>\n  </a>\n  :\n </p>\n <blockquote>\n  <p>\n   Since the pointers in the delay descriptor (ImgDelayDescr in\n  delayimp.h) have been changed from absolute addresses (VAs) to\n  relative addresses (RVAs) to work as expected in both 32- and 64-bit\n  programs, you need to convert these back to pointers. A new function\n  has been introduced: PFromRva, found in delayhlp.cpp. You can use this\n  function on each of the fields in the descriptor to convert them back\n  to either 32- or 64-bit pointers. The default delay load helper\n  function continues to be a good template to use as an example.\n  </p>\n </blockquote>\n <p>\n  If you open the above-mentioned header, you can see this definition:\n </p>\n <pre><code>enum DLAttr {                   // Delay Load Attributes\n    dlattrRva = 0x1,                // RVAs are used instead of pointers\n                                    // Having this set indicates a VC7.0\n                                    // and above delay load descriptor.\n    };\n</code></pre>\n <p>\n  This is how IDA detects the correct format of delayed imports (absolute addresses in your case) and can handle them without crashing.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Igor Skochinsky",
+            "time": "Jan 24, 2020 at 17:03",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "John Källén",
+                    "text": "<span class=\"comment-copy\">Thanks for the clarifications. It seems my copy of Microsoft's documentation of the delay import directory is incomplete; it makes no mention of the delay load attribute you mention above.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">the whole thing should be documented as \"implementation defined, but here's how Visual C++ does it\". The OS does not care about it.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

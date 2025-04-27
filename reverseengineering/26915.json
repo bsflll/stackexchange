@@ -1,0 +1,34 @@
+{
+    "title": "Specifying the register value which is constant for all the functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/26915/specifying-the-register-value-which-is-constant-for-all-the-functions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In the firmwares I met the situation when some register value is set at startup, and then it's implicitly used as a base address to access the variables.</p>\n<p>e.g. register r13 is set to 0x40000000 which is address of RAM. And then all over the code the variables are being accessed as offset to r13. Hex Rays doesn't like it at all, and generates lots of red variables for which <strong>VALUE MAY BE UNDEFINED</strong></p>\n<p>Is there any way to set the register value, so that Hex Rays uses it in every function?</p>\n<p>EDIT: Actually IDA does it in some cases. PowerPC processor module seems to know about __init_registers() function when working with ELF files and uses r13 value to calculate the global variables offsets relative to r13.\n<a href=\"https://i.sstatic.net/XfjDA.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/XfjDA.png\"/></a></p>\n<p>And I've learned that it actually creates User defined offsets in such cases.</p>\n<p><a href=\"https://i.sstatic.net/xvNbH.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/xvNbH.png\"/></a></p>\n<p>But still don't know how it's implemented to know r13 value.</p>\n</div>",
+    "votes": "5",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "hexrays"
+    ],
+    "user": "Anton Kukoba",
+    "time": "Feb 10, 2021 at 9:53",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I don't know off the top of my head if there's an option you can set for that, but that's the type of thing that's utterly trivial to write a Hex-Rays plugin for. I bet that would be less than 25 lines of code. If you can send a link to a binary, I'll write a script to demonstrate. Assuming you're writing IDAPython (the details would only be slightly different in C++), the outline would be:</p>\n<ol>\n<li>Derive a class from <code>mop_visitor_t</code>, whose <code>visit_mop</code> method: requires <code>is_target</code> to be false; compares the operand against <code>mop_r</code>; if so, compares the <code>.r</code> union element against the microregister number for <code>r13</code>. If found, replace the operand with\nyour constant (i.e. call <code>mop_t::make_number(0x40000000)</code> on the operand).</li>\n<li>Derive a class named <code>R13ReplaceHooks</code> off of <code>ida_hexrays.Hexrays_Hooks</code>.</li>\n<li>Override its <code>microcode</code> method to call <code>mba_t::for_all_ops</code> with an instance of the visitor above.</li>\n<li>At the bottom of the script, a bit of glue code to allow easy installation and removal of the hook, as in:</li>\n</ol>\n<pre><code>try:\n    r13replacehooks.unhook()\n    del r13replacehooks\nexcept NameError as e:\n    pass\nfinally:\n    r13replacehooks = R13ReplaceHooks()\n    r13replacehooks.hook()\n</code></pre>\n<ol start=\"5\">\n<li>That's it.</li>\n</ol>\n<p>===== EDIT TO ADD =====</p>\n<p>After writing the answer above, I had some further thoughts on the matter.</p>\n<p>Red/orange variables and warnings about values being undefined is not what I would expect in this situation. Rather, I would expect that you would see a bunch of <code>__usercall</code> prototypes that had <code>r13</code> as an argument, and then you would see nasty pointer arithmetic typical of code that needs a structure definition, as in <code>*(QWORD *)((QWORD)x + 20)</code>. So I guess an alternative answer would be that you could add those arguments to the function prototypes, declare one big structure for the data section in question, and define the <code>r13</code> <code>__usercall</code> arguments as being pointers to that structure.</p>\n<p>I tend to think that the other answer would be generally easier to work with, but this approach does have one upside: you can use <a href=\"https://reverseengineering.stackexchange.com/questions/26284/how-can-i-get-xrefs-to-class-member-variables-in-ida/26291#26291\">Hex-Rays' \"Jump to xref globally\" feature</a> to track cross-references to the data members. This won't be the case for the register replacement approach in the other answer, since the references aren't really there in the code; in the other approach, those references will be created on the fly, and not stored in the database in a form that can be browsed through the normal cross-reference machinery. In this approach, the references will be available persistently via the structure cross-references.</p>\n</div>",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Feb 1, 2021 at 17:34",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Since <code>r13</code> is a memory mapped register, you should create a new RAM segment and define all of your registers there on the correct virtual addresses (use <code>ida_bytes.create_data()</code> and <code>idc.set_name()</code>). You can then use it in the code as a reference and it would be resolved everywhere.</p>\n</div>",
+            "votes": "0",
+            "user": "none32",
+            "time": "Mar 9, 2023 at 13:17",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

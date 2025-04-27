@@ -1,0 +1,78 @@
+{
+    "title": "How to backport Vista program to XP without source code?",
+    "link": "https://reverseengineering.stackexchange.com/questions/11663/how-to-backport-vista-program-to-xp-without-source-code",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Generally when I have Vista application it upgrade few function from kernel32.dll\n </p>\n <p>\n  most often being InitializeCriticalSection -> InitializeCriticalSectionEx\n </p>\n <p>\n  Is it possibly to backport such? beside changing linker OSVersion.\n </p>\n <p>\n  Edit: Just to be verbose, here is the example\n </p>\n <pre><code>.text:0048CE4D                 xor     esi, esi\n.text:0048CE4F                 push    esi             ; Flags\n.text:0048CE50                 push    esi             ; dwSpinCount\n.text:0048CE51                 push    ecx             ; lpCriticalSection\n.text:0048CE52                 call    ds:InitializeCriticalSectionEx\n.text:0048CE58                 test    eax, eax\n</code></pre>\n <p>\n  hex dump:\n  <code>\n   33 F6 56  56 51 FF 15 F0 C1 4A 00 85 C0\n  </code>\n </p>\n</div>\n</body></html>",
+    "votes": "5",
+    "answers": 3,
+    "views": "574",
+    "tags": [
+        "disassembly",
+        "windows"
+    ],
+    "user": "Kohl Emmert",
+    "time": "Dec 31, 2015 at 16:22",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  One way to do this is to create \"shim\" DLLs with similar names so that they are easy to recognize.  This technique can be used incrementally (i.e. additional functions can be added to the DLL at any time, for other programs with similar requirements, rather than using an entirely new DLL each time).\n </p>\n <p>\n  The initial problem is that you can't simply replace the function names (i.e. CriticalSectionEx -> CriticalSection), because of the additional parameters that are required.\n </p>\n <p>\n  The shim technique requires that you change only the name of the imported DLL in the exe file, for example from \"kernel32.dll\" to \"kernel31.dll\" (to preserve the length of the name and maintain data alignment).  Then you create a \"kernel31.dll\", which is placed in the same directory as the exe file.  The contents of this \"kernel31.dll\" file will be an export table, an import table, and wrappers for some functions.\n </p>\n <p>\n  To create the import table, you need another program which will read the import table of your original exe, and perform a GetProcAddress on each entry.  For each entry that returns a valid address, the \"kernel31.dll\" export table will have that entry added directly, and will point to the \"kernel31.dll\" import table in order to forward that imported name to the original DLL.  This function has no compatibility issues.\n </p>\n <p>\n  For each entry that returns a zero for the address, the \"kernel31.dll\" export table will point to a wrapper inside \"kernel31.dll\" that you would have to write yourself.\n </p>\n <p>\n  Repeat this procedure for each of the DLLs in the original exe (so \"ntdll.dll\" could become \"ntdl1.dll\", \"user32.dll\" could become \"user31.dll\", etc).\n </p>\n <p>\n  There are two special cases, though: LoadLibrary and its variants (and its equivalent in ntdll.dll), and GetModuleHandle and its variants (and its equivalent in ntdll.dll).  These require wrappers in the \"kernel31.dll\" because they might attempt to access dynamically DLLs or functions which will have compatibility issues, too.  Unfortunately, you can't really determine that through static analysis.\n </p>\n <p>\n  These two wrappers will call the original function in kernel32.dll (or ntdll.dll), and then check the result.  If a DLL does not exist, then it's a case of creating that DLL yourself, in case it was introduced in a later version of Windows, or returning this result if the DLL is truly optional.  If the function does not exist, then it's a case of finding the reference to the DLL and renaming it, and then writing the function wrapper for a new version of that DLL.\n </p>\n <p>\n  That's a horribly long answer, and probably makes it sound more difficult to implement that it really is, but the details are needed.\n </p>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "peter ferrie",
+            "time": "Jan 3, 2016 at 17:10",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Kohl Emmert",
+                    "text": "<span class=\"comment-copy\">just curious does that shims available on torrent? too bad XP have SFC otherwise there woulde be kernelEx for XP</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kohl Emmert",
+                    "text": "<span class=\"comment-copy\">In msvcp140.dll redist (which still support XP) I can find all missing *Ex functions but in the name of __crt[function]Ex. Can I redirect it to these?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kohl Emmert",
+                    "text": "<span class=\"comment-copy\">Additionally all missing secureapi also available in the other dlls that come with msvcp140 (those UCRT).</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">yes, these functions should work.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Not a trivial fix, but you could patch the Import Table to replace\n  <code>\n   InitializeCriticalSectionEx\n  </code>\n  with\n  <code>\n   InitializeCriticalSection\n  </code>\n  (just replace the\n  <code>\n   E\n  </code>\n  character with a null-byte) and then patch all calls that were initially to\n  <code>\n   InitializeCriticalSectionEx\n  </code>\n  to instead only pass the\n  <code>\n   lpCriticalSection\n  </code>\n  argument and not the\n  <code>\n   dwSpinCount\n  </code>\n  and\n  <code>\n   Flags\n  </code>\n  arguments. You'll need to do some extra work if there are other calls to this function that don't rely on a static import.\n </p>\n <p>\n  There are even uglier solutions like hooking Windows's PE loader to dynamically redirect things, but I wouldn't recommend that route.\n </p>\n <p>\n  Perhaps someone else can think of a more simple solution...?\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Jason Geffner",
+            "time": "Dec 31, 2015 at 14:55",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Kohl Emmert",
+                    "text": "<span class=\"comment-copy\">I try it, but it crashed with memory allocation error. I changed 56 56 with 00 00 in the hex dump, beside changing the import table</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Changing <code>56 56</code> to <code>00 00</code> is not in line with the advice I gave above.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Kohl Emmert",
+                    "text": "<span class=\"comment-copy\">ah sorry you're right</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  It is easy as pie.\n </p>\n <pre><code>                33 F6 56 56 51 FF 15 F0 C1 4A 00 85 C0\nchanged into -> 33 F6 90 90 51 FF 15 F0 C1 4A 00 85 C0\n                      ^^ ^^\n</code></pre>\n <p>\n  And change the String in Import table\n </p>\n <pre><code>49 6E 69 74 69 61 6C 69 7A 65 43 72 69 74 69 63 61 6C 53 65 63 74 69 6F 6E 45 78 00 // InitializeCriticalSectionEx\n49 6E 69 74 69 61 6C 69 7A 65 43 72 69 74 69 63 61 6C 53 65 63 74 69 6F 6E 00 00 00  // InitializeCriticalSection \n                                                                           ^^ ^^\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "perror",
+            "time": "May 11, 2016 at 7:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

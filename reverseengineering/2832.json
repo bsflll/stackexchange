@@ -1,0 +1,50 @@
+{
+    "title": "Reversing a Mac OS X binary that appears to be non encrypted, backtrace just shows mach_msg_trap ()",
+    "link": "https://reverseengineering.stackexchange.com/questions/2832/reversing-a-mac-os-x-binary-that-appears-to-be-non-encrypted-backtrace-just-sho",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Currently I have a binary that I am investigating.  The application is GUI / event driven, so that makes it difficult to set a break point.  I would like to set a break point on a certain button click, so I thought I would click the button, and then run a <code>backtrace</code> in GDB to see what functions were called when I clicked the button, but the output of the <code>bt</code> is just showing <code>mach_msg_trap()</code>, and a few other \"functions\" I suppose.  Does anyone know why I'm in the <code>mach_msg_trap()</code>  I am assuming it's some security feature implemented by Apple to prevent people from reversing their software, I just thought I would ask, as my googlefu didn't really return any tangible results.</p>\n<p><img alt=\"Screenshot of the GDB output\" src=\"https://i.sstatic.net/ZpuXV.png\"/></p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "gdb",
+        "osx",
+        "mach-o"
+    ],
+    "user": "ipatch",
+    "time": "Sep 25, 2013 at 10:25",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "<span class=\"comment-copy\">If you do a backtrace at any arbitrary point in time, you'll just see the message pump. In order for a backtrace to be useful, you would need to do a backtrace while the program is handling your button click in the active thread (in other words, set a breakpoint in the button click handling code).</span>",
+            "time": null
+        },
+        {
+            "user": "Till",
+            "text": "<span class=\"comment-copy\">What @JasonGeffner is entirely correct. Just as an addendum; <code>mach_msg_trap</code> is not a security feature, it is the message dispatcher. It receives messages and attempts to forward them to objects that registered for handling them.</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Google <code>site:developer.apple.com mach_msg_trap</code> :) ... it's just a signal handler.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Well, my Mac fu isn't too strong, but I have terminal access to a Mac and will give it a wild shot, hoping to provide you with the insight required to proceed.</p>\n<p><code>info sharedlibrary</code> on the GDB prompt will tell you details about the ranges of the shared libraries inside of which those functions reside. But we know that already from the function names.</p>\n<p><a href=\"https://developer.apple.com/library/mac/documentation/Cocoa/Reference/ApplicationKit/Classes/NSApplication_Class/Reference/Reference.html\"><code>NSApplication</code></a> comes from: Cocoa.</p>\n<blockquote>\n<p>The <code>NSApplication</code> object maintains a list of all the <code>NSWindow</code> objects\n  the application uses, so it can retrieve any of the application’s\n  <code>NSView</code> objects.</p>\n</blockquote>\n<p>So my suggestion would be to start by starting the application</p>\n<pre><code>gdb --args /path/to/binary optional arguments for program\n</code></pre>\n<p>and then set a breakpoint:</p>\n<pre><code>b NSApplicationMain\n</code></pre>\n<p>(can be done inside <code>.gdbinit</code> obviously)</p>\n<p>Then let the application continue. Break into it using <kbd>Ctrl</kbd>+<kbd>C</kbd>. Most likely the <code>backtrace</code> will be similar to what you saw before, but probably not up to <code>mach_msg_trap()</code>.</p>\n<p>Then you go to one frame that uses a function which has a reference to the <code>NSApplication</code> instance. You can find the frame numbers with <code>bt</code>, obviously. So say:</p>\n<pre><code>f 9\n</code></pre>\n<p>there you should be able to use GDB's <code>call</code>. Now, my Objective-C/C++ fu is even weaker than my Mac fu, but you can use</p>\n<pre><code>set language\n</code></pre>\n<p>to list the available languages (which influences the syntax for <code>call</code>). So you should probably switch to one of the Objective-C/C++ alternatives as appropriate. On my Mac I have the following language options:</p>\n<pre><code>(gdb) set language\nThe currently understood settings are:\n\nlocal or auto    Automatic setting based on source file\nada              Use the Ada language\nc                Use the C language\nc++              Use the C++ language\nasm              Use the Asm language\nminimal          Use the Minimal language\nfortran          Use the Fortran language\nobjective-c      Use the Objective-c language\nobjective-c++    Use the Objective-c++ language\njava             Use the Java language\nmodula-2         Use the Modula-2 language\npascal           Use the Pascal language\nscheme           Use the Scheme language\n</code></pre>\n<p><code>call</code> lets you call functions inside the context of the running program (and GDB has command line completion for symbols it knows of). So calling <code>mainWindow</code> of the <code>NSApplication</code> instance would appear as a good idea and then drilling down from there.</p>\n<p>From there you should be able to figure out where your button comes into play and set the breakpoint, no?</p>\n<p>Basically if you know a certain parameter of a certain call in the framework references your button (we'll assume it has a pointer somehow) you can use the</p>\n<pre><code>break location if condition\n</code></pre>\n<p>syntax to make sure the breakpoint will only trigger for the button press. An alternative is the <code>ignore</code> command which will ignore X hits of a breakpoint and only trigger after that.</p>\n</div>",
+            "votes": "6",
+            "user": "0xC0000022L",
+            "time": "Sep 25, 2013 at 11:32",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Do you have md5 for the application?</p>\n<p>It seems like a GUI/Cocoa application. The code seems to be stuck in <code>msgloop</code>.\nThis loop generally occurs in applications, which require user interaction or when application is interacting with messages.</p>\n<p>The image shows the breakpoint has been hit inside <code>__CFRunLoopRun</code>. It means app was running and processing system messages until it met a breakpoint (which is <kbd>Command</kbd>+<kbd>C</kbd>, in this case) it need some kind of user interaction or is waiting for some message, may be a click or key press or message from some system process.</p>\n<p>If you have the sample md5 or SHA, I can have a look at it</p>\n</div>",
+            "votes": "0",
+            "user": "perror",
+            "time": "Aug 25, 2014 at 12:04",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

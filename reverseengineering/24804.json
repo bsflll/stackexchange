@@ -1,0 +1,39 @@
+{
+    "title": "What is the mdisp field in RTTI for throw used for?",
+    "link": "https://reverseengineering.stackexchange.com/questions/24804/what-is-the-mdisp-field-in-rtti-for-throw-used-for",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>First of here is the article from which I'm looking up the <a href=\"http://www.openrce.org/articles/full_view/21\" rel=\"nofollow noreferrer\">fields</a>.</p>\n<p>I was trying out different combinations to see how they affect the RTTI for a C++ throw. It seems that having a virtual base class changes the two fields below <code>mdisp</code> but I wasn't able to change the actual <code>mdisp</code> field here is what I've tried:</p>\n<pre><code>struct B {\n    int a, b;\n};\n\nstruct A : virtual B {\n    int b, c;\n};\nint main() {\n\n    struct A* tmp = 0;\n\n    throw tmp;\n}\n</code></pre>\n<p>The above will change the catchabletypes of <code>struct A *</code> and <code>struct B *</code> to have different values for <code>pdisp</code> and <code>vdisp</code> because of the virtual base class.</p>\n<p>I've also tried pointer to members but with the no luck of changing the field as well:</p>\n<pre><code>struct A::* tmp = &amp;A::c;\n</code></pre>\n<p>I assumed that the above will cause the field for the type to change because there is an offset for the fields of A relative to B. I also tried removing the virtual specifier for the inheritance in this particular case.</p>\n<p>Here is what the dissasembly looks like:</p>\n<pre><code>push    offset __TI3PAUA@@ ; throw info for 'struct A *'\nlea     ecx, [ebp+var_8]\npush    ecx\ncall    sub_401BB4\n\n.rdata:004130C0 __TI3PAUA@@     dd 0                    ; DATA XREF: _main+13↑o\n.rdata:004130C0                                         ; attributes\n.rdata:004130C4                 dd 0                    ; destructor of exception object\n.rdata:004130C8                 dd 0                    ; forward compatibility frame handler\n.rdata:004130CC                 dd offset __CTA3PAUA@@  ; address of catchable types array\n.rdata:004130D0 __CTA3PAUA@@    dd 3                    ; DATA XREF: .rdata:004130CC↑o\n.rdata:004130D0                                         ; count of catchable type addresses following\n.rdata:004130D4                 dd offset __CT??_R0PAUA@@@8 ; catchable type 'struct A *'\n.rdata:004130D8                 dd offset __CT??_R0PAUB@@@8 ; catchable type 'struct B *'\n.rdata:004130DC                 dd offset __CT??_R0PAX@8 ; catchable type 'void *'\n.rdata:004130E0 __CT??_R0PAUA@@@8 dd CT_IsSimpleType or CT_HasVirtualBase\n.rdata:004130E0                                         ; DATA XREF: .rdata:004130D4↑o\n.rdata:004130E0                                         ; attributes\n.rdata:004130E4                 dd offset ??_R0PAUA@@@8 ; A * `RTTI Type Descriptor'\n.rdata:004130E8                 dd 0                    ; mdisp\n.rdata:004130EC                 dd -1                   ; pdisp\n.rdata:004130F0                 dd 0                    ; vdisp\n.rdata:004130F4                 dd 4                    ; size of thrown object\n.rdata:004130F8                 dd 0                    ; reference to optional copy constructor\n.rdata:004130FC __CT??_R0PAUB@@@8 dd CT_IsSimpleType    ; DATA XREF: .rdata:004130D8↑o\n.rdata:004130FC                                         ; attributes\n.rdata:00413100                 dd offset ??_R0PAUB@@@8 ; B * `RTTI Type Descriptor'\n.rdata:00413104                 dd 0                    ; mdisp\n.rdata:00413108                 dd 0                    ; pdisp\n.rdata:0041310C                 dd 4                    ; vdisp\n.rdata:00413110                 dd 4                    ; size of thrown object\n.rdata:00413114                 dd 0                    ; reference to optional copy constructor\n.rdata:00413118 __CT??_R0PAX@8  dd CT_IsSimpleType      ; DATA XREF: .rdata:004130DC↑o\n.rdata:00413118                                         ; attributes\n.rdata:0041311C                 dd offset ??_R0PAX@8    ; void * `RTTI Type Descriptor'\n.rdata:00413120                 dd 0                    ; mdisp\n.rdata:00413124                 dd -1                   ; pdisp\n.rdata:00413128                 dd 0                    ; vdisp\n.rdata:0041312C                 dd 4                    ; size of thrown object\n.rdata:00413130                 dd 0                    ; reference to optional copy constructor\n</code></pre>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "192",
+    "tags": [
+        "disassembly",
+        "windows",
+        "x86",
+        "c++",
+        "msvc"
+    ],
+    "user": "rec",
+    "time": "Apr 23, 2020 at 15:16",
+    "comments": [
+        {
+            "user": "rec",
+            "text": "<span class=\"comment-copy\">OK - I've found the answer thanks to a comment inside <code>ehdata_forceinclude.h</code>. It's useful when multiple inheritance is used.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">please add an answer so other people with the same question also know what it is</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It seems that inheritance does it. If we do something like:</p>\n<pre><code>#include &lt;stdio.h&gt;\nstruct B {\n    int a, b;\n};\n\nstruct B1 {\n    B1() = default;\n    B1(const B1&amp; tmp) {\n        a1 = tmp.a1;\n        printf(\"B1::B1 copy constr\\n\");\n    }\n    int a1, b1;\n};\n\nstruct A : B, B1 {\n    int b, c;\n};\n\nint main() try {\n\n    struct A tmp;\n\n    tmp.a1 = 9;\n\n    throw tmp;\n}\ncatch (B1 tmp) {\n    printf(\"%d\\n\", tmp.a1);\n}\n</code></pre>\n<p>We got RTTI for the throw of <code>struct A</code> containing an entry of <code>struct B1</code> with the following info:</p>\n<pre><code>.rdata:00419D8C __CT??_R0?AUB1@@@8_401150 dd 0          ; DATA XREF: .rdata:00419D50↑o\n.rdata:00419D8C                                         ; attributes\n.rdata:00419D90                 dd offset ??_R0?AUB1@@@8 ; B1 `RTTI Type Descriptor'\n.rdata:00419D94                 dd 8                    ; mdisp\n.rdata:00419D98                 dd -1                   ; pdisp\n.rdata:00419D9C                 dd 0                    ; vdisp\n.rdata:00419DA0                 dd 8                    ; size of thrown object\n.rdata:00419DA4                 dd offset sub_401150    ; reference to optional copy constructo\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "rec",
+            "time": "Apr 23, 2020 at 23:43",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

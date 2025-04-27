@@ -1,0 +1,84 @@
+{
+  "title": "Is Null in Windows equal to zero?",
+  "link": "https://reverseengineering.stackexchange.com/questions/26434/is-null-in-windows-equal-to-zero",
+  "content": "(This question refers to assembly language.)  I'm a little bit confused.  I've encountered many times Windows functions that are supposed to return a Handle, and if they don't they return NULL.  Why do the checks afterward check against zero?  Zero isn't equal to NULL.\n\nAs an example:\nGetModuleHandleA:\n\nhttps://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea\n\n\n\n",
+  "votes": "6",
+  "answers": 4,
+  "views": "3k",
+  "tags": [
+    "ida",
+    "disassembly",
+    "malware"
+  ],
+  "user": "Daniel Benisti",
+  "time": "Dec 9, 2020 at 12:40",
+  "comments": [
+    {
+      "user": "Alexei Levenkov",
+      "text": "Side note: I think originally all those methods were documented with returning zero on failure but now most switched to \"NULL\", but you can still find \"zero\" - docs.microsoft.com/en-us/windows/win32/api/libloaderapi/… (which is just Ex version of function in the question)",
+      "time": null
+    },
+    {
+      "user": "Thorbjørn Ravn Andersen",
+      "text": "You may not have to check for null because the hardware catches the bad memory reference and tells your handler.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "In C, and many other low-level programming languages the term NULL is equivalent to 0.\n\nThe C standard requires NULL to be #defined to an \"implementation defined value\", however all implementations have chosen (for obvious reasons) to use 0 for that purpose. For that reason if you'll attempt to \"See definition\" for NULL, many IDEs will drop you in a line #define NULL 0 or something similar.\n\nThis has the additional benefit of NULL evaluating to false making conditional statements readable and intuitive.\n\nThe proper way, from a strict standard following perspective, would be to use NULL and not 0, and that's what most developers do. The compiler (or pre-processor in the case of #define NULL 0) will however translate that to a 0.\n\nSome higher level languages (such as javascript and C++) use special expressions to signify null. One example is C++'s nullptr, that since C++11 is the required definition of NULL. Javascript uses a special object, null.\n\n",
+      "votes": "13",
+      "user": "NirIzr",
+      "time": "Dec 3, 2020 at 17:44",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "0xC0000022L",
+          "text": "Comments are not for extended discussion; this conversation has been moved to chat.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "ISO C and C++ allow implementations to use a non-zero bit-pattern as the object representation for a null pointer, despite requiring that a literal 0 or (void*)0 in the source (in a pointer context) is evaluated as a null pointer, equivalent to NULL.  Reasoning based on source definitions like #define NULL 0 is not sufficient in C or C++.\n\nBut fortunately for everyone's sanity, all modern C and C++ implementations for x86 (and other modern ISAs) do use 0 in asm as the bit-pattern for NULL.  This makes non-portable code like memset(ptr_array, 0, size) work as expected, equivalent to a loop that sets each element to NULL.\n\nWhen was the NULL macro not 0? is asking about source-level non-zero definitions, but I think that's not allowed in modern C.  The answers mention several historical machines that had non-zero null pointer bit-patterns.  (i.e. what you'd see in the asm for code like do {...} while(p = p->next);)\n\nRemember that in asm, pointers are just 64-bit (or 32-bit) integers.  The whole idea of NULL is in-band signalling, not some special thing that isn't even a pointer-sized integer.  So we have to pick some constant.\n\n0 is a convenient sentinel value because many ISAs can branch slightly more efficiently on a value being non-zero than checking for any other value.  e.g. ARM has cbnz to branch on non-zero without needing a cmp.  x86 has a minor code-size optimization of test eax, eax / jnz instead of cmp eax, 0 / jnz.  (Test whether a register is zero with CMP reg,0 vs OR reg,reg?).  If FLAGS are already set by another arithmetic instruction, no test would be needed, but that's unusual for null pointer tests: usually you don't do math on a pointer and then test for NULL.\n\n(You're not seeing that optimization in your asm because your debug build stores to memory before testing.)\n\nAlso, 0 is easy to generate.  Some large number might take a larger instruction, or more instructions on some ISAs, to create in a register.  (e.g. x86 xor eax,eax instead of mov eax, imm32).  And zero-initialized static storage like static int *table = NULL; can be in the BSS instead of .data - modern systems zero-init the BSS.\n\nOn some systems (especially embedded) the 0 address isn't special, and you actually have system-management stuff there, like the start of a table of interrupt handlers.  So 0 can be a valid address, as well as being equal to NULL.  This kinda sucks, so this is where one might actually want a non-zero object representation for null pointers.  @Simon Richter comments about hacking an ARM compiler to use 0x20000000 as the NULL bit-pattern.\n\nOn systems using virtual memory (like Windows), we can simply avoid ever mapping the page containing that address, which helps detect bugs by making sure NULL-dereference actually faults.  (Remember that undefined behaviour in C and C++ is not required to fault, but it's certainly convenient if it does.)\n\n",
+      "votes": "7",
+      "user": "Peter Cordes",
+      "time": "May 12, 2024 at 4:04",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Peter Cordes",
+          "text": "There was a useful and interesting comment here that this answer linked to, but apparently it's been deleted.  >.<  Some comments are worth keeping.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "When looking at Windows API calls or disassembly of C/C++ code, NULL Is always 0, in Visual Studio this is defined in vcruntime.h\n\n```\n#ifndef NULL\n    #ifdef __cplusplus\n        #define NULL 0\n    #else\n        #define NULL ((void *)0)\n    #endif\n#endif\n\n```\nHowever if you are looking at higher level languages NULL will not necessarily be zero, for example within .NET C# code like this:\n\n```\nif (args == null)\n{\n    Console.WriteLine(\"null!\");\n}\n\n```\nWill compile to Common Intermediate Language (CIL). You can see with ldnull null is not simply zero.\n\n```\nIL_0001: ldarg.0\nIL_0002: ldnull\nIL_0003: ceq\nIL_0005: stloc.0\nIL_0006: ldloc.0\nIL_0007: brfalse.s IL_0016\nIL_000a: ldstr \"null!\"\nIL_000f: call void [mscorlib]System.Console::WriteLine(string)\n\n```\n",
+      "votes": "6",
+      "user": "chentiangemalc",
+      "time": "Dec 3, 2020 at 23:01",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Peter Cordes",
+          "text": "0 in a pointer context has special meaning in C and C++.  This definition does not definitively tell you that the object-representation for a null pointer is 0x00000000.  (That is the case in all mainstream C++ implementations for x86, and almost all mainstream C and C++ implementations ever.  There are a few historical exceptions: When was the NULL macro not 0? mentions some and quotes the C standard re: 0 in the source vs. the bit-pattern used.)",
+          "time": null
+        },
+        {
+          "user": "Peter Cordes",
+          "text": "This means ISO C++ doesn't guarantee that memset(ptr_array, 0, 16) would initialize pointers to NULL, or in the OP's case that a compare would check against zero in the generated asm.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "NULL is zero.\n\nBut in the Windows SDK you can also find ERROR_SUCCESS which is also equal to 0 (as described here) and defined as \"the operation completed successfully\". Some Windows API functions will return ERROR_SUCCESS when successful rather than a handle.\n\nUltimately it depends on each API and it's return values.\nIf you look at the documentation for GetModuleHandleA you can see clearly that it is said that\n\n\"Return value\n\nIf the function succeeds, the return value is a handle to the specified module.\n\nIf the function fails, the return value is NULL. To get extended error information, call GetLastError.\"\n\n",
+      "votes": "-1",
+      "user": "rotem.salinas",
+      "time": "May 13, 2024 at 5:38",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

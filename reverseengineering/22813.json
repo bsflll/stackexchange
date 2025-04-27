@@ -1,0 +1,65 @@
+{
+    "title": "Reassembling ELF binary files",
+    "link": "https://reverseengineering.stackexchange.com/questions/22813/reassembling-elf-binary-files",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have been doing a number of CTF activities when I came across something I’m unfamiliar with. As I am somewhat new to exploitation and reverse engineering, this was unfamiliar to me.</p>\n<p>I have 7 pieces of an ELF binary file. I’ve been using readelf to get a better idea of where to put each piece. But I’m still unable to glean the order except for piece 4 contains the header and piece 6 contains the section names.</p>\n<p>I’ve been using ‘cat’ to glue the pieces together then run them through readelf and gdb. Is there an easier way that I’m just missing?</p>\n<p>For reference the particular example can be found on <a href=\"https://0x0539.net/play/fangorn/fragmented\" rel=\"noreferrer\">0x0539.net -&gt; Fangorn Forest -&gt; Fragmented</a>. I don’t want the answer. What I’m looking for is someone to point me in the right direction. </p>\n</div>",
+    "votes": "8",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "elf"
+    ],
+    "user": "t3nt0nbr1ck",
+    "time": "Dec 24, 2019 at 20:27",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">what about creating a small python script that will try the combinations of the remaining parts and checking if the can be interpreted as a valid ELF file? Probably some of the combinations will result in an error and remaining ones could be inspected manually.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Here is the flag:</p>\n<blockquote class=\"spoiler\">\n<p> FLAG{1ts_l1k3_4_m0r3_fun_puzz1e_m0m}</p>\n</blockquote>\n<p>Notes:</p>\n<ul>\n<li><code>readelf -SW</code> was used to look at 2 small baseline binaries: a simple \"hello world\"-style ELF binary and the <code>cat</code> utility. This provided a frame of reference for how GCC organizes information in a binary. </li>\n<li>Hex dumps of the fragments were then compared to a hex dump of these 2 programs.  </li>\n<li>Areas of particular importance were certain sections and their boundaries, such as between <code>.plt</code>, <code>.text</code>, and <code>.rodata</code>. Sections containing strings provided helpful reference points, certain sections contained table-like structures with repeating patters, and object code could also be identified just from looking at the dump. The offsets in the hex dumps could be cross referenced with the information output by <code>readelf -SW</code> to match locations in the dumps with the different sections.</li>\n<li>After the first and last piece had been identified, they were analyzed further to determine which sections they contained. As you have pointed out, <code>frag_4</code> contains the ELF header and <code>frag_6</code> contains the section header string table. However, these 2 pieces actually contain much more than just this information.</li>\n<li><code>frag_3</code> contains the procedure linkage table and the beginning of the <code>.text</code> section</li>\n<li>pieces 2, 3, 5 and 7 consist of object code</li>\n<li><code>frag_5</code> looked like it contained the end of the <code>.text</code> section.</li>\n<li>at this point, the order looked like this: 4, 1, {2, 3, 7 - order could not be deduced from looking at hex dumps}, 5, 6 </li>\n<li>pieces 2, 3, and 7 were disassembled using Capstone using this script:</li>\n</ul>\n<blockquote>\n<pre><code>#!/usr/bin/python3\n\nfrom capstone import *\nimport sys\n\n\nmd = Cs(CS_ARCH_X86, CS_MODE_64)\n\ndef disassemble(buf):\n    for i in md.disasm(buf, 0x4004e0):\n        print(\"0x%x:\\t%s\\t%s\" %(i.address, i.mnemonic, i.op_str))\n\n\ndef main():\n    file_buf = []\n\n    for arg in sys.argv:\n        file_buf.append(arg)\n\n    buf = []\n    for file in file_buf[1:]:\n        with open(file, 'rb') as f:\n            buf = f.read()\n            print(f.name + '\\n')\n            disassemble(buf)\n            print('\\n\\n')\n\nif __name__ == '__main__':\n    main()\n</code></pre>\n</blockquote>\n<ul>\n<li>After viewing the disassembly, an educated guess was made: 3, 2, 7</li>\n<li>Then the file was rebuilt:</li>\n</ul>\n<blockquote>\n<pre><code>#!/usr/bin/python3\n\nfile_names = ['frag_4', 'frag_1', 'frag_3', 'frag_2', 'frag_7', 'frag_5', 'frag_6']\n\nbytes = b''\nfor file in file_names:\n    with open(file, 'rb') as f:\n        buf = f.read()\n        bytes += buf\n\nwith open('reassembled.elf', 'wb') as f:\n    f.write(bytes)\n</code></pre>\n</blockquote>\n<p>Resulting file:</p>\n<blockquote>\n<pre><code>$ readelf -SW reassembled.elf \nThere are 31 section headers, starting at offset 0x1ac8:\n\nSection Headers:\n  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al\n  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0\n  [ 1] .interp           PROGBITS        0000000000400238 000238 00001c 00   A  0   0  1\n  [ 2] .note.ABI-tag     NOTE            0000000000400254 000254 000020 00   A  0   0  4\n  [ 3] .note.gnu.build-id NOTE            0000000000400274 000274 000024 00   A  0   0  4\n  [ 4] .gnu.hash         GNU_HASH        0000000000400298 000298 00001c 00   A  5   0  8\n  [ 5] .dynsym           DYNSYM          00000000004002b8 0002b8 000090 18   A  6   1  8\n  [ 6] .dynstr           STRTAB          0000000000400348 000348 00005f 00   A  0   0  1\n  [ 7] .gnu.version      VERSYM          00000000004003a8 0003a8 00000c 02   A  5   0  2\n  [ 8] .gnu.version_r    VERNEED         00000000004003b8 0003b8 000030 00   A  6   1  8\n  [ 9] .rela.dyn         RELA            00000000004003e8 0003e8 000018 18   A  5   0  8\n  [10] .rela.plt         RELA            0000000000400400 000400 000060 18  AI  5  24  8\n  [11] .init             PROGBITS        0000000000400460 000460 00001a 00  AX  0   0  4\n  [12] .plt              PROGBITS        0000000000400480 000480 000050 10  AX  0   0 16\n  [13] .plt.got          PROGBITS        00000000004004d0 0004d0 000008 00  AX  0   0  8\n  [14] .text             PROGBITS        00000000004004e0 0004e0 0003c2 00  AX  0   0 16\n  [15] .fini             PROGBITS        00000000004008a4 0008a4 000009 00  AX  0   0  4\n  [16] .rodata           PROGBITS        00000000004008b0 0008b0 00000f 00   A  0   0  4\n  [17] .eh_frame_hdr     PROGBITS        00000000004008c0 0008c0 00004c 00   A  0   0  4\n  [18] .eh_frame         PROGBITS        0000000000400910 000910 000154 00   A  0   0  8\n  [19] .init_array       INIT_ARRAY      0000000000600e10 000e10 000008 00  WA  0   0  8\n  [20] .fini_array       FINI_ARRAY      0000000000600e18 000e18 000008 00  WA  0   0  8\n  [21] .jcr              PROGBITS        0000000000600e20 000e20 000008 00  WA  0   0  8\n  [22] .dynamic          DYNAMIC         0000000000600e28 000e28 0001d0 10  WA  6   0  8\n  [23] .got              PROGBITS        0000000000600ff8 000ff8 000008 08  WA  0   0  8\n  [24] .got.plt          PROGBITS        0000000000601000 001000 000038 08  WA  0   0  8\n  [25] .data             PROGBITS        0000000000601038 001038 000010 00  WA  0   0  8\n  [26] .bss              NOBITS          0000000000601048 001048 000008 00  WA  0   0  1\n  [27] .comment          PROGBITS        0000000000000000 001048 000035 01  MS  0   0  1\n  [28] .shstrtab         STRTAB          0000000000000000 0019b8 00010c 00      0   0  1\n  [29] .symtab           SYMTAB          0000000000000000 001080 0006c0 18     30  47  8\n  [30] .strtab           STRTAB          0000000000000000 001740 000278 00      0   0  1\nKey to Flags:\n  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),\n  L (link order), O (extra OS processing required), G (group), T (TLS),\n  C (compressed), x (unknown), o (OS specific), E (exclude),\n  l (large), p (processor specific)\n</code></pre>\n</blockquote>\n<p>Since the symbol table and section header table were intact, <code>objdump -dj .text reassembled.elf</code> was used to compare disassembly of the code in the file to that of <code>cat</code> to check for consistency. There were some differences, but it turned out not to matter, as the flag was recoverable even though the program segfaults:</p>\n<blockquote>\n<pre><code>$ ./reassembled.elf \n��Ϛ^FLAG{1ts_l1k3_4_m0r3_fun_puzz1e_m0m}\n*** stack smashing detected ***: &lt;unknown&gt; terminated\nAborted (core dumped)\n</code></pre>\n</blockquote>\n</div>",
+            "votes": "2",
+            "user": "julian",
+            "time": "Mar 19, 2020 at 16:36",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "t3nt0nbr1ck",
+                    "text": "<span class=\"comment-copy\">I see where I went wrong, thanks!</span>",
+                    "time": null
+                },
+                {
+                    "user": "julian",
+                    "text": "<span class=\"comment-copy\">@t3nt0nbr1ck you are welcome</span>",
+                    "time": null
+                },
+                {
+                    "user": "macro_controller",
+                    "text": "<span class=\"comment-copy\">I wouldn't publish the flag :) It's kinda cheating, if they want the flag they should do your step themselves IMO.</span>",
+                    "time": null
+                },
+                {
+                    "user": "t3nt0nbr1ck",
+                    "text": "<span class=\"comment-copy\">@macr0controller I agree.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It may be beneficial to study what the flags in the header actually mean. This will tell you useful information such as, where \"things\" are located and the size of said \"things\". Plus you would gain a better understanding of the ELF file format!</p>\n<p>After that, you could probably automate the process with a python script, looking for key flags and using them to piece it together. </p>\n</div>",
+            "votes": "1",
+            "user": "Chase Opsahl",
+            "time": "Dec 23, 2019 at 21:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "t3nt0nbr1ck",
+                    "text": "<span class=\"comment-copy\">So, I tried both methods, and got literally no where. I was able to sort the resulting files into only ones with the elf header (720), then I wrote a shell script to attempt to run each file, which failed because I keep getting access denied. tried file, which did confirm that almost all of them read as valid executables. when I try an objdump I just run into errors on every file, stating that there are references that go beyond the file size. I'm sort of still lost. Any recommendations?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

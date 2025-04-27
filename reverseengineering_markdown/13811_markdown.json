@@ -1,0 +1,45 @@
+{
+  "title": "What is this protection that seems to prevent ROP when ASLR in ON?",
+  "link": "https://reverseengineering.stackexchange.com/questions/13811/what-is-this-protection-that-seems-to-prevent-rop-when-aslr-in-on",
+  "content": "I was doing some tests to train myself to ROP when ASLR is ON and NX is enabled.\n\nI created this small program for testing purpose\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main(int argc, char ** argv) {\n    char buff[128];\n\n    gets(buff);\n\n    char *password = \"I am h4cknd0\";\n\n    if (strcmp(buff, password)) {\n        printf(\"You password is incorrect  \n\");\n    } else {\n        printf(\"Access GRANTED !  \n\");\n    }\n\n    return 0;\n}\n\n```\nAnd I compiled it on a 64bits Ubuntu with this command\n\n```\ngcc -o rop rop.c -m32 -fno-stack-protector  -Wl,-z,relro,-z,now,-z,noexecstack -static\n\n```\nWhen I open the beast in gdb and disassemble the main function, I get the following\n\n```\n0x0804887c <+0>:       lea    ecx,[esp+0x4]\n0x08048880 <+4>:       and    esp,0xfffffff0\n0x08048883 <+7>:       push   DWORD PTR [ecx-0x4]\n0x08048886 <+10>:      push   ebp\n0x08048887 <+11>:      mov    ebp,esp\n0x08048889 <+13>:      push   ecx\n0x0804888a <+14>:      sub    esp,0x94\n0x08048890 <+20>:      sub    esp,0xc\n0x08048893 <+23>:      lea    eax,[ebp-0x8c]\n0x08048899 <+29>:      push   eax\n0x0804889a <+30>:      call   0x804f100 <gets>\n0x0804889f <+35>:      add    esp,0x10\n0x080488a2 <+38>:      mov    DWORD PTR [ebp-0xc],0x80bb388\n0x080488a9 <+45>:      sub    esp,0x8\n0x080488ac <+48>:      push   DWORD PTR [ebp-0xc]\n0x080488af <+51>:      lea    eax,[ebp-0x8c]\n0x080488b5 <+57>:      push   eax\n0x080488b6 <+58>:      call   0x8048280\n0x080488bb <+63>:      add    esp,0x10\n0x080488be <+66>:      test   eax,eax\n0x080488c0 <+68>:      je     0x80488d4 <main+88>\n0x080488c2 <+70>:      sub    esp,0xc\n0x080488c5 <+73>:      push   0x80bb395\n0x080488ca <+78>:      call   0x804f280 <puts>\n0x080488cf <+83>:      add    esp,0x10\n0x080488d2 <+86>:      jmp    0x80488e4 <main+104>\n0x080488d4 <+88>:      sub    esp,0xc\n0x080488d7 <+91>:      push   0x80bb3af\n0x080488dc <+96>:      call   0x804f280 <puts>\n0x080488e1 <+101>:     add    esp,0x10\n0x080488e4 <+104>:     mov    eax,0x0\n0x080488e9 <+109>:     mov    ecx,DWORD PTR [ebp-0x4]\n0x080488ec <+112>:     leave  \n0x080488ed <+113>:     lea    esp,[ecx-0x4]\n0x080488f0 <+116>:     ret\n\n```\nIt's the first time I have these function prologue and epilogue\n\nPrologue\n\n```\n0x0804887c <+0>:       lea    ecx,[esp+0x4]\n0x08048880 <+4>:       and    esp,0xfffffff0\n0x08048883 <+7>:       push   DWORD PTR [ecx-0x4]\n\n```\nEpilogue\n\n```\n0x080488e9 <+109>:     mov    ecx,DWORD PTR [ebp-0x4]\n0x080488ec <+112>:     leave  \n0x080488ed <+113>:     lea    esp,[ecx-0x4]\n0x080488f0 <+116>:     ret\n\n```\nBecause of these, I need to know ESP value when the main function is called when exploiting the vulnerable binary with ROP, but since ASLR is enabled, it's not possible.\n\nPS : I assure you this is a program I wrote myself for training purpose, it's not part of any challenge or CTF.\n\nThanks for your time and knowledge :)\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "disassembly",
+    "rop"
+  ],
+  "user": "Hackndo",
+  "time": "Oct 26, 2016 at 20:48",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "This is not a protection but juste a prologue / epilogue that your compiler will produce.\nYou can check the produced assembly with different versions of gcc right there: https://gcc.godbolt.org/\n\nAnd in your context, you can control ECX. But what if you just control the last byte only ? Then you might fall on some of your input in the stack.\n\n",
+      "votes": "2",
+      "user": "laxa",
+      "time": "Oct 25, 2016 at 8:38",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Hackndo",
+          "text": "Thank you for your answer. That's totally right. I tried to use another compiler and did the following command clang -o rop rop.c -m32 -fno-stack-protector  -Wl,-z,relro,-z,now,-z,noexecstack -static and now I have a perfect well know prologue/epilogue :)",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "While not a part of the official 386 SysV ABI, there is a de-facto requirement that the stack pointer is aligned to 16 bytes at all times when calling system functions (enforced by the de-facto standard compiler (GCC) since several years ago:1,2). That's why the prolog of the main function contains the and esp,0xfffffff0 instruction. Only the main() function needs to do that, other functions usually don't perform stack realignment since they assume they're already called with 16-byte alignment (unless you use -mrealignstack).\n\nSo instead of using another compiler you could try putting the vulnerable code in a separate function, not main directly.\n\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Oct 25, 2016 at 16:35",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Hackndo",
+          "text": "Thanks for this useful information. I already published my article but I'll think about putting the vulnerable code in a separate function.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

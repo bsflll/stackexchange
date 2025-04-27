@@ -1,0 +1,49 @@
+{
+    "title": "Debug vs Release binaries - Overflow detection",
+    "link": "https://reverseengineering.stackexchange.com/questions/17648/debug-vs-release-binaries-overflow-detection",
+    "content": "I'm reading the IDA Pro book and in chapter 20 the author shows the following code from a debug build:\n<pre><code>push ebp\nmov ebp, esp\nsub esp, 0F0h\npush ebx\npush esi\npush edi \nlea edi, [ebp+var_F0]\nmov ecx, 3Ch\nmov eax, 0CCCCCCCCh\nrep stosd\nmov[ebp+var_8], 0\nmov [ebp+var_14], 1\nmov [ebp+var_20], 2\nmov [ebp+var_2C], 3\n</code></pre>\nAs we can see the local variables are not adjacent to each other. Chris Eagle outlines that this makes it easier to detect  overflows from one variable that may spill into and corrupt another variable, and then he just left it at that. That doesn't make sense to me, isn't it easier to just set a breakpoint after a specific operation that could cause an overflow and then check the value of variable? How exactly is this more useful?\n",
+    "votes": "3",
+    "answers": 3,
+    "views": "283",
+    "tags": [
+        "ida",
+        "ollydbg",
+        "buffer-overflow",
+        "software-security"
+    ],
+    "user": "Trey",
+    "time": "Mar 30, 2018 at 1:12",
+    "comments": [
+        {
+            "user": "Abr001am",
+            "text": "This regards the values of (var_8, var_14, var_20 and var_2C), if they are distanced less than 4 bytes, then 3 variables should de altered.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "the latest visual studio compilers use runtime checks to detect overflows it \nperforms them using a variety of run-time checks \nyou can use them in un-optimized builds only  /Od \n(these don't work in optimized builds  not with /O1 or /O2 or /Ox)\nthese can be either #pragmas or /RTC1 /RTCS | U | C command-line switches \nthe stack corruption is detected by means of allocating a larger buffer than is required and filling it up with a known pattern     \nsince the compiler knows how much space should be used it can check if the bounds have been trampled with unknown pattern    \n(yes some clever pattern matching exploits can possibly still try to fool this but it works for genuine usage where you are writing an inadvertently overflowing code) \ntake for example this code \n<pre><code>#define CRT_SECURE_NO_WARNING\n#include <string.h>\n#include <stdio.h>\nvoid foo(void){\n    char flowoverme[0x10];\n    strcpy(flowoverme,\"yaddaaayadddaaafoo\");\n}\nint main(void){\n    foo();\n    printf(\"checking overflows by pattern pasting \n\");\n}\n</code></pre>\n(if you use /analyze compiler switch it will spit out this code will overflow \n<pre><code>:\\>cl /nologo /Zi /RTC1 /analyze /Od /EHsc rtcchk.cpp /link /nologo /debug\nrtcchk.cpp\nrtcchk.cpp(8) : warning C6386: Buffer overrun while writing to 'flowoverme':  the wr\nitable size is '16' bytes, but '19' bytes might be written.: Lines: 7, 8\n</code></pre>\nbut assume you just did cl foo.cpp\n<pre><code>:\\>cl /nologo /Zi /RTC1 /Od /EHsc rtcchk.cpp /link /nologo /debug\nrtcchk.cpp\n</code></pre>\nif you execute this compiled code the printf wont be reached if runtime checks were enabled \n<pre><code>:\\>rtcchk.exe\n\n:\\>\n</code></pre>\nwe can disassemble and see what is happening inside the function foo and why printf() is not executed \nlets open up the binary in windbg go to start of foo() and ask windbg to go up (gu that is return to main() back) as below and you will notice windbg doesn't return to main but stops with an error message \n<pre><code>:\\>cdb -c \"g rtcchk!foo;gu\" rtcchk.exe\n\nMicrosoft (R) Windows Debugger Version 10.0.16299.15 X86\n\n0:000> cdb: Reading initial command 'g rtcchk!foo;gu'\n\nrtcchk!failwithmessage+0x255:\n013d75da cc              int     3\n</code></pre>\nand the call stack would show \n<pre><code>0:000> kP\nChildEBP RetAddr\n0028f544 013d72a9 rtcchk!failwithmessage(\n                        void * retaddr = 0x013d698a,\n                        int crttype = 0n1,\n                        int errnum = 0n2,\n                        char * msg = 0x0028f568 \"Stack around the variable 'flowoverme' was corrupted.\")+0x255\n0028f96c 013d6c3d rtcchk!_RTC_StackFailure(\n                        void * retaddr = 0x013d698a,\n                        char * varname = 0x013d69b8 \"flowoverme\")+0x94\n0028f98c 013d698a rtcchk!_RTC_CheckStackVars(\n                        void * frame = 0x0028f9b8,\n                        struct _RTC_framedesc * v = 0x013d69a4)+0x42\n0028f9b8 013d69d8 rtcchk!foo(void)+0x4a\n0028f9c0 013d6ecd rtcchk!main(void)+0x8\n(Inline) -------- rtcchk!invoke_main+0x1c\n0028fa08 76a9ed6c rtcchk!__scrt_common_main_seh(void)+0xf9\n0028fa14 77cb37eb kernel32!BaseThreadInitThunk+0xe\n0028fa54 77cb37be ntdll!__RtlUserThreadStart+0x70\n0028fa6c 00000000 ntdll!_RtlUserThreadStart+0x1b\n0:000>\n</code></pre>\nif you still want to know what or how those functions operate open up either crt sources in vs  or disassemble the functions\nthe compiler knows the required size and where the bounds are \n<pre><code>0:000> dx -r3 (_RTC_framedesc *) 0x013d69a4\n(_RTC_framedesc *) 0x013d69a4  : 0x13d69a4 [Type: _RTC_framedesc *]\n    [+0x000] varCount         : 1 [Type: int]\n    [+0x004] variables        : 0x13d69ac [Type: _RTC_vardesc *]\n        [+0x000] addr             : -24 [Type: int]\n        [+0x004] size             : 16 [Type: int]\n        [+0x008] name             : 0x13d69b8 : \"flowoverme\" [Type: char *]\n0:000>\n</code></pre>\n",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Mar 30, 2018 at 12:48",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "I've checked the mentioned chapter and there's also an info about detecting an execution of the instruction on the stack. This is I think more common scenario. \nAs for the overflow detection I can only speculate, but for me it's easier to check, in one place, if all the values that should be <pre><code>0xCC</code></pre> are still in fact intact the same than to do this every time after an operation that could overflow and check if the value that should be the result of an operation. Consider also an arrays that with this approach could be check if the do not span outside the range than they should. \nWith having the use of <pre><code>OxCC</code></pre> both checks can be covered.\n",
+            "votes": "2",
+            "user": "Paweł Łukasik",
+            "time": "Mar 30, 2018 at 10:16",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "What you pasted is Visual C++'s <pre><code>/GZ</code></pre> switch or for newer versions <pre><code>/RTC</code></pre>. It fills the stack for local variables with 0xCC. What I couldn't find is if there's an actual function that checks at runtime if any of the gaps have been tainted.\nI assume there is because the compiler should be able to generate those at compile time knowing the stack layout, so at some point (end of function, or exception?) he could automatically verify if the gaps are clean.\nWithout the gap, you would not be able to tell if one variable write spilled because it would just end up in the next one. I guess that's what the book author was implying.\nUnfortunately I could not find clear documentation for those flags, except a description that it does fill the stack and use it to verify the integrity.\n",
+            "votes": "2",
+            "user": "Johann Aydinbas",
+            "time": "Mar 30, 2018 at 10:56",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

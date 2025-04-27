@@ -1,0 +1,59 @@
+{
+    "title": "Is there a way to adjust local variables when a function doesn't utilize ebp?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4213/is-there-a-way-to-adjust-local-variables-when-a-function-doesnt-utilize-ebp",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a problem just like in the question. Modern compilers don't use\n  <code>\n   ebp\n  </code>\n  to handle local variables and arguments, they just calculate and add hard=coded offsets to\n  <code>\n   esp\n  </code>\n  . Example:\n </p>\n <pre><code>sub     esp, 5Eh  \n...     \nmov     [esp+5Eh+var_1], 123h\nmov     [esp+5Eh+var_2], 456h\ncall    some_func            ; var_1 and var_2 point to actual addresses\ncmp     eax, 0               ; esp changed (stdcall), var_1 and var_2 point to wrong addresses\n\n...\n\n;  creation of a \"fake\" variable example:\n;  var_3 = -8h\n;  var_4 = -12h \nmov     [esp+5Eh+var_3], 78h  ; var_3 at: esp + 5Eh -8h\npop     eax                   ; esp = esp + 4  \nmov     [esp+5Eh+var_4], 89h  ; var_4 at: esp + 4  + 5eh -12h = esp + 5Eh -8h = var_3\n; desireable fix:\nmov     [esp+62h+var_3], 89h \n</code></pre>\n <p>\n  This results in a lot of overhead: IDA creates \"fake\" local variables (i.e. several names for one and the same address), you can't freely check variables whenever you want to, you have to create additional comments, etc. So I was wondering is there any way to fix that ?\n </p>\n <p>\n  PS. I'm using IDA Pro Free. Tell me if it is possible only in IDA Pro (full version).\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ida"
+    ],
+    "user": "Krzysztof Bracha",
+    "time": "May 3, 2014 at 22:33",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The variable names that IDA is generating aren't \"fake\"; they are exactly the same as they would be labeled had the function been\n  <code>\n   ebp\n  </code>\n  -based. The problem you describe is only really an issue when debugging since that's the only time you can inspect the values pointed to. I'm not aware of any built-in way to get IDA to display what you want. When you hover over an operand, IDA just takes the current value of the register and adds the offset. If\n  <code>\n   esp\n  </code>\n  has changed, then it will show you the wrong address, which is what you're seeing in your example.\n </p>\n <p>\n  Since IDA does know the correct stack offset, one way to do what you're asking is to write an IDC script that checks\n  <code>\n   eip\n  </code>\n  and adjusts for the difference in\n  <code>\n   esp\n  </code>\n  values before calculating the final target address. The IDC function that gets the stack offset at a given address is\n  <a href=\"https://www.hex-rays.com/products/ida/support/idadoc/351.shtml\" rel=\"nofollow\">\n   <code>\n    GetSpd()\n   </code>\n  </a>\n  . The algorithm would go something like this:\n </p>\n <ol>\n  <li>\n   Calculate the target address of the operand you are interested in (i.e. esp+5Eh+var_1 -> 0x10000000)\n  </li>\n  <li>\n   Get the stack pointer delta (SPD) of the line containing the operand you're interested in (i.e. 5Eh)\n  </li>\n  <li>\n   Get the SPD of\n   <code>\n    eip\n   </code>\n   (i.e. 6Eh)\n  </li>\n  <li>\n   Calculate the difference of the two SPDs and add (or subtract) that amount from the target address you calculated in step 1 (i.e. 0x10000000 + (6Eh-5Eh) = 0x10000010)\n  </li>\n  <li>\n   Go to your calculated address ([0x10000010] contains the variable you are after)\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "bad_decoy",
+            "time": "May 3, 2014 at 16:39",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Krzysztof Bracha",
+                    "text": "<span class=\"comment-copy\">Thank you very much for your answer, now I know that there are no facilities for that issue in IDA Pro so I should write my own script. Ad. (\"fake\") variables - I updated my post so it's more clear what I mean. Ad. your algo - it's not that trivial because i.e. GetSpd() ignores esp changes done by stdcall functions. I think the approach I will take is to write a script that will run a function while keeping track of all variable addresses and do some access presentation adjustments (fix shown in post) and eventually write addresses in comments.</span>",
+                    "time": null
+                },
+                {
+                    "user": "bad_decoy",
+                    "text": "<span class=\"comment-copy\">Hi, looking at your update, what you've labelled as the desirable fix is exactly what my version of IDA does. I'm wondering if this is a free vs. paid difference. I use IDA 6.2. You're right, the script would be more complicated than I made it sound. :-) I've found that the stack pointer delta is usually pretty accurate, but that might also have been improved in more recent versions.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Krzysztof Bracha",
+                    "text": "<span class=\"comment-copy\">Ah, sorry I didn't post it when creating the topic. I think it's not a free vs paid difference, just the free version is 5.0 and hex-rays did a lot of improvements since that time I guess. Thank you again, a script that would run the function should be useful but I'll probably have to risk my future and buy the newest version of IDA one day anyway.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  With your cursor inside of the given function, press\n  <kbd>\n   Alt\n  </kbd>\n  +\n  <kbd>\n   P\n  </kbd>\n  to edit the function properties. In the\n  <strong>\n   Edit function\n  </strong>\n  window, uncheck\n  <strong>\n   BP based frame\n  </strong>\n  and press\n  <strong>\n   OK\n  </strong>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Jason Geffner",
+            "time": "Apr 30, 2014 at 13:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Krzysztof Bracha",
+                    "text": "<span class=\"comment-copy\">Thank you for an answer, but it's never been checked.</span>",
+                    "time": null
+                },
+                {
+                    "user": "alexandernst",
+                    "text": "<span class=\"comment-copy\">This should be the correct answer.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

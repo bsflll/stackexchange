@@ -1,0 +1,60 @@
+{
+    "title": "What does the cs register do here?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27924/what-does-the-cs-register-do-here",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I've come across this sequence of bytes: <code>2e 88 38</code>.</p>\n<p><a href=\"https://www.hopperapp.com/\" rel=\"nofollow noreferrer\">Hopper</a> disassembles this as:</p>\n<pre><code>mov    byte [cs:rax], bh\n</code></pre>\n<p><a href=\"https://defuse.ca/online-x86-assembler.htm#disassembly\" rel=\"nofollow noreferrer\">This online disassembler</a> gives slightly different output:</p>\n<pre><code>mov    BYTE PTR cs:[rax],bh \n</code></pre>\n<p>Either way, I can't make heads nor tails of what the intended result of this instruction is.</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "321",
+    "tags": [
+        "disassembly",
+        "x86"
+    ],
+    "user": "MTCoster",
+    "time": "Jul 1, 2021 at 11:39",
+    "comments": [
+        {
+            "user": "macro_controller",
+            "text": "<span class=\"comment-copy\">I think it's the same meaning with slightly different syntax.</span>",
+            "time": null
+        },
+        {
+            "user": "MTCoster",
+            "text": "<span class=\"comment-copy\">@macro_controller That was my assumption, but given I couldn't tell what either meant I didn't want to jump to that conclusion and leave something potentially important out of the question</span>",
+            "time": null
+        },
+        {
+            "user": "Rolf Rolles",
+            "text": "<span class=\"comment-copy\">It might not even be a valid instruction -- that is to say, does it make sense in the context of the surrounding instructions, or are they nonsensical?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In 16- and 32-bit modes the  memory accesses used the ds or ss registers, but by using <em>segment override</em>, you could force usage of another segment (selector in protected mode). For example, in 16-bit real mode</p>\n<pre><code> mov bx, [si]\n</code></pre>\n<p>Would access the address ds*16 + si</p>\n<p>While</p>\n<pre><code> mov bx, cs:[si]\n</code></pre>\n<p>Would access cs*16+si</p>\n<p>The distinction was less useful in most 32-but OSes, which usually set up memory so that cs, ds, es, ss all pointed to the same flat 32-bit memory space although in theory they could be different (and often they did have different permissions). In 64-bit mode the segment registers are even less useful - in it the segment overrides are officially ignored except for fs and gs.</p>\n<p>So in your example the cs prefix (2e) is completely redundant and serves no useful purpose: the instruction has the same effect as</p>\n<pre><code>mov  byte [rax], bh\n</code></pre>\n<p>However the disassembler still prints <code>cs:</code> to show that the prefix is  present in the instruction.</p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Jul 3, 2021 at 12:02",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>char * rax; = bh<br/>\nor byte* rax = bh or\nsimply mov the <strong>[8..16]</strong> bit component  of rbx register into the address pointed by 64 bit register rax  at <strong>[0..7]</strong> bit place and zero out the remaining bits</p>\n<p>or in other words if address <strong>12345678`9abcdef</strong> contains <strong>0x0</strong></p>\n<p>and register rbx contains <strong>0x00000000`0000ffff</strong></p>\n<p>then after this operation address  <strong>12345678`9abcdef</strong>  will contain <strong>0xff</strong></p>\n<p>see below a simulation of operation with windbg</p>\n<pre><code>0:000&gt; ? @rip\nEvaluate expression: 140705686294668 = 00007ff8`9873108c\n0:000&gt; dq @rip l1\n00007ff8`9873108c  c338c483`4800ebcc\n0:000&gt; r @rax = @rip\n0:000&gt; r @rbx = 0xffff\n0:000&gt; r @bh\nbh=ff\n0:000&gt; eq @rax\n00007ff8`9873108c c338c483`4800ebcc @bh\n00007ff8`98731094 cccccccc`cccccccc\n0:000&gt; dq @rip l1\n00007ff8`9873108c  00000000`000000ff\n0:000&gt;  \n</code></pre>\n<p>and cs, ds, es , ss segment registers do not matter much in flat memory model.</p>\n<p>only fs and gs segment registers matters</p>\n<p>a sample code that demonstrates the write using various segment prefixes in x64<br/>\nml64 wont encode the instruction so need to emit raw bytes using define byte</p>\n<p>c code with inline assembly usage follows</p>\n<p>cpp file</p>\n<pre><code>:\\&gt;type inline_cpp.cpp\n\n#include &lt;windows.h&gt;\nextern \"C\" void segregtest(ULONG64 *addr ,BYTE value);\nULONG64 myaddr = 0x77;\nint main (void)\n{\n        segregtest(&amp;myaddr,0x88);\n        return 0;\n}\n</code></pre>\n<p>asmfile</p>\n<pre><code>:\\&gt;type inline_asm.asm\nPUBLIC segregtest\n.code\nsegregtest PROC\nmov rax,rcx\nmov bh,dl\ndb 2Eh\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 3Eh\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 36h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 26h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 64h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 65h\nmov byte ptr [rax] ,    bh\nret\nsegregtest ENDP\nEND\n</code></pre>\n<p>compile link with</p>\n<pre><code>:\\&gt;type assemble_compile_link.bat\nml64 /c /Zi /nologo %1_asm.asm\n\ncl /Zi /W4 /Od /analyze /nologo /GS- /EHsc %1_cpp.cpp /link /release /subsystem:windows /fixed /entry:main %1_asm.obj\n</code></pre>\n<p>execution and tracing</p>\n<pre><code>:\\&gt;assemble_compile_link.bat inline\n\n:\\&gt;cdb -c \"g inline_cpp!segregtest;t 10;q\" inline_cpp.exe | awk /Reading/,/quit/\n0:000&gt; cdb: Reading initial command 'g inline_cpp!segregtest;t 10;q'\ninline_cpp!segregtest+0x3:\n00000001`40001003 8afa            mov     bh,dl\ninline_cpp!segregtest+0x5:\n00000001`40001005 2e8838          mov     byte ptr cs:[rax],bh cs:00000001`40003000=77\ninline_cpp!segregtest+0x8:\n00000001`40001008 80c711          add     bh,11h\ninline_cpp!segregtest+0xb:\n00000001`4000100b 3e8838          mov     byte ptr ds:[rax],bh ds:00000001`40003000=88\ninline_cpp!segregtest+0xe:\n00000001`4000100e 80c711          add     bh,11h\ninline_cpp!segregtest+0x11:\n00000001`40001011 368838          mov     byte ptr ss:[rax],bh ss:00000001`40003000=99\ninline_cpp!segregtest+0x14:\n00000001`40001014 80c711          add     bh,11h\ninline_cpp!segregtest+0x17:\n00000001`40001017 268838          mov     byte ptr es:[rax],bh es:00000001`40003000=aa\ninline_cpp!segregtest+0x1a:\n00000001`4000101a 80c711          add     bh,11h\ninline_cpp!segregtest+0x1d:\n00000001`4000101d 648838          mov     byte ptr fs:[rax],bh fs:00000001`40003000=bb\ninline_cpp!segregtest+0x20:\n00000001`40001020 80c711          add     bh,11h\ninline_cpp!segregtest+0x23:\n00000001`40001023 658838          mov     byte ptr gs:[rax],bh gs:00000001`40003000=cc\n(1b44.cf8): Access violation - code c0000005 (first chance)\nFirst chance exceptions are reported before any exception handling.\nThis exception may be expected and handled.\nquit:\n</code></pre>\n</div>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Jul 2, 2021 at 18:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "MTCoster",
+                    "text": "<span class=\"comment-copy\">\"<i>and cs ds es segemtn registers do not matter much in flat memory model</i>\" - This is the part my question was about - I understand the <code>mov</code> instruction works usually, what I can't figure out (or search for apparently) is what <code>[cs:rax]</code> (or <code>cs:[rax]</code>) means</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">added a snippet that shows usage</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

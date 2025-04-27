@@ -1,0 +1,71 @@
+{
+  "title": "How can I set a breakpoint for a button click?",
+  "link": "https://reverseengineering.stackexchange.com/questions/3288/how-can-i-set-a-breakpoint-for-a-button-click",
+  "content": "I am trying to find what a button does, so I want to set a breakpoint to catch button click event. Is that possible?\n\nAny tools or tricks to assist in this?\n\n",
+  "votes": "24",
+  "answers": 2,
+  "views": "33k",
+  "tags": [
+    "windows",
+    "ollydbg"
+  ],
+  "user": "Menna",
+  "time": "Dec 26, 2013 at 11:32",
+  "comments": [
+    {
+      "user": "Dominik Antal",
+      "text": "As Peter mentioned it depends on many things, what I usually do in Olly is pausing the program, and clicking on \"Stop at user input\" (or something similar to that), which will break when you press the button.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It very much depends on what framework they use in order to do their windowing. It could be MFC, WPF, WinForms, WTL, QT, wxWidgets, pure Windows API. There's a lot of frameworks and they all handle the final routing of messages differently.\n\nI'll answer the question for the cases that are either directly built on top of Windows API or where they're using the Windows API directly. WPF does not use the Windows API windowing system other than for the outermost windows.\n\nInitially the program registers a function that handles messages intended for a particular window. This can be done using the RegisterClass or RegisterClassEx functions. The function which will be responsible for handling the messages sent to the window is the lpfnWndProc member of the structures passed to these functions. This is called the window procedure. \n\nWhat happens when a button is pressed is that a message, in this case WM_COMMAND, is pushed into the thread message queue by Windows. This message is then fetched using  GetMessage or PeekMessage. Some messages use short cuts and can result in a call to the window procedure directly when you call GetMessage, some messages only result in a call to the window procedure when the application calls DispatchMessage. If you're dealing with a dialog, the message will be handled by a call to IsDialogMessage.\n\nNow that we have some background on how this works behind the scenes, OllyDbg actually has a helper for dealing with this sort of thing. You can simply open the View->Windows dialog item. Right click the window you want to catch button presses in, select message breakpoint on classproc, select command and notifications from the message dropdown or select the WM_COMMAND message. Now whenever you click the button you will break in the window procedure the application registered for that window. You still need to trace the code so that you can find the code that examines the message type and then handles the message. From now on it will be different depending on what type of framework is being used.\n\n",
+      "votes": "27",
+      "user": "Peter Andersson",
+      "time": "Dec 26, 2013 at 20:02",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Menna",
+          "text": "Thanks a lot for your comment , I tried what you said before and for some reason i never manage to find the application's function so i thought I'm doing it wrong .. I guess i need to try harder! Thanks!",
+          "time": null
+        },
+        {
+          "user": "Fewmitz",
+          "text": "A tip I can give you that I've used to get familiar with the windowing systems (although admittedly not all of them) is to code something up that uses the framework and have the call back be your own inline assembly (something obvious like 20 nops/int3s/etc) then find the function in your debugger/disassembler. You can trace it back from there to see what you could look for in a real sample. Depends on how you learn but it might help.",
+          "time": null
+        },
+        {
+          "user": "Menna",
+          "text": "I've used this learning technique to learn most of reverse engineering tricks i know , didn't come to my mind this time though..Thanks!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "open calc.exe in ollydbg c:\\ollydbg.exe calc.exe\npress Ctrl + G and type GetMessageW\npress F2 to set a breakpoint and press F9 until it breaks\nwhen it is broken press ctrl+f9 to run until return\npress shift+f4 to set a conditional log breakpoint\nin the expression edit box type [esp+4]\nin the decode value of expression select pointer to MSG structure (UNICODE)\nset radio button pause to never\nset radio button log expression to Always\nhit ok\nnow look at log window for all the messages that are handled\nrefine your conditional breakpoint to handle only the cases you want to examine \nfor example this condition will log only mouseup and wm_char messages\n\n```\nBreakpoints, item 1\n Address=7E41920E\n Module=USER32\n Active=Log when [[esp+4]+4] == WM_KEYDOWN || [[esp+4]+4] == WM_LBUTTONUP\n Disassembly=RETN    10\n\n```\nlike results posted below notice the hwnd for each button you can refine to a multiple condition with a specifc Window Handle hWnd 2e048a etc\n\n```\n\\Log data\nMessage\nCOND: 0007FEE8 WM_LBUTTONUP hw = 2E048A (\"C\") Keys = 0 X = 57. Y = 14.\nCOND: 0007FEE8 WM_LBUTTONUP hw = 10053E (\"And\") Keys = 0 X = 22. Y = 10.\nCOND: 0007FEE8 WM_LBUTTONUP hw = 200404 (\"Xor\") Keys = 0 X = 22. Y = 18.\nCOND: 0007FEE8 WM_LBUTTONUP hw = 270402 (\"M+\") Keys = 0 X = 22. Y = 11.\nCOND: 0007FEE8 WM_LBUTTONUP hw = D036A (\"Sta\") Keys = 0 X = 27. Y = 15.\nCOND: 0007FEE8 WM_LBUTTONUP hw = 1B04F0 (\"x^2\") Keys = 0 X = 18. Y = 17.\nCOND: 0007FEE8 WM_KEYDOWN hw = 1B04F0 (\"x^2\") Key = 35  ('5') KeyData = 60001\nCOND: 0007FEE8 WM_KEYDOWN hw = 4303EC (class=\"Edit\") Key = 42  ('B') KeyData = 300001\nCOND: 0007FEE8 WM_KEYDOWN hw = 4303EC (class=\"Edit\") Key = 41  ('A') KeyData = 1E0001\n\n```\nto simulate same in windbg put this commands in a txt file and run windbg  (you should have skywings sdbgext extension loaded for verbose display )\n\n```\nbp user32!GetMessageW \"pt;gc\"\ng\nbc *\n.load sdbgext\nbp @eip \".if (poi(poi(esp+4)+4) == 0x202) {!hwnd poi(poi(esp+4));gc } .else {gc}\"\ng\n\nwindbg  -c \"$$>a< ......\\wtf.txt\" calc\n\nWindow    00600438\nName      And\nClass     Button\nWndProc   00000000\nStyle     WS_OVERLAPPED \nExStyle   WS_EX_NOPARENTNOTIFY WS_EX_LEFT WS_EX_LTRREADING WS_EX_RIGHTSCROLLBAR \nHInstance 01000000\nParentWnd 00490534\nId        00000056\nUserData  00000000\nUnicode   TRUE\nThreadId  00000df0\nProcessId 00000f68\nWindow    00150436\nName      Xor\nClass     Button\nWndProc   00000000\nStyle     WS_OVERLAPPED \n\n```\n",
+      "votes": "11",
+      "user": "blabb",
+      "time": "Dec 27, 2013 at 7:34",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Ciantic",
+          "text": "I wonder if x64dbg (open source, and still developed) can do same things.",
+          "time": null
+        },
+        {
+          "user": "rollsch",
+          "text": "Great post with detailed example. Very helpful.",
+          "time": null
+        },
+        {
+          "user": "Konrad",
+          "text": "@Ciantic it can x64dbg.com/blog/2017/07/07/messages-breakpoints-in-x64dbg.html",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

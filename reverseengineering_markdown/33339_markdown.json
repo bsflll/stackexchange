@@ -1,0 +1,46 @@
+{
+  "title": "How to decrypt ZTE F670 router's encrypted config.bin with payload type 5 with telnet access?",
+  "link": "https://reverseengineering.stackexchange.com/questions/33339/how-to-decrypt-zte-f670-routers-encrypted-config-bin-with-payload-type-5-with-t",
+  "content": "I’m from Indonesia.\n\nI have a ZTE F670 (Software Version V6.0.10) router provided by my ISP, and I'm trying to retrieve certain credentials stored in the configuration.\n\nPreviously, with a different router, I could download the config.xml file directly from the web interface and extract the needed information. However, with this new router, the backup file is in an encrypted config.bin format.\n\nSo far, I've tried the following:\n\nDownloaded the config.bin file from the router's web interface. Used tools like the ZTE config utility, but the router appears to use a newer encryption algorithm (payload type 5), which isn't supported by the tools I've found.\nI tried to use the serial number as an encryption key, without success.\nThen I tried using https://github.com/mkst/zte-config-utility but no success.\nTelnet are open and I can access root user. I can download telnet file like cspd, dataprotocol and etc… but don’t know to use it.\n\nCan someone help me decrypt the config.bin file, or suggest any tools that work with newer ZTE models?\n\nthis my file on telnet\n\nhttps://drive.google.com/drive/folders/1GyQrkNc6WXQoICSP4wMUzigPTtmn4fpW?usp=sharing\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "221",
+  "tags": [
+    "decryption",
+    "router"
+  ],
+  "user": "Lukman Lantowa",
+  "time": "Dec 13, 2024 at 7:11",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "So there was a rabbithole I had to go through.\n\nStep 1: Download the firmware - https://www.tripleoxygen.net/files/devices/zte/f670l/v1/firmware/stock/?SD\n\nStep 2: Extract with binwalk - it has a jffs2-root of the file system\n\nStep 3: Interact with the file system enough to see the httpd service - js files associated and the httpd ELF file that is the server binary\n\nStep 4: load httpd into IDA - See that it uses libdb.so to manage the database. Load libdb.so into IDA - it uses libharcode.so\n\nStep 5: libhardcode.so uses /etc/hardcode as input to decrypt files in /etc/hardcodefile - See CspHardCodeParamGet - both key and IV are derived from SHA256 of parts of /etc/hardcodefile\n\nStep 6: RE the implementation to decrypt the file /etc/hardcodefile/dataprotocol to reveal\n\n```\nDefAESCBCKey=L04&Product@5A238dc79b15726d5c06\nDefAESCBCIV=ZTE%FN$GponNJ025678b02a85c63c706\nAESENCRYKey=\nuserkey=608158c36497b00221db14afb845c9e3\n\n```\nfor the files attached in the question\n\nStep 7: With - https://github.com/mkst/zte-config-utility\n\n```\n$ python examples/auto.py --key \"L04&Product@5A238dc79b15726d5c06\" --iv 'ZTE%FN$GponNJ025678b02a85c63c706' /tmp/f670/user_cfg.bin /tmp/f670/some.xml\n\n```\nand voila you can decrypt the file too\n\nScript to decrypt the harcodefiles\n\n```\nfrom struct import unpack\nimport glob\n\nfrom Crypto.Cipher import AES\nfrom Crypto.Hash import SHA256\n\n\ndef decrypt():\n    key_file = \"./etc/hardcode\"\n    config_paths = glob.glob(\"./etc/hardcodefile/*\")\n\n    with open(key_file, \"rb\") as f:\n        key_data = f.readline().strip()\n    offset_bytes = lambda data, offset: bytes(b + offset for b in data)\n\n    key = SHA256.new(offset_bytes(key_data[5:21], 3) + key_data[64:]).digest()\n    iv = SHA256.new(offset_bytes(key_data[7:39], 1)).digest()[:16]\n\n    for path in config_paths:\n        cipher = AES.new(key, AES.MODE_CBC, iv)\n        try:\n            with open(path, \"rb\") as config:\n                print(f\"Decrypting {path}\")\n                header = config.read(8)\n                magic1, magic2 = unpack(\">II\", header)\n                if magic1 != 0x01020304 or magic2 != 0x00000003:\n                    print(f\"{path} is not a valid config file, skipping\")\n                    continue\n                config.read(52)\n                with open(f\"{path}.decrypted.txt\", \"wb\") as output:\n                    while True:\n                        chunk_header = config.read(12)\n                        if not chunk_header:\n                            break\n                        plain_len, cipher_len, eof = unpack(\">III\", chunk_header)\n                        plaintext = cipher.decrypt(config.read(cipher_len))[:plain_len]\n                        output.write(plaintext)\n                        if not eof:\n                            break\n        except FileNotFoundError:\n            print(f\"File {path} not found, skipping\")\n\nif __name__ == \"__main__\":\n    decrypt()\n\n```\n",
+      "votes": "3",
+      "user": "hold-me",
+      "time": "Dec 13, 2024 at 18:45",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Lukman Lantowa",
+          "text": "Hello its work!!!",
+          "time": null
+        },
+        {
+          "user": "hold-me",
+          "text": "You can accept the answer if it works",
+          "time": null
+        },
+        {
+          "user": "Lukman Lantowa",
+          "text": "Hello, I'm willing for you to make a donation to your PayPal as a thank you for your time and effort to help",
+          "time": null
+        },
+        {
+          "user": "Lukman Lantowa",
+          "text": "Hello okay I have reply your email Thank you friend",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

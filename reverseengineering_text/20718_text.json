@@ -1,0 +1,67 @@
+{
+    "title": "Assembly that just seems to be a jumble",
+    "link": "https://reverseengineering.stackexchange.com/questions/20718/assembly-that-just-seems-to-be-a-jumble",
+    "content": "I've disassembled an old DOS program into assembly and I'm trying to figure out a function call.  Here is the ASM:\n<pre><code>seg000:373C ; ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦ S U B R O U T I N E ¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦¦\nseg000:373C\nseg000:373C\nseg000:373C sub_373C        proc far                ; CODE XREF: sub_72C6+16BP\nseg000:373C                                         ; sub_72C6+18FP ...\nseg000:373C                 push    si              ; Temp. store si on stack so we can restore it later\nseg000:373D                 xchg    ax, si\nseg000:373E                 xchg    ax, dx\nseg000:373F                 test    ax, ax\nseg000:3741                 jz      short loc_3745\nseg000:3743                 mul     bx              ; Multiply b by a IIF a is non-zero\nseg000:3745\nseg000:3745 loc_3745:                               ; CODE XREF: sub_373C+5j\nseg000:3745                 jcxz    short loc_374C\nseg000:3747                 xchg    ax, cx\nseg000:3748                 mul     si\nseg000:374A                 add     ax, cx\nseg000:374C\nseg000:374C loc_374C:                               ; CODE XREF: sub_373C:loc_3745j\nseg000:374C                 xchg    ax, si\nseg000:374D                 mul     bx\nseg000:374F                 add     dx, si\nseg000:3751                 pop     si              ; Restore old si\nseg000:3752                 retf\nseg000:3752 sub_373C        endp\n</code></pre>\nFrankly it just seems to be jumbling the registers around to me.  My best guess is that it's some kind of primitive pseudo-random number generator.  Can anyone confirm this or if not, tell me what it's actually meant to do?\nEDIT:\nI've tried dry-running the code, and as far as I can tell, the following is the end result of the registers (can anyone confirm I've got this right and tell me what useful mathematical function it might be doing?):\n<pre><code>ax: ( ax * bx )\nbx: bx\ncx: cx\ndx: ax + ( (bx * dx) + (ax * cx) )\n</code></pre>\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "199",
+    "tags": [
+        "disassembly",
+        "x86",
+        "dos"
+    ],
+    "user": "Jez",
+    "time": "Feb 26, 2019 at 22:11",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "Look up what a one-operand mul instruction does, what are its inputs and outputs.\n",
+            "time": null
+        },
+        {
+            "user": "Jez",
+            "text": "Multiplies the operand with AX and stores the result in DX:AX.  I still don't see what this code is doing messing around with CX and SI :-)\n",
+            "time": null
+        },
+        {
+            "user": "Johann Aydinbas",
+            "text": "<pre><code>si</code></pre> is just used as a temporary storage throughout the code, it is not part of the input and its value is never used inside the function.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This appears to be a 32 bit multiplication implemented on a 16 bit architecture.\nInput numbers are <pre><code>dx:ax</code></pre> and <pre><code>cx:bx</code></pre>, result in <pre><code>dx:ax</code></pre>.\nThe <pre><code>xchg</code></pre>s make the code confusing but if you play it through you notice it does a bunch of a seperate multiplications with the high and low 16 bit of the input numbers.\nAt this point I had a hunch it may be 32 bit multiplication so I tried to understand how that would look with the input numbers split and the result also split and approach the problem from the other way round.\nAssuming the above inputs, one can deduce the following formulas:\n<pre><code>dx:ax = (dx << 16) + ax\ncx:bx = (cx << 16) + bx\n</code></pre>\nthen just multiple them:\n<pre><code>(dx:ax * cx:bx) = (dx << 16)*(cx << 16)  + (dx << 16)*bx + ax*(cx << 16) + ax*bx\n</code></pre>\nIf you take a look, we have 3 additions here instead of two. The reason is that multiplying the upper parts overflows 32 bit so the first multiplicant is dropped in the above code silently.\nThat leaves us\n<pre><code>(dx:ax * cx:bx) = (dx << 16)*bx + ax*(cx << 16) + ax*bx\n</code></pre>\nNow if you think about bitshifts and multiplications in this case every case, as a bitshift is nothing more than a multiplication by powers of 2, they commute meaning this is equivalent to:\n<pre><code>(dx:ax * cx:bx) = (dx*bx << 16) + (ax*cx << 16) + ax*bx\n</code></pre>\nand then we can split it back into 16 bit easily:\n<pre><code>dx = dx*bx + ax*cx\nax = ax*bx\n</code></pre>\nand there you have it, the result of the multiplication of two 32 bit numbers given as 16 bit words.\nAnd this seems to match what the code is doing (safe for bx cx swapped possibly, you may want to have a closer look on that), so it just seems to multiply numbers.\nEdit: Armed with that knowledge and the response to your previous question by Igor I found this source code:\nhttps://github.com/gandrewstone/GameMaker/blob/master/tools/BORLANDC/CRTL/CLIB/F_LXMUL.ASM\nwhich confirms the finding.\n",
+            "votes": "5",
+            "user": "Johann Aydinbas",
+            "time": "Feb 26, 2019 at 22:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jez",
+                    "text": "<span class=\"comment-copy\">Could you explain what this is doing: <code>seg000:374F add dx, si</code>?  It seems to add the original value of <code>ax</code> to <code>dx</code>, meaning <code>dx</code> ends up as <code>ax + ( (bx * dx) + (ax * cx) )</code>.  What am I missing?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Johann Aydinbas",
+                    "text": "<span class=\"comment-copy\">No, before the add it does <code>xchg ax, si</code> but <code>ax</code> at this point is not the initial <code>ax</code>. There are multiple code paths that lead to it, for example with <code>dx = cx = 0</code> (so only 16 bit numbers as input), <code>ax</code> at that point contains <code>dx</code> instead (which is 0). Do note that <code>mul</code> outputs to <code>dx:ax</code> so the other code paths are more complicated.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "It looks like the code is specifically generating these outputs:\n<pre><code>ax: (ax * bx)\ndx: (bx * dx + ax * cx)\n</code></pre>\nThis is under the assumption that the <pre><code>mul</code></pre> instructions never have operands large enough to set <pre><code>dx</code></pre> to a non-zero value. (If that is true, it seems kinda weird that <pre><code>seg000:374F</code></pre> is an <pre><code>add</code></pre> and not just an <pre><code>xchg</code></pre>.)\nMaybe it's calculating the addition of two fractions?\n<pre><code>dx   cx   (bx * dx + ax * cx)\n-- + -- = -------------------\nax   bx        (ax * bx)\n</code></pre>\n",
+            "votes": "2",
+            "user": "booto",
+            "time": "Feb 26, 2019 at 14:53",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jez",
+                    "text": "<span class=\"comment-copy\">Doesn't it then add <code>ax</code> to <code>dx</code>, so it's <code>ax + ( (bx * dx) + (ax * cx) )</code>?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

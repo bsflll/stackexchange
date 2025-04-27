@@ -1,0 +1,47 @@
+{
+    "title": "Unicorn and QEMU: Example use cases to understand the differences",
+    "link": "https://reverseengineering.stackexchange.com/questions/12540/unicorn-and-qemu-example-use-cases-to-understand-the-differences",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The Unicorn <a href=\"http://www.unicorn-engine.org/docs/beyond_qemu.html\" rel=\"noreferrer\">website</a> lists some differences between Unicorn and QEMU, especially those differences \"where Unicorn shines\".</p>\n<p>They furthermore write:</p>\n<blockquote>\n<p>A notable difference between Unicorn and QEMU is that we only focus on emulating CPU operations, but do not handle other parts of computer machine like QEMU.</p>\n<p>[...] we stripped all the subsystems that do not involve in CPU emulation.</p>\n</blockquote>\n<p>I am trying to understand what this actually means, i.e. when to choose QEMU and when Unicorn. Especially, what are concrete example use cases (in the area of reverse engineering) in which Unicorn*) cannot be used, but QEMU can ?</p>\n<p>*) or any tools based on Unicorn such as <a href=\"https://github.com/lunixbochs/usercorn\" rel=\"noreferrer\">usercorn</a></p>\n</div>",
+    "votes": "6",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "dynamic-analysis",
+        "qemu",
+        "emulation"
+    ],
+    "user": "langlauf.io",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h2>What does \"<em>(not) emulating hardware other than the CPU</em>\" mean?</h2>\n<p>This means that whenever the software being emulated accesses hardware, it won't work in Unicorn in the same way as on actual hardware.</p>\n<p>We have several questions about emulating firmware on QEMU. The general answer is that, when you try booting a firmware kernel in QEMU, that kernel will access some I/O ports, but in the emulated environment, those I/O ports won't react in the way they should. For example, an input bit that signals \"device ready\" will be stuck in one state, instead of toggling between true and false.</p>\n<p>To make your software work as intended, you need to emulate this hardware as well - for example, your emulator needs to know something like: </p>\n<blockquote>\n<p>Bit 3 of the input port at <code>0x124</code> is the \"<em>ready</em>\" bit, when it's set to <code>1</code>, there's one byte of serial input waiting at port <code>0x125</code>. Reading port <code>0x125</code> will reset the ready bit to <code>0</code>, and it will stay in state <code>0</code> until the next byte arrives on the serial line.</p>\n</blockquote>\n<p>And if you want to emulate how a software reacts on some particular input on the serial interface, you'll have to build on that specification and make the emulator provide your input at these I/O ports.</p>\n<p>But of course, you need information about the hardware first, so this isn't very useful to reverse engineering. It may be useful to the hardware designer though to find some bugs that are difficult to reproduce or monitor on actual hardware.</p>\n<p>As a specific example, consider the <a href=\"https://en.wikipedia.org/wiki/A20_line\" rel=\"nofollow noreferrer\">A20 gate</a> on 16/32 bit PCs. Indeed, the same instructions:</p>\n<pre><code>mov ax,0ffffh\nmov es,ax\nmov ax,es:[01234h]\n</code></pre>\n<p>May access different memory depending on some bits you wrote to the keyboard controller. You can't get this right in an emulator unless you emulate hardware as well.</p>\n<h2>When is QEMU more useful?</h2>\n<p>Mostly for not RE-related tasks.</p>\n<p>If you want to emulate an old MS DOS program, you'd need QEMU, just because those programs did so much hardware manipulation themselves as the OS lacked the APIs. (Of course, in this case <a href=\"https://www.dosbox.com/\" rel=\"nofollow noreferrer\">DOSBox</a> would probably be more suited than QEMU).</p>\n<p>Or, if you want to make an emulator for a Gameboy, C64, or just any other kind of vintage hardware, you need to simulate the hardware as well, so you'd need these QEMU features.</p>\n<h2>When is Unicorn more useful?</h2>\n<p>For RE tasks, you typically don't need hardware emulation, because you don't have access to hardware design documents anyway. So, an emulator that omits these parts of QEMU, and improves other parts, is probably more suited to RE than QEMU is. Especially the \"<em>does not need an environment</em>\" part can make stuff easier. </p>\n<p>As a concrete example, take one of those \"<em>do my homework for me</em>\" questions - <a href=\"https://reverseengineering.stackexchange.com/questions/12534/translate-the-assembly-code-to-c-code\">this</a>, and <a href=\"https://reverseengineering.stackexchange.com/questions/12530/how-to-convert-assembly-to-c-code\">this</a>. When you have an assumption what a function does, you may want to run it to check if some specific input produces the output you assume. With QEMU, you need to compile this to an ELF file, and set up an operating system to run your program; with Unicorn, it seems like you can run the snippet directly (of course you still have to assemble it, and need to initialize registers in a sensible way, but you don't need all the rest of the bloat).</p>\n<p>Or, another example, you have a program that deals with DRM protected data, and includes some functions to decrypt the DRM. If that program runs on ARM Android or I/OS, and you want to have your PC do the decryption, you can try loading the program into memory and tell your emulator \"<em>start emulating at address <code>0x12345678</code></em>\". It seems to be much easier to do this if you don't have to provide all the environment, and dependencies, that QEMU requires.</p>\n</div>",
+            "votes": "8",
+            "user": "perror",
+            "time": "Aug 16, 2017 at 8:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">But can I use unicorn like a debugger? E.g. do things like starting the program (i.e. automatically loading the binary into memory, loading and resolving the libraries, ...) setting a breakpoint, continuing the program. What if the program uses system APIs, e.g. network IO?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">No, you wouldn't be able to use Unicorn to run an executable file (PE file, ELF file, etc.) because loading those files relies on an underlying operating system and libraries. Unicorn is instead meant to deal with small snippets of assembly where no system APIs, network I/O, etc. is performed. See <a href=\"https://i.imgur.com/UpHJjxv.png\" rel=\"nofollow noreferrer\">here</a> for an example of how Unicorn is used -- you initialize memory, initialize registers, and then execute some assembly instructions.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">@Jason Thanks for the clarification. This means QEMU has another advantage, besides the hardware emulation: It allows to really \"run\" (loading, shared libs, ...) the target executable (and thus also to debug it). Yet, maybe it makes more sense to compare QEMU and usercorn then, right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">QEMU runs a real OS in the virtualized environment, whereas usercorn runs a simulated Linux OS in the virtualized environment.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

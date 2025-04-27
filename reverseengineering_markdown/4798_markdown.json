@@ -1,0 +1,70 @@
+{
+  "title": "Jump into the instructions, is it a case `objdump` can't handle?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4798/jump-into-the-instructions-is-it-a-case-objdump-cant-handle",
+  "content": "So basically I am using objdump on 32 bit x86 Linux, disassembling some static linked binary compiled by gcc\n\nIn the disassembled asm code, I find this:\n\n```\n 80ade23:       74 01                   je     0x80ade26\n 80ade25:       f0 0f c1 16             lock xadd %edx,(%esi) // lock\n 80ade29:       89 54 24 14             mov    %edx,0x14(%esp)\n 80ade2d:       8b 54 24 14             mov    0x14(%esp),%edx\n 80ade31:       3b 15 f0 0e 0f 08       cmp    0x80f0ef0,%edx\n 80ade37:       73 75                   jae    0x80adeae\n 80ade39:       65 83 3d 0c 00 00 00    cmpl   $0x0,%gs:0xc\n 80ade40:       00\n 80ade41:       74 01                   je     0x80ade44\n 80ade43:       f0 0f c1 0d dc 0e 0f    lock xadd %ecx,0x80f0edc // lock\n 80ade4a:       08\n\n```\nSo basically, in my understanding, lock is a prefix of x86 asm opcode, which is legal here.\n\nand it seems that je jump into the position right after lock.\n\nso here are my questions:\n\nI tried to change it in this way and re-assemble it using gcc, \nit can pass the assemble process, but basically I really don't know if it is a correct way or not.\n\n```\n je     S_0x80ade26\n lock   \n S_0x80ade26: xadd %edx,(%esi) // lock\n\n```\n",
+  "votes": "3",
+  "answers": 3,
+  "views": "3k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "x86",
+    "reassembly"
+  ],
+  "user": "lllllllllllll",
+  "time": "Jul 7, 2014 at 19:22",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I wouldn't go that far and state that the output provided by objdump isn't correct. True, Linear Sweep doesn't handle data properly, and jump tables & shellcodes are usually a source of disassembly errors. But still, this isn't an error.\n\nIf you take a closer look at your code you'll notice you have je. Meaning, the jump is taken only if the previous instruction - which is certainly a cmp or a test - returns true. The x86 ISA (instruction set) allows to jump in the middle of instructions, or a byte stream if you like. And this is sometimes used to avoid certain prefixes like rep, ..., and in your case a lock.\n\nI'm 100% sure the output provided is correct and that the programmer (or the compiler) used this trick to avoid unnecessary additional code.\n\n",
+      "votes": "4",
+      "user": "yaspr",
+      "time": "Jul 9, 2014 at 8:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "lllllllllllll",
+          "text": "Thank you yaspr, so basically, the way I re-use it (at the bottom of my question), is it correct or not..?",
+          "time": null
+        },
+        {
+          "user": "yaspr",
+          "text": "Actually, there's no difference between the way you rewrote it and the way it was. Why ?! Well, at the binary level, there's no separator between instructions for that in x86 they are of variable length. And also, the fact that you can jump inside a byte stream.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "In fact, objdump use the linear sweep algorithm to disassemble executable files. It means that it disassembles instructions one after one. Like this:\n\nobjdump implementation add only one small increment on this simple algorithm, it will start on every symbols even if it appear in the middle of the current disassembled instruction. Meaning that you may have the following case (I encountered it while studying an obfuscated software):\n\n```\n   4028c0:       41 57                   push   %r15\n   4028c2:       41 56                   push   %r14\n   4028c4:       41 55                   push   %r13\n   4028c6:       41 54                   push   %r12\n   4028c8:       55                      push   %rbp\n   4028c9:       48 89 f5                mov    %rsi,%rbp\n   4028cc:       48 85 c0                test   %rax,%rax\n\n00000000004028cd <.f668>:\n   4028cd:       85 c0                   test   %eax,%eax\n   4028cf:       53                      push   %rbx\n   ...\n\n```\nThe disassembler first disassembled 4028cc as an amd64 instruction, but a symbol was at 4028cd. So, the algorithm reseted to this value and started over from there.\n\nFinally, be aware that the linear sweep algorithm is widely known as being incorrect. It may be mislead very easily. Its main problem is that it does not take into account the semantics of all the instructions, so when reaching a dynamic jump (jmp %rax), the algorithm won't be able to follow the execution flow. Of course, there are many other ways to mislead this algorithm, I won't try to be exhaustive here on all these techniques (note that recursive traversal is not really better).\n\nTo get back to your original questions:\n\n",
+      "votes": "3",
+      "user": "perror",
+      "time": "Jul 8, 2014 at 9:50",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "I think that what you call \"jump into instructions\" could be an anti-static analysis technique called disassembly desynchronization, which interleaves data bytes with code in order to confuse the disassembler. This technique and others are explained in chapter 21 (Obfuscated Code Analysis) of the IDA Pro book.\n\nUsing IDA Pro you can obtain the correct disassembly of your code if you:\n\nNote that this anti-static analysis technique is applied twice in your code. So you need to apply steps 2-5 twice.\n\nUPDATE: However, in your objdump output there is no disassembly desynchronization as Peter Ferrie pointed out in the comments below. The jump into instruction is a means of improving performance. However, I leave this answer as a hint for anyone who stumbles upon your question and whose disassembly is actually suffering from desynchronization.\n\n",
+      "votes": "3",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "peter ferrie",
+          "text": "The original disassembly is correct, and the answer is not.  The code is checking the thread count and avoiding the lock: if there's only one thread.  This action improves performance.",
+          "time": null
+        },
+        {
+          "user": "Benny",
+          "text": "@peterferrie thanks for the info. I haven't seen this kind of optimization before. Therefore I assumed it was a case of disassembly desynch. I'm now wondering how can the lock not be skipped if the jump address is not dynamically computed?",
+          "time": null
+        },
+        {
+          "user": "peter ferrie",
+          "text": "the branch and locked instruction are generated as a set, so always je $+3/lock/<instruction>.  The cmp is not part of the set, so can be separated for better pipelining (to permit insertion of unrelated mov instructions).",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

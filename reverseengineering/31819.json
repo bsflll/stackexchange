@@ -1,0 +1,53 @@
+{
+    "title": "Malware analysis - Debugger hangs at HttpSendRequestA",
+    "link": "https://reverseengineering.stackexchange.com/questions/31819/malware-analysis-debugger-hangs-at-httpsendrequesta",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm reverse engineering a malware that at some point tries to connect to <code>http://api.ipify.org</code> in order to get the IP address of the infected PC.</p>\n<p>I was able to replicate this behaviour with a small Python script, but for some reason, I can't get the same result when debugging the malware (in my dynamic-analysis VM using <strong>x32dbg</strong>), due to the fact that execution hangs indefinitely inside <code>HttpSendRequestA</code>.</p>\n<p>I tried to trace the execution flow inside that API, and the reason of the hang is a call to <code>WaitForSingleObjectEx</code> in <strong>wininet.dll</strong> (so, nothing to do with the malware itself).</p>\n<p>If I try to patch the <code>dwMilliseconds</code> param of <code>WaitForSingleObjectEx</code> (causing a timeout) I can get further to the execution, but eventually I get stuck another time when the malware tries to perform another http request.</p>\n<p>I tried to run this sample on another dynamic-analysis VM with Fakenet-ng installed and I can't even see the attempt to perform the http requests from the log.</p>\n<p>In both VMs the network is online.</p>\n<p>Am I missing something obvious here?</p>\n<p><strong>EDIT:</strong></p>\n<p>I tried to run the malware outside the debugger (still in a VM with fakenet) and I see the http requests from the log! So the issue described here <strong>only happens when running INSIDE the debugger</strong>. Still, I don't think that this is an anti-debugging trick: I have reverse-engineered and documented EVERY function of this malware and I haven't found any anti-debugging stuff.</p>\n<p><strong>EDIT2:</strong></p>\n<p>It seems that this user had the same issue (usign a different debugger):</p>\n<p><a href=\"https://reverseengineering.stackexchange.com/questions/19431/ollydbg-runs-away-when-stepping-over-wininet-httpsendrequestw\">OllyDbg \"runs away\" when stepping over wininet.HttpSendRequestW</a></p>\n<p><strong>EDIT3:</strong></p>\n<p>Found a workaround (described in the answer bellow)</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "302",
+    "tags": [
+        "windows",
+        "debugging",
+        "malware",
+        "x64dbg",
+        "networking"
+    ],
+    "user": "Luca D'Amico",
+    "time": "Apr 27, 2023 at 21:21",
+    "comments": [
+        {
+            "user": "Tobias",
+            "text": "<span class=\"comment-copy\">I assume you've tried setting a breakpoint after the function call, and rather than stepping to and over the call, just launch the process and wait for it to hit the breakpoint. What flags are sent to InternetOpen()? Is it setting the async flag? After clearing the dns cache, do you see it doing name lookup before the hang?</span>",
+            "time": null
+        },
+        {
+            "user": "Luca D'Amico",
+            "text": "<span class=\"comment-copy\">Hello Tobias. Yes, I tried to set a bp just after the function call, but it still get stuck before reaching it. There isn't any flag pushed to InternetOpenA (it pushes 0 as dwFlags param). I don't see any name loopups either. I'm thinking about coding a little prog that simulate this behaviour using same APIs/params and see what happens while debugging it.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Ok after hours of struggle, I found a solution (sort of).</p>\n<p>First of all, I still don't know what causes the deadlock, but I found that this happend only when debugging the malware as a dll.</p>\n<p>How I came to this conclusion? Because I've written a little app (exe, NOT dll) to simulate exacly what the malware is doing, using the same windows apis and in this case I got no deadlock. So I started to suspect that the issue was indeed the fact that I was debugging a dll.</p>\n<p>So this is what I did:</p>\n<ol>\n<li>Using dll_to_exe I've convert the malware from dll to exe (thanks @hasherezade for this great tool) [https://github.com/hasherezade/dll_to_exe]</li>\n<li>Since the malware uses a custom entry point, I loaded the new executable in x32dbg,  reached the real entry point, then fired up Scylla and produced a new dump with the EP set to the real entry point (I know that this can be done without Scylla at all by simply using a PE editor, but I was lacking any PE editor in that VM and the network was intercepted by Fakenet-NG).</li>\n<li>Loaded this new executable (with the correct EP) in the debugger and executed it. It reached HttpSendRequestA call and I was able to step over it without any deadlock.</li>\n</ol>\n<p>Still, if you know why the deadlock happens in the dll version please tell me. I also tried to use OllyDBG just to make sure that this wasn't a bug of x32dbg, but I was able to repliace the same issue there too.</p>\n</div>",
+            "votes": "2",
+            "user": "Luca D'Amico",
+            "time": "Apr 27, 2023 at 21:19",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I don't know if it's still a problem for you, but it might be related to this:</p>\n<p><a href=\"https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices\" rel=\"nofollow noreferrer\">https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-best-practices</a></p>\n<p>and more particularly this sentence:</p>\n<p>\"Improper synchronization within DllMain can cause an application to deadlock or access data or code in an uninitialized DLL. Calling certain functions from within DllMain causes such problems.\"</p>\n<p>So my guess is that the malware you're debugging is trying to call HttpSendRequestA before it exits DllMain ?</p>\n</div>",
+            "votes": "1",
+            "user": "Stanislas Arnoud",
+            "time": "Jun 2, 2023 at 14:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Luca D'Amico",
+                    "text": "<span class=\"comment-copy\">Thank you for this piece of info. This is interesting, considering that this malware doesn't use the regular DllMain, but instead use another entry point.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

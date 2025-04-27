@@ -1,0 +1,38 @@
+{
+    "title": "x86 main preamble makes stack aligned on 32-bytes boundaries",
+    "link": "https://reverseengineering.stackexchange.com/questions/22109/x86-main-preamble-makes-stack-aligned-on-32-bytes-boundaries",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>For the record, I've read all stackexchange relevant answers on the topic (<a href=\"https://reverseengineering.stackexchange.com/questions/14880/basic-reversing-question-about-local-variable\">here</a> and <a href=\"https://reverseengineering.stackexchange.com/questions/15173/what-is-the-purpose-of-these-instructions-before-the-main-preamble\">here</a>) plus other articles to fully grasp the concepts of <em>memory alignment</em> and <em>CPU natural boundaries</em>.<br/>\nBut for some reason, I just can't understand the meaning of the following main preamble (given out by <code>radare2</code>)</p>\n<pre><code>(fcn) sym.main 99\n|   sym.main (int argc, char **argv, char **envp);\n|           ; var int local_78h @ ebp-0x78\n|           ; arg int arg_10h @ ebp+0x10\n|           ; var int local_4h @ esp+0x4\n|           ; DATA XREF from entry0 (0x8048417)\n|           0x0804867d      55             push ebp\n|           0x0804867e      89e5           mov ebp, esp\n|           0x08048680      81ec88000000   sub esp, 0x88\n|           0x08048686      83e4f0         and esp, 0xfffffff0\n|           0x08048689      b800000000     mov eax, 0\n|           0x0804868e      83c00f         add eax, 0xf\n|           0x08048691      83c00f         add eax, 0xf\n|           0x08048694      c1e804         shr eax, 4\n|           0x08048697      c1e004         shl eax, 4\n|           0x0804869a      29c4           sub esp, eax\n</code></pre>\n<hr/>\n<h2>Breakdown</h2>\n<p>There seems to be a local array on the stack frame that takes up  <em>78h = 120d</em> bytes on the stack, indicated by this line :</p>\n<pre><code>|           ; var int local_78h @ ebp-0x78\n</code></pre>\n<p>So far so good.<br/>\nNow the stack pointer is moved to make space for such an array on the stack, manipulating <code>esp</code> to make sure the stack is aligned on <em>16-bytes boundaries</em> :</p>\n<pre><code>|           0x08048680      81ec88000000   sub esp, 0x88\n|           0x08048686      83e4f0         and esp, 0xfffffff0\n</code></pre>\n<p>Which effectively makes <code>esp</code> a multiple of at least <em>16</em> (<strong>least significant nibble</strong> zeroed out), but let's for the sake of mathematical rigor say that <code>esp</code> is now a multiple of <em>16k</em>, with <em>k</em> an arbitrary integer.<br/>\nAll this makes perfect sense (see <a href=\"http://www.songho.ca/misc/alignment/dataalign.html\" rel=\"nofollow noreferrer\">here</a> and <a href=\"https://stackoverflow.com/questions/16703211/why-128bit-variables-should-be-aligned-to-16byte-boundary\">here</a> to fully understand the need for <em>16-bytes stack alignment</em>, having to do with <em>SSE</em> and whatnot).<br/>\nNow what I really can't seem to wrap my head around is the relevance of the subsequent instructions :</p>\n<pre><code>|           0x08048689      b800000000     mov eax, 0\n|           0x0804868e      83c00f         add eax, 0xf\n|           0x08048691      83c00f         add eax, 0xf\n|           0x08048694      c1e804         shr eax, 4\n|           0x08048697      c1e004         shl eax, 4\n|           0x0804869a      29c4           sub esp, eax\n</code></pre>\n<p>Which as far as I could understand :<br/>\n1 - Made <code>eax</code> equal to <em>10h</em> (by the way why all these instructions to get to such a simple result for <code>eax</code> ? Why not just make a <code>mov eax, 0x10</code> ?)<br/>\n2 - Subtract that quantity from <code>esp</code>, which is just gonna zero out the <strong>least significant 1 bit</strong> in <code>esp</code> (given that the <em>first nibble</em> is null anyway) which is just gonna make <code>esp</code> a multiple of <em>16(k+<strong>1</strong>)</em>, thus making the stack aligned on <strong><em>32</em></strong>-bytes boundaries if it was aligned on <strong><em>16</em></strong>-bytes boundaries, or make it aligned on <strong><em>64</em></strong>-bytes boundaries if it was aligned on <strong><em>32</em></strong>-bytes boundaries, and so on and so forth. </p>\n<p>What do we need that for ?<br/>\nIs there something I got wrong in this whole analysis ?</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "254",
+    "tags": [
+        "disassembly",
+        "x86",
+        "memory",
+        "stack"
+    ],
+    "user": "programmersn",
+    "time": "Sep 12, 2019 at 19:48",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>There seems to be a local array on the stack frame that takes up 78h =\n  120d bytes on the stack, indicated by this line :</p>\n</blockquote>\n<p>no the local var is of type int and it takes 4 bytes on 32 bit machine<br/>\nit is located at the address ebp - 0x78<br/>\nthe other one is again a int and is located at esp+4</p>\n<p>the circus is probably some home grown obfuscation may be </p>\n<p>all it does is subtract another 0x10 from esp </p>\n<p>so basically it is sub esp 0x98</p>\n<p>you can check whats going on by emulating it or single stepping through it</p>\n<p>simple check using python</p>\n<pre><code>&gt;&gt;&gt; eax = 0\n&gt;&gt;&gt; eax\n0\n&gt;&gt;&gt; eax = eax+0xf\n&gt;&gt;&gt; eax\n15\n&gt;&gt;&gt; eax = eax + 0xf\n&gt;&gt;&gt; eax\n30\n&gt;&gt;&gt; eax = eax &gt;&gt; 4\n&gt;&gt;&gt; eax\n1\n&gt;&gt;&gt; eax = eax &lt;&lt; 4\n&gt;&gt;&gt; eax\n16\n&gt;&gt;&gt; hex(eax)\n'0x10'\n&gt;&gt;&gt;\n</code></pre>\n<p>subtracting is not for alignment as you seem to be confusing it\nsubtracting is making space in stack </p>\n<p>the alignment is done with and esp,0x..... </p>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Sep 12, 2019 at 19:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "programmersn",
+                    "text": "<span class=\"comment-copy\">Fair enough. But then why bother to allocate 98h = 152d  bytes on the stack for two miserable 4-byte integers ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">cannot infer the reason from the posted snippet may be it is doing some stuff and radare2 didn't find enough evidence to name them as local to the function</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

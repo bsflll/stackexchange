@@ -1,0 +1,25 @@
+{
+    "title": "How to select an item in IDAPython, in decompilation view?",
+    "link": "https://reverseengineering.stackexchange.com/questions/30860/how-to-select-an-item-in-idapython-in-decompilation-view",
+    "content": "I would like to automate calling the DeepScanVariable function from the HexRaysPyTools right-click menu (that serves to reconstruct structures).\nI have changed the arguments types for a list of functions, based on data gathered at run-time. Now, I would like to go over that list of functions, and for each argument of a given type, select that argument, right-click, and select Deep Scan Variable.\nWhat that HexRaysPyTools function does is roughly:\n<pre><code>def activate(self, ctx):\n    hx_view = idaapi.get_widget_vdui(ctx.widget)\n    obj = api.ScanObject.create(hx_view.cfunc, hx_view.item)\n    (...)\n</code></pre>\nI already found the action name by calling <pre><code>idaapi.get_registered_actions()</code></pre>.\nThen I give focus to the decompilation view, to make <pre><code>get_widget_vdui</code></pre> happy and fire the action:\n<pre><code>widget = idaapi.find_widget('Pseudocode-A')\nidaapi.activate_widget(widget, 1)\nidaapi.process_ui_action('HexRaysPyTools:DeepScanVariable')\n</code></pre>\nWhat's missing is that I'm supposed to select the item, so that <pre><code>hx_view.item</code></pre> has the correct value and I cannot find any way to do that. I can iterate over arguments of a decompiled function just fine, I just cannot find a way to actually mark an item as selected.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "377",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "overflo",
+    "time": "Sep 7, 2022 at 15:24",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "If you look closer at that code in HexRaysPyTools, you'll see the following:\n<pre><code>    def create(cfunc, arg):\n        # Creates object suitable for scaning either from cexpr_t or ctree_item_t\n        if isinstance(arg, idaapi.ctree_item_t):\n            # ... code for ctree_item_t ...\n        else:\n            cexpr = arg\n\n        if cexpr.op == idaapi.cot_var:\n            lvar = cfunc.get_lvars()[cexpr.v.idx]\n            result = VariableObject(lvar, cexpr.v.idx)\n            result.ea = ScanObject.get_expression_address(cfunc, cexpr)\n            return result\n</code></pre>\nSo if you can get your hands on a <pre><code>cexpr_t</code></pre> containing the <pre><code>lvar_t</code></pre> that you want, you're good to go. For example, you could write a small visitor class whose <pre><code>visit_expr</code></pre> method looks for <pre><code>cexpr_t</code></pre> objects of type <pre><code>cot_var</code></pre>, whose <pre><code>.var</code></pre> field refers to the <pre><code>lvar_t</code></pre> object that you want. Alternatively, you could perhaps edit the code to accept a raw <pre><code>lvar_t</code></pre> (though pay close attention to the call to <pre><code>ScanObject.get_expression_address</code></pre>).\nWhat I would do would be to edit the code so that it reads as follows:\n<pre><code>def create(cfunc, arg):\n    # Creates object suitable for scaning either from cexpr_t or ctree_item_t OR lvar_t\n    if isinstance(arg, idaapi.lvar_t):\n        index = list(cfunc.get_lvars()).index(arg)\n        return VariableObject(arg, index)\n    # ... rest of function as before ...\n</code></pre>\nThen you can simply call the function above with an <pre><code>lvar_t</code></pre> object you get from <pre><code>mba_t::vars</code></pre>. You can use <pre><code>mba_t::argidx</code></pre> to look up arguments by their index, and if you need to look up a variable by location, note that <pre><code>lvar_t</code></pre> derives from <pre><code>lvar_locator_t</code></pre>, which in turn contains a <pre><code>vdloc_t</code></pre> (which derives from <pre><code>argloc_t</code></pre>). I.e., you can use <pre><code>lvar_t::location</code></pre> to inspect the physical location of a given <pre><code>lvar_t</code></pre> if you need to look up arguments by location instead of by numeric index.\nIn general, it seems like you've made a lot of progress getting to this point. Don't let the Hex-Rays SDK scare you; if <pre><code>HexRaysPyTools</code></pre> doesn't do what you want, try modifying it. If that still doesn't work, read the code deeper to figure out why not, and reimplement the logic if you have to.\n",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Sep 8, 2022 at 20:53",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,53 @@
+{
+    "title": "ADDS(operations with S suffix) -Arm",
+    "link": "https://reverseengineering.stackexchange.com/questions/29678/addsoperations-with-s-suffix-arm",
+    "content": "This question was asked before here but in the answers I did get what i was looking for.\nConsider this:\n<pre><code>ADDS R0 RO R1\n</code></pre>\nAs far as I know to update the cpsr flags a subtraction has to be made. So after this instruction, is the result subtracted from RO or R1?\nEdit:\nThis is what I understand\n<pre><code>CMP RO R1 \n</code></pre>\nIn this instruction, <pre><code>R1</code></pre> is subtracted from <pre><code>R0</code></pre> and based on the results the flags are updated. The thing I dont understand is in operations with S suffix the result after the operation like <pre><code>eg ADDS  on the top</code></pre> is it subtracted from <pre><code>R0</code></pre> or <pre><code>R1</code></pre> to update the flags or i got it all wrong?\nEdit 2:\nFor example consider these instructions\n<pre><code>mov r0, #1\nmov r1, #6\ntst r1, r0\nbne 0x6000\n</code></pre>\nFrom this example, the result of the tst instruction is 7(111 binary). In the branch instruction how can it branch with the NE condition code if there was no comparison between registers.\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "346",
+    "tags": [
+        "assembly",
+        "arm",
+        "register"
+    ],
+    "user": "Silent",
+    "time": "Dec 7, 2021 at 22:03",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "R0 == R0+R1 is the operation here not sure what subtraction you are referring to the S modifies the flags based on the result of operation\n",
+            "time": null
+        },
+        {
+            "user": "Silent",
+            "text": "@blabb i have updated the question please correct me if I am wrong.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "As I Commented the operation here is R0 == R0+R1\nthe Current Program Status Register or\nApplication Program Status Register are modified based on the result\nAssume for  example\nR0 contains 0xffffffff (maximum possible 32 bit unsigned integer)\nR1 contains 0x00000001\nR0+R1 will be\n<pre><code>>>> print(hex(0xffffffff+0x00000001))\n0x100000000\n>>>\n</code></pre>\nthe result is a 33bit or in other words the result is 0x0 and the 33rd bit is lost\nsince result is 0 N or Negative flag is not set N=0\nagain since result is 0 zero flag is set to 1 Z=1\nthe upper 33rd bit is lost so Carry flag is set C==1\nsigned or v flag doesn't not have any overflow (-1 + 1 ) == 0 so V flag is not set V=0\nthis all are explained in this document\nthere is a source code and demo also attached in the link\nwhere adds and the cpsr details are retrieved by this assembly stub\nyou can use unicorn or unicorn based qiling to emulate these instruction\n<pre><code>doADDS:\n    @ Perform the operation, leaving the result in r0 to return it.\n    adds    r0, r0, r1\n    \n    @ Get the APSR flags and dump them into flags (*r2).\n    mrs     r3, CPSR\n    str     r3, [r2]\n    \n    @ The recommended (interworking-compatible) return method:\n    bx      lr\n</code></pre>\na sample emulation and cpsr flags using Qiling Framework\n<pre><code>:\\>type armshell.py\nfrom qiling import *\nfrom qiling.const import QL_VERBOSE\n\n# 0x0000000000000000:  00 00 E0 E3    mvn  r0, #0\n# 0x0000000000000004:  01 10 A0 E3    mov  r1, #1\n# 0x0000000000000008:  01 00 90 E0    adds r0, r0, r1\n# 0x000000000000000c:  00 F0 20 E3    nop\n# 0x0000000000000010:  00 F0 20 E3    nop\n\nshellcode = b\"\\x00\\x00\\xe0\\xe3\\x01\\x10\\xa0\\xe3\\x01\\x00\\x90\\xe0\\x00\\xf0\\x20\\xe3\\x00\\xf0\\x20\\xe3\"\n\nql = Qiling(\n    code=shellcode,\n    rootfs=r\"F:\\QILING\\examples\\rootfs\\x8664_windows\",\n    ostype=\"linux\",\n    archtype=\"arm\",\n    verbose=QL_VERBOSE.DEBUG\n)\nql.reg.cpsr = 0\nql.reg.r0 = 0\nql.reg.r1 = 0\nprint(\"registers before starting\")\nprint(\"r0 = 0x{:x}\".format(ql.reg.r0))\nprint(\"r1 = 0x{:x}\".format(ql.reg.r1))\nprint(\"cpsr = 0x{:x}\n\".format(ql.reg.cpsr))\n\nfor i in range(1, 5, 1):\n    ql.run(0, len(shellcode), -1, i)\n    print(\"r0 = 0x{:x}\".format(ql.reg.r0))\n    print(\"r1 = 0x{:x}\".format(ql.reg.r1))\n    print(\"cpsr = 0x{:x}\n\".format(ql.reg.cpsr))\n</code></pre>\nexecuted\n<pre><code>:\\>python armshell.py\n[+]     Profile: Default\n[+]     Set init_kernel_get_tls\nregisters before starting\nr0 = 0x0\nr1 = 0x0\ncpsr = 0x0\n\nr0 = 0xffffffff\nr1 = 0x0\ncpsr = 0x0\n\nr0 = 0xffffffff\nr1 = 0x1\ncpsr = 0x0\n\nr0 = 0x0\nr1 = 0x1\ncpsr = 0x60000000\n\nr0 = 0x0\nr1 = 0x1\ncpsr = 0x60000000\n</code></pre>\nthe cpsr is set with bit 29,30 representing flags Z and C (Zero and Carry)\n<pre><code>>>> hex(1<<30|1<<29)\n'0x60000000'\n>>>\n</code></pre>\nfeeding with a ladle\n<pre><code>from qiling import *\nfrom qiling.const import QL_VERBOSE\n\n# 0x0000000000000000:  00 F0 20 E3    nop \n# 0x0000000000000004:  01 00 A0 E3    mov r0, #1\n# 0x0000000000000008:  06 10 A0 E3    mov r1, #6\n# 0x000000000000000c:  00 00 11 E1    tst r1, r0\n# 0x0000000000000010:  FA 17 00 1A    bne #0x6000\n# 0x0000000000000014:  00 F0 20 E3    nop \n\nshellcode = b\"\\x00\\xf0\\x20\\xe3\\x01\\x00\\xa0\\xe3\\x06\\x10\\xa0\\xe3\\x00\\x00\\x11\\xe1\\xfa\\x17\\x00\\x1a\\x00\\xf0\\x20\\xe3\"\n\nql = Qiling(\n    code=shellcode,\n    rootfs=r\"F:\\QILING\\examples\\rootfs\\x8664_windows\",\n    ostype=\"linux\",\n    archtype=\"arm\",\n    verbose=QL_VERBOSE.DEBUG\n)\nql.reg.cpsr = 0\nql.reg.r0 = 0\nql.reg.r1 = 0\nprint(\"registers before starting\")\nprint(\"r0 = 0x{:x}\".format(ql.reg.r0))\nprint(\"r1 = 0x{:x}\".format(ql.reg.r1))\nprint(\"cpsr = 0x{:x}\n\".format(ql.reg.cpsr))\n\nfor i in range(1, 5, 1):\n    ql.run(0, len(shellcode), -1, i)\n    print(\"r0 = 0x{:x}\".format(ql.reg.r0))\n    print(\"r1 = 0x{:x}\".format(ql.reg.r1))\n    print(\"cpsr = 0x{:x}\n\".format(ql.reg.cpsr))\n</code></pre>\nemulation  of tst instruction.\n<pre><code>F:\\QILING\\testqiling>python armtstop.py\n[+]     Profile: Default\n[+]     Set init_kernel_get_tls\nregisters before starting\nr0 = 0x0\nr1 = 0x0\ncpsr = 0x0\n\nr0 = 0x0\nr1 = 0x0\ncpsr = 0x0\n\nr0 = 0x1\nr1 = 0x0\ncpsr = 0x0\n\nr0 = 0x1\nr1 = 0x6\ncpsr = 0x0\n\nr0 = 0x1\nr1 = 0x6\ncpsr = 0x40000000 <<<<<<<<<< \n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Dec 8, 2021 at 3:06",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Silent",
+                    "text": "<span class=\"comment-copy\">Oh now I understand. With <code>CMP</code> you have to subtract between the two registers for you to get the result and hence update the cpsr flags. But with the instructions with  <code>S</code> suffix the result is used to update the flags whether the instructions was <code>ANDS</code>, <code>SUBS</code>, etc.... But what i dont really get in this concept is how does this really work in <code>EQ</code> and <code>NE</code> condition codes since there was no comparison done. Please see update in question for the example.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">have You Opened the Link i posted ? have you read the contents ? especially the conditional code execution part ?  have you given a thought to how tst is equivalent to ands operation and what might be the actual result of such operation ?  have you noticed the footnote that says tst discards the result and updates the flags ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Silent",
+                    "text": "<span class=\"comment-copy\">Thanks I now understand. I read it before but didn't get the S suffix part. I guess I needed the recap.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

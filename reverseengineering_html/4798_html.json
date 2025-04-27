@@ -1,0 +1,70 @@
+{
+    "title": "Jump into the instructions, is it a case `objdump` can't handle?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4798/jump-into-the-instructions-is-it-a-case-objdump-cant-handle",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  So basically I am using\n  <code>\n   objdump\n  </code>\n  on 32 bit x86 Linux, disassembling some\n  <strong>\n   static linked\n  </strong>\n  binary compiled by\n  <code>\n   gcc\n  </code>\n </p>\n <p>\n  In the disassembled asm code, I find this:\n </p>\n <pre><code> 80ade23:       74 01                   je     0x80ade26\n 80ade25:       f0 0f c1 16             lock xadd %edx,(%esi) // lock\n 80ade29:       89 54 24 14             mov    %edx,0x14(%esp)\n 80ade2d:       8b 54 24 14             mov    0x14(%esp),%edx\n 80ade31:       3b 15 f0 0e 0f 08       cmp    0x80f0ef0,%edx\n 80ade37:       73 75                   jae    0x80adeae\n 80ade39:       65 83 3d 0c 00 00 00    cmpl   $0x0,%gs:0xc\n 80ade40:       00\n 80ade41:       74 01                   je     0x80ade44\n 80ade43:       f0 0f c1 0d dc 0e 0f    lock xadd %ecx,0x80f0edc // lock\n 80ade4a:       08\n</code></pre>\n <p>\n  So basically, in my understanding,\n  <code>\n   lock\n  </code>\n  is a prefix of x86 asm opcode, which is legal here.\n </p>\n <p>\n  and it seems that\n  <code>\n   je\n  </code>\n  jump into the position right after\n  <code>\n   lock\n  </code>\n  .\n </p>\n <p>\n  so here are my questions:\n </p>\n <ol>\n  <li>\n   <p>\n    Is the disassemble results from\n    <code>\n     objdump\n    </code>\n    correct? It is rare to see\n    <code>\n     objdump\n    </code>\n    generate this kind of \"jump into instructions\" asm code..(anyway, I am new to reverse engineering, so... :) )\n   </p>\n  </li>\n  <li>\n   <p>\n    Then how to adjust it to make it re-assemblable?\n   </p>\n  </li>\n </ol>\n <p>\n  I tried to change it in this way and re-assemble it using\n  <code>\n   gcc\n  </code>\n  , \nit can pass the assemble process, but basically I really don't know if it is a correct way or not.\n </p>\n <pre><code> je     S_0x80ade26\n lock   \n S_0x80ade26: xadd %edx,(%esi) // lock\n</code></pre>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "3k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "x86",
+        "reassembly"
+    ],
+    "user": "lllllllllllll",
+    "time": "Jul 7, 2014 at 19:22",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I wouldn't go that far and state that the output provided by\n  <code>\n   objdump\n  </code>\n  isn't correct. True, Linear Sweep doesn't handle data properly, and jump tables & shellcodes are usually a source of disassembly errors. But still, this isn't an error.\n </p>\n <p>\n  If you take a closer look at your code you'll notice you have\n  <code>\n   je\n  </code>\n  . Meaning, the jump is taken only if the previous instruction - which is certainly a\n  <code>\n   cmp\n  </code>\n  or a\n  <code>\n   test\n  </code>\n  - returns true. The\n  <code>\n   x86\n  </code>\n  ISA (instruction set) allows to jump in the middle of instructions, or a byte stream if you like. And this is sometimes used to avoid certain prefixes like\n  <code>\n   rep\n  </code>\n  , ..., and in your case a\n  <code>\n   lock\n  </code>\n  .\n </p>\n <p>\n  I'm 100% sure the output provided is correct and that the programmer (or the compiler) used this trick to avoid unnecessary additional code.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "yaspr",
+            "time": "Jul 9, 2014 at 8:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Thank you yaspr, so basically, the way I re-use it (at the bottom of my question), is it correct or not..?</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">Actually, there's no difference between the way you rewrote it and the way it was. Why ?! Well, at the binary level, there's no separator between instructions for that in <code>x86</code> they are of variable length. And also, the fact that you can jump inside a byte stream.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In fact,\n  <code>\n   objdump\n  </code>\n  use the\n  <em>\n   linear sweep\n  </em>\n  algorithm to disassemble executable files. It means that it disassembles instructions one after one. Like this:\n </p>\n <ol>\n  <li>\n   <p>\n    First it goes to the entry point and disassemble the first instruction (and get its size):\n   </p>\n   <pre><code>4028c0:       41 57                   push   %r15\n</code></pre>\n  </li>\n  <li>\n   <p>\n    Then, knowing the size of the previous instruction, it updates the current address to the next instruction and disassemble it (and get its size again):\n   </p>\n   <pre><code>4028c2:       41 56                   push   %r14\n</code></pre>\n  </li>\n  <li>\n   <p>\n    And, it iterates again and again (go back to 2) until it reaches the end of the current section:\n   </p>\n   <pre><code>4028c4:       41 55                   push   %r13\n4028c6:       41 54                   push   %r12\n4028c8:       55                      push   %rbp\n4028c9:       48 89 f5                mov    %rsi,%rbp\n4028cc:       53                      push   %rbx\n...\n</code></pre>\n  </li>\n </ol>\n <p>\n  <code>\n   objdump\n  </code>\n  implementation add only one small increment on this simple algorithm, it will start on every symbols even if it appear in the middle of the current disassembled instruction. Meaning that you may have the following case (I encountered it while studying an obfuscated software):\n </p>\n <pre><code>   4028c0:       41 57                   push   %r15\n   4028c2:       41 56                   push   %r14\n   4028c4:       41 55                   push   %r13\n   4028c6:       41 54                   push   %r12\n   4028c8:       55                      push   %rbp\n   4028c9:       48 89 f5                mov    %rsi,%rbp\n   4028cc:       48 85 c0                test   %rax,%rax\n\n00000000004028cd <.f668>:\n   4028cd:       85 c0                   test   %eax,%eax\n   4028cf:       53                      push   %rbx\n   ...\n</code></pre>\n <p>\n  The disassembler first disassembled\n  <code>\n   4028cc\n  </code>\n  as an amd64 instruction, but a symbol was at\n  <code>\n   4028cd\n  </code>\n  . So, the algorithm reseted to this value and started over from there.\n </p>\n <p>\n  Finally, be aware that the linear sweep algorithm is widely known as being incorrect. It may be mislead very easily. Its main problem is that it does not take into account the semantics of all the instructions, so when reaching a dynamic jump (\n  <code>\n   jmp %rax\n  </code>\n  ), the algorithm won't be able to follow the execution flow. Of course, there are many other ways to mislead this algorithm, I won't try to be exhaustive here on all these techniques (note that\n  <em>\n   recursive traversal\n  </em>\n  is not really better).\n </p>\n <p>\n  To get back to your original questions:\n </p>\n <ol>\n  <li>\n   <p>\n    The linear sweep algorithm cannot track the execution flow of a program. And won't be able to jump over a data if it lays in the middle of instructions. Yet,\n    <code>\n     objdump\n    </code>\n    may incidentally be correct when a symbol point to the instruction where to jump in the middle of the previous instruction (see the case I described before).\n   </p>\n  </li>\n  <li>\n   <p>\n    To obtain a proper disassembly of this program, there is no hope with\n    <code>\n     objdump\n    </code>\n    . But, you can use\n    <code>\n     gdb\n    </code>\n    and collect an execution trace by instrumenting it though a Python script. Also, other disassembler won't be tricked by this simple layout. You may try\n    <code>\n     radare\n    </code>\n    or, as Benny suggested, IDAPro. I can also advertise a bit my own tool which is\n    <code>\n     cfgrecovery\n    </code>\n    from the\n    <a href=\"https://github.com/perror/insight\" rel=\"nofollow\">\n     Insight framework\n    </a>\n    (but it's a bit overkilling for such a simple trick).\n   </p>\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "perror",
+            "time": "Jul 8, 2014 at 9:50",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I think that what you call \"jump into instructions\" could be an anti-static analysis technique called\n  <em>\n   disassembly desynchronization\n  </em>\n  , which interleaves data bytes with code in order to confuse the disassembler. This technique and others are explained in chapter 21 (Obfuscated Code Analysis) of the\n  <a href=\"http://www.idabook.com/\" rel=\"nofollow noreferrer\">\n   IDA Pro book\n  </a>\n  .\n </p>\n <p>\n  Using IDA Pro you can obtain the correct disassembly of your code if you:\n </p>\n <ol>\n  <li>\n   <p>\n    Open the binary with IDA (Free or Pro)\n   </p>\n  </li>\n  <li>\n   <p>\n    Put your cursor on one problematic line of code, which in your case is at addresses:\n    <code>\n     80ade25\n    </code>\n    and\n    <code>\n     80ade43\n    </code>\n   </p>\n   <pre><code>lock xadd %edx,(%esi) // lock\n...    \nlock xadd %ecx,0x80f0edc // lock\n</code></pre>\n  </li>\n  <li>\n   <p>\n    Click the\n    <strong>\n     Edit\n    </strong>\n    menu of IDA and then select\n    <strong>\n     Undefine\n    </strong>\n   </p>\n  </li>\n  <li>\n   <p>\n    Now put your cursor at address where the jump instruction points to, which in your case is\n    <code>\n     0x80ade26\n    </code>\n    and\n    <code>\n     80ade44\n    </code>\n   </p>\n  </li>\n  <li>\n   <p>\n    Click the\n    <strong>\n     Edit\n    </strong>\n    menu of IDA again and select\n    <strong>\n     Code\n    </strong>\n    this time\n   </p>\n  </li>\n </ol>\n <p>\n  Note that this anti-static analysis technique is applied twice in your code. So you need to apply steps 2-5 twice.\n </p>\n <p>\n  <strong>\n   UPDATE:\n  </strong>\n  However, in your\n  <code>\n   objdump\n  </code>\n  output there is no disassembly desynchronization as Peter Ferrie pointed out in the comments below. The jump into instruction is a means of improving performance. However, I leave this answer as a hint for anyone who stumbles upon your question and whose disassembly is actually suffering from desynchronization.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">The original disassembly is correct, and the answer is not.  The code is checking the thread count and avoiding the lock: if there's only one thread.  This action improves performance.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Benny",
+                    "text": "<span class=\"comment-copy\">@peterferrie thanks for the info. I haven't seen this kind of optimization before. Therefore I assumed it was a case of disassembly desynch. I'm now wondering how can the lock not be skipped if the jump address is not dynamically computed?</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">the branch and locked instruction are generated as a set, so always je $+3/lock/&lt;instruction&gt;.  The cmp is not part of the set, so can be separated for better pipelining (to permit insertion of unrelated mov instructions).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

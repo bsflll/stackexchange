@@ -1,0 +1,63 @@
+{
+    "title": "Stack-Smashing Protection error message",
+    "link": "https://reverseengineering.stackexchange.com/questions/22450/stack-smashing-protection-error-message",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Here is a very ugly C program:</p>\n<pre><code> #include &lt;stdio.h&gt;\n #include &lt;string.h&gt;\n int main(int argc, char *argv[])\n {\n    char buffer[10];\n    memcpy(buffer,argv[1],strlen(argv[1]));\n    printf(\"%s\\n\", buffer);\n    return 0;\n }\n</code></pre>\n<p>I am compiling this program with Stack-Smashing Protection:</p>\n<pre><code> $ gcc -fstack-protector smash.c -o smash\n</code></pre>\n<p>Here is what I get during execution:</p>\n<pre><code> $ ./smash 01234567890\n 01234567890v?\\??nr?!??U\n *** stack smashing detected ***: &lt;unknown&gt; terminated\n</code></pre>\n<p>The protection works fine but I do not understand why I see unknown instead of <code>argv[0]</code>.</p>\n</div>",
+    "votes": "3",
+    "answers": 3,
+    "views": "324",
+    "tags": [
+        "assembly",
+        "stack-protector"
+    ],
+    "user": "Bob5421",
+    "time": "Dec 4, 2019 at 12:21",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It seems you are overwriting the <code>argv</code> array itself so error handler  is unable to retrieve the <code>argv[0]</code> value. </p>\n</div>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Nov 4, 2019 at 7:09",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In fact, this is a fairly recent mitigation mechanism introduced to avoid to leak information about the stack of the crashed application.</p>\n<p>The \"<code>&lt;unknown&gt;</code>\" (which is a static string added by <code>-fstack-protector</code>) that you see was previously <code>argv[0]</code>. But, some attackers started to exploit the fact that you could overflow the stack, reach the <code>argv[0]</code> and overwrite it with an address that you choose. Indeed, if you can control the address at <code>argv[0]</code> and crash the application, you can leak the whole stack outside of the application.</p>\n<p>This technique was mainly used in servers where <code>fork()</code> was used to respawn an instance. As <code>fork()</code> is cloning the memory of the initial process, the ASLR was useless because the same starting memory image was used and, then, the same memory mapping was used again and again.</p>\n<p>If a secret key or some confidential data were stored in the stack, then an attacker can access it through this feature.</p>\n<p>That is why, sometime last year, some developers decided to avoid to use <code>argv[0]</code> when displaying information about the stack-smashing and replaced it by <code>&lt;unknown&gt;</code>.</p>\n<p>Here is an <a href=\"https://unix.stackexchange.com/questions/530524/disable-stack-smashing-detected-unknown-terminated/530545#530545\">answer on Unix/Linux Stack-Exchange site</a> that pinpoint the part of the code of <code>glibc</code> that is responsible for that.</p>\n<pre><code>void\n__attribute__ ((noreturn))\n__fortify_fail_abort (_Bool need_backtrace, const char *msg)\n{\n  /* The loop is added only to keep gcc happy.  Don't pass down\n     __libc_argv[0] if we aren't doing backtrace since __libc_argv[0]\n     may point to the corrupted stack.  */\n  while (1)\n    __libc_message (need_backtrace ? (do_abort | do_backtrace) : do_abort,\n            \"*** %s ***: %s terminated\\n\",\n            msg,\n            (need_backtrace &amp;&amp; __libc_argv[0] != NULL\n             ? __libc_argv[0] : \"&lt;unknown&gt;\"));\n}\n</code></pre>\n<p>And, here is the comment attached to the original commit introducing the patch:</p>\n<blockquote>\n<p>Avoid backtrace from <code>__stack_chk_fail</code> [BZ #12189]</p>\n<p><code>__stack_chk_fail</code> is called on corrupted stack. Stack backtrace is very\n  unreliable against corrupted stack. <code>__libc_message</code> is changed to accept\n  <code>enum __libc_message_action</code> and call <code>BEFORE_ABORT</code> only if action includes\n  <code>do_backtrace</code>.  <code>__fortify_fail_abort</code> is added to avoid backtrace from\n  <code>__stack_chk_fail</code>.</p>\n</blockquote>\n<p>I would have liked to give more references and articles in english about this flaw but nobody seemed have write about this thing... Sorry. </p>\n<p>Here is an article explaining it (in French):</p>\n<ul>\n<li><a href=\"https://www.hacktion.be/stack-smashing-protector-leak/\" rel=\"nofollow noreferrer\">Stack Smashing Protector : fuite d'informations</a></li>\n</ul>\n</div>",
+            "votes": "2",
+            "user": "perror",
+            "time": "Dec 6, 2019 at 8:39",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">Hmm, I am really unhappy to have failed to find references for that... The only good references I found were in French. So, if somebody can come with good references or links (in an understandable language), feel free to suggest it in the comments. I'll edit my answer to integrate it.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><code>strlen</code> returns the length of a string <strong>excluding</strong> terminating <code>NULL</code> character, so <code>memcpy</code> just copies provided characters without <code>0</code> at the end. </p>\n<p><code>printf</code> will print everything it gets until it encounters <code>NULL</code> and hence these \"random\" characters at the end.</p>\n</div>",
+            "votes": "1",
+            "user": "bart1e",
+            "time": "Nov 2, 2019 at 22:38",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">I understand, but this is not my question. My problem is on the second line : The &lt;unknown&gt; should contain argv[0]</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">Please add this clarification to your question since “i do not understand why i see instead of argv[0]” is very unclear.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">Sorry, stackexchange was thinking &lt;unknown&gt; was a tag!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

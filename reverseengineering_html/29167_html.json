@@ -1,0 +1,48 @@
+{
+    "title": "How to debug / analyze a Themida protected binary",
+    "link": "https://reverseengineering.stackexchange.com/questions/29167/how-to-debug-analyze-a-themida-protected-binary",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Background: I have an application that has worked fine up until Windows 10 build 1511 but broke as of build 1607. It produces an access violation:\n </p>\n <pre><code>STACK_TEXT:  \n03799f54 00f91cfa     24d1ae78 0000000f 0000001f GDI32!ext-ms-win-gdi-internal-desktop-l1-1-0_NULL_THUNK_DATA_DLB+0xc22b\nWARNING: Stack unwind information not available. Following frames may be wrong.\n0379a01c 01570000     00000000 00000000 00000023 THEEXE+0xb91cfa\n0379a038 77015125     00000000 00000000 01ba0254 THEEXE+0x1170000\n0379a088 00cd691c     0379afa8 016a5276 00000000 ntdll!RtlpAllocateHeapInternal+0x155\n00000000 00000000     00000000 00000000 00000000 THEEXE+0x8d691c\n</code></pre>\n <p>\n  Win10 1607 and higher have a change in GDI dll's, before there was only\n  <code>\n   gdi32.dll\n  </code>\n  and\n  <code>\n   GdiPlus.dll\n  </code>\n  but as of 1607\n  <code>\n   gdi32.dll\n  </code>\n  is basically a stub for a new dll,\n  <code>\n   gdi32full.dll\n  </code>\n </p>\n <p>\n  I want to understand why the app crashes and find a workaround. The fact that the exe is packed makes analyzing it with WinDbg, Ida Pro etc very difficult. PE ID tools suggest that the exe is packed with Themida (Themida v2.0.1.0 - v2.1.8.0 (or newer) + Hide PE Scanner Option).\n </p>\n <p>\n  I tried to follow a tutorial involving OllyDBG and a script named\n  <code>\n   Themida - Winlicense Ultra Unpacker 1.4.txt\n  </code>\n  and although this seems to go a long way it does not result in a correct unpacked binary. The issue might be that some of the code is executing outside of the address space as defined in the PE sections because I get several errors like this:\n </p>\n <pre><code>Memory breakpoint range reduced: OllyDbg is unable to activate memory breakpoint on the whole specified address range (EA:   ). Breakpoint is reduced to range 00401000..0086CFFF.\n</code></pre>\n <p>\n  Also tried unthemida 2.0 and unthemida 3.0 but they hang after creating the process (which appears to be terminated). I'm looking for help or pointers on how to unpack the exe so I can analyze the crash.\n </p>\n <p>\n  A free version of the software that has the same issue can be found\n  <a href=\"https://www.sparxsystems.com/bin/EALite_111.exe\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  (installer).\nThe exe can be found here:\n  <em>\n   removed\n  </em>\n </p>\n <p>\n  The crash can be reproduced by starting the application and click open on the supplied example project (EAExample.eap).\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "ida",
+        "debugging",
+        "unpacking",
+        "anti-debugging",
+        "anti-dumping"
+    ],
+    "user": "Remko",
+    "time": "Aug 20, 2021 at 18:10",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I found the cause of the crash which is... Themida 🤦‍♂️\n </p>\n <p>\n  What happens is that from build 1607 and higher some exports have a double redirection using api sets. The app imports a couple of functions from\n  <code>\n   Usp10.dll\n  </code>\n  which have an apiset redirection to\n  <code>\n   Gdi32.dll\n  </code>\n  and inside\n  <code>\n   Gdi32.dll\n  </code>\n  there is an apiset redirection to\n  <code>\n   Gdi32full.dll\n  </code>\n  .\n </p>\n <p>\n  Themida \"understands\" or follows the first api set redirection and uses an asm\n  <code>\n   JMP\n  </code>\n  instruction to jump to\n  <code>\n   Gdi32.dll\n  </code>\n  . The ApiSet name is then executed as if it's code, resulting in strange opcodes (but it is of course the api set name in ascii) and thus the crash dump doesn't make sense.\n </p>\n <p>\n  I've resolved it by writing a\n  <code>\n   JMP\n  </code>\n  instruction at the various API's in\n  <code>\n   Gdi32.dll\n  </code>\n  to the actual implementation in\n  <code>\n   Gdi32full.dll\n  </code>\n  using an attached debugger.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Remko",
+            "time": "Sep 6, 2021 at 14:07",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Remko",
+                    "text": "<span class=\"comment-copy\">Although I've resolved my issue it's not a true answer to the question (which was to unpack Themida). So I've left this answer to indicate I do not require an answer anymore but closing the question doesn't seem to be the good solution either...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You can start with static analysis. Dump the file at runtime and see what you can gather from the dumped file. You can rebuild the import table with tools like\n  <a href=\"https://github.com/NtQuery/Scylla\" rel=\"nofollow noreferrer\">\n   Scylla\n  </a>\n  . Generally, the above reconstructed file is pretty good for analysis already. Since you mentioned files relating to gdi32.dll, reconstructing the import table would do you good.\n </p>\n <p>\n  If it is not sufficient, you will need to use OllyDbg with anti-anti-debugging plugins. Try tools such as Phant0m (has a kernel driver),\n  <a href=\"https://github.com/x64dbg/ScyllaHide\" rel=\"nofollow noreferrer\">\n   ScyllaHide\n  </a>\n  , etc..\nI can't remember the exact configuration - just look it up on Google. After you bypass their anti-debugging features, you should have a much better time analyzing the code or trying the unpacker script.\n </p>\n <p>\n  The hardest part of unpacking Themida would be their code virtualization feature. If it is enabled and used, then you will probably need to rely on the unpacker script, or find someone with deep knowledge to reverse it. Would be very tough then.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Jack",
+            "time": "Aug 27, 2021 at 3:22",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Remko",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer, I've managed to resolve the actual issue and although I had already tried using a.o. the tools you mentioned I didn't manage to unpack something I could debug nor did I manage to fully reconstruct the IAT (e.g. the problematic imports were still not visible).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

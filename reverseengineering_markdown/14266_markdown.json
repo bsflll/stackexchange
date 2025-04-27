@@ -1,0 +1,76 @@
+{
+  "title": "Register Calling Convention: written in stone, or in mud?",
+  "link": "https://reverseengineering.stackexchange.com/questions/14266/register-calling-convention-written-in-stone-or-in-mud",
+  "content": "When disassembling an old Delphi 3 executable, I find some routines that pass arguments in registers EAX, EDX, and on the stack – but not in ECX!\n\nFor those routines, ECX never gets set to a 'reasonable' value. This can be seen inside the code of small functions which do use EAX, EDX, and the stack, and also when such a routine is called inside a 'tight' inner block, which ought to be self-containing as far as function arguments go. (This version of Delphi clearly predates call stack optimization.)\n\nThis is quite surprising because according to Delphi's current owners (and, thus far, in my own experience), Delphi has always used register:\n\nInitially, I found this in some routines that reside in vcl30.dpl, the standard library, and so I assumed it was a peculiarity of that particular build (perhaps the library was created with an even older version of Delphi which did not use ECX). But now I also find user routines that are missing ECX! (In both the called function and in calling it, and the function has a number of stack arguments.) Inside a called function an argument may be unused, but the compiler would not know that, and it'd still provide that argument.\n\nThis messes up my disassembly; not only I have to provide a dummy argument in the original function's prototype, but also the back-tracking fails because my code cannot find an assignment to ECX, and so it presumes the called function only uses the first 2 arguments.\n\nIt seems to violate the strict register calling convention. Is there a calling convention that uses the other 2 registers but not ECX?\n\nExample – a fragment where ECX gets used and thrashed, prior to calling a library function:\n\n```\n8D4DFC          lea    ecx, [ebp+local_4]\n33D2            xor    edx, edx\n8BC6            mov    eax, esi\n8B18            mov    ebx, [eax]\nFF5350          call   [ebx+50h]  <- GetSaveFileName; this uses ECX as a proper argument\nA144831041      mov    eax, [lpEnginePtr]\nFF702C          push   [eax+2Ch]   <- probably a local path\n6870277355      push   (address)\"/Saved Games/\"\nFF75FC          push   [ebp+local_4]\n8D45F8          lea    eax, [ebp+local_8]\nBA03000000      mov    edx, 3\nE869EAFCFF      call   System.@LStrCatN   <- wot no ECX?\n8B55F8          mov    edx, [ebp+local_8]\nA144831041      mov    eax, [lpEnginePtr]\nE860630600      call   Engine.SaveFile\n...\n\n```\nwhich I decompile into\n\n```\ncall GetSaveFileName (esi, 0, addressof (local_4))\neax = lpEnginePtr\npush (eax.field_2C)\npush (\"/Saved Games/\")\npush (local_4)\ncall System.@LStrCatN (addressof (local_8), 3)\ncall Engine.SaveFile (lpEnginePtr, local_8)\n\n```\nThe routine GetSaveFileName uses, and clobbers, ECX, without saving it:\n\n```\n                GetSaveFileName:\n53              | push   ebx\n8BD9            mov    ebx, ecx     \nA140A08F55      mov    eax, lpGameSettings\n8B90E4000000    mov    edx, [eax+0E4h]\n8BC3            mov    eax, ebx     \nB944267355      mov    ecx, (address)\".sav\"\nE856EBFCFF      call   System.@LStrCat3 \n\n                5573263Ah:\n5B              | pop    ebx\nC3              | retn\n\n```\nThe library function System.@LStrCatN indeed does not read ECX at all:\n\n```\nSystem.@LStrCatN:\n    push   ebx\n    push   esi\n    push   edx\n    push   eax         <-- not in the Save List\n    mov    ebx, edx\n    xor    eax, eax\n    mov    ecx, [esp+4*edx+10h]  <-- overwrite ECX!\n    test   ecx, ecx\n    jz     41304AA7h\n\n41304AA4h:\n    add    eax, [ecx-4]\n\n41304AA7h:\n    dec    edx\n    jnz    41304A9Ch\n\n41304AAAh:\n    call   System.@NewAnsiString\n    ...\n\n```\nOther routines that overwrite ECX (write without read) do save ECX in the prolog.\n\nThis has been mentioned earlier in Which calling convention to use for EAX/EDX in IDA, but according to the comments that one was a misunderstanding and ECX was used after all.\n\n",
+  "votes": "8",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "calling-conventions",
+    "delphi",
+    "register"
+  ],
+  "user": "Jongware",
+  "time": "Apr 13, 2017 at 12:49",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "If the compiler can prove that it has all call sites for a given function under its control then it can discard conventions and arrange things around to its liking. Microsoft's C/C++ compiler has been doing this for decades in connection with link-time code generation and profile-guided optimisation, especially internal copies of the compiler like the one used to compile the Visual FoxPro executables. This causes no end of additional fun when analysing such executables with IDA, since all pre-programmed conventions basically go out of the window.\n\nThat applies only in 32-bit mode, though. In 64-bit mode Windows mandates adherence to its ABI for all non-leaf functions (including the registering of the call frame layout in meta data) to ensure full stack frame traceability. This means that the compiler doesn't have a lot of leeway here...\n\nGiven the way Delphi works it is conceivable that the compiler might make similar adjustments with regard to parameter passing for functions that are local to the implementation section of a unit or nested functions, provided that the address of the function is never taken and passed outside.\n\nThe comment conversation with Rad Lexus elicited another important aspect: system functions do not necessarily play by the same rules as 'ordinary' functions, especially those functions that are intended to be called implicitly by compiler-generated code instead of being invoked explicitly by user code. The compiler may have extended information on these system functions, like clobbered registers, unusual parameter locations, 'nothrow', 'noreturn' and so on. This extended information could be in System unit meta data or hardcoded directly into the compiler.\n\n@LStrCatN is a special since it is a vararg function with callee cleanup (which is very unusual). It needs special treatment by the compiler in any case because the compiler must pass the actual number of pointers on the stack as a parameter to the function.\n\n",
+      "votes": "7",
+      "user": "DarthGizka",
+      "time": "Dec 30, 2016 at 11:09",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Jongware",
+          "text": "Reasonable, but I found a good counterexample to your \"... local to the implementation section of a unit ...\" User code calls a system function, and it's aware ECX is not used as an argument.",
+          "time": null
+        },
+        {
+          "user": "DarthGizka",
+          "text": "@Rad: @LStrCatN is special since it is a vararg function with callee cleanup (!) that needs special handling by the compiler in any case (seeing that the compiler must emit the pointer count as a hidden parameter). It is easy to see why they would want all of the pointers to be on the stack instead of pulling the first one from ECX, although it wouldn't be difficult, with a tiny adjustment to the loop logic. In any case, system functions in Turbo Pascal and Delphi do not necessarily play by the same rules as ordinary functions and the compiler may have extended (hardcoded?) info about some.",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "You're right about those varargs, the stack manipulation at the end of @LStrCatN breaks my decompiler 😜 (and I already considered it not worth my time trying to fix that). Should I try and find a pure user code example? If I can't find any, you'll get a Green Tick of Approval.",
+          "time": null
+        },
+        {
+          "user": "DarthGizka",
+          "text": "@Rad: dcc32 being what it is, my guess is that you'll find anomalies only with system functions/intrinsics - which is good for your project, since the System unit is finite. :-)  However, it can't hurt to scan a few gigabytes of Delphi-produced executables... Or, more precisely, to refine your automated 'hypothesis verifier' tests to include a full check of argument usage (definedness of register values at the call sites versus 'uninitialised' usage in the callee). If your own disasm engine would need too much work for this have a look at the amazing Capstone",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "I found a couple of occurrences, but all of those are either in base classes (which get overridden later on), or the reverse, in a derived class (and at least one of its parents does clearly use the register). I guess I have to hard-code the exceptions into my decompiler, then. Thanks!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "From your link:\n\n(emphasis mine).\n\nIf the function has two parameters, it has no third parameter to pass in ECX, so only EAX and EDX are set before calling it. Accordingly, a single-argument function uses only EAX and not EDX or ECX.\n\n",
+      "votes": "0",
+      "user": "Igor Skochinsky",
+      "time": "Dec 28, 2016 at 19:12",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jongware",
+          "text": "But for these mysterious functions the retn XXX at the end and the code itself clearly indicate there are more arguments, supplied on the stack. Hence my confusion.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "In that case more info is needed; maybe try to find this function in the Delphi RTL sources.",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "My examples came from user code, but yeah, I'm sure I can find a few in the standard libs as well. I don't think the full sources are publically available; I've only found a few scattered fragments so far.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

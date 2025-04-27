@@ -1,0 +1,51 @@
+{
+  "title": "Understanding STM32L151's disassembled firmware",
+  "link": "https://reverseengineering.stackexchange.com/questions/13025/understanding-stm32l151s-disassembled-firmware",
+  "content": "I have been sorting through disassembled code for a couple of days and I have a few questions.\n\nNote: This is my first reverse engineering side project and I apologize if these are rather newbie questions...\n\n1) I wrote a simple program that blinks an LED on a STM32F4 board (this is not the board I am rev eng), compiled the code, and looked at the hex file in IDA. When in hex view, I saw some clear text like so:\n\n```\n..Q..<...8pG../s\nystem/src/stm32f\n4-hal/stm32f4xx_\nhal_cortex.c....\n../system/src/st\nm32f4-hal/stm32f\n4xx_hal_gpio.c..\n................\n../system/src/st\nm32f4-hal/stm32f\n\n```\nWhen I look at my disassembled binary from the STM32L151 board in IDA's hex view, I do not seen any trace of readable characters. Does this mean the firmware was obfuscated (the programmed board sells for $60 so I wouldn't be surprised if it is)?\n\n2) IDA cannot recognize an entry point, so I am sifting though the disassembled file looking for anything interesting (like functions). I have programmed in assembly before, but the first line of the firmware does not make any sense to me. It consists of consecutive STR operations... what is it storing? It pretty much did the same operation 50 times!? Additionally, it has the EQ condition but I don't see what it's comparing. The starting code that I linked is not unique to the board, the STM32F4 hex file started in a similar fashion. \n\n3) When I am looking over the disassembled firmware in \"IDA View-A\", I am hitting the down arrow follow by the \"C\" key to see the assembly code but some of the code stays as a DCB operation. Why is that? Example here.\n\n4) Are there any guides dedicated to finding an entry point? I am getting overwhelmed by the sheer amount of assembly code. \n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "arm"
+  ],
+  "user": "Tyler",
+  "time": "Jul 12, 2016 at 16:00",
+  "comments": [
+    {
+      "user": "Jongware",
+      "text": "Those dcb's are there because not every single random sequence of bytes forms valid code. By the way, the code that does appear around them doesn't look much like valid code either. So yeah, it's packed, encrypted or not actually code at all.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "You have two main issues here:\n\n1) the start of the firmware is data (Interrupt Vector Table), not code\n2) Cortex-M uses Thumb mode instructions and not classical ARM.\n\nNormally when you load an ARM binary file into IDA, you get this message:\n\n```\n---------------------------\nInformation\n---------------------------\n ARM AND THUMB MODE SWITCH INSTRUCTIONS\n\n This processor has two instruction encodings: ARM and THUMB.\n IDA allows to specify the encoding mode for every single instruction.\n For this IDA uses a virtual register T. If its value is zero, then\n the ARM mode is used, otherwise the THUMB mode is used.\n You can change the value of the register T using\n the 'change segment register value' command\n (the canonical hotkey is Alt-G)\n\n---------------------------\nOK   \n---------------------------\n\n```\nIn your case the whole file is Thumb, so you can just set T to 1 at the top. Then you need to follow the second dword (the reset vector) to find the initial entrypoint. Ideally you should get something like:\n\n```\nROM:00000000   DCD 0x200002F8\nROM:00000004   DCD _reset+1\n\n ROM:00001480 _reset                      \nROM:00001480    BIC.W   R1, SP, #7\nROM:00001484    MOV     R0, SP\nROM:00001486    MOV     SP, R1\nROM:00001488    PUSH    {R0,LR}\nROM:0000148A    MOVS    R2, #0\nROM:0000148C    LDR     R1, =0x20000000\nROM:0000148E    LDR.W   R12, =0x20000000\nROM:00001492    LDR     R0, =0x2440\nROM:00001494    B       loc_149C\nROM:00001496 ----------------------------\nROM:00001496    LDR     R3, [R0,R2]\nROM:00001498    STR     R3, [R1,R2]\nROM:0000149A    ADDS    R2, #4\nROM:0000149C\nROM:0000149C    ADD.W   R3, R1, R2\nROM:000014A0    CMP     R3, R12\nROM:000014A2    BCC     loc_1496\nROM:000014A4    LDR     R3, =0x20000000\nROM:000014A6    LDR     R1, =0x200001F8\nROM:000014A8    MOVS    R2, #0\nROM:000014AA    B       loc_14B0\nROM:000014AC ----------------------------\nROM:000014AC\nROM:000014AC    STR.W   R2, [R3],#4\nROM:000014B0\nROM:000014B0    CMP     R3, R1\nROM:000014B2    BCC     loc_14AC\nROM:000014B4    BL      sub_244\nROM:000014B4 ; End of function _reset\n\n```\n",
+      "votes": "2",
+      "user": "Igor Skochinsky",
+      "time": "Jul 12, 2016 at 18:32",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Tyler",
+          "text": "When I load the binary, I see \"Binary File [binary.llx]\" at the top and processor type as \"MetaPC (disassemble all opcodes)[metapc]\" which means it's not recognizing the code as ARM (please correct me if I'm wrong). If I leave it as is and click okay, it disassembles into Intel syntax. If I choose \"ARM Little-endian\" as the processor type, I get the \"ARM AND THUMB MODE...\" prompt that you wrote above and it disassembles into ARM assembly which is what we want. I am confused as to what you are talking about next. I set T to 0x1 with Alt+G like the prompt said and nothing happened.",
+          "time": null
+        },
+        {
+          "user": "Tyler",
+          "text": "And I don't think that I am loading IDA with the wrong address... on pg 48 of the manual the memory map shows Flash memory at 0x0800 0000 which is where I am loading my program. Thank you for your help!",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "nothing visible \"happpens\" when you change T, but it affects how the bytes  are  decoded (e.g next time you press C)",
+          "time": null
+        },
+        {
+          "user": "Tyler",
+          "text": "I apologize for my ignorance, once I set T and analyzed the entire file it worked. Thank you so much for the help, you have made my day!",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

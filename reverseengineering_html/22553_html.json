@@ -1,0 +1,65 @@
+{
+    "title": "Strange vtable setup in constructor disassembly",
+    "link": "https://reverseengineering.stackexchange.com/questions/22553/strange-vtable-setup-in-constructor-disassembly",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In a program I'm trying to recover data structures I've discovered the following strange (ARM) disassembly code:\n </p>\n <pre><code>ctor_1:\n    ldr  r1, =vtable_base\n    str  r1, [r0]             ;r0 always contains object instance ptr\n    ;... more setup\n    bx   lr\n\nctor_2:\n    push {r4,lr}\n    mov  r4, r0\n    bl   ctor_1\n    ldr  r1, =vtable_derived\n    str  r1, [r0]             ;vtable override in derived class\n    add  r0, r0, #0x20\n    bl   obj_ctor             ;calls an object's ctor at r0+0x20\n    ldr  r1, =vtable_derived_so\n    str  r1, [r0, 0x20]       ;overrides object vtable\n    ;...\n    pop  {r4,lr}\n    bx   lr\n</code></pre>\n <p>\n  So far it looks all fine. There seems to be a derived class overriding the vptr after the base class ctor has been called. An internal subobject is first initialized in\n  <code>\n   obj_ctor\n  </code>\n  and then the vtable is set to a derived subobject. The first strange thing is why\n  <code>\n   ctor_2\n  </code>\n  doesn't directly call the subobject's derived ctor which in turn sets up first the base subobject. I suppose this happened because the call has been inlined by the compiler.\n </p>\n <p>\n  However, things get spicy when the whole object is again subclassed:\n </p>\n <pre><code>ctor_3:\n    push {r4,lr}\n    mov  r4, r0\n    bl   ctor_2\n    ldr  r1, =vtable_derived2\n    ldr  r2, =vtable_derived2_so\n    str  r1, [r0]           ;vtable to the new subclass\n    str  r2, [r0, 0x20]     ;what??\n    ;...\n    pop  {r4,lr}\n    bx   lr\n</code></pre>\n <p>\n  I have absolutely no idea how this is possible. How can a subclass 'change' a member type (which is definitely not even a pointer) which has already been setup in a superclass? It is confirmed that\n  <code>\n   ctor_2\n  </code>\n  and\n  <code>\n   ctor_3\n  </code>\n  create both valid opaque objects.\n </p>\n <p>\n  <strong>\n   Do I misunderstand how vtables work in disassembly? Could a compiler generate such code from valid C++?\n  </strong>\n </p>\n <p>\n  I don't know if that's important, but the symbols\n  <code>\n   ctor_2\n  </code>\n  and the\n  <code>\n   ctor_2\n  </code>\n  called from\n  <code>\n   ctor_3\n  </code>\n  are actually different albeit executing the exact same code (maybe because of different ctors?).\n </p>\n <p>\n  <strong>\n   EDIT:\n  </strong>\n </p>\n <p>\n  This is how the destructors look like:\n </p>\n <pre><code>dtor_1:\n    push {r4, lr}\n    ldr  r1, =vtable_base\n    str  r1, [r0]                      ;why overwrite the vtable with the same value?\n    ;...calls to delete for heap objects\n    pop  {r4, lr}\n    bx   lr\n\ndtor_2:\n    push {r4, lr}\n    mov  r4, r0\n    ldr  r1, =vtable_derived\n    ldr  r2, =vtable_derived_so\n    str  r1, [r0]\n    str  r2, [r0, #0x20]\n    add  r0, r0, #0x20\n    bl   dtor_base_so\n    mov  r0, r4\n    bl   dtor_1\n    pop  {r4, lr}\n    bx   lr\n\ndtor_3:\n    push {r4, lr}\n    mov  r4, r0\n    ldr  r1, =vtable_derived2\n    ldr  r2, =vtable_derived2_so\n    str  r1, [r0]\n    str  r2, [r0, #0x20]\n    ;...\n    bl   dtor_2\n    pop  {r4, lr}\n    bx   lr\n</code></pre>\n <p>\n  As you can see, the vtables are overwritten with the same value. There is no call to\n  <code>\n   dtor_derived2_so\n  </code>\n  , so the vtable overwrite seems unneccesary. Even more interesting is that when the subobject should be destructed, there's always a call to\n  <code>\n   dtor_base_so\n  </code>\n  and not\n  <code>\n   dtor_derived_so\n  </code>\n  . I checked the vtables of\n  <code>\n   derived_so\n  </code>\n  and\n  <code>\n   derived2_so\n  </code>\n  and they have the following two destructors:\n </p>\n <pre><code>dtor_derived_so:\n    ldr  r12, =0xFFFFFFE0              ;-0x20\n    add  r0, r0, r12\n    b    dtor_2\n\ndtor_derived2_so:\n    ldr  r12, =0xFFFFFFE0              ;-0x20\n    add  r0, r0, r12\n    b    dtor_3\n</code></pre>\n <p>\n  When they're called they call immediately the corresponding dtor. Since they reference fixed locations at which the object should be destroyed, the subobjects seem to only exist inside\n  <code>\n   derived2\n  </code>\n  's class. What is going on here? Why would one force the object's destruction if a subobject is destroyed? Or do we have here a special case of virtual inheritance?\n </p>\n <p>\n  Here are the vtables:\n </p>\n <pre><code>vtable_base:\n    dcd  0x82016D20          ;dtor_1\n    dcd  0x82016CE0          ;dtor_1 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x82016C98\n    dcd  0x82016BB8\n    dcd  0x82016B78\nvtable_derived:\n    dcd  0x8201691C          ;dtor_2\n    dcd  0x820168D8          ;dtor_2 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x8201686C\n    dcd  0x8201682C\n    dcd  0x820167F8\n    dcd  0x820167C4\nvtable_derived2:\n    dcd  0x82016364          ;dtor_3\n    dcd  0x82016320          ;dtor_3 (destruct and free)\n    dcd  0x82016BF8\n    dcd  0x8201686C\n    dcd  0x8201682C\n    dcd  0x820167F8\n    dcd  0x820167C4\nvtable_base_so:\n    dcd  0x82015CE8          ;dtor_base_so\n    dcd  0x82015CC4          ;dtor_base_so (destruct and free)\nvtable_derived_so:\n    dcd  0x82017178          ;dtor_derived_so\n    dcd  0x82017168          ;dtor_derived_so (destruct and free)\nvtable_derived2_so:\n    dcd  0x820171B8          ;dtor_derived2_so\n    dcd  0x820171A8          ;dtor_derived2_so (destruct and free)\n</code></pre>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "645",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "c++",
+        "arm",
+        "vtables"
+    ],
+    "user": "Overblade",
+    "time": "Nov 18, 2019 at 19:38",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n can you also add the vtables, including the two dwords before each if they're not zero?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Overblade",
+            "text": "<html><body><span class=\"comment-copy\">\n You mean the data before the address the vptr points to? Yeah sure, there is always an address to some other location close to the vtables.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n I mean a list of\n <code>\n  DCD xxx\n </code>\n at\n <code>\n  vtable_base\n </code>\n ,\n <code>\n  vtable_derived\n </code>\n etc.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks for vtables. I’ll check them and update my answer some time soon.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You're correctly interpreting C++'s way of implementing class inheritance, however your assumption that the \"subobject\" is a member object of the class may be incorrect.\n </p>\n <p>\n  Through compiled code alone, It is impossible to completely distinguish member objects from additional inheritance in multiple inheritance classes as both appear the same. As a matter of fact, seeing something like this is one of the ways to distinguish a member object from multiple inheritance. Another is using\n  <a href=\"https://en.wikipedia.org/wiki/RTTI\" rel=\"nofollow noreferrer\">\n   RTTI\n  </a>\n  information, if it exists.\n </p>\n <p>\n  In C++, multiple inheritance is implemented by appending one base class structure after the other, where all additional members are often be added to the first class (although if I remember correctly, that's not required by the standard). You can read about the memory layout of multiple inheritance classes in\n  <a href=\"https://www.drdobbs.com/cpp/multiple-inheritance-considered-useful/184402074\" rel=\"nofollow noreferrer\">\n   this\n  </a>\n  article, which also covers the diamond inheritance problem and it's common solution -\n  <a href=\"https://en.wikipedia.org/wiki/Virtual_inheritance\" rel=\"nofollow noreferrer\">\n   <em>\n    virtual inheritance\n   </em>\n  </a>\n  - and the resulting memory layout.\n </p>\n <p>\n  The following figure (taken from the article) illustrates the memory layout of a multiple-inheritance class:\n </p>\n <p>\n  <a href=\"https://twimgs.com/ddj/cuj/images/cuj0602reeves/0602reevesf2.jpeg\" rel=\"nofollow noreferrer\">\n   <img alt=\"multiple inheritance class structure\" src=\"https://twimgs.com/ddj/cuj/images/cuj0602reeves/0602reevesf2.jpeg\"/>\n  </a>\n </p>\n <p>\n  I also found\n  <a href=\"https://gist.github.com/airekans/3215428\" rel=\"nofollow noreferrer\">\n   this\n  </a>\n  gist example code that shows how multiple inheritance works under the hood and includes the expected structure in the comments at the top of the file.\n </p>\n <p>\n  You should definitely check it out in\n  <a href=\"https://godbolt.org/z/V5MZy8\" rel=\"nofollow noreferrer\">\n   compiler explorer\n  </a>\n  . Where you could easily see how this all looks in most compiler and architecture configurations.\n </p>\n <p>\n  I think the inclusion of names and symbols together with instant update upon modifications and the control over the optimization levels makes this a great way to understand the memory layout and code of multiple inheritance.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "NirIzr",
+            "time": "Nov 20, 2019 at 12:34",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Could it be multiple inheritance? That could explain why the vptr of the supposed subobject is overwritten by\n  <code>\n   ctor_2\n  </code>\n  without having to assume the compiler to inline anything. The\n  <code>\n   derived\n  </code>\n  class might actually have two base classes, the \"base\" and the \"subobject\". If this is the case, it kinda makes sense why the compiler would make\n  <code>\n   ctor_3\n  </code>\n  to change the vptr of both base classes instead of just one of them. I'm not quite sure what exactly this would mean for the destructors, though.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "pants64",
+            "time": "Nov 19, 2019 at 22:48",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You have here multiple inheritance where both base classes have virtual destructors. The pattern you see in\n  <code>\n   dtor_derived_so\n  </code>\n  is a so-called \"non-virtual thunk\", which adjusts\n  <code>\n   this\n  </code>\n  before calling the whole class destructor. Normally you should also see\n  <code>\n   0xFFFFFFE0\n  </code>\n  (offset to base) in the second dword before the secondary vtables. I was able to produce code and vtable layout very similar to your example with the following source code:\n </p>\n <pre><code>class A\n{\n  int a, b, c, d;\npublic:\n  A() {};\n  virtual ~A() {};\n  virtual int f1() { return 0;};\n};\n\nclass B\n{\n  int x;\npublic:\n  virtual ~B() {};\n};\n\n\nclass C: public A, B\n{\npublic:\n  virtual int f1() { return 2;};\n};\n\nclass D: public C\n{\npublic:\n  virtual int f1() { return 3;};\n};\n\n\nint main()\n{\n D d;\n}\n</code></pre>\n <p>\n  For more info, see the\n  <a href=\"https://itanium-cxx-abi.github.io/cxx-abi/abi.html\" rel=\"nofollow noreferrer\">\n   Itanium C++ ABI\n  </a>\n  , in particular\n  <em>\n   2.5 Virtual Table Layout\n  </em>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Nov 20, 2019 at 12:06",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

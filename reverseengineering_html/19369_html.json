@@ -1,0 +1,33 @@
+{
+    "title": "Syscall from ntdll.dll",
+    "link": "https://reverseengineering.stackexchange.com/questions/19369/syscall-from-ntdll-dll",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am begginer in RE and also in Win NT world.\nI used IDA to disassemble ntdll.dll from Win XP SP 3. I care about non oficially documented function NtCreatePort which creates LPC port. I would find out how it work under the cover.\nSo ntdll.dll exports NtCreatePort and I can find this:\n </p>\n <pre><code> mov     eax, 2Eh\n mov     edx, 7FFE0300h\n call    dword ptr [edx]\n retn    14h\n</code></pre>\n <p>\n  So I think that function on address\n  <code>\n   7FFE0300h\n  </code>\n  is called. \nThe first problem: I do not know where to find it.\n </p>\n <p>\n  But from literature I found out that function\n  <code>\n   KiFastSystemCall\n  </code>\n  should be called, correct?\n </p>\n <pre><code> mov edx, esp\n sysenter\n</code></pre>\n <p>\n  I would think that syscall\n  <code>\n   2Eh\n  </code>\n  could be called. But where to find it? I am quite stucked and I do not know how to continue with tracking.\n </p>\n <p>\n  Thanks you all! Btw I would appraciate if you recommend me a literature of this topic.\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "windows",
+        "dll"
+    ],
+    "user": "hardcheese",
+    "time": "Sep 17, 2018 at 11:27",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <code>\n   int 2e\n  </code>\n  was used in systems prior to windows xp\nfrom windows xp fast syscall is the preferred method to transition from usermode to kernel mode\n </p>\n <p>\n  fast syscall pointer is embedded in the the Shared User Data Section\n </p>\n <pre><code>0:003> dt ntdll!_KUSER_SHARED_DATA  @@masm(SharedUserData) SystemCall\n   +0x300 SystemCall : 0x76dd70f0\n\n0:003> uf 0x76dd70f0\nntdll!KiFastSystemCall:\n76dd70f0 8bd4            mov     edx,esp\n76dd70f2 0f34            sysenter\n76dd70f4 c3              ret\n</code></pre>\n <p>\n  if you are using a usermode debugger you cant see the internals of Nt/Zw functions\n </p>\n <p>\n  ntdll carries only the stub that transitions into kernel mode\n </p>\n <p>\n  you need a kernel debugging connection or you  have to depend on static analysis of ntos....(kr/mp).exe (kernel executive code)\n </p>\n <p>\n  or you can use livekd from sysinternals for local debugging\n </p>\n <p>\n  <code>\n   NtCreatePort\n  </code>\n  calls\n  <code>\n   nt!AlpcpCreateConnectionPort\n  </code>\n  internally \nwhich calls\n  <code>\n   NtCreateObject\n  </code>\n  , initializes the port Attributes inserts\n  \n\n  the object into HANDLE Table and returns back\n </p>\n <p>\n  a small overview of the control flow as follows (win 7 32 bit)\n </p>\n <pre><code>kd> uf /c nt!NtCreatePort\nnt!NtCreatePort (8303f8a6)\n  nt!NtCreatePort+0x22 (8303f8c8):\n    call to nt!AlpcpCreateConnectionPort (8304d35c)\n  nt!NtCreatePort+0x52 (8303f8f8):\n    call to nt!KiCheckForKernelApcDelivery (82e74b24)\n\n\nkd> uf /c nt!AlpcpCreateConnectionPort\nnt!AlpcpCreateConnectionPort (8304d35c)\n  nt!AlpcpCreateConnectionPort+0x7 (8304d363):\n    call to nt!_SEH_prolog4 (82ecc240)\n  nt!AlpcpCreateConnectionPort+0xb3 (8304d40f):\n    call to nt!ObCreateObject (83072413)\n  nt!AlpcpCreateConnectionPort+0xc5 (8304d421):\n    call to nt!memset (82e864c0)\n  nt!AlpcpCreateConnectionPort+0xf4 (8304d450):\n    call to nt!AlpcpInitializePort (830b76c5)\n  nt!AlpcpCreateConnectionPort+0x101 (8304d45d):\n    call to nt!ObfDereferenceObject (82ec5163)\n  nt!AlpcpCreateConnectionPort+0x120 (8304d47c):\n    call to nt!AlpcpValidateAndSetPortAttributes (830b75a5)\n  nt!AlpcpCreateConnectionPort+0x140 (8304d49c):\n    call to nt!AlpcpSetOwnerProcessPort (830b77dc)\n  nt!AlpcpCreateConnectionPort+0x14d (8304d4a9):\n    call to nt!AlpcpAllocateBlob (830b7526)\n  nt!AlpcpCreateConnectionPort+0x181 (8304d4dd):\n    call to nt!AlpcInitializeHandleTable (830b7898)\n  nt!AlpcpCreateConnectionPort+0x198 (8304d4f4):\n    call to nt!ObInsertObjectEx (83071380)\n  nt!AlpcpCreateConnectionPort+0x1d5 (8304d531):\n    call to nt!_SEH_epilog4 (82ecc285)\nkd>\n</code></pre>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "NirIzr",
+            "time": "Sep 17, 2018 at 22:34",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <strong>\n   First question:\n  </strong>\n </p>\n <p>\n  in your example you right -\n  <code>\n   KiFastSystemCall()\n  </code>\n  is called.\n  <code>\n   7FFE0300h\n  </code>\n  is pointer to it on non-ASLR systems.\n  \n\n  In windbg, you can look at it like this:\n  <code>\n   uf poi(7ffe0300)\n  </code>\n </p>\n <p>\n  <strong>\n   Second question:\n  </strong>\n </p>\n <p>\n  Where to find\n  <code>\n   int 2E\n  </code>\n  - in older Windows versions -  Windows 2k and earlier.  In Windows XP mechanism has changed, and the new one is exactly what you see in your IDA.\n </p>\n <p>\n  Please note that this relevant to x86 machines.\n </p>\n <p>\n  More details:\n </p>\n <p>\n  <a href=\"https://opcode0x90.wordpress.com/2007/05/18/kifastsystemcall-hook/\" rel=\"nofollow noreferrer\">\n   https://opcode0x90.wordpress.com/2007/05/18/kifastsystemcall-hook/\n  </a>\n </p>\n <p>\n  <a href=\"https://www.evilsocket.net/2014/02/11/on-windows-syscall-mechanism-and-syscall-numbers-extraction-methods/\" rel=\"nofollow noreferrer\">\n   https://www.evilsocket.net/2014/02/11/on-windows-syscall-mechanism-and-syscall-numbers-extraction-methods/\n  </a>\n </p>\n <p>\n  <a href=\"https://www.codemachine.com/article_syscall.html\" rel=\"nofollow noreferrer\">\n   https://www.codemachine.com/article_syscall.html\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "NirIzr",
+            "time": "Sep 17, 2018 at 22:33",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

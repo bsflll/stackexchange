@@ -1,0 +1,62 @@
+{
+    "title": "gdb on FreeBSD and follow-fork-mode child",
+    "link": "https://reverseengineering.stackexchange.com/questions/2241/gdb-on-freebsd-and-follow-fork-mode-child",
+    "content": "Long time ago I noticed that using\n\nset follow-fork-mode child\n\nin GDB on FreeBSD doesn't really work.\nThis problem occurs very often with some challenges on various Capture The Flag contests.\nFor example, a server will spawn a child which would handle the connection.\nThe child code has a vulnerability which I would like to debug, but gdb just never follows\nthe childs execution and I can't really observe the vulnerability being triggered.\nSo far, I've solved this problem in two ways:\n\nMaking a connection, waiting for a child to spawn and than attaching GDB to it.\nThis works since the spawned child has it's own PID to which I can attach, but is rather painful since first I have to make a connection from one session, attach with GDB in another, and then send the payload/continue the connection in the first.\n\nPatching the binary after the fork call to continue the execution in the parent process instead of the child.\nThis is also painful since then I have to restart the whole parent process to create another debugging session.\n\n\nThere are some other tricks that can be employed, but these are enough to illustrate my point.\nNow I know there have been some limitations on FreeBSD in the past regarding this but has anything improved?\nIs there any way to patch GDB to add this functionality? Any suggestions for an easier way of overcoming this?\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "gdb",
+        "exploit",
+        "debugging",
+        "multi-process"
+    ],
+    "user": "0xea",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "dna",
+            "text": "On my Linux box I have to <pre><code>set follow-fork-mode child</code></pre> but also <pre><code>catch fork</code></pre> inorder to make GDB stop on the fork call and follow the child.\n",
+            "time": null
+        },
+        {
+            "user": "0xea",
+            "text": "on linux it's fine, bsd has the problem with follow-fork-mode... and it seems it's still there...\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Try to set a catchpoint on fork if you are want to both the parent and the child.\n<pre><code>set-follow-fork-mode ask \ncatch fork \n</code></pre>\nConcerning your second point, I have this macro in my <pre><code>.gdbinit</code></pre> (I believe ultimately originating from Tavis Ormandy). It is imminently useful in many cases, your own included.\n<pre><code>define assemble\n # dont enter routine again if user hits enter\n dont-repeat\n if ($argc)\n  if (*$arg0 = *$arg0)\n    # check if we have a valid address by dereferencing it,\n    # if we havnt, this will cause the routine to exit.\n  end\n  printf \"Instructions will be written to %#x.\n\", $arg0\n else\n  printf \"Instructions will be written to stdout.\n\"\n end\n printf \"Type instructions, one per line.\n\"\n printf \"End with a line saying just \\\"end\\\".\n\"\n if ($argc)\n  # argument specified, assemble instructions into memory\n  # at address specified.\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    <<< \"$( echo \"BITS 32\"; while read -ep '>' r && test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | hexdump -ve \\\n        '1/1 \"set *((unsigned char *) $arg0 + %#2_ax) = %#02x\n\"' \\\n            > ~/.gdbassemble\n  # load the file containing set instructions\n  source ~/.gdbassemble\n  # all done.\n  shell rm -f ~/.gdbassemble\n else\n  # no argument, assemble instructions to stdout\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    <<< \"$( echo \"BITS 32\"; while read -ep '>' r && test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | ndisasm -i -b32 /dev/stdin\n end\nend\ndocument assemble\nAssemble instructions using nasm.\nType a line containing \"end\" to indicate the end.\nIf an address is specified, insert instructions at that address.\nIf no address is specified, assembled instructions are printed to stdout.\nUse the pseudo instruction \"org ADDR\" to set the base address.\nend\n</code></pre>\n",
+            "votes": "5",
+            "user": "zetavolt",
+            "time": "Jun 15, 2013 at 3:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">Nice macro, I definitely gonna use it! Huh it's zsh unfriendly :p</span>",
+                    "time": null
+                },
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">For zsh <code>read -ep '&gt;' r</code> should be replaced by <code>read r</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xea",
+                    "text": "<span class=\"comment-copy\">accepted the answer because of that nice macro and it helps a lot:) especially since there is no real solution (at least i haven't found one yet, see my answer), the problem is that follow-fork-mode doesn't work on bsd, and that hasn't been fixed yet...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I was digging a bit into this, and found this question on SO by mrduclaw (link in the original article is dead, but web archive has it). He has the exact same problem like I do, and exactly the same motivation for finding a solution.\nSo I was digging around some more and it turns out freebsd until recently didn't have support for forks in it's ptrace. There was a patch submitted but I can't really figure out if it's applied. Will try to apply it myself and see if it will start working then.\n",
+            "votes": "0",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

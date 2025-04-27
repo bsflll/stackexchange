@@ -1,0 +1,43 @@
+{
+    "title": "CreateTimerQueueTimer arguments differs from WinAPI",
+    "link": "https://reverseengineering.stackexchange.com/questions/22816/createtimerqueuetimer-arguments-differs-from-winapi",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was reading <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/threadpoollegacyapiset/nf-threadpoollegacyapiset-createtimerqueuetimer\" rel=\"nofollow noreferrer\">a man page</a> about CreateTimerQueueTimer.</p>\n<pre><code>BOOL CreateTimerQueueTimer(\n  PHANDLE             phNewTimer,\n  HANDLE              TimerQueue,\n  WAITORTIMERCALLBACK Callback,\n  PVOID               DueTime,\n  DWORD               Period,\n  DWORD               Flags,\n  ULONG               Parameter\n);\n</code></pre>\n<p>The doc states:</p>\n<blockquote>\n<p>Period</p>\n<p>The period of the timer, in milliseconds. If this parameter is zero, the timer is signaled once.</p>\n</blockquote>\n<p>So I needed to set this to 0 to avoid the callback to be executed periodically.\nThe problem was that modifying the <code>period</code> value has no effect on periodicity. Once loaded in OllyDBG, Olly reconstructed the arguments and the call giving me this function signature :</p>\n<pre><code>BOOL CreateTimerQueueTimer(\n PHANDLE             phNewTimer,\n HANDLE              TimerQueue,\n WAITORTIMERCALLBACK Callback,\n ULONG               Parameter,\n PVOID               DueTime,\n DWORD               Period,\n DWORD               Flags\n);\n</code></pre>\n<p>Notice that the <code>parameter</code> argument changed position, and thus all my patches was useless. I guess this error might be due to an old version of the API where the <code>Parameter</code> argument was in 4th position, but I can be wrong. Also, I can't find old WinAPIs to confirm my sayings.\nAm I guessing right or am I missing something?</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "350",
+    "tags": [
+        "assembly",
+        "malware",
+        "winapi",
+        "calling-conventions"
+    ],
+    "user": "Nark",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Yep, I think I've seen a similar case before. It happens very rarely, but because you can do some stunts at the C preprocessor level as well as at the linker level, this happens to work.</p>\n<p>In this case I looked it up in the 3790.1830 DDK (Windows 2003 Server) and several newer WDKs and SDKs.</p>\n<h3>Windows 2000/XP target (<code>3790.1830/inc/w2k/winbase.h</code> and <code>3790.1830/inc/wxp/winbase.h</code>)</h3>\n<pre><code>WINBASEAPI\nBOOL\nWINAPI\nCreateTimerQueueTimer(\n    PHANDLE phNewTimer,\n    HANDLE TimerQueue,\n    WAITORTIMERCALLBACK Callback,\n    PVOID Parameter,\n    DWORD DueTime,\n    DWORD Period,\n    ULONG Flags\n    ) ;  \n</code></pre>\n<h3>Windows 2003/Vista/7 target (<code>3790.1830/inc/wnet/winbase.h</code> and <code>6001.18002/inc/api/WINBASE.H</code> and <code>7600.16385.1/inc/api/WINBASE.H</code>)</h3>\n<pre><code>WINBASEAPI\nBOOL\nWINAPI\nCreateTimerQueueTimer(                                                                                                                                                                                             \n    __deref_out PHANDLE phNewTimer,\n    __in_opt    HANDLE TimerQueue,\n    __in        WAITORTIMERCALLBACK Callback,\n    __in_opt    PVOID Parameter,\n    __in        DWORD DueTime,\n    __in        DWORD Period,\n    __in        ULONG Flags \n    ) ;   \n</code></pre>\n<h3>With the Windows 8.1 SDK ...</h3>\n<p>... this API moved into another header: <code>Include/um/threadpoollegacyapiset.h</code> (check out <a href=\"http://www.geoffchappell.com/studies/windows/win32/apisetschema/index.htm\" rel=\"nofollow noreferrer\">this study on API sets</a>).</p>\n<pre><code>WINBASEAPI\nBOOL\nWINAPI\nCreateTimerQueueTimer(\n    _Outptr_ PHANDLE phNewTimer,\n    _In_opt_ HANDLE TimerQueue,\n    _In_ WAITORTIMERCALLBACK Callback,\n    _In_opt_ PVOID Parameter,\n    _In_ DWORD DueTime,\n    _In_ DWORD Period,\n    _In_ ULONG Flags\n    );  \n</code></pre>\n<p>... so no change up until this point (other than adopting SAL2 annotations).</p>\n<p>For the Windows 10 SDKs 10.0.10240.0, 10.0.16299.0, 10.0.17134.0, 10.0.17134.0, 10.0.17763.0, 10.0.18362.0 it still has the same order for the arguments as for Windows 8.1. <strong>So it stands to reason you ran into a documentation issue rather than an actual change here.</strong></p>\n<p>There is <a href=\"https://github.com/MicrosoftDocs/sdk-api/pulls?utf8=%E2%9C%93&amp;q=is%3Apr+CreateTimerQueueTimer\" rel=\"nofollow noreferrer\">no pending or old (and closed) pull request mentioning this function</a>, so you may want to consider sending one.</p>\n</div>",
+            "votes": "2",
+            "user": "0xC0000022L",
+            "time": "Dec 23, 2019 at 19:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nark",
+                    "text": "<span class=\"comment-copy\">Thanks, is there any resource out there that references old versions of the API? Can't find them on the waybackmachine !</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@Nark not sure what the point would be, since - as they say - the code doesn't lie. And as I pointed out to you the headers show the same argument order since at least Windows 2000. That new subdomain won't be in the Internet Archive and generally MS has changed URLs so often I'd consider you lucky if you managed to find one. Why not cross-check with the <a href=\"https://www.microsoft.com/en-us/download/details.aspx?id=8279\" rel=\"nofollow noreferrer\">Windows 7 SDK</a> or older ones, if you need to validate my findings?!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Nark",
+                    "text": "<span class=\"comment-copy\">so it is rather a linker/compiler problem if I get it right ?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

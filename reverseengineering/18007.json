@@ -1,0 +1,60 @@
+{
+    "title": "Disassembly shows `LEA` with RIP?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18007/disassembly-shows-lea-with-rip",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When I <a href=\"https://reverseengineering.stackexchange.com/a/18005/22669\">disassemble this instruction using <code>pad</code> on Radare I get an <code>LEA</code> with <code>rip</code></a></p>\n<pre><code>[0x00000000]&gt; pad 8d 15 c8 90 04 08\nlea edx, [rip + 0x80490c8]\n</code></pre>\n<p>I got this instruction from this <a href=\"https://stackoverflow.com/a/27265685/124486\">post here</a> I'm confused though why the disassembly shows <code>rip + 0x80490c8</code>, when <a href=\"https://stackoverflow.com/a/27265685/124486\">the original post</a> claims it's the equivalent of <code>mov</code>? Is this the right disassembled output? Why would the instruction pointer be in the <code>LEA</code>? Is that an implicit base, or did the original poster make a mistake?</p>\n</div>",
+    "votes": "6",
+    "answers": 2,
+    "views": "8k",
+    "tags": [
+        "assembly",
+        "x86",
+        "radare2"
+    ],
+    "user": "Evan Carroll",
+    "time": "Apr 16, 2018 at 4:49",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It is simply a matter of bits. In the example shown, the hexpairs are disassembled using 64bit assembly, and you probably want to change it to a 32bit assembly. Just tell radare that you are working with 32bits and it will do the job for you:</p>\n<pre><code>[0x00000000]&gt; pad 8d 15 c8 90 04 08\nlea edx, [rip + 0x80490c8]\n\n[0x00000000]&gt; e asm.bits =32\n\n[0x00000000]&gt; pad 8d 15 c8 90 04 08\nlea edx, [0x80490c8]\n</code></pre>\n<p>Unlike 32bits modes instructions that were taken as absolute addresses (use 32-bit immediate offset addressing), the 64bits modes (a.k.a long-mode) are usually using 32-bit offset from the current RIP, not from 0x00000000 like before. That means that you don't have to know the absolute address of something you want to reference, you only need to know how far away it is from the currently executing instruction. </p>\n<p>There are very few addressing modes which use a full 64bit absolute address. Most addressing modes are 32bit offsets relative to one of the 64bit registers (usually RIP).</p>\n</div>",
+            "votes": "8",
+            "user": "Megabeets",
+            "time": "Apr 16, 2018 at 5:21",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Evan Carroll",
+                    "text": "<span class=\"comment-copy\">that's interesting. I could see it happening the other way around, but I wonder how the 32 bit opcode got translated into the same 64bit opcode with the RIP operand (for free).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Megabeets",
+                    "text": "<span class=\"comment-copy\">Added explanation for the reason behind. Again, simply the shift from 32bit to 64bit</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jules",
+                    "text": "<span class=\"comment-copy\">@EvanCarroll - if you've been doing this for long enough to be familiar with it, it's similar to the way going from 16-bit code to 32-bit changed all your 'ax' (etc) references to 'eax': in each mode there are default settings that are designed to be sensible <i>for that mode</i>, which cause slight changes in the interpretation of each instruction.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@EvanCarroll: 32-bit x86 has 2 redundant ways to encode <code>[disp32]</code> (with no registers): with and without a SIB.  x86-64 repurposed the without-SIB version to mean <code>[RIP + rel32]</code>, leaving the longer with-SIB version to still mean <code>[sign_extended_disp32]</code> like when you use a disp32 with GP registers.  In NASM syntax, <code>[rel foo]</code> vs. <code>[abs foo]</code>, or use <code>default rel</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@Megabeets: Only the special <code>mov al/ax/eax/rax, moffs</code> form of <code>mov</code> (and the store form) use a full 64-bit / 8-byte absolute address.  There are no ModR/M addressing modes that can be used with other instructions that accept more than an absolute disp32.  So your last sentence could say that there aren't any normal addressing modes.  Actually that's a little weird.  <i>normally</i>, you just use small offsets relative to an address in registers, like <code>[rdi + 8]</code>, <i>or</i> RIP-relative.  But yeah in position-dependent code you can index a static array with <code>[array + rdi]</code>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>32-bit x86 has 2 redundant ways to encode <code>[disp32]</code> (with no registers): with and without a SIB byte.  Assemblers will of course always use the shorter form, and that's what the link in your question is showing.</p>\n<p>You're disassembling as 64-bit machine code.</p>\n<p>x86-64 repurposed the without-SIB version to mean <code>[RIP + rel32]</code>, leaving the longer with-SIB version to still mean <code>[sign_extended_disp32]</code> like when you use a disp32 with GP registers.  (RIP-relative is not available combined with any GP registers; only this one specific ModR/M encoding.)</p>\n<p>In NASM syntax, <code>[rel foo]</code> vs. <code>[abs foo]</code>, or use <code>default rel</code>.</p>\n<hr/>\n<p>AFAIK, <code>lea r32, [disp32]</code> instead of <code>mov r32, imm32</code> is never useful for performance on any CPU I'm aware of, <a href=\"https://stackoverflow.com/questions/48046814/what-methods-can-be-used-to-efficiently-extend-instruction-length-on-modern-x86\">except to make an instruction longer on purpose instead of padding with NOP</a>.</p>\n<p>The only use-case for <code>lea</code> for static addresses is in 64-bit code with RIP-relative LEA.</p>\n<p>See <a href=\"https://stackoverflow.com/questions/46597055/using-lea-on-values-that-arent-addresses-pointers/46597375#46597375\">this canonical answer</a> for more about LEA, but really <strong>this question has nothing to do with LEA specifically, and would have happened with any instruction that used a <code>disp32</code> ModR/M addressing mode decoded in the wrong mode.</strong>  You only ran into this because you found an example that compared using an inefficient <code>lea</code> with an efficient <code>mov</code>-immediate in 32-bit mode.</p>\n</div>",
+            "votes": "3",
+            "user": "Community",
+            "time": "Dec 20, 2019 at 7:45",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

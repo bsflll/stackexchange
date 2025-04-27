@@ -1,0 +1,68 @@
+{
+    "title": "STL Data Structures Hex-Rays",
+    "link": "https://reverseengineering.stackexchange.com/questions/25960/stl-data-structures-hex-rays",
+    "content": "We all know that reversing STL code is no fun. To make it easier, I usually create some of the strucutres so I can reference the created STL structures in another custom structure.\nFor example, msvc - std::string structure:\n<pre><code>00000000 std::string     struc ; (sizeof=0x1C)\n00000000 alloc           dd ?                    ; void *\n00000004 Buffer          db 16 dup(?)            ; string(C)\n00000014 Length          dd ?                    ; int\n00000018 LengthMax       dd ?                    ; int\n0000001C std::string     ends\n</code></pre>\nor std::vector:\n<pre><code>00000000 std::vector     struc ; (sizeof=0x10)\n00000000 alloc           dd ?                    ; void *\n00000004 NumberOfItems   dd ?                    ; int\n00000008 MaxSize         dd ?                    ; int\n0000000C Data            dd ?                    ; \n00000010 std::vector     ends\n</code></pre>\nDoing this and then in decompilation using these structures, makes the code much more readable.\nI sometimes find it difficult figuring out other structures, i.e. <pre><code>std::queue</code></pre>, looking in the implementation I can see its container type is actually a typedef to <pre><code>std::deque</code></pre>, which has the content of <pre><code>std::_Compressed_pair</code></pre>.\nIs there a way to recreate these STL types, with proper naming as I did for vector and string, so I can reference to them in other structures in order to a have cleaner decompilation? What would a <pre><code>std::queue</code></pre> structure look like?\nThanks a lot in advance.\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "c++",
+        "hexrays",
+        "msvc"
+    ],
+    "user": "Martin Brooker",
+    "time": "Oct 30, 2020 at 17:46",
+    "comments": [
+        {
+            "user": "Rolf Rolles",
+            "text": "By the way, you're clearly discussing the MSVC implementation of STL here, given the fact that you referenced <pre><code>_Compressed_pair</code></pre>. Note that neither <pre><code>std::string</code></pre> nor <pre><code>std::vector</code></pre> have a <pre><code>vTable</code></pre> field -- you should delete them from both structure declarations. Anyway, I have a specific answer to the substance of your question, but I will eventually write a blog entry about it rather than go into it now.\n",
+            "time": null
+        },
+        {
+            "user": "kthxbai2",
+            "text": "Sorry for the late joining to the party but, im having familiar stuff going on with reverse engeneering certain game compiled with vc7.1 toolset. Im planning to install the IDE and compile lots of different templated versions with the same (I'll try to mimic them) compile setting. Then I'll be at the point where I'm not sure what to do next, create a DLL with debug symbols and try to force load them into my idb? (That wont' resolve the functions addresses properly, pretty sure, thus I'm just gonna end up with the useless templated classes definitions). Other option seems to generate the flirt\n",
+            "time": null
+        },
+        {
+            "user": "Martin Brooker",
+            "text": "You're totally right @RolfRolles, I should've probably mentioned this. Regarding the vtable thing, for STL structures they are allocators, instead of virtual tables. Looking forward to read your blog post. Would appreciate if you post it here.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "as i commented i used windbg to dump those structures\nsample code used for walk through\n<pre><code>#include <iostream>                                                     //01\n#include <list>                                                         //02\n#include <vector>                                                       //03\n#include <map>                                                          //04\n#include <queue>                                                        //05\n#include <string>                                                       //06\nint main(void)                                                          //07\n{                                                                       //08\n    std::string             ms;                                         //09\n    std::wstring            mw;                                         //10\n    std::map< char,int >    mm;                                         //11\n    std::vector<int>        mv1,mv2,mv3,mv4;                            //12\n    std::queue<std::vector<int>> mq;                                    //13\n                                                                        //14\n    ms = \"This is a big Ascii string for that matter to avoid sso\";     //15\n    mw = L\"This is a big Wide string for that matter to avoid sso\";     //16\n    mm = {{'a',0x61},{'b',0x62},{'c',0x63},{'d',0x64}};                 //17\n    mv1.insert(mv1.end(), {mm['a'],mm['b'],mm['c'],mm['d']});           //18\n    mv2.insert(mv2.end(), {mm['b'],mm['c'],mm['a'],mm['d']});           //19\n    mv3.insert(mv3.end(), {mm['d'],mm['b'],mm['a'],mm['c']});           //20\n    mv4.insert(mv4.end(), {mm['c'],mm['b'],mm['a'],mm['d']});           //21\n    mq.push(mv1);                                                       //22\n    mq.push(mv2);                                                       //23\n    mq.push(mv3);                                                       //24\n    mq.push(mv4);                                                       //25\n    std::cout << ms << \"\n\";                                            //26\n    std::wcout << mw << \"\n\";                                           //27\n    std::cout << mm.begin()->first << \"\n\";                             //28\n    std::cout << *mv1.begin() << \"\n\";                                  //29\n    std::cout << *mq.front().begin() << \"\n\";                           //30\n    std::cout << *mq.back().begin() << \"\n\";                            //31\n}                                                                       //32\n</code></pre>\ncompiled and linked on vs2017 devcmd prompt as x86 with\n<pre><code>:>cat complink.bat\npushd .\ncall \"c:\\Program Files\\Microsoft Visual Studio\\2017\\Community\\Common7\\Tools\\vsdevcmd.bat\"\npopd\ncl /Zi /W4 /analyze /EHsc /nologo /Od nsstd.cpp /link /release\n:>\n</code></pre>\nload it in windbg execute till line 26 to initialize all the variables.\nrun the script given below to dump the queue's->vector's->maps's->integer values and quit.\nwindbg script\n<pre><code>.for(r$t0=0;@$t0<4;r$t0=@$t0+1) \n{\n    .for(r $t1=0;@$t1<4;r$t1 =@$t1+1) \n    {\n        .printf \"%c\\t\" , @@c++( mq.c._Mypair._Myval2._Map[@$t0]->_Mypair._Myval2._Myfirst[@$t1] )\n    }\n    .printf \"\n\"\n}\n</code></pre>\nresult\n<pre><code>:>cdb -c \"g `nsstd!nsstd.cpp:26`;$$>a< dumpq.wds;q\" nsstd.exe | awk \"/Reading/,/quit/\"\n0:000> cdb: Reading initial command 'g `nsstd!nsstd.cpp:26`;$$>a< dumpq.wds;q'\nWARNING: Line information loading disabled\nModLoad: 6c700000 6c703000   C:\\Windows\\system32\\api-ms-win-core-synch-l1-2-0.DLL\na       b       c       d\nb       c       a       d\nd       b       a       c\nc       b       a       d\nquit:\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Sep 25, 2020 at 18:55",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "you created those structures or you pulled  it from somewhere ?\nbasically these are template classes and not structures\nwhere did you get the size of 0x1c for std::string\nit is 0x18\n0x10 for buffer  or Pointer (static small string or malloced() bigstring )\n0x4 for Actualsize or_Mysize\n0x4 for Reservedsize or _Myres\nlike\n<pre><code>typedef struct _FOO {\nunion _Bx {\nchar buff[16];\nPointer ptr;\n};\nULONG _Mysize;\nULONG _Myres;\n}Foo,*PFoo;\n</code></pre>\nthese classes are defined in the header files like xstring , vector etc\nfor example string_val is defined in xstring\n<pre><code>C:\\Program Files\\Microsoft Visual Studio\\2017\\Community\\VC\\Tools\\MSVC\\14.16.27023\\include\\xstring\n\n:\\>grep -r -n -i  class.*string_val *\nxstring:1768:           // CLASS TEMPLATE _String_val\nxstring:1770:   class _String_val\n</code></pre>\nlike wise you can get queue also  lookfor queue_val in deque header\n<pre><code>0:000> ?? myqueue\n\nclass std::queue<std::vector<int,std::allocator<int> >,std::deque<std::vector<int,std::allocator<int> >,std::allocator<std::vector<int,std::allocator<int> > > > >\n   +0x000 c                : std::deque<std::vector<int,std::allocator<int> >,std::allocator<std::vector<int,std::allocator<int> > > >\n\n0:000> ?? sizeof(myqueue)\nunsigned int 0x14\n\n0:000> ?? myqueue.c._Mypair._Myval2\nclass std::_Deque_val<std::_Deque_simple_types<std::vector<int,std::allocator<int> > > >\n   +0x000 _Myproxy         : 0x0057b598 std::_Container_proxy\n   +0x004 _Map             : 0x0057b960  -> 0x0057b998 std::vector<int,std::allocator<int> >\n   +0x008 _Mapsize         : 8\n   +0x00c _Myoff           : 0\n   +0x010 _Mysize          : 1\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Sep 23, 2020 at 19:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Martin Brooker",
+                    "text": "<span class=\"comment-copy\">Thanks for your promoted answer! Yes, I created them. I should have probably mentioned the compiler version is msvc-9, so the STL structures changed over time of course. On older compilers, i.e. VC6 they didn't even reserve 16 bytes on the stack for the string buffer, it was just a pointer to the buffer. I'm aware that they are template classes, but they help constructing a structure after all, which what makes it difficult on some scenarios to RE, depending on the data structure of course.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Martin Brooker",
+                    "text": "<span class=\"comment-copy\">I'm a little bit confused by your queue example. What was your approach reaching to that structure? You are using radera2 there, am I right? Thanks again!</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i was using windbg for dumping those structure i added another answer with code and walk through take a look</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

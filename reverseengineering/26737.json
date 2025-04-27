@@ -1,0 +1,57 @@
+{
+    "title": "Frida reading files is slow",
+    "link": "https://reverseengineering.stackexchange.com/questions/26737/frida-reading-files-is-slow",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I need to read a file around 2 MB into a byte array.</p>\n<pre><code>var fis = Java.use(\"java.io.FileInputStream\");\nvar file = fis.$new(\"/data/local/file.txt\");\nvar fileBytes = new Uint8Array(file.available());\nvar x;\nwhile ((x = file.read()) != -1)\n    fileBytes.push(x);\n</code></pre>\n<p>I'm using the code above but it's reading ~100 kb/s which takes ~20 seconds in my case.</p>\n<p>I also tried with ByteArrayOutputStream with 1, 4, 16kb buffers but result isn't any different.</p>\n<p>I believe a native Java function which takes Inputfilestream and returns a bytearray will fix my issue, but I couldn't find any.</p>\n<p>How can I make this process faster?</p>\n<p>I'm actually trying to use it with <code>okio.ByteString</code> which has a <code>.read()</code> method, but I can't access it from Frida. It's undefined.</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "android",
+        "java",
+        "function-hooking",
+        "frida"
+    ],
+    "user": "Cagri",
+    "time": "Jan 10, 2021 at 0:25",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The reason why your code is slow is not Frida but your code. Your code would be also slow when executed in plain J2SE Java.</p>\n<p>The simple reason is because you are reading the file byte by byte using an unbuffered <code>FileInputStream</code> which is the worst way you can read a file. Typically IO operations work on blocks of at least 4096 bytes (a typical block site in a file-system).</p>\n<p>Therefore a simple modification would be to wrap the <code>FileInputStream</code> in an <code>BufferedInputStream</code>:</p>\n<pre><code>var fis = Java.use(\"java.io.FileInputStream\");\nvar bis = Java.use(\"java.io.BufferedInputStream\");\nvar file = bis.$new(fis.$new(\"/data/local/file.txt\"));\n...\n</code></pre>\n<p>However this does not the <code>read</code> calls which will take significant time. Therefore the following code reads byte blocks and procesess them.\nThis should be a lot faster:</p>\n<pre><code>var fis = Java.use(\"java.io.FileInputStream\");\nvar file = fis.$new(\"/data/local/file.txt\");\nvar fileBytes = new Uint8Array(file.available());\nconst buffer = Java.array('byte', new Array(4096).fill(0));\nvar x;\nwhile ((x = file.read(buffer)) != -1) {\n    for (int i = 0; i &lt; x; i++) {\n        fileBytes.push(buffer[i]);\n    } \n}\n</code></pre>\n<p>The fasted way would be if your app would contain Java code that directly read a file to a byte array. The less Frida JavaScript calls you have to perform the faster the result.</p>\n<p>Therefore check if your app contains a libraray like Apache common IO. Then you could directly execute <code>org.apache.commons.io.IOUtils.toByteArray(java.io.InputStream)</code>.</p>\n</div>",
+            "votes": "2",
+            "user": "Robert",
+            "time": "Jan 11, 2021 at 8:06",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Cagri",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer, however I already tried with buffer previously and speed is almost the same. I had not tried <code>Java.array</code> but it doesn't seem to work too. I've posted an answer which worked for me</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Unfortunately using buffer still didn't help me.</p>\n<p>I guess doing JS -&gt; Java -&gt; JS -&gt; Java takes a bit long. I have found this solution:</p>\n<pre><code>var Files = Java.use(\"java.nio.file.Files\");\nvar Paths = Java.use(\"java.nio.file.Paths\");\nvar URI = Java.use(\"java.net.URI\");\n\nvar fileBytes = Files.readAllBytes(Paths.get(URI.create(\"file:///sdcard/file.jpg\")));\n</code></pre>\n<p>It does reading in Java and returns a byte array which is pretty fast.</p>\n</div>",
+            "votes": "1",
+            "user": "Cagri",
+            "time": "Jan 11, 2021 at 8:26",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Robert",
+                    "text": "<span class=\"comment-copy\">Indeed I forgot that <code>Files.readAllBytes</code> is a Java7 function and is therefore available on Android. But how to you convert this to an Uint8Array? I would assume that converting it byte for byte is still a very slow operation.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Cagri",
+                    "text": "<span class=\"comment-copy\">@Robert I have checked and yes, <code>new Uint8Array(fileBytes)</code> is still slow. <code>typeof fileBytes</code> shows it as an object, so I'm not exactly sure about the type, and if we even need to convert it, because the converted one looks same. I'm actually passing this array (without converting) to <code>okio.ByteString</code> to use it in the Android application, which works pretty fast</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">This is not a forum; please use the answer box only for answers to the asked question.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

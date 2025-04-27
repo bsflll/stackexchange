@@ -1,0 +1,58 @@
+{
+    "title": "Get section's names and headers for a file using C++",
+    "link": "https://reverseengineering.stackexchange.com/questions/6077/get-sections-names-and-headers-for-a-file-using-c",
+    "content": "I'm implementing a software for performing some PE classification. Among the features values I'm gathering from each PE are, the amount of sections, the name of sections, image section headers.\nI have been reading about ImageHlp Structures. But there is no example on how to get those struct initialized from a file/path_to_a_file you pass. I'm specially interested in the IMAGE_SECTION_HEADER structure.\nHow can I get the IMAGE_SECTION_HEADERs form an executable file programatically?\n",
+    "votes": "6",
+    "answers": 1,
+    "views": "7k",
+    "tags": [
+        "binary-analysis",
+        "c++",
+        "pe"
+    ],
+    "user": "Raydel Miranda",
+    "time": "May 27, 2022 at 13:27",
+    "comments": [
+        {
+            "user": "0xec",
+            "text": "The PE format is well documented. Parse the file manually. This page can serve as a reference although the examples are in python. Other than this you can use a prebuilt parser library such as pe-parse\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I have extensive experience with parsing the PE on Windows, mainly for use in function interception. Here are the steps you should follow to achieve your goal.\nThe first step is to find the base address of the image loaded into memory. This step will be different depending on if the executable has or hasn't been mapped into memory, but the basic idea will be the same. Assuming that you are interested in doing this for a file on disk, then you may do this with the file mapping API, if you would prefer to implement this on an executable loaded into memory as a running process, you can achieve the equivalent by using the the tool help snapshot API. The base address will be the same as the field <pre><code>hModule</code></pre> in the <pre><code>MODULEENTRY32</code></pre> data retrieved from the snapshot. For more information about what a module handle is, see here.\nOnce you have completed the first step, the structure at the base address is the <pre><code>IMAGE_DOS_HEADER</code></pre>, while this is not documented on MSDN, it has two very important but cryptic fields.  The two fields you will need to know are the <pre><code>e_magic</code></pre> field and the <pre><code>e_lfanew</code></pre> field. The <pre><code>e_magic</code></pre> field contains a double word for 32-bit or quadruple for 64-bit that allows you to test if the file being read or your implementation is correctly formatted with the correct value being defined as <pre><code>IMAGE_DOS_SIGNATURE</code></pre>, which is the ASCII-Z string of \"MZ\\0\". The <pre><code>e_lfanew</code></pre> field contains a relative virtual address which you need to add to the image base you found in step one to calculate the virtual address of the <pre><code>IMAGE_NT_HEADERS</code></pre> structure.\nThe third step will be to check the first member of the <pre><code>IMAGE_NT_HEADERS</code></pre> to see if it is an actual PE file, this will be defined by the <pre><code>Signature</code></pre> field of the structure, and the defined constant to test for will be <pre><code>IMAGE_NT_SIGNATURE</code></pre>. This is not typically nessecary, since most Windows versions will be using the PE format of executable file, but it's good practice in order to ensure your code is a bit more robust.\nOnce everything checks out and you have performed steps 1-3, step four will be when you can finally calculate the address of the <pre><code>IMAGE_SECTION_HEADER</code></pre> structures. The IMAGE_SECTION_HEADER structures are stored as an array in the file, so to obtain the size of the array, you will need to use the <pre><code>NumberOfSections</code></pre> member in the <pre><code>IMAGE_FILE_HEADER</code></pre> structure which is nested in the <pre><code>IMAGE_NT_HEADERS</code></pre> structure mentioned above.Once you have that value, you may find the virtual address of the first <pre><code>IMAGE_SECTION_HEADER</code></pre> by adding the size of the <pre><code>Signature</code></pre> member of the <pre><code>IMAGE_NT_HEADERS</code></pre> structure, the size of the <pre><code>FileHeader</code></pre> member in the <pre><code>IMAGE_NT_HEADERS</code></pre> structure, and finally the <pre><code>SizeOfOptionalHeader</code></pre> value in the <pre><code>IMAGE_FILE_HEADER</code></pre> structure. The reason you can't simply do a <pre><code>sizeof(</code></pre> <pre><code>IMAGE_OPTIONAL_HEADER</code></pre> <pre><code>)</code></pre> for the last value in the formula listed above is because a file on disk will not have the <pre><code>IMAGE_OPTIONAL_HEADER</code></pre>, so to obtain the proper size dynamically, you should do so through the structure member I mentioned earlier.\nNow you may simply copy the array of <pre><code>IMAGE_SECTION_HEADER</code></pre> structures from memory any way you please. Just remember, that these structures are contigous in memory, so all you need to do is multiply the size of each structure by the number of sections to find the total size of the entire array in memory. After you have calculate that value, it will be trivial to collect the data.\nFor more resources on the PE executable format, see this wonderful article written by Matt Pietrek, Peering Inside the PE. You may also take a look at the official specification here.\n",
+            "votes": "9",
+            "user": "Glorfindel",
+            "time": "May 27, 2022 at 13:13",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Nice effort but many small issues. 1) DOS header's <code>e_magic</code> is always a <code>WORD</code> (16-bit), never 32 or 64 bits; 2) <code>IMAGE_DOS_SIGNATURE</code> matches the two-character \"MZ\" sequence - zero terminator is not required; 3) strictly speaking, <code>e_lfanew</code> is a file offset and not RVA (though they happen to match in this case); 4) <code>IMAGE_OPTIONAL_HEADER</code> definitely <i>is</i> present in the file on disk, it does not appear magically just because you use file mapping; 5) the reason you need to use <code>SizeOfOptionalHeader</code> is because some malware/packers use a value different from <code>sizeof(IMAGE_OPTIONAL_HEADER)</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "CaptainObvious",
+                    "text": "<span class=\"comment-copy\">@Igor Oops, I was thinking of an object file. My mistake.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">The \"file mapping API\" mentioned is for Windows only. The PE format is described in detail in various sources, and there is no actual need to use Windows API's - for example, I wrote my latest PE disassembler from scratch on my Mac.</span>",
+                    "time": null
+                },
+                {
+                    "user": "CaptainObvious",
+                    "text": "<span class=\"comment-copy\">@Jongware Well, if he wants, he can always use some third party library to parse the PE in a more portable fashion. Windows is the only operating system I use, so if someone wants to give an answer for other systems, feel free to. The references he posted were for Windows implementations, so I answered the question as such.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Yes, you're correct, the OP indeed appears to be using Windows. My <code>load_exec</code> source code is (.. checking) close to 300 lines of code, and it makes use of another 250-or-so lines of structures and #define's. All in all, it takes about 2,000 lines of C code to only <i>load</i> an executable (mind, it displays generous amounts of debugging data as well). I would hazard that's way too much for an RE answer.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

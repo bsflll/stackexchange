@@ -1,0 +1,38 @@
+{
+    "title": "Viewing an exported DLL function in OllyDbg - garbage code",
+    "link": "https://reverseengineering.stackexchange.com/questions/6104/viewing-an-exported-dll-function-in-ollydbg-garbage-code",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Being rather new to the concept of RE, I wanted to try and take a look at the assembly code in one DLL that I know exports some functions.\n </p>\n <p>\n  First, I used this tool -\n  <a href=\"http://www.nirsoft.net/utils/dll_export_viewer.html\" rel=\"nofollow\">\n   http://www.nirsoft.net/utils/dll_export_viewer.html\n  </a>\n  - to obtain a list of exports within said DLL. These are some of the functions:\n </p>\n <pre><code>GI_Call 0x100590a7  0x000590a7  2 (0x2) mydll.dll   I:\\test\\mydll.dll   Exported Function   \nGI_CleanReturnStack 0x10058eae  0x00058eae  3 (0x3) mydll.dll  I:\\test\\mydll.dll    Exported Function   \nGI_Cmd_Argc 0x10058bd4  0x00058bd4  4 (0x4) mydll.dll   I:\\test\\mydll.dll   Exported Function   \nGI_Cmd_Argc_sv  0x10059593  0x00059593  5 (0x5) mydll.dll   I:\\test\\mydll.dll   Exported Function   \n</code></pre>\n <p>\n  When I, however, load the DLL up in OllyDbg and browse to any of these addresses, I get instructions that don't really resemble a beginning of a function, for example GI_Call:\n </p>\n <pre><code>100590A7     10E9                ADC CL,CH\n100590A9     CE                  INTO\n100590AA     FC                  CLD\n100590AB     FFFF                ???                                                        ; Unknown command\n100590AD     FF75 10             PUSH DWORD PTR SS:[EBP+10]\n100590B0     8D45 FC             LEA EAX,DWORD PTR SS:[EBP-4]\n100590B3     50                  PUSH EAX\n100590B4     57                  PUSH EDI\n</code></pre>\n <p>\n  What's even more puzzling is that once I scroll up/down, the code actually changes - there's no\n </p>\n <pre><code>100590A7     10E9                ADC CL,CH\n</code></pre>\n <p>\n  anymore, it changes to a completely different instruction, also that address is gone.\n </p>\n <p>\n  Am I doing something wrong? Or is the DLL possibly encrypted? Though if it is, how could DLL Export Viewer dump the exports so easily?\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "disassembly",
+        "ollydbg",
+        "dll",
+        "functions"
+    ],
+    "user": "user4520",
+    "time": "Aug 21, 2014 at 7:21",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Your library might get loaded to a location that's completely different from the one it wants to be loaded at, i.e. the address in the header, due to\n  <a href=\"http://en.wikipedia.org/wiki/Address_space_layout_randomization\" rel=\"nofollow\">\n   ASLR\n  </a>\n  .\n </p>\n <p>\n  Also, when loading a DLL, Ollydbg doesn't load the DLL directly; instead, it uses\n  <code>\n   loaddll.exe\n  </code>\n  . Which means, it starts the executable, but the breakpoint it sets is\n  <em>\n   before\n  </em>\n  <code>\n   loaddll\n  </code>\n  has a chance to, well, load the DLL.\n </p>\n <p>\n  Try the following:\n </p>\n <ul>\n  <li>\n   Set a breakpoint on\n   <code>\n    LoadLibraryA\n   </code>\n   : right click in CPU Window - Go To - Expression -\n   <code>\n    LoadLibraryA\n   </code>\n   - Press\n   <kbd>\n    F2\n   </kbd>\n   ;\n  </li>\n  <li>\n   Repeat the same with LoadLibraryW (the A version should be sufficient, just to make sure);\n  </li>\n  <li>\n   Run the program;\n  </li>\n  <li>\n   Once your breakpoint is it, press\n   <kbd>\n    CTRL\n   </kbd>\n   -\n   <kbd>\n    F9\n   </kbd>\n   (execute till return);\n  </li>\n  <li>\n   If your DLL depends on others, you'll hit one of your breakpoints again; else you'll hit the breakpoint at the\n   <code>\n    RET\n   </code>\n   instruction. Don't worry, in either case, your DLL will be loaded;\n  </li>\n  <li>\n   Use View->Memory or View->Executable Modules to learn where your DLL was actually loaded. This may be the same address that DLL Export Viewer shows you, but often, it will be different (address conflicts between two DLLs, in which case one has to be relocated, or ASLR, as above);\n  </li>\n  <li>\n   Only if the addresses match: Right Click -> GoTo -> Expression ->\n   <code>\n    0x12345678\n   </code>\n   or whatever address you want to see;\n  </li>\n  <li>\n   No matter if they match or not: Right Click -> GoTo -> Expression -> (Function name) will scroll to that function.\n  </li>\n </ul>\n <p>\n  The reason for your '\n  <em>\n   disappearing\n  </em>\n  ' instruction is that it's the middle of another instruction. Consider this function start:\n </p>\n <pre><code>10001280 > 53               PUSH EBX\n10001281   56               PUSH ESI\n10001282   57               PUSH EDI\n10001283   8B7C24 10        MOV EDI,DWORD PTR SS:[ESP+10]\n10001287   8BF1             MOV ESI,ECX\n10001289   3BF7             CMP ESI,EDI\n1000128B   0F94C3           SETE BL\n1000128E   84DB             TEST BL,BL\n10001290   75 32            JNZ SHORT 100012C4\n</code></pre>\n <p>\n  The byte at\n  <code>\n   10001284\n  </code>\n  ,\n  <code>\n   0x7c\n  </code>\n  , is part of the instruction at\n  <code>\n   1001283\n  </code>\n  . But if you disassemble from\n  <code>\n   10001284\n  </code>\n  ,\n </p>\n <pre><code>10001284   7C 24            JL SHORT 100012AA\n10001286   108B F13BF70F    ADC BYTE PTR DS:[EBX+FF73BF1],CL\n1000128C   94               XCHG EAX,ESP\n1000128D   C3               RETN\n1000128E   84DB             TEST BL,BL\n10001290   75 32            JNZ SHORT 100012C4\n</code></pre>\n <p>\n  The wrong bytes get interpreted as instructions. Once you scroll up a few rows, Ollydbg syncs correctly again - and shows the '\n  <em>\n   real\n  </em>\n  ' instructions.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "perror",
+            "time": "Aug 21, 2014 at 8:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user4520",
+                    "text": "<span class=\"comment-copy\">Thanks, that made it clear. I'll remember to upvote as soon as I get 15 rep.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user4520",
+                    "text": "<span class=\"comment-copy\">Finally upvoted :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

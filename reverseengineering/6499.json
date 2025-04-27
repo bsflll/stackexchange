@@ -1,0 +1,52 @@
+{
+    "title": "Problem: Identifying the size of VirtualAllocEx",
+    "link": "https://reverseengineering.stackexchange.com/questions/6499/problem-identifying-the-size-of-virtualallocex",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have the following lines:</p>\n<pre><code> ... \n mov [ebp+nSize], offset nullsub_1\n ...\n sub [ebp+nSize], offset loc_402B58\n</code></pre>\n<p>So, nSize is then used for the call of VirtualAllocEx.\nAt nullsub_1, I have the follwoing(notice I use IDA PRO):</p>\n<pre><code>nulsub_1 proc near\nretn\nnullsub_1 endp\n</code></pre>\n<p>Question 1 : What is that ? Has somebody an idea what this can be ? I would say, it is a pointer to NULL but I am not sure. </p>\n<p>At loc_402B58 I have the following(It is the same what I posted in another topic, I thought it would be helpful when I also post this <a href=\"https://reverseengineering.stackexchange.com/questions/6493/question-about-process-injection\">Question about process injection</a>): </p>\n<pre><code>loc_402B58:\n  push esi\n  mov esi, [esp+8]\n  lea eax, [esi+14h]\n  push eax\n  call dword ptr[esi]\n  test eax, eax\n  mov [esi+10h], eax\n  jz short loc_402B80\n  lea ecx, [esi+46h]\n  push ecx\n  push eax\n  call dword ptr [esi+4]\n  test eax, eax\n  jz short_loc402B80\n  call eax\n  push 0\n  call eax\n  push 0\n  call dword ptr [esi+8]\n\n  loc_402B80:     \n   xor eax, eax\n   pop esi\n   retn 4\n</code></pre>\n<p>How can we subtract pieces of codes which is done at <strong>sub [ebp+nSize], offset loc_402B58</strong> ?\nI have never seen a piece of code like <strong>nullsub_1</strong> . So I hope somebody can tell me what is it but i understand what the code at loc_402B58 does.</p>\n</div>",
+    "votes": "2",
+    "answers": 3,
+    "views": "330",
+    "tags": [
+        "assembly"
+    ],
+    "user": "user3097712",
+    "time": "Oct 4, 2018 at 4:39",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Assume you're a C programmer who has written a malware subroutine, and you want to copy your subroutine to somewhere \"safe\" where it remains after your starter process terminates. Then you'd probably start with something like</p>\n<pre><code>void malware(void) {\n    ......\n    helper1(...);\n    ......\n    helper2(...);\n    ......\n}\n\nvoid helper1(...) {\n    .....\n}\n\nvoid helper2(...) {\n    .....\n}\n</code></pre>\n<p>Now, how can you copy the compiled code of these functions somewhere, especially to some memory block you got using VirtualAlloc(), and how do you know how much memory you need? That's exactly what your code does. At the end of the (one or more) functions that need to stay \"resident\" in memory, you place a function that does nothing, just to have a memory address.</p>\n<pre><code>void end_of_malware(void) { /* do nothing, just return */ }\n</code></pre>\n<p>Then, you know that the memory block from <code>malware()</code> to <code>end_of_malware()</code> contains the code you want to \"save\". The expression</p>\n<pre><code>size_t size=((char *) end_of_malware - (char *)malware)\n</code></pre>\n<p>is the number of bytes you need, and which you pass to <code>VirtualAlloc</code> and <code>memcpy()</code> (or whichever function you use to copy the memory). This is just what the <code>mov [somewhere], offset end_of_malware</code> and <code>sub [somewhere], malware</code> does. Except that IDA can't know the original names of the functions.</p>\n<p>IDA detects, however, that the <code>end_of_malware</code> function does nothing, so it names it <code>nullsub</code> - a \"null subroutine\". This helps a bit since, whenever you see a <code>call nullsub_*</code> in your disassembly. you know there's no reason to check what that function does. </p>\n</div>",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Oct 19, 2014 at 20:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">wow, thank you for your explanation. It helps a lot.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<pre><code> ... \n mov [ebp+nSize], offset nullsub_1\n ...\n sub [ebp+nSize], offset loc_402B58\n</code></pre>\n<p>The code above is effectively: <code>nSize = address_of(nullsub_1) - address_of(loc_402B58)</code></p>\n<p>Assuming the function <code>nullsub_1</code> is immediately after <code>loc_402B58</code>, <code>nSize</code> is getting set to the length of the code at <code>loc_402B58</code>. This dynamic code length calculation is often used with <code>VirtualAllocEx()</code> so that the right amount of memory can be allocated in a remote process before the code is copied into that process.</p>\n</div>",
+            "votes": "0",
+            "user": "Jason Geffner",
+            "time": "Oct 19, 2014 at 14:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user3097712",
+                    "text": "<span class=\"comment-copy\">thank you for your explanation. It is always good to learn new things.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A bit of Trivia to add to Jason and Guntam's answers.</p>\n<p><code>Ida normally</code> seems to name the function <code>nullsub_XX</code> only when the <code>function body contains a single return</code> and this single return cannot be achieved by <code>normal programming</code> style<br/>\nif you write a c program  like <code>void foo(void){};</code> this would create a <code>prolog and epilog</code> which Ida Would name <code>sub_XXXXXXX</code> <strong>not</strong> <code>nullsub_XX</code> most of the <code>malwarion contructs</code> use assembly programming so a single return can be assembled in place.</p>\n<p><code>if you want to think c style</code> you may need to ensure <code>no prolog and epilog are generated</code> by using <code>__declspec(naked)</code> this invariably involves <code>inline assembly and an embedded _retn</code>.</p>\n<p>a sample code below will generate nullsub_xx when compiled in msvc with the given commandline </p>\n<pre><code>#include &lt;windows.h&gt;\nchar info[] = {\n    \"this is the func whose block size needs to be calculated since \"\n    \"the function is between two nullsub subtracting the address of \"\n    \"them gets the size of block but be aware compilers are clever  \"\n    \"and may do away all of this if compiled with optimsation /OXXX \"\n};\nchar buff[0x200] ={0};\n__declspec(naked) void startlabel(void) {__asm{retn}};\nvoid func2size(void) {\n    wsprintf(buff,\"%s\\n\",info);\n    MessageBox(0,buff,\"whats nullsub demo\",0);\n    return;\n}\n__declspec(naked) void endlabel(void) {__asm{retn}};\nint WINAPI WinMain(HINSTANCE hi,HINSTANCE hpi,LPSTR cmd,int show) {\n    wsprintf(buff,\"blocksiz\\t0x%08x\\n\",((char *)endlabel-(char *)startlabel));\n    MessageBoxA(0,buff,\"whats nullsub demo\",0);\n    ExitProcess(0);\n}\n</code></pre>\n<p>compiled and linked with </p>\n<pre><code>cl /nologo dynsize.c user32.lib kernel32.lib /link /ENTRY:WinMain /SUBSYSTEM:Windows dynsize.c\n</code></pre>\n<p>if <code>optimizations are enabled</code> compiler will discard func2size() because it is <code>unreferenced</code><br/>\ncompiler will coalesce both the label functions into one single retn opcode because compiler will notice that both the function body are same only the names are differnt which doesnt make any difference in execution </p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/qejp8.png\"/></p>\n</div>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Oct 20, 2014 at 12:36",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

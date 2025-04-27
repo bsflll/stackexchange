@@ -1,0 +1,60 @@
+{
+    "title": "How to get the CPU architecture via Idapython?",
+    "link": "https://reverseengineering.stackexchange.com/questions/11396/how-to-get-the-cpu-architecture-via-idapython",
+    "content": "I was not able to find an API function to get the CPU architecture of the loaded binary. \nIn <pre><code>idaapi.py</code></pre>, there is a function <pre><code>def set_processor_type(*args)</code></pre> but no equivalent such as <pre><code>get_processor_type</code></pre>.\nI don't want to fall back to running some additional (python) tool such as file, readelf or a python ELF parser. I also don't like the idea of parsing the strings displayed at the beginning of the IDA assembly listing.\nThere must be a way to use <pre><code>idc.py</code></pre>, <pre><code>idaapi.py</code></pre> or <pre><code>idautils.py</code></pre> for this.\n",
+    "votes": "7",
+    "answers": 4,
+    "views": "5k",
+    "tags": [
+        "ida",
+        "idapython"
+    ],
+    "user": "langlauf.io",
+    "time": "Jan 4, 2017 at 20:35",
+    "comments": [
+        {
+            "user": "Pocanatos",
+            "text": "Sorry for resurrecting this old thread, but for reasons I'm unable to figure out, both info.is_64bit() and info.is_32bit() are not working for me. I'm using IDA C++ SDK v7.1. Even if the executable in the database is 64-bit, it still goes through the 32-bit check. Any idea why this is happening?\n",
+            "time": null
+        },
+        {
+            "user": "knx",
+            "text": "If you have a new question, please ask it by clicking the Ask Question button. Include a link to this question if it helps provide context. - From Review\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "You can get the name of the processor from the <pre><code>idainfo</code></pre> struct:\n<pre><code>import idaapi\n\ninfo = idaapi.get_inf_structure()\n\nif info.is_64bit():\n    bits = 64\nelif info.is_32bit():\n    bits = 32\nelse:\n    bits = 16\n\ntry:\n    is_be = info.is_be()\nexcept:\n    is_be = info.mf\nendian = \"big\" if is_be else \"little\"\n\nprint 'Processor: {}, {}bit, {} endian'.format(info.procName, bits, endian)\n# Result: Processor: mipsr, 32bit, big endian\n</code></pre>\nStill haven't found the endian, though.\nEDIT:\nEndian can be determined by processor name. For example, <pre><code>mipsr</code></pre> is big endian, and <pre><code>mipsrl</code></pre> is little endian.\nEDIT:\nAdded a proper endian check (<pre><code>mf</code></pre> == MSB First). Based on this answer.\nEDIT:\nSince IDA7 beta 3 (170724), idainfo.mf was removed, and idainfo.is_be() must be used. Based on keypatch\n",
+            "votes": "9",
+            "user": "stek29",
+            "time": "Jan 30, 2018 at 9:00",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "Not all processor name has endian information. Generally it can be determinded as:\n<pre><code>BIG_ENDIAN if _idaapi.cvar.inf.mf else LITTLE_ENDIAN\n</code></pre>\n",
+            "votes": "3",
+            "user": "NirIzr",
+            "time": "Jan 4, 2017 at 20:36",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "This is definitely not exact answer, but probably you could make use of \n<pre><code>idaapi.ph_get_regnames() \n</code></pre>\n\nReturns the list of register names as defined in the processor module\n\nDifferent platforms has different register sets, and if you will not find your solution about exact cpu you can give it a try.\nThis function exists in IDA 6.8.\n",
+            "votes": "2",
+            "user": "w s",
+            "time": "Nov 25, 2015 at 10:14",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Using the minsc plugin at https://github.com/arizvisa/ida-minsc, you can access database information using <pre><code>database.information</code></pre>. To get the detected architecture, you can access it via <pre><code>instruction.arch</code></pre> (currently only Intel, Mips, and Arm are implemented for this particular method).\n<pre><code>Python>db.info.processor(), db.info.bits(), db.info.byteorder(), ins.arch\n('metapc', 0x20, 'little', <pc.Intel object at 0x7fdf2c145e90>)\n</code></pre>\nDisclaimer: I maintain the ida-minsc plugin.\nRegister information can be accessed via <pre><code>instruction.architecture.register</code></pre> (or <pre><code>instruction.register</code></pre>).\n<pre><code>Python>ins.arch.reg\n<class 'internal.architecture.map_t'>\n%bnd0  : <class 'register_t' index=97 dtype=dt_byte16 name='bnd0' position=0+128>\n%bnd1  : <class 'register_t' index=98 dtype=dt_byte16 name='bnd1' position=0+128>\n%bnd2  : <class 'register_t' index=99 dtype=dt_byte16 name='bnd2' position=0+128>\n%bnd3  : <class 'register_t' index=100 dtype=dt_byte16 name='bnd3' position=0+128>\n...\n%zmm31  : <class 'register_t' index=164 dtype=dt_byte64 name='zmm31' position=0+512>\n %ymm31 : \\_<class 'register_t' index=132 dtype=dt_byte32 name='ymm31' position=0+256>\n %xmm31 :   \\_<class 'register_t' index=116 dtype=dt_byte16 name='xmm31' position=0+128>\n</code></pre>\nIf you want to access the processor information as soon as the disassembler figures it out, you can add a hook. First we define some function that corresponds to <pre><code>IDP_Hooks.ev_newprc</code></pre>. Then we can use the idp hooks in the <pre><code>ui</code></pre> module from minsc accessed as <pre><code>ui.hooks.idp</code></pre>.\n<pre><code>import database as db, ui\ndef choose_processor(*dunno):\n    print('got', db.info.processor())\nPython>ui.hook.idp.add('ev_newprc', choose_processor)\n</code></pre>\nIDP Hook is now added (Note: edited a bit to highlight the function we've attached).\n<pre><code>Python>ui.hook.idp\nEvents currently connected to IDP_Hooks:\n...\nIDP_Hooks.ev_newprc           : __main__.choose_processor(*dunno)[+0]\n...\nIDP_Hooks.ev_rename           : internal.hooks.changing(*parameters)[+0]\n</code></pre>\nNow upon opening up or creating a database we'll see the following output.\n<pre><code>Loading processor module procs/arm.so for ARM...\n...\nOK\nWARNING:root:Detected processor module : AArch32 (13)\ngot ARM\nAssuming __fastcall calling convention by default\n...\n</code></pre>\n",
+            "votes": "0",
+            "user": "Ali Rizvi-Santiago",
+            "time": "Jul 21, 2024 at 4:16",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,52 @@
+{
+  "title": "LDR specifier combination UXTW",
+  "link": "https://reverseengineering.stackexchange.com/questions/22962/ldr-specifier-combination-uxtw",
+  "content": "Sorry, if this question seems stupid, but I am new in arm64 and next 2 assembly lines seriously damaged my brain:\n\n```\nLDR             W0, [X30,W0,UXTW#2]\nADD             X30, X30, W0,UXTW\n\n```\nI have readed docs, used google with different keywords, but it seems like everything connected to assembly is written by machines to machines..\n\nI understood that it patches return address of subroutine, but what UTXW#2 is and how does it affect on LDR is hard to undertand.\n\nCould somebody explain me \"magic\" which happens in this 2 lines?\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "assembly",
+    "arm",
+    "arm64"
+  ],
+  "user": "Olvin Roght",
+  "time": "Jan 10, 2020 at 16:39",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Not Sure i selected uxtw in this post Right Clicked and Search Google For UXTW\nthe First Hit is Arm Documentation\n\n```\nSUB  Wd|WSP, Wn|WSP, Wm{, extend {#amount}} ; 32-bit general registers\n\nSUB  Xd|SP, Xn|SP, Rm{, extend {#amount}}  ; 64-bit general registers\n\nextend\n\n    Is the extension to be applied to the second source operand:  \n\n    32-bit general registers \n\n        Can be one of UXTB, UXTH, LSL|UXTW, UXTX, SXTB, SXTH, SXTW or SXTX.\n\n        If Rd or Rn is WSP then LSL is preferred rather than UXTW,  \nand can be omitted when amount is 0. \nIn all other cases extend is required and must be UXTW rather than LSL.\n\n    64-bit general registers\n\n        Can be one of UXTB, UXTH, UXTW, LSL|UXTX, SXTB, SXTH, SXTW or SXTX.\n\n        If Rd or Rn is SP then LSL is preferred rather than UXTX,  \nand can be omitted when amount is 0.    \nIn all other cases extend is required and must be UXTX rather than LSL.\n\n```\nsxtw is signed extend word 8000->ffff8000\nuxtw isunsigned extend word 8000->00008000   \n\nquoting from another relevent hit \n\nhere is a sample unicorn python emulation\n\n```\n#code modified from unicorn sample\nfrom __future__ import print_function\nfrom unicorn import *\nfrom unicorn.arm64_const import *\nprint (\n\"Register X30 on start = 0x10  \n\"\n\"Register W0  on start = 0x02  \n\"\n\"Emulate 5 ARM64 instructions that follows  \n\"\n\"ADD X30, X30, W0,UXTW#0  \n\"\n\"ADD X30, X30, W0,UXTW#1  \n\"\n\"ADD X30, X30, W0,UXTW#2  \n\"\n\"ADD X30, X30, W0,UXTW#3  \n\"\n\"ADD X30, X30, W0,UXTW#4  \n\"\n\"Register X30 on end = 0x10+0x2+0x4+0x8+0x10+0x20 == 0x4e\"\n)\nCODE =  b\"\\xDE\\x43\\x20\\x8B\\xDE\\x47\\x20\\x8B\\xDE\\x4b\\x20\\x8B\\xDE\\x4f\\x20\\x8B\\xDE\\x53\\x20\\x8B\"\nADDRESS    = 0x10000\ndef test_arm64():\n    try:\n        mu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)\n        mu.mem_map(ADDRESS, 2 * 1024 * 1024)\n        mu.mem_write(ADDRESS, CODE)\n        mu.reg_write(UC_ARM64_REG_X30, 0x10)\n        mu.reg_write(UC_ARM64_REG_W0, 2)\n        for i in range (ADDRESS,ADDRESS + len(CODE),4):\n            mu.emu_start(i, i + 4)\n            x30 = mu.reg_read(UC_ARM64_REG_X30)\n            w0  =  mu.reg_read(UC_ARM64_REG_W0) \n            print(\">>> x30  = 0x%x w0 = 0x%x\" %(x30,w0))\n    except UcError as e:\n        print(\"ERROR: %s\" % e)\n\nif __name__ == '__main__':\n    test_arm64()\n\n```\nemulation results\n\n```\n:\\>python uniaarch64.py\nRegister X30 on start = 0x10\nRegister W0  on start = 0x02\nEmulate 5 ARM64 instructions that follows\nADD X30, X30, W0,UXTW#0\nADD X30, X30, W0,UXTW#1\nADD X30, X30, W0,UXTW#2\nADD X30, X30, W0,UXTW#3\nADD X30, X30, W0,UXTW#4\nRegister X30 on end = 0x10+0x2+0x4+0x8+0x10+0x20 == 0x4e\n>>> x30  = 0x12 w0 = 0x2\n>>> x30  = 0x16 w0 = 0x2\n>>> x30  = 0x1e w0 = 0x2\n>>> x30  = 0x2e w0 = 0x2\n>>> x30  = 0x4e w0 = 0x2\n\n```\nwhen you start with -0x2 in W0 see the extended results\n\n```\n>>> x30  = 0x10000000e w0 = 0xfffffffe\n>>> x30  = 0x30000000a w0 = 0xfffffffe\n>>> x30  = 0x700000002 w0 = 0xfffffffe\n>>> x30  = 0xefffffff2 w0 = 0xfffffffe\n>>> x30  = 0x1effffffd2 w0 = 0xfffffffe\n\n```\nSXTW and -2\n\n```\n>>> x30  = 0xe w0 = 0xfffffffe\n>>> x30  = 0xa w0 = 0xfffffffe\n>>> x30  = 0x2 w0 = 0xfffffffe\n>>> x30  = 0xfffffffffffffff2 w0 = 0xfffffffe\n>>> x30  = 0xfffffffffffffff0 w0 = 0xfffffffe\n\n```\nSXTW and 2\n\n```\n>>> x30  = 0x12 w0 = 0x2\n>>> x30  = 0x16 w0 = 0x2\n>>> x30  = 0x1e w0 = 0x2\n>>> x30  = 0x2e w0 = 0x2\n>>> x30  = 0x30 w0 = 0x2\n\n```\n",
+      "votes": "3",
+      "user": "blabb",
+      "time": "Jan 10, 2020 at 21:16",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Olvin Roght",
+          "text": "Yes, I have provided link to this docs in my question. But I can't find there explanation what UTXW#2 means. Could you point me?",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "it is not utxw it is uxtw == unsigned extend word it is x86 equivalent of MOVZX read the quoted part or follow the link provided",
+          "time": null
+        },
+        {
+          "user": "Olvin Roght",
+          "text": "I have copied code from IDA =/",
+          "time": null
+        },
+        {
+          "user": "Olvin Roght",
+          "text": "I would prefer to sleep instead.. Thanks.",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "added an emulation of Add instruction take a look",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

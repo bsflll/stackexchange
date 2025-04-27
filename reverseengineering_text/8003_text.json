@@ -1,0 +1,80 @@
+{
+    "title": "Need Ideas to Reverse Engineer this HCC file format",
+    "link": "https://reverseengineering.stackexchange.com/questions/8003/need-ideas-to-reverse-engineer-this-hcc-file-format",
+    "content": "January 17, 2015 update,\nWe made some progress by converting the CSV to hcc file; however, MT5 is deleting the file. Attached is our code. Can someone help us? \nhttp://www.mediafire.com/download/n5454ao79mmqksf/CSVtoHCC.rar\n\nCan someone give us some pointers as how to crack this hcc file? It took a long time but a friend was able to determine its data structure. See link below for the hcc file.\n4 byte, seperator , little endian encoding 18385028, hex(84 88 18 01)\n4 byte, time, int divisible by 60\n8 byte, double Opened Price\n8 byte, double Highest Price\n8 byte, double Lowest Price\n8 byte, double Closed Price\n1 byte, char | small int spread\n1 byte, char | small int tick volume \ndate & time format is: \n2015.01.04 0:00\nOpened Price = 1.23894\nHighest Price = 1.23904\nLowest Price = 1.23883\nClosed Price = 1.23904\nTick Volume = 81\n2015.01.04  0:00    1.23894 1.23904 1.23883 1.23904 81\nMany thanks in advance.\nhttp://www.mediafire.com/download/2csbb4s3b9bjx8e/2015.hcc\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "struct"
+    ],
+    "user": "Uncle Bob",
+    "time": "Jan 17, 2015 at 19:24",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "I'm not sure what your question is, if you already know (a part of) what your file format is like. But your separators are actually <pre><code>84 88 18 X1</code></pre>, where X is the number of additional bytes between each of your 'record's and the next one.\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "Looking at your separators a bit more, they're actually byte counts. Your little endian 0x01188884, read from behind, translates to 4 bytes (time), 8 bytes double (4 times), one byte, one byte, zero bytes. At 0xde1a in your file, your separator is 0x42188884, and after your doubles, you have 1 byte int (40), a 2 byte int (333, supposed to be volume), and a 4 byte int, 72000000, (whatever that means).\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The file seems to contain a \"sum of transactions\" field as well. I refined my earlier program a bit:\n<pre><code>/* version 1.2 - generates a CSV file on the desktop for another application to create a reverse engineered hcc file */\n/* version 1.1 - includes header format and detects the number of data rows */\n\n#include <stdio.h>\n#include <stdlib.h>\n#include <time.h>\n\n#pragma pack(1)\nunion header {\n                struct {\n                                char magic[2]; // 0x81 0x00\n                                char label[64];\n                                char something[18];\n                                int nrows;\n                } data;\n                char rawbytes[189];\n};\n\nstruct record {\n                int separator;\n                int time;\n                double open, high, low, close;\n                char additional[10]\n\n\n};\n\n\nvoid printint(char *buf, FILE *fpcsv,int size);\nvoid dumpat(FILE *fp,FILE *fpcsv, int start);\n\nint main(int argc, char **argv) {\n                FILE *fp,*fpcsv;\n                union header header;\n\n\n                if ((fpcsv=fopen(\"C:\\\\Users\\\\Hello\\\\Desktop\\\\2015.csv\", \"w\"))==NULL) {\n                        perror(\"C:\\\\Users\\\\Hello\\\\Desktop\\\\2015.csv\"); return 1;\n                }\n                if ((fp=fopen(\"C:\\\\Users\\\\Hello\\\\Desktop\\\\2015.hcc\", \"rb\"))==NULL) {\n                        perror(\"C:\\\\Users\\\\Hello\\\\Desktop\\\\2015.hcc\"); return 1;\n                }\n                fseek(fp, 0x3be5-sizeof(header), 0);\n                while (fread(&header, sizeof header, 1, fp)!=0) {\n                                if ((header.data.magic[0]&0xff)!=0x81\n                                ||   header.data.magic[1]!=0x00) {\n                                                fprintf(stderr, \"Bad header magic number at %08lx\n\",\n                                                                ftell(fp)-sizeof(header));\n                                                exit(1);\n                                }\n                                fprintf(fpcsv,\"Expect %d rows\n\", header.data.nrows);\n                                dumpat(fp,fpcsv, header.data.nrows);\n                // dumpat(fp, 0x3be5);\n                // dumpat(fp, 0xde1a);\n                // dumpat(fp, 0x1e169);\n                // dumpat(fp, 0x2e4a5);\n                // dumpat(fp, 0x3bd7e);\n                // dumpat(fp, 0x55c07);\n                }\n                fclose(fp);\n                fclose(fpcsv);\n}\n\nvoid dumpat(FILE *fp,FILE *fpcsv, int nrows) {\n                struct record data;\n                int i, extra1, extra2, extra3, pos;\n                time_t time;\n                struct tm *tm;\n                char timebuf[80];\n\n                for (i=0; i<nrows; i++) {\n                                if (fread(&data, sizeof(int), 1, fp)==0)\n                                                break;\n                                if ((data.separator & 0x00088884) != 0x00088884) {\n                                                fprintf(stdout, \"bad separator %08x at %lx\n\",\n                                                                data.separator, ftell(fp));\n                                                break;\n                                }\n                                extra1=data.separator>>28;\n                                extra2=((data.separator>>24)&0x0f);\n                                extra3=((data.separator>>20)&0x0f);\n                                fread(&data.time,  4 + 8 + 8 + 8 + 8 + extra3 + extra2 + extra1\n                                                , 1, fp);\n                                time=data.time;\n                                tm=gmtime(&time);\n                                strftime(timebuf, sizeof timebuf, \"%Y-%m-%d %H:%M:%S\", tm);\n                                fprintf(fpcsv,\"%s,%lf,%lf,%lf,%lf,\", timebuf, data.open,\n                                                data.high, data.low, data.close);\n                                pos=0;\n                                printint(data.additional+pos,fpcsv, extra3); pos+=extra3;\n                                fprintf(fpcsv,\",\");\n                                printint(data.additional+pos,fpcsv, extra2); pos+=extra2;\n                                fprintf(fpcsv,\",\");\n                                printint(data.additional+pos,fpcsv, extra1); pos+=extra1;\n                                fprintf(fpcsv,\"\n\");\n\n                }\n}\n\nvoid printint(char *buf,FILE *fpcsv, int size) {\n                int val=0, scale=1;\n                while (size--) {\n                                val+=(*buf++&0xff)*scale;\n                                scale<<=8;\n                }\n                 fprintf(fpcsv,\"%5d\", val);\n}\n</code></pre>\nThe result of this begins with:\n<pre><code>2015-01-02 10:00:00 1.205450 1.205450 1.205140 1.205160    31     9 22000000 \n2015-01-02 10:01:00 1.205160 1.205210 1.205030 1.205030    31     6 35000000 \n2015-01-02 10:02:00 1.205030 1.205030 1.204680 1.204730    51     9 54500000 \n2015-01-02 10:03:00 1.204730 1.204750 1.203460 1.203850    81    18 65700000 \n2015-01-02 10:04:00 1.203790 1.204210 1.203750 1.204210    79     9 85100000 \n2015-01-02 10:05:00 1.204200 1.204210 1.204090 1.204170    41    10 38300000 \n2015-01-02 10:06:00 1.204170 1.204570 1.204150 1.204150    52    13 46600000 \n2015-01-02 10:07:00 1.204150 1.204460 1.204150 1.204380    44     8 53900000 \n2015-01-02 10:08:00 1.204380 1.204380 1.203800 1.203800    52     9 70400000 \n2015-01-02 10:09:00 1.203820 1.204010 1.203600 1.203900    72     9 76100000 \n</code></pre>\nThe headers (that contain <pre><code>EUR USD</code></pre>) seem to have the same size, and the start of the data seems to be 176 bytes after the D every time, but i'm not yet sure about where/how to find the first of them, and where the number of data rows to the next header is stored, so i can't get rid of those magic numbers (byte positions where the data starts) yet.\n",
+            "votes": "4",
+            "user": "kenorb",
+            "time": "Sep 30, 2016 at 21:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Uncle Bob",
+                    "text": "<span class=\"comment-copy\">Guntram,Thank you very much for helping us out. Attached are three different hcc files from three different brokers. I believe that each broker will have its own identifier. <a href=\"http://www.mediafire.com/download/9d0ux9uh74lpd2c/different_broker_hcc_files.rar\" rel=\"nofollow noreferrer\">mediafire.com/download/9d0ux9uh74lpd2c/…</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Seems the first block of data is always at 0x3be5, the headers have always 189 bytes and start with 0x81 0x00 and are followed by the EURUSD string, and there's the number of data rows at offset 84 in the header. Download the new program at <a href=\"https://mega.co.nz/#!lBAFmYbJ!xruNNVCq655-Fh7fkMDZ0hMsK4XhCLrHcwJW9K2g-cY\" rel=\"nofollow noreferrer\">mega.co.nz/…</a>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Uncle Bob",
+                    "text": "<span class=\"comment-copy\">Guntram. Just to let you know that we are working on the codes at the moment and will post them up once finish. Code #1 will slightly modify your version 1.1 (i.e. version 1.2) and will generate a CSV file on the desktop.  Code#2 will import the CSV file from the desktop and then attempt to generate reverse engineered hcc file.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Uncle Bob",
+                    "text": "<span class=\"comment-copy\">attached is version 1.2, please let us know how we can improve it further <a href=\"http://www.mediafire.com/view/zsuoxj4h4506s5l/main.c\" rel=\"nofollow noreferrer\">mediafire.com/view/zsuoxj4h4506s5l/main.c</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Uncle Bob",
+                    "text": "<span class=\"comment-copy\">Here is something interesting. I found another broker using the same trading platform; however, the file has a hcs instead of hcc extension. <a href=\"http://www.mediafire.com/download/itp8h3462bq2weo/2015.hcs\" rel=\"nofollow noreferrer\">mediafire.com/download/itp8h3462bq2weo/2015.hcs</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "It would help to have the output of this actual file. After a quick search, I found:\n<pre><code>$ strings -e l 2015.hcc\nCopyright 2001-2014, MetaQuotes Software Corp.\nHistory\nEURUSD\nEURUSD\nEURUSD\nEURUSD\nEURUSD\nEURUSD\n</code></pre>\nWhich lead to the following website. What's in this file ? Using clear text attack would be much more efficient. Do you have more sample files ?\nUsing <pre><code>binwalk</code></pre> did not reveal anything, so I am guessing this is a simple binary format, since it contains -potentially- trading information I would bet this is a simple format (no cryptography or obfuscation involved).\n",
+            "votes": "0",
+            "user": "tibar",
+            "time": "Jan 13, 2015 at 10:08",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">The OP documents most of the file format. The file actually has a simple binary format, and from the OP, it's possible to write a simple <a href=\"http://pastebin.com/mdug38WG\" rel=\"nofollow noreferrer\">c program</a> to read the data. This is just why i don't really understand OPs question.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Uncle Bob",
+                    "text": "<span class=\"comment-copy\">The HCC file contains the following information (see attached file link) plus some additional unknown information   <a href=\"http://www.mediafire.com/view/60tww4c2tvj6b5f/data_2.csv\" rel=\"nofollow noreferrer\">mediafire.com/view/60tww4c2tvj6b5f/data_2.csv</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

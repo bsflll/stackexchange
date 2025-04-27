@@ -1,0 +1,46 @@
+{
+    "title": "Need help with binary file analysis",
+    "link": "https://reverseengineering.stackexchange.com/questions/16010/need-help-with-binary-file-analysis",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So I'm currently trying to analyze a resource archive file of an old game.</p>\n<p><strong>What I got so far</strong></p>\n<ul>\n<li>The file is supposed to represent a \"virtual drive\", the format is called VDRV. This means there are paths listed with offsets and sizes.</li>\n<li>Header structure is 64 bytes for the game identification (magic number + a whole lot of 0x00), then a uint32 for total file size, then a uint32 for the offset where the first block of data ends</li>\n<li>Data follows, the first block takes up more than 90% of archive size. This is where the resources have to be located. This seems to be ciphered/encrypted.</li>\n<li>What is left is what I call the \"Resource Table\" - a chain of either 64 or 120 bytes long blocks until the end of file. I believe this is where the paths are registered</li>\n</ul>\n<p>So far, so good. However, this is where it get's tricky. The first twelve bytes of each of those blocks are readable, they are always three uint32.</p>\n<ol>\n<li>Length of the block including this int (either 64 or 120)</li>\n<li>Some offset, this seems to link the blocks in a LinkedList style (actually proved that using a small program I wrote).</li>\n<li>Offset of the last 4 bytes of this block.</li>\n</ol>\n<p>And this is where I'm currently stuck, since the rest seems to be encrypted/ciphered data. I dumped the data from the 64 and 120 long blocks seperately, without those twelve \"header\" bytes. Each block is seperated by line break.</p>\n<ul>\n<li><a href=\"http://paste.ubuntu.com/25247256/\" rel=\"nofollow noreferrer\">Long Blocks</a></li>\n<li><a href=\"http://paste.ubuntu.com/25247255/\" rel=\"nofollow noreferrer\">Small Blocks</a></li>\n</ul>\n<p>Now there are obviously some repeated patterns here, so I'm thinking that it might be some XOR-ish cipher, though I haven't been able to figure out a key or even a structure.</p>\n<p><strong>What I expect to find in this data</strong></p>\n<ul>\n<li>Two uint32, offset and size</li>\n<li>A string path</li>\n<li>Unused space filled with 0x00</li>\n</ul>\n<p>Also, I know that these (partial) strings should be in there somewhere in some way or another (got those from the executable):</p>\n<pre><code>data\n../../../data/g\ng/img/inv_Lf._img\ng/img/inv_Rt._img\ng/img/inv_All._img\ng/img/mcUse._img\ng/img/mcTalk._img\ng/img/mcTake._img\ng/img/mcLook._img\ng/img/mcArrow._img\ng/img/fntOtherSpeakers._img\ng/img/fntBig._img\ng/img/fntWhite._img\ng/img/fntYellow._img\ng/img/fntGray._img\n</code></pre>\n<p>That is all I have been able to figure out up to now. Any help in figuring this out would be <em>much</em> appreciated!</p>\n<p>Thank you for your time!</p>\n<p><strong>EDIT:</strong> Posted the binary in the comments</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "binary-analysis"
+    ],
+    "user": null,
+    "time": "Aug 5, 2017 at 15:05",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">Encrypted data will have high entropy (close to 1 when normalized). In other words, encrypted data should look random. Since you did not make the binary available, the only option is making guesses based on eyeballing the ASCII hex dumps of the long and small blocks. My guess is they are not encrypted.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">did you check xentax for any info on this game?</span>",
+            "time": null
+        },
+        {
+            "user": "TkTech",
+            "text": "<span class=\"comment-copy\">What game? Your download is also invalid.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The binary seems to be composed of blocks of <code>zlib</code> compressed data.</p>\n<pre><code>$ binwalk -B vdrv.dat \n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n76            0x4C            Zlib compressed data, best compression\n410855        0x644E7         Zlib compressed data, best compression\n411415        0x64717         Zlib compressed data, best compression\n411833        0x648B9         Zlib compressed data, best compression\n739843        0xB4A03         Zlib compressed data, best compression\n740261        0xB4BA5         Zlib compressed data, best compression\n943653        0xE6625         Zlib compressed data, best compression\n944071        0xE67C7         Zlib compressed data, best compression\n1342964       0x147DF4        Zlib compressed data, best compression\n1343382       0x147F96        Zlib compressed data, best compression\n1715439       0x1A2CEF        Zlib compressed data, best compression\n1715857       0x1A2E91        Zlib compressed data, best compression\n&lt;-snip-&gt;\n</code></pre>\n<p><code>binwalk</code> treats the following bytes as <code>zlib</code> signatures:</p>\n<pre><code>#0    beshort        0x7801        Zlib header, no compression\n0    beshort        0x789c        Zlib compressed data, default compression\n0    beshort        0x78da        Zlib compressed data, best compression\n0    beshort        0x785e        Zlib compressed data, compressed\n</code></pre>\n<p>Entropy plot:</p>\n<p><a href=\"https://i.sstatic.net/uGEQJ.png\" rel=\"nofollow noreferrer\"><img alt=\"Entropy plot\" src=\"https://i.sstatic.net/uGEQJ.png\"/></a></p>\n<p>When the compressed data at offset <code>4C</code> is decompressed, the result is a binary blob with some image signatures and string data:</p>\n<pre><code> $ binwalk 4C\n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n89            0x59            JPEG image data, JFIF standard 1.02\n119           0x77            TIFF image data, big-endian, offset of first image directory: 8\n413           0x19D           JPEG image data, JFIF standard 1.02\n6169          0x1819          Copyright string: \"Copyright Flag\"\n6800          0x1A90          JPEG image data, JFIF standard 1.02\n</code></pre>\n<br/>\n<pre><code>Adobe Photoshop 7.0\n2004:10:25 15:02:26\nAdobe_CM\n4Photoshop 3.0\nResolution\nFX Global Lighting Angle\nFX Global Altitude\nPrint Flags\nCopyright Flag\nJapanese Print Flags\nColor Halftone Settings\nColor Transfer Settings\nURL overrides\nICC Untagged Flag\nLayer ID Generator Base\nNew Windows Thumbnail\nVersion compatibility info\nJPEG Quality\n@3$%&amp;C49\n#L#|AJ74N\nM&gt;5..=l5\n/;t&gt;q~{z\n6.r%G60L\n&lt;-snip-&gt;\n</code></pre>\n<p>The presence of readable ASCII strings seems to confirm that the data is compressed and was successfully decompressed. With that being said, <code>binwalk</code> detects roughly 1900 <code>zlib</code> compressed data blocks, with some false positives detected throughout the file. In addition, not all of the compressed blocks may be detected; when I used <a href=\"http://www.wxhexeditor.org/\" rel=\"nofollow noreferrer\">wxHexEditor</a> to search for byte <code>0x78DA</code>, more than 3000 matches were found. Either that or <code>binwalk</code> augments its signature scan with additional information or heuristics that I am not aware of to reduce false positives.</p>\n<p><a href=\"https://i.sstatic.net/OHE5C.png\" rel=\"nofollow noreferrer\"><img alt=\"Search results\" src=\"https://i.sstatic.net/OHE5C.png\"/></a></p>\n<p>The search results differ from the output of the signature scan.</p>\n</div>",
+            "votes": "1",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user21123",
+                    "text": "<span class=\"comment-copy\">Thank you so much! That's all I need. Still can't figure out the small, second part of the file (\"ResourceTable\"), but that won't be necessary if I can just extract all files</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

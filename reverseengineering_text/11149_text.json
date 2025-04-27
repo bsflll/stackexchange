@@ -1,0 +1,51 @@
+{
+    "title": "Locating Memory Allocation Functions from Static Analysis",
+    "link": "https://reverseengineering.stackexchange.com/questions/11149/locating-memory-allocation-functions-from-static-analysis",
+    "content": "I'm currently working on reversing a firmware binary for an embedded device. This device is using an uncommon architecture: it is a modified Harvard architecture, running on a TMS320C55x chipset with an old Real-time Operating System (RTOS) which does not exists anymore (Byte-BOS) and for which I cannot find any manual (if you have, please let me know). No standard library is used within the firmware.\nBased on some rare documentation found from the Internet Archive, the RTOS is actually a micro-kernel which manages tasks, memory allocation and inter-process messaging. Within the kernel, there are two functions that appears to manage memory: <pre><code>fmem_alloc</code></pre> and <pre><code>fmem_free</code></pre>.\nI'm trying to locate these functions within the firmware file. I can approximate the location of the code of the RTOS, as well as find functions within that section of code. My goal is to locate the <pre><code>fmem_alloc</code></pre> and <pre><code>fmem_free</code></pre> functions and functions calling them using IDA.\nSince my target is a TMS320C55x architecture and I have a raw firmware file versus a neat COFF binary, debugging it is quite difficult without an actual emulator, which from what I understood, is only hardware-based for this microprocessor. As such, it seems I'm doomed to rely only on static analysis. However if anyone knows of a software solution to debug the raw firmware, I would be extremely interested. The Code Composer Studio IDE only debugs COFF binaries.\nIs there any techniques, or set of C55x instructions within a certain distance I could search that could identify this function? Or at least reduce the number of potential functions to search? I know the RTOS uses a double linked-list to manage the heap. I first thought of using the <pre><code>malloc</code></pre> function as a potential template, but found it too far from what I'm looking at, i.e. Intel assembly to the C55x, especially given the differences between the Von Neumann and Harvard architectures.\nAny help appreciated. Thanks.\nP.S. I cannot post product details, firmware files or disassembled code due to non-disclosure conditions. I understand it may be difficult to provide a reliable answer because of this.\nUpdates\nSince my last post, I've identify old Seagate firmware binairies using the same RTOS, but for the Intel 8096. BTW, the target RTOS is an old microkernel called Byte-BOS RTOS, which I wrote about in this post. The only string available in this OS is the copyright notice. However using the Seagate firmware, I can see heap-related error messages. I could potentially try to work these 8096 code segment into C and then recompile them on the TMS320C55x.\nUpdates 2\nSo I found out that the compiler/IDE for the platform included somesort of C library which contained a simple malloc() function. I wrote a small C program that allocated some memory with it, ran it in the included debugger and dump the machine code. I made a quick byte string search function in IDAPython and replacing non-instruction values with \"????\" for IDA to look only for the instructions. Unfortunately, it found no malloc() function. I suspect the code relies exclusively on the memory allocation functions provided by the RTOS rather than the ones from the library. I can hardly believe they would be very different, since both rely on linked list. Anyway, that's where I am with this. I may try to fuzzy the byte string to find code sections that resemble the malloc() function from the library.\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "binary-analysis",
+        "memory",
+        "static-analysis",
+        "embedded"
+    ],
+    "user": "InfectedPacket",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "Can't you add a COFF header to the firmware? From reading the spec, it seems that a COFF header that has only one section starting at address 0, no optional header, no relocs, no line numbers, no symbol table, no string table should be easy to produce and prepend to your raw binary.\n",
+            "time": null
+        },
+        {
+            "user": "MrSynAckSter",
+            "text": "You could try to study malloc implementations on AVR, that's basically Harvard ARCH.\n",
+            "time": null
+        },
+        {
+            "user": "InfectedPacket",
+            "text": "When the COFF file is being made into the firmware, most of the information about symbols is removed. Interrupt services routines and vectors are also added. The interrupt vector is added at 0x0, followed by what I presume are the ISR. In any case, adding a COFF header doesn't simplify disassembly. I'll check for the AVR.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I'd approach this problem as follows:\n\nCheck for logging strings. Probably you'll find there something related to allocations which will solve the problem.\nFind all functions with 1 argument (size for <pre><code>malloc()</code></pre> and pointer for <pre><code>free()</code></pre>).\nTrack results of these functions. <pre><code>malloc()</code></pre> result is usually checked against <pre><code>NULL</code></pre> after use and rarely used in math operations. In addition result of <pre><code>malloc()</code></pre> function is used in store operations or <pre><code>memcpy()</code></pre>.\nFree function argument is not used after calling it.\n<pre><code>malloc()</code></pre> and <pre><code>free()</code></pre> should be located in close addresses.\n\nThese heuristics should be enough to narrow down the number of possible candidates to observable. \nGood luck.\n",
+            "votes": "3",
+            "user": "perror",
+            "time": "Nov 3, 2015 at 8:35",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "From the TMS320C55x documentation it's clear that the chip supports multiple memory modes. Therefore, a function such as malloc could have different definitions for each one. I think that the smartest thing to do is to identify the memory mode and figure out how a malloc can be implemented in that mode.\nGiven that your binary file is fully stripped and most functions seem to be inlined, all you can do is pattern matching. If you want to be smart, figure out a way to build a CFG and try to identify where a malloc could be necessary and check if your target pattern is redundant enough.\nHope this helps.\n",
+            "votes": "0",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

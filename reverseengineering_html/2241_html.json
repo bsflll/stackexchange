@@ -1,0 +1,62 @@
+{
+    "title": "gdb on FreeBSD and follow-fork-mode child",
+    "link": "https://reverseengineering.stackexchange.com/questions/2241/gdb-on-freebsd-and-follow-fork-mode-child",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Long time ago I noticed that using\n </p>\n <blockquote>\n  <p>\n   set follow-fork-mode child\n  </p>\n </blockquote>\n <p>\n  in GDB on FreeBSD doesn't really work.\nThis problem occurs very often with some challenges on various Capture The Flag contests.\nFor example, a server will spawn a child which would handle the connection.\nThe child code has a vulnerability which I would like to debug, but gdb just never follows\nthe childs execution and I can't really observe the vulnerability being triggered.\n </p>\n <p>\n  So far, I've solved this problem in two ways:\n </p>\n <ol>\n  <li>\n   <p>\n    Making a connection, waiting for a child to spawn and than attaching GDB to it.\n   </p>\n   <p>\n    This works since the spawned child has it's own PID to which I can attach, but is rather painful since first I have to make a connection from one session, attach with GDB in another, and then send the payload/continue the connection in the first.\n   </p>\n  </li>\n  <li>\n   <p>\n    Patching the binary after the fork call to continue the execution in the parent process instead of the child.\n   </p>\n   <p>\n    This is also painful since then I have to restart the whole parent process to create another debugging session.\n   </p>\n  </li>\n </ol>\n <p>\n  There are some other tricks that can be employed, but these are enough to illustrate my point.\n </p>\n <p>\n  Now I know there have been some limitations on FreeBSD in the past regarding this but has anything improved?\n </p>\n <p>\n  Is there any way to patch GDB to add this functionality? Any suggestions for an easier way of overcoming this?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "gdb",
+        "exploit",
+        "debugging",
+        "multi-process"
+    ],
+    "user": "0xea",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "dna",
+            "text": "<html><body><span class=\"comment-copy\">\n On my Linux box I have to\n <code>\n  set follow-fork-mode child\n </code>\n but also\n <code>\n  catch fork\n </code>\n inorder to make GDB stop on the fork call and follow the child.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "0xea",
+            "text": "<html><body><span class=\"comment-copy\">\n on linux it's fine, bsd has the problem with follow-fork-mode... and it seems it's still there...\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Try to set a catchpoint on fork if you are want to both the parent and the child.\n </p>\n <pre><code>set-follow-fork-mode ask \ncatch fork \n</code></pre>\n <p>\n  Concerning your second point, I have this macro in my\n  <code>\n   .gdbinit\n  </code>\n  (I believe ultimately originating from Tavis Ormandy). It is imminently useful in many cases, your own included.\n </p>\n <pre><code>define assemble\n # dont enter routine again if user hits enter\n dont-repeat\n if ($argc)\n  if (*$arg0 = *$arg0)\n    # check if we have a valid address by dereferencing it,\n    # if we havnt, this will cause the routine to exit.\n  end\n  printf \"Instructions will be written to %#x.\n\", $arg0\n else\n  printf \"Instructions will be written to stdout.\n\"\n end\n printf \"Type instructions, one per line.\n\"\n printf \"End with a line saying just \\\"end\\\".\n\"\n if ($argc)\n  # argument specified, assemble instructions into memory\n  # at address specified.\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    <<< \"$( echo \"BITS 32\"; while read -ep '>' r && test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | hexdump -ve \\\n        '1/1 \"set *((unsigned char *) $arg0 + %#2_ax) = %#02x\n\"' \\\n            > ~/.gdbassemble\n  # load the file containing set instructions\n  source ~/.gdbassemble\n  # all done.\n  shell rm -f ~/.gdbassemble\n else\n  # no argument, assemble instructions to stdout\n  shell nasm -f bin -o /dev/stdout /dev/stdin \\\n    <<< \"$( echo \"BITS 32\"; while read -ep '>' r && test \"$r\" != end; \\\n                do echo -E \"$r\"; done )\" | ndisasm -i -b32 /dev/stdin\n end\nend\ndocument assemble\nAssemble instructions using nasm.\nType a line containing \"end\" to indicate the end.\nIf an address is specified, insert instructions at that address.\nIf no address is specified, assembled instructions are printed to stdout.\nUse the pseudo instruction \"org ADDR\" to set the base address.\nend\n</code></pre>\n</div>\n</body></html>",
+            "votes": "5",
+            "user": "zetavolt",
+            "time": "Jun 15, 2013 at 3:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">Nice macro, I definitely gonna use it! Huh it's zsh unfriendly :p</span>",
+                    "time": null
+                },
+                {
+                    "user": "dna",
+                    "text": "<span class=\"comment-copy\">For zsh <code>read -ep '&gt;' r</code> should be replaced by <code>read r</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xea",
+                    "text": "<span class=\"comment-copy\">accepted the answer because of that nice macro and it helps a lot:) especially since there is no real solution (at least i haven't found one yet, see my answer), the problem is that follow-fork-mode doesn't work on bsd, and that hasn't been fixed yet...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I was digging a bit into this, and found\n  <a href=\"https://stackoverflow.com/questions/1515661/gdb-not-hitting-breakpoints\">\n   this question\n  </a>\n  on SO by mrduclaw (link in the original article is dead, but\n  <a href=\"http://web.archive.org/web/20090611150423/http://sourceware.org/gdb/current/onlinedocs/gdb_5.html#SEC29\" rel=\"nofollow noreferrer\">\n   web archive has it\n  </a>\n  ). He has the exact same problem like I do, and exactly the same motivation for finding a solution.\n </p>\n <p>\n  So I was digging around some more and it turns out freebsd until recently didn't have support for forks in it's ptrace. There was a\n  <a href=\"http://lists.freebsd.org/pipermail/freebsd-toolchain/2012-April/000370.html\" rel=\"nofollow noreferrer\">\n   patch submitted\n  </a>\n  but I can't really figure out if it's applied. Will try to apply it myself and see if it will start working then.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

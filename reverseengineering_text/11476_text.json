@@ -1,0 +1,43 @@
+{
+    "title": "IDA Pro and recognized library functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/11476/ida-pro-and-recognized-library-functions",
+    "content": "I start by saying that I'm completely new to the topic of reversing although I have many years of experience with programming in general.\nI've some problems with automatic recognition of library functions of a DOS executable compiled with Borland C++ 3.1.\nActually the signatures are correctly identified as bc31rtd (and it states 199 as the actual number of applied signatures). So for example <pre><code>strcmp</code></pre> is correctly identified, colored and such.\nStarting from this I was relying blindly on these library function in the rest of the code until I realized that there was something wrong, this is, for example what I see in for <pre><code>strcpy</code></pre>:\n\nWhich doesn't make sense to me since <pre><code>src</code></pre> is not used at all. Then <pre><code>\nrepne scasb</code></pre> should scan for the length of the string but the last value placed in <pre><code>di</code></pre> is <pre><code>[bp+dest+2]</code></pre> like if both <pre><code>const char*</code></pre> were not <pre><code>dd</code></pre> but <pre><code>dw</code></pre> (so just the offset, without any specified segment, and <pre><code>ds</code></pre> is used implicitly). \nSince this was getting me crazy I checked the original implementation of the function by opening CC.LIB of BC++3.1 with IDA Pro directly and implementation is different indeed:\n\nSo where's the problem here?\nHow can I alter the function as I want? I tried modifying directly stack variables (Ctrl+K) but then offsets become faulty (eg <pre><code>[bp+8]</code></pre> marked as red).\nI ask sorry if I'm making some trivial wrong assumption that I'm not realizing.\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "dos",
+        "flirt-signatures"
+    ],
+    "user": "Jack",
+    "time": "Dec 8, 2015 at 14:18",
+    "comments": [
+        {
+            "user": "Vitaly Osipov",
+            "text": "Generally speaking, hex-rays.com/products/ida/tech/flirt/in_depth.shtml is how IDA Pro recognizes compiled-in functions.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Oh, the happyness of near functions vs. far functions, near pointers vs. far pointers, and mixed models (far functions, near pointers)\nBack in the 16 bit world, programs could either\n\nuse a maximum of 64 KB code, and 64 KB data, have all pointers use 16 bit, and ignore segment registers. This was called the <pre><code>near</code></pre> model, because all offsets were within the same segment\n\nor\n\nchoose to be able to have more than 64 KB code, and more than 64 KB data; make pointers 32 bit (16 bit segment and 16 bit offset), and mess with segment registers whenever using a pointer. This was called the <pre><code>far</code></pre> model since pointers could point to different segments, in fact, the whole address space\n\nor\n\nuse a mixed model - near pointers for code, and far pointers for data (more commonly used) or vice versa (i don't know of a single program that used that).\n\nNow, the problem is, that the <pre><code>strcpy</code></pre> function from your program seems to be the far-code-near-data version, and the <pre><code>strcpy</code></pre> from the library seems to be the near-code-far-data version.\nYou see how the first function makes sure that <pre><code>es</code></pre> = <pre><code>ds</code></pre> (<pre><code>push ds; pop es</code></pre>) but doesn't mess with segments otherwise. This would make it use 16 bit pointers. The <pre><code>retf</code></pre> at the end suggests it uses the <pre><code>far</code></pre> code convention.\nThe second function uses <pre><code>LES di, [bp+src]</code></pre>, which loads <pre><code>es</code></pre> and <pre><code>di</code></pre> at the same time. This means it uses <pre><code>far</code></pre> data pointers on the stack, the <pre><code>retn</code></pre> at the end means it uses the <pre><code>near</code></pre> code model.\nWhat happened is that, in your disassembled program, IDA saw the <pre><code>retf</code></pre>, deducted <pre><code>far code</code></pre>, and probably assumed <pre><code>far data</code></pre> as well - which is wrong. If data was indeed <pre><code>far</code></pre>, you'd have 4 bytes for <pre><code>src</code></pre>, and another 4 bytes for <pre><code>dst</code></pre>, and this is what ida is showing on your stack. But in fact, the pointers have just 2 bytes each, so <pre><code>dest</code></pre> is at offset 6, but <pre><code>src</code></pre> is at offset 8, not 0x0a (10). Which is why accessing <pre><code>src</code></pre> is shown as <pre><code>dest+2</code></pre>, and the (wrong) offset 0x0a, which IDA falsely assumes to be <pre><code>src</code></pre>, isn't used at all.\nShown as a picture:\n<pre><code>This is what IDA thinks:           and this is the real stack layout:\n\n+----------------------------+     +--------------------------------+\n|000c src  segment           |     |                                |\n|000a src  offset            |     |                                |\n|0008 dest segment           |     |0008 src                        |\n|0006 dest offset            |     |0006 dest                       |\n|0004 saved bp               |     |0004 saved bp                   |\n|0002 return address segment |     |0002 return address segment     |\n|0000 return address offset  |     |0000 return address offset      |\n+----------------------------+     +--------------------------------+\n</code></pre>\nTo fix this, open the function prototype dialog, and change the pointer definitions to <pre><code>char near *</code></pre>.\n",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Dec 9, 2015 at 14:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jack",
+                    "text": "<span class=\"comment-copy\">Everythins is clear, thanks for taking the time to give me precise and complete answers because they're really useful in getting some expertise of this new world. So assuming this, the binary library object of Borland C++ compiler should contain multiple implementations of the same function and choose the one accordingly to the program model specified? I see I can tell IDA to use far code/data or near code/data in compiler options but other methods look like with far data so I wonder if in reality it's like mixed far/near data mode according to the function involved, is it plausible?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Well, you can't link in the <code>near</code> <i>and</i> <code>far</code> versions of <code>strcpy</code> at the same time (at least not without a lot of tricks involving changing the names of functions in standard libraries). But even if you compile for the near data model, you could explicitly define some big data arrays as <code>far</code>, while keeping the rest of your data <code>near</code>. You won't be able to use standard functions on these data arrays in that case, but this might be ok depending on your application. When speed is important, keeping as much as possible <code>near</code> helps, so there's a valid reason to do this.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

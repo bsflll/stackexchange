@@ -1,0 +1,57 @@
+{
+    "title": "Fixing/recompiling a heavily control flow obfuscated function",
+    "link": "https://reverseengineering.stackexchange.com/questions/27969/fixing-recompiling-a-heavily-control-flow-obfuscated-function",
+    "content": "I've recently come across a binary that has been obfuscated with a very obscure protection.\nObfuscation\nFrom what I understand, the obfuscator is effective in several ways.\n\nMultiple JMPs via relative addressing (0xE9), JMPs to addresses in stack (<pre><code>e.g jmp [rsp-0x8]</code></pre>), and less frequently, JMPs using registers (<pre><code>jmp reg</code></pre>). These are extremely effective at rendering the CFG in IDA Pro useless.\nConstant stack arithmetic. The obfuscator is continuously using stack memory to hold vital parts of information such as variables and JMPs to the next block (as stated previously). More importantly, the instruction <pre><code>sub rsp, #</code></pre> and <pre><code>add rsp, #</code></pre> and substituted via <pre><code>lea rsp, [rsp+-#]</code></pre>. IDA's analyzer also fails to acknowledge a change in the stack pointer in the instruction <pre><code>lea rsp, [rsp+8]</code></pre>.\nJunk code. Instructions that don't exactly have any effect or pertain to the original function's goal.\nSlight use of opaque predicates (however I haven't spotted too many).\nConditional branching via <pre><code>cmov</code></pre> instructions, e.g\n\n<pre><code>test rax, rax\n... ; junk\nmov rdx, sub_not_equal\nmov rcx, [rsp-0x8]\ncmovz rcx, rdx\n... ; stack stuff\n-> jmp to position in stack containing rcx\n</code></pre>\nExamples\n<pre><code>.text:00007FF639A15EA9                                                     loc_7FF639A15EA9:                       \n.text:00007FF639A15EA9 048 48 89 04 24                                                     mov     [rsp+48h+var_48], rax\n.text:00007FF639A15EAD 048 48 8D 64 24 08                                                  lea     rsp, [rsp+8]\n.text:00007FF639A15EB2 040 48 8B 74 24 F8                                                  mov     rsi, [rsp+40h+var_48]\n.text:00007FF639A15EB7 040 48 85 C0                                                        test    rax, rax\n.text:00007FF639A15EBA 040 E9 F8 10 44 FF                                                  jmp     loc_7FF638E56FB7\n</code></pre>\n<pre><code>.text:00007FF638E56FB7                                                     loc_7FF638E56FB7:                       \n.text:00007FF638E56FB7 040 0F 85 F4 C2 B9 FB                                               jnz     near ptr sub_7FF6349F32B1\n.text:00007FF638E56FBD 040 E9 33 EE 9F 02                                                  jmp     loc_7FF63B855DF5\n</code></pre>\n<pre><code>.text:00007FF63B855DF5                                                     loc_7FF63B855DF5:                       \n.text:00007FF63B855DF5 040 4C 89 74 24 F8                                                  mov     [rsp+40h+var_48], r14\n.text:00007FF63B855DFA 040 48 8D 64 24 F8                                                  lea     rsp, [rsp-8]\n.text:00007FF63B855DFF 048 48 8B 34 24                                                     mov     rsi, [rsp+48h+var_48]\n.text:00007FF63B855E03 048 48 8D 64 24 08                                                  lea     rsp, [rsp+8]\n.text:00007FF63B855E08 040 E9 86 B1 74 FD                                                  jmp     loc_7FF638FA0F93\n</code></pre>\n<pre><code>.text:00007FF6392FCD6C                                                     loc_7FF6392FCD6C:                       \n.text:00007FF6392FCD6C 048 48 8D 2D 42 65 6F FB                                            lea     rbp, loc_7FF6349F32B5\n.text:00007FF6392FCD73 048 48 87 2C 24                                                     xchg    rbp, [rsp+48h+var_48]\n.text:00007FF6392FCD77 048 48 8D 64 24 08                                                  lea     rsp, [rsp+8]\n.text:00007FF6392FCD7C 040 FF 64 24 F8                                                     jmp     [rsp+40h+var_48]\n</code></pre>\nSo on and so forth..\nEfforts\nMy goal was to create a tool that would take an obfuscated routine, follow along every jump, then create a peephole optimizer that would completely erase instruction sequences such as the <pre><code>lea rsp, [rsp+-]</code></pre>, <pre><code>xhng reg, [rsp+x]</code></pre> and others shown and replace them with their \"deobfuscated\" variants. So I began working on a tool that would emulate certain instructions (especially anything involved with the stack) then create my own \"virtual stack\" that would hold the same information the original program would. This actually worked, except I didn't account for many things, such as JCCs. The end result shown in my tool was over 60 JMPs and over 200 instructions in the final combined dump (this did not even including the multiple JCC branches which can easily have the same or more CF obfuscation). I feel like my attempt was aimed in the wrong direction.\nGuidance\nWell. Using my tool, I could probably just skim through the entire assembly and figure out what is going on after adding in conditional branch support, however I still feel unsatisfied. My original goal was to produce a completely optimized, decompilable dump, however I feel like I've hit a dead end due to my design flaws.\nI want to ask to everyone who has had the patience to read through this post, on their advice carrying forward, whether it's a library recommendation, or how to re-approach the deobfuscation process I had going here.\nFor context, I'm analyzing a unpacked dump of a process and using my tool coded in C++ using Zydis disassembler to decode and manually emulate some of the instructions.\n",
+    "votes": "5",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "windows",
+        "obfuscation",
+        "x86-64",
+        "control-flow-graph"
+    ],
+    "user": null,
+    "time": "Jul 8, 2021 at 2:36",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "lea does change the tracked sp delta, you can see the change of the adjustment value from 48h to 40h.\n",
+            "time": null
+        },
+        {
+            "user": "user29468",
+            "text": "@IgorSkochinsky Yeah you are correct. I'm not sure how I missed that. I noticed the issue while IDA was still analyzing the binary so that could have been it (it's a very large binary). My apologies.\n",
+            "time": null
+        },
+        {
+            "user": "Rolf Rolles",
+            "text": "Can you clarify what your question is? I don't seen an actual question here.\n",
+            "time": null
+        },
+        {
+            "user": "user29468",
+            "text": "@RolfRolles My question was how to approach this type of obfuscation and reach my intended goal without re-inventing the wheel. I'm more so asking for advice on how to proceed here.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Since this is obviously a pain to do statically or by hand in a dynamic fashion, I would suggest trying another approach.\nI personally would try to do it by writing a small emulator.\nSince it is mostly 'stack arithmetic' and junk code, this would be perfect. Take a look at the emulation framework named 'Unicorn'.\nWith this option, you don't have to re-implement anything, and it will support a lot more cases that a simple 'virtual stack' (as you call it).\nYou basically have to map the whole binary in memory, setup an initial stack frame, create a hook for every instructions, and maybe create a breakpoints system for debugging. You can then start the emulation, and inspect the program's behavior and the jmp that where taken.\nIf you want to make the code more readable, your hook routine may scan if the current instruction contains a reference to any stack pointer. And if, replace it with the content of the involved variable.\nIf you want to only focus on a small portion of code, this is also possible. But you'll have to setup the initial stack/registers state carefully and start at your custom entrypoint\n",
+            "votes": "1",
+            "user": "Guillaume",
+            "time": "Jul 15, 2021 at 8:17",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Try ESET's deobfuscation tool.\nBasically it helps to remove some junk code, decrypt strings and restore CFF via a dynamic symbolic execution.\n",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "Jan 10, 2023 at 8:39",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

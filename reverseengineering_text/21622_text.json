@@ -1,0 +1,38 @@
+{
+    "title": "Weird IDA/Decompiler floating point output",
+    "link": "https://reverseengineering.stackexchange.com/questions/21622/weird-ida-decompiler-floating-point-output",
+    "content": "I stumbled upon this (reduced for readability) function. It does weird things that I have never encountered before. \n<pre><code>// a2 is always 60.0\nvoid some_function(struct_123 *this, float a1, float a2)\n{\n  float v5; // ST10_4\n  float v6; // ST14_4\n\n  this->field_34 = a1;\n  v5 = a2 / (0.011 * 1000.0); // 60.0 / 11.0\n  v6 = v5 - (double)(signed int)v5;\n  this->field_38 = (SLODWORD(v6) >> 31) + (signed int)v5;\n}\n</code></pre>\nI know a little bit about IEEE 754 decimals, so i think <pre><code>(SLODWORD(v6) >> 31)</code></pre> yields v6's sign bit. I suspect this is some kind of inlined floor/ceiling rounding operation, but I am anything but sure about this.\nEdit: I stumbled upon the actual non-inlined method. Here it is:\n<pre><code>int __cdecl float_sub_466560(float a1)\n{\n  float v1; // ST04_4\n\n  v1 = (double)(signed int)a1 - a1;\n  return (signed int)a1 - (SLODWORD(v1) >> 31);\n}\n</code></pre>\nEdit 2: it seems like the first function I gave adds 1 in the last line. That is part of the function, not the floating point operation. I removed it.\nEdit 3: as requested, here is the assembly for the second function.\nI can provide the assembly from the first function, however it is quite big, and I don't really want to extract the right portion of it if it's not necessary.\n<pre><code>float_sub_466560 proc near\n\nvar_8           = dword ptr -8\nvar_4           = dword ptr -4\narg_0           = dword ptr  4\n\n                sub     esp, 8          ; stack frame\n                fld     [esp+8+arg_0]   ; Load Real\n                fist    [esp+8+var_8]   ; Store Integer\n                fisubr  [esp+8+var_8]   ; Subtract Integer Reversed\n                fstp    [esp+8+var_4]   ; Store Real and Pop\n                mov     eax, [esp+8+var_4]\n                mov     ecx, [esp+8+var_8]\n                sar     eax, 1Fh        ; Shift Arithmetic Right\n                sub     ecx, eax        ; Integer Subtraction\n                mov     eax, ecx        ; move result to correct return register\n                add     esp, 8          ; stack frame\n                retn                    ; Return Near from Procedure\nfloat_sub_466560 endp\n</code></pre>\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "427",
+    "tags": [
+        "ida",
+        "x86",
+        "hexrays",
+        "float"
+    ],
+    "user": "Fridtjof Mund",
+    "time": "Jul 7, 2019 at 0:46",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I have added some comments to the disassembly you posted, so it's easier to understand.\n<pre><code>sub     esp, 8          ; stack frame\nfld     [esp+8+arg_0]   ; load value of arg0 to st\nfist    [esp+8+var_8]   ; store round(arg0) in var8\nfisubr  [esp+8+var_8]   ; subtract arg0 from var8\nfstp    [esp+8+var_4]   ; store result in var4\n;now var4 = round(arg0) - arg0\nmov     eax, [esp+8+var_4] ; eax = round(arg0) - arg0\nmov     ecx, [esp+8+var_8] ; ecx = round(arg0)\nsar     eax, 1Fh        ; shift eax right by 31; eax contains just a sign bit\nsub     ecx, eax        ; if eax was negative, subtract 1, do nothing otherwise\nmov     eax, ecx        ; eax = round(arg0) - signbit(round(arg0) - arg0)\nadd     esp, 8          ; stack frame\nretn                    ; Return Near from Procedure\n</code></pre>\nwhere <pre><code>round(n)</code></pre> can be a function:\n\nrounding to the nearest integer\nrounding down (floor)\nrounding up (ceil)\nrounding toward <pre><code>0</code></pre> thus returning the integer part of <pre><code>n</code></pre>,\n\ndepending on the rounding mode.\n",
+            "votes": "1",
+            "user": "bart1e",
+            "time": "Jul 9, 2019 at 5:20",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Fridtjof Mund",
+                    "text": "<span class=\"comment-copy\">I looked at the documentation for the <code>fist</code> instruction - and according to that, it actually rounds according to the current rounding mode. The default for that is \"Round to nearest\", so am I right to assume that if arg0's value was 1.6, var8 would contain 2, but if it was 1.4, var8 would contain 1?</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">You are right. If we assume that this is the rounding mode, fist will just round to the nearest integer value. Information about the rounding mode will be containted in RC field so you can check its value when debugging application. See <a href=\"https://xem.github.io/minix86/manual/intel-x86-and-64-manual-vol1/o_7281d5ea06a5b67a-102.html\" rel=\"nofollow noreferrer\">xem.github.io/minix86/manual/intel-x86-and-64-manual-vol1/…</a></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

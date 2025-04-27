@@ -1,0 +1,34 @@
+{
+    "title": "Trying to call a function in an unknown DLL",
+    "link": "https://reverseengineering.stackexchange.com/questions/15605/trying-to-call-a-function-in-an-unknown-dll",
+    "content": "My goal is far from nefarious. After several polite attempts to try and get Lenovo to implement a proper keyboard backlight control, I've had no response.\nThey do have a Windows Store app which adds that control, however, it's not tied to keyboard or mouse input (idle user time). I can implement that, with AutoHotKey, if I manage to call their methods.\nScreenshots for reference: https://i.sstatic.net/pGBre.jpg\nUsing JetBrains I can see a quite readable code, written in .NET (I assume), my main interest is in Keyboard_Core.dll. There I can see the methods for getting and setting the keyboard backlight, but I don't understand how they work.\n<pre><code>public unsafe uint SetKeyboardBackLightStatus(int nStatus)\n{\n  CKeyboardLight* ckeyboardLightPtr1 = (CKeyboardLight*) <Module>.@new(4U);\n  CKeyboardLight* ckeyboardLightPtr2;\n  // ISSUE: fault handler\n  try\n  {\n    ckeyboardLightPtr2 = (IntPtr) ckeyboardLightPtr1 == IntPtr.Zero ? (CKeyboardLight*) 0 : <Module>.ThinkPad.CKeyboardLight.{ctor}(ckeyboardLightPtr1);\n  }\n  __fault\n  {\n    <Module>.delete((void*) ckeyboardLightPtr1);\n  }\n  <Module>.ThinkPad.CKeyboardLight.SetStatus(ckeyboardLightPtr2, (KBDLIGHT_STATUS) nStatus);\n  if ((IntPtr) ckeyboardLightPtr2 != IntPtr.Zero)\n  {\n    CKeyboardLight* ckeyboardLightPtr3 = ckeyboardLightPtr2;\n    int num = 1;\n    // ISSUE: cast to a function pointer type\n    // ISSUE: function pointer call\n    void* voidPtr = __calli((__FnPtr<void* (IntPtr, uint)>) *(int*) *(int*) ckeyboardLightPtr2)((uint) ckeyboardLightPtr3, (IntPtr) num);\n  }\n  return 0;\n}\n</code></pre>\nI don't understand where @new(4U) points to. In the decompiled declaration it says it's <pre><code>[StructLayout(LayoutKind.Sequential, Size = 4)]</code></pre> - so I can probably work with that without any structure description. Is it later pointed to some real memory address?\nI cannot figure that out, it seems that both <pre><code>ckeyboardLightPtr1</code></pre> and <pre><code>ckeyboardLightPtr2</code></pre> are new objects until the end of the function.\nI don't know how to call a random address (function) with some prepared parameters (stack) - should I stick to AHK (then it would be a different question), try Python (another layer), PowerShell (never used it) or create a small C program?\nEither way, it looks that I have to set 4 bytes somewhere in memory. Perhaps I'm chasing the wrong end and these functions just set a temporary/proxy object that is later handled by a monitor thread.\nhttps://pastebin.com/vyfiTTcr\nOllydbg doesn't let me do anything with the DLL.\n",
+    "votes": "0",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "x86-64",
+        ".net"
+    ],
+    "user": "brainwash",
+    "time": "Jun 20, 2017 at 8:26",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<pre><code>@new(4U)</code></pre> points to an external function that this DLL uses via P/Invoke. I don't have Jetbrains dotPeek installed right now but if you do it in dnSpy - you can click on the <pre><code>@new</code></pre> and you will be taken to the method.\n\n\nIs it later pointed to some real memory address?\n\nI would assume that's it's just allocates the memory and returns the pointer that's assigned to <pre><code>ckeyboardLightPtr1</code></pre> and then later it is used in the call to <pre><code><Module>.ThinkPad.CKeyboardLight.{ctor}</code></pre>.\n\nI don't know how to call a random address (function) with some prepared parameters (stack) - should I stick to AHK (then it would be a different question), try Python (another layer), PowerShell (never used it) or create a small C program?\n\nNot sure to what random function you are referring to but I guess you can choose what's best for you. I would use .NET ;)\n\nEither way, it looks that I have to set 4 bytes somewhere in memory.\n\nyes, it does look like that.\n",
+            "votes": "1",
+            "user": "Paweł Łukasik",
+            "time": "Jun 20, 2017 at 5:12",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "It was actually pretty easy to do in Visual Studio with a bit of basic research.\nI created a console application, the main functionality is contained within these lines:\n<pre><code>            Assembly myAssembly;\n            //full path to dll\n            myAssembly = Assembly.LoadFile(args[0]);\n\n            object obj;\n            Type myType = myAssembly.GetType(\"Keyboard_Core.KeyboardControl\");\n            obj = Activator.CreateInstance(myType);\n            IEnumerable list = myType.GetMethods();\n            MethodInfo setKeyboardBackLightStatusInfo = GetRuntimeMethodsExt(myType, \"SetKeyboardBackLightStatus\");\n\n\n            object[] arguments = new object[] { Int32.Parse(args[1]) };\n            UInt32 output = (UInt32)setKeyboardBackLightStatusInfo.Invoke(obj, arguments);\n</code></pre>\nThe \"list\" parameter is useless for normal usage but useful when debugging. With that, it's easy to see what the available functions are and their signature.\nargs[0] points to the absolute path of the DLL, including its name.\nargs[1] is the int parameter to be given to the function.\nI used a modified version of the answer linked below, to avoid having to manually give Type parameters: https://stackoverflow.com/questions/21307845/runtimereflectionextensions-getruntimemethod-does-not-work-as-expected\nThe modified (unsafe) version is basically this:\n<pre><code>    static MethodInfo GetRuntimeMethodsExt(this Type type, string name)\n    {\n        var potentials = (from ele in type.GetMethods()\n                          where ele.Name.Equals(name)\n                          select ele);\n\n        // Maybe check if we have more than 1? Or not?\n        return potentials.FirstOrDefault();\n    }\n</code></pre>\n",
+            "votes": "0",
+            "user": "brainwash",
+            "time": "Jul 9, 2017 at 0:47",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

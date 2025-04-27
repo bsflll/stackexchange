@@ -1,0 +1,72 @@
+{
+    "title": "IOCTL Code for Windows driver",
+    "link": "https://reverseengineering.stackexchange.com/questions/15283/ioctl-code-for-windows-driver",
+    "content": "Recently I tried to obtain OICTL Codes from the iscflashx64.sys driver and I have found it in DispatchDeviceControl function. After driver being installed and have started with SCM it displayed in WinObj. when I invoke DeviceIOControl  function with this codes in my user-land app it returns \"1\" error code. that means my codes is invalid. \nHere is IDA view capture and userapp code\nNext:\n<pre><code>lea     rdx, cs:10000h\nmovzx   eax, ds:(byte_1C9C8 - 10000h)[rdx+rsi]\nmov     ecx, ds:(off_1C988 - 10000h)[rdx+rax*4]\nadd     rcx, rdx\njmp     rcx             ; switch jump\n</code></pre>\nAnd function call:\n<pre><code>lea     rcx, [rsp+188h+PhysicalAddress]\ncall    MSR_read1\njmp     short loc_1C2BC\n</code></pre>\nin userapp:\n<pre><code>#define IOCTL_READ_MSR\\\n CTL_CODE(FILE_DEVICE_UNKNOWN, 0x2237134, METHOD_BUFFERED, FILE_ANY_ACCESS)\n...\n\n    bool msr_get(unsigned int reg, unsigned long long *val)\n  {\n    if (hHandle == NULL)\n    {\n        printf(\"## ERROR: Not initialized\n\");\n        return false;\n    }\n\n    DWORD dwBytes = 0;\n    UCHAR Request[0x100];\n    ZeroMemory(&Request, sizeof(Request));\n\n    *(PDWORD)(Request + 0x08) = reg;\n\n    // send request to the driver\n    if (DeviceIoControl(\n        hHandle, IOCTL_READ_MSR,\n        &Request, sizeof(Request), &Request, sizeof(Request),\n        &dwBytes, NULL))\n    {\n        LARGE_INTEGER Val;\n\n        Val.HighPart = *(PDWORD)(Request + 0x0c);\n        Val.LowPart = *(PDWORD)(Request + 0x00);\n\n        *val = Val.QuadPart;\n\n        return true;\n    }\n    else\n    {\n        printf(\"## ERROR DeviceIoControl() %d\n\", GetLastError());\n    }\n\n    return false;\n }\n</code></pre>\nAfter googling I found this answer. So this step by step solution does`t work for me. May be problem in switch case tables, but IDA get comments that seems like a codes like that:\n<pre><code>loc_1C55A:\nsub     esi, 222406h\njz      loc_1C6E7\n</code></pre>\nWhat is going wrong? Will be very grateful for any suggestions or just a common techniques in using IOCTL.\nP.S. Sorry for my English.\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "windows",
+        "kernel-mode",
+        "driver"
+    ],
+    "user": "B. Bot",
+    "time": "May 4, 2017 at 18:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "IDA comments list case values in decimal, so you need to either use <pre><code>2237134</code></pre> as decimal in your code, or convert it to hex (i.e. <pre><code>0x2222CE</code></pre>) first. \nAdditional issue is that the value 0x2222CE is the full IOCTL code while the <pre><code>CTL_CODE</code></pre> macro accepts a function value (bits 2:12 of the code).\nUsing Online IOCTL decoder, we can see that the function is 0x8b3. \nSo you can use either\n<pre><code>#define IOCTL_READ_MSR\\\n CTL_CODE(FILE_DEVICE_UNKNOWN, 0x8b3, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)\n</code></pre>\nor\n<pre><code>#define IOCTL_READ_MSR 0x2222CE \n</code></pre>\n(both should result in the same value).\n",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "May 4, 2017 at 21:21",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "B. Bot",
+                    "text": "<span class=\"comment-copy\">That works for msr reading !  Now I have BSOD with 3b code(exception while executing a routine that transitions from non-privileged code to privileged code) after invoking DeviceIOControl with my MSR_WRITE code. Any ideas?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">sorry, we're not a debugging site; please try to figure it out yourself or ask for help on SO</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "you can use a python script to find all the IOCTL codes in your binary, here is a script created for the very same purpose :\n    # Find the IoControlCodes corresponding to\n    # calls to DeviceIOControl within a binary\n<pre><code>from idaapi import *\nfrom idautils import *\nfrom idc import *\n\n##########################################################\n# This class implements a fifo queue\nclass fqueue(list):\n    def __init__(self, n):\n        self.n = n\n\n    def push(self, a):\n        self.append(a)\n        if len(self) > self.n:\n            self.pop(0)\n\n##########################################################\n\ngpRegList = ['eax', 'ebx', 'ecx', 'edx']\nioccList = []\ncallerList = []\npushQueue = fqueue(2)\n\ndioc_ea = LocByName(\"DeviceIoControl\") # EA\n\nprint \"DeviceIoControl found at 0x%08x\" % dioc_ea\n\nfor caller in XrefsTo(dioc_ea, True):\n    # This is the address (within a function)\n    # where the reference was made\n    caller_ea = caller.frm\n\n    if caller_ea not in callerList:\n        # IDA Pro shifts duplicates, get rid of them\n        callerList.append(caller_ea)\n        print \"xref @ 0x%08x (%s)\" % (caller_ea, GetFunctionName(caller_ea))\n    else:\n        continue\n\n    # The dwIoControlCode must be the second \n    # PUSH xxx before the CALL instruction\n    # So we need to keep track of the PUSH instructions\n    for ins in FuncItems(caller_ea):\n        disasm = GetDisasm(ins)\n        if \"push\" in disasm:\n            # Save the PUSH instruction's operand\n            pushQueue.push(GetOpnd(ins, 0))\n        elif ins == caller_ea:\n            # At this moment we hit the corresponding CALL instruction\n            # First item in Queue is second \"oldest\" push\n            iocc = pushQueue[0]\n\n            if iocc in gpRegList:\n                print \"NOTE: IoControlCode was %s at 0x%08x. Check manually\" % (iocc, caller_ea)\n            else:\n                if pushQueue[0] not in ioccList:\n                    ioccList.append(pushQueue[0])\n        else:\n            pass\n\n# Print all the gathered IoControlCodes\n\nprint \"%d IoControlCodes found!\" % len(ioccList)\n\nfor io in ioccList:\n    print \"[*]\", io\n</code></pre>\nrun the script using IDA when disassembling the binary and it will do the magic for you, \nhope this helps!\n",
+            "votes": "2",
+            "user": "Mohammed Janati Idrissi",
+            "time": "Feb 18, 2019 at 9:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Does not work in IDA 7.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mohammed Janati Idrissi",
+                    "text": "<span class=\"comment-copy\">@Biswapriyo Just tested the script on IDA 7 and it works fine, make sure your python version is 2.7.  a stack trace of the given error would be more helpfull</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">Thanks for the reply. Yes I've py 2.7. Other py scripts work fine (e.g. diaphora). Though I'm not deeply familiar with python I shall find why it doesn't work.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mohammed Janati Idrissi",
+                    "text": "<span class=\"comment-copy\">good luck with that, I'm here to help if you need any :D</span>",
+                    "time": null
+                },
+                {
+                    "user": "MrSynAckSter",
+                    "text": "<span class=\"comment-copy\">I'm on IDA 7.4 and the script doesn't work for me either. It doesn't throw any errors either....</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,36 @@
+{
+    "title": "Windbg: \"gu\" command inside of a breakpoint causes warning",
+    "link": "https://reverseengineering.stackexchange.com/questions/24696/windbg-gu-command-inside-of-a-breakpoint-causes-warning",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to leverage \"gu\" command in a conditional breakpoint or as a <a href=\"https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/bp--bu--bm--set-breakpoint-\" rel=\"nofollow noreferrer\">\"CommandString\"</a> in a regular breakpoint. For example let's consider break on a malloc() function when we want to see in logs what pointer was allocated and what was the size of an allocation:</p>\n<pre><code>bp msvcrt!malloc \"r $t1=@rcx; gu; .printf \\\"malloc: %p %08x\\\\n\\\",@rax,@$t1; gc\"\n</code></pre>\n<blockquote>\n<p>tldr: So, we've created a temporary register $t1, assigned it to the\n  size of allocation (the arch is x64,  thus @rcx = \"size\"), steeped out\n  of the function using \"gu\" command, and finally printed pointer at\n  @rax plus our temp register value. You can try it yourself with a \"notepad.exe\" ;)</p>\n</blockquote>\n<p>It's kind of working, we can see the data:</p>\n<pre><code>Some commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d42c0 00000100\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d4700 00000088\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d47c0 00000088\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d4880 00000038\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d4f10 000000f0\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d5030 00001124\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d6190 00002430\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d85f0 00000200\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d8820 00000080\nSome commands were skipped because previous commands caused target execution inside an event handler.malloc: 000001d2e78d88d0 00000080\n\n</code></pre>\n<p>With the only small exception which is noisy string\n\"Some commands were skipped because previous commands caused target execution inside an event handler.\". It seems it's always in a logs when we're using \"gu\" as a \"CommandString\". </p>\n<p>Any ideas how to get rid of it or what is the intended way of solving such a problem?</p>\n<p>Regards!</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "666",
+    "tags": [
+        "windbg",
+        "breakpoint"
+    ],
+    "user": "eXp",
+    "time": "Apr 13, 2020 at 10:45",
+    "comments": [
+        {
+            "user": "eXp",
+            "text": "<span class=\"comment-copy\">UPD: Aforementioned example is working in windbg but not in windbg preview. It may be that \"gu\" is not intended to be used in this case :(</span>",
+            "time": null
+        },
+        {
+            "user": "eXp",
+            "text": "<span class=\"comment-copy\">One way of solving this is to put two breakpoints: one at the start and second in the end of the function.  ``` bp msvcrt!malloc \"r $t1=@rcx; gc;\" r $t0=msvcrt!malloc+cc bp @$t0 \".printf \\\"malloc: %p %08x\\\\n\\\",@rax,@$t1; gc\" ```  This works but it certainly looses it's elegance</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>take a look at <a href=\"https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/debugging-session-and-execution-model\" rel=\"nofollow noreferrer\">this</a> </p>\n<p>so you cannot use a command that alters the execution status inside a wait</p>\n<p>I am not sure what your intent is </p>\n<p>but windbg provides several PseudoRegisters to access state and act upon</p>\n<p>one is <strong>@$ra</strong>  which is the Return Address on the stack this is wher your gu will actually endup</p>\n<p>others are <strong>@$retreg and @$retreg64</strong><br/>\nthese are actually the returns from a function (or in layman's term <strong>eax and rax</strong> after a call is executed</p>\n<p>so basically some xyz is calling  malloc like malloc(size) \nyou have set up a break on msvcrt!malloc \n@ra will contain the xyz + (size of call) that is the address of Return from the call \nand if you had issued gu \nyou will land here and when you have landed here rax/eax as well as @$retreg/@$retreg64 will contain the Address of Allocated memory from the malloc call </p>\n<p>you can also set a one shot breakpoint </p>\n<p>you can combine all this to make a concise breakpoint  that will print both the size as well as returned pointer </p>\n<pre><code>0:002&gt; bl\n     1 e Disable Clear  00007ff8`c8199d30     0001 (0001)  0:**** msvcrt!malloc \"bp /1 @$ra \\\"? @$t1;?@$retreg64;gc\\\";r $t1=@rcx;gc\"\nwindbg&gt; .hh\n0:002&gt; g\nEvaluate expression: 40 = 00000000`00000028\nEvaluate expression: 2051178946016 = 000001dd`93cadde0\nEvaluate expression: 256 = 00000000`00000100\nEvaluate expression: 2051178943712 = 000001dd`93cad4e0\nEvaluate expression: 40 = 00000000`00000028\nEvaluate expression: 2051178944016 = 000001dd`93cad610\nEvaluate expression: 24 = 00000000`00000018\nEvaluate expression: 2051178947056 = 000001dd`93cae1f0\nEvaluate expression: 32 = 00000000`00000020\nEvaluate expression: 2051178947328 = 000001dd`93cae300\nEvaluate expression: 32 = 00000000`00000020\nEvaluate expression: 2051178949536 = 000001dd`93caeba0\nEvaluate expression: 72 = 00000000`00000048\nEvaluate expression: 2051178946272 = 000001dd`93cadee0\nEvaluate expression: 32 = 00000000`00000020\nEvaluate expression: 2051178947056 = 000001dd`93cae1f0\nEvaluate expression: 32 = 00000000`00000020\nEvaluate expression: 2051178944016 = 000001dd`93cad610\nEvaluate expression: 672 = 00000000`000002a0\nEvaluate expression: 2051178949824 = 000001dd`93caecc0\nEvaluate expression: 104 = 00000000`00000068\nEvaluate expression: 2051178946272 = 000001dd`93cadee0\nEvaluate expression: 32 = 00000000`00000020\nEvaluate expression: 2051178946432 = 000001dd`93cadf80 \n</code></pre>\n<p>notice the escaped command string in the bp   </p>\n<p><strong>bp msvcrt!malloc \"bp /1 @$ra \\\"? @$t1;?@$retreg64;gc\\\";r $t1=@rcx;gc\"</strong></p>\n<p>if you need to use .printf you may need another level of quote escaping </p>\n</div>",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Apr 13, 2020 at 14:36",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

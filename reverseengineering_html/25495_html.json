@@ -1,0 +1,52 @@
+{
+    "title": "best approach to hook function",
+    "link": "https://reverseengineering.stackexchange.com/questions/25495/best-approach-to-hook-function",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have found 2 source code example to hook a function.\n </p>\n <p>\n  Example1:\n </p>\n <pre><code>#include \"detours.h\"\n#include \"sigscan.h\"\n\n// this is the function that the program\n// will jump to when sum() is called in the original program (testprogram.exe)\n\nDWORD AddressOfSum = 0;\n// template for the original function\ntypedef int(*sum)(int x, int y); \n\nint HookSum(int x, int y)\n{\n    // manipulate the arguments\n    x += 500;\n    y += 500;\n\n    // we manipulate the arguments here and then\n    // redirect the program to the original function\n\n    std::cout << \"your program has been hacked! \" << std::endl;\n    sum originalSum = (sum)AddressOfSum;\n    return originalSum(x, y);\n}\n\nBOOL WINAPI DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved)\n{\n    // store the address of sum() in testprogram.exe here.\n\n    if (dwReason == DLL_PROCESS_ATTACH)\n    {\n        // We will use signature scanning to find the function that we want to hook\n        // we will find the function in IDA pro and create a signature from it:\n\n        SigScan Scanner;\n\n        // testprogram.exe is the name of the main module in our target process\n        AddressOfSum = Scanner.FindPattern(\"testprogram.exe\", \"\\x55\\x8B\\xEC\\x8B\\x45\\x08\\x03\\x45\\x0C\", \"xxxxxxxxx\");\n\n        DetourTransactionBegin();\n        DetourUpdateThread(GetCurrentThread());\n\n        // this will hook the function\n        DetourAttach(&(LPVOID&)AddressOfSum, &HookSum);\n\n        DetourTransactionCommit();\n    }\n    else if (dwReason == DLL_PROCESS_DETACH)\n    {\n        // unhook\n        DetourTransactionBegin();\n        DetourUpdateThread(GetCurrentThread());\n\n        // this will hook the function\n        DetourDetach(&(LPVOID&)AddressOfSum, &HookSum);\n\n        DetourTransactionCommit();\n    }\n    return TRUE;\n}\n</code></pre>\n <p>\n  Example2:\n </p>\n <pre><code>#include <windows.h>\n#include <detours.h>\n#include <iostream>\n \n#define ADDRESS 0x40133C    //This is the address where our targeted function begins\ndouble (__cdecl* originalFunction)(double); //Pointer to the function we are going to hook, must be declared same as original(returns double and takes double as argument)\n \n \n \n/*Our modified function code that is going to be executed\nbefore continuing to the code of original function*/\ndouble hookedFunction(double a)  \n{                                 \nstd::cout << \"original function: argument = \"<< a << std::endl; //we can access arguments passed to original function\na=50.1337;                                                        //Modify arguments\nreturn originalFunction(a);                                        //before returning to normal execution of function\n}\n \nBOOL APIENTRY DllMain(HANDLE hModule, DWORD dwReason, LPVOID lpReserved)\n{\nswitch (dwReason)\n{\ncase DLL_PROCESS_ATTACH:\noriginalFunction = (double(__cdecl*)(double))DetourFunction((PBYTE)ADDRESS, (PBYTE)hookedFunction); //Magic\nbreak;\n}\nreturn TRUE;\n}\n</code></pre>\n <p>\n  And I ask what is best easy and flexible approach to hook functions.\n </p>\n <p>\n  My consideration:\n </p>\n <ol>\n  <li>\n   Example 1: is tested and worked.\n  </li>\n  <li>\n   Example 1: is a filename dependent \"testprogram.exe\". So if I change the exe file name I need to change the source code.\n  </li>\n  <li>\n   Example 1: \"\\x55\\x8B\\xEC\\x8B\\x45\\x08\\x03\\x45\\x0C\" this is the address point format and it is not easy to decode like example 2: \"0x40133C\" (more easy)\n  </li>\n  <li>\n   Example 2: don't work because \"detourFunction\" is deprecated. Now there is \"detourAttach\" but I don't known how migrate to it in this case.\n  </li>\n  <li>\n   Example 2: is more easy but old. I don't known if will work in the future (32 or 64 bit)...\n  </li>\n </ol>\n <p>\n  Can you help me please to take a decision or suggest me a better/easier solution ?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "816",
+    "tags": [
+        "c++",
+        "function-hooking",
+        "dll-injection"
+    ],
+    "user": "user3449922",
+    "time": "Jul 17, 2020 at 7:10",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The first one is much better in my opinion:\n </p>\n <ul>\n  <li>\n   <p>\n    It doesn't use deprecated function, that is probably kept only in the\n    <code>\n     Detours\n    </code>\n    library for backward compatibility\n   </p>\n  </li>\n  <li>\n   <p>\n    It uses pattern scanning, this is much better then embedding raw address, because lets say you are going to inject the .dll to a game, even if it's old singleplayer game it may have a lot of revisions, so the raw address may point to another function, while the pattern will mostly likely find a match anyway (providing the revisions don't differ too much)\n   </p>\n  </li>\n </ul>\n <p>\n  The argument with hardcoded \"testprogram.exe\" doesn't really matter, beacuse there are a lot of ways to get name of the executable, for example you may use the winapi function\n  <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulefilenamea\" rel=\"nofollow noreferrer\">\n   GetModuleFileName\n  </a>\n </p>\n <p>\n  Not sure if I understand correctly the question about migration, however if you wan't to use DetourAttach in the second example there is no problem with that, just call the\n  <code>\n   DetourAttach\n  </code>\n  like in first example, but with\n  <code>\n   ADDRESS\n  </code>\n  instead of\n  <code>\n   AddressOfSum\n  </code>\n  as parameter.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "morsisko",
+            "time": "Jul 14, 2020 at 14:55",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user3449922",
+                    "text": "<span class=\"comment-copy\">Thank you, The address that the function to hook start is: \".text:00401670\"  I have not undestand how is converted it this to \"\\x55\\x8B\\xEC\\x8B\\x45\\x08\\x03\\x45\\x0C\". I ask if exist a conversion tool.</span>",
+                    "time": null
+                },
+                {
+                    "user": "morsisko",
+                    "text": "<span class=\"comment-copy\">This is pattern. Look at the bytes at 401670 in your executable, the opcodes are translated into assembler instructions by your disassembler, eg /x55/x8B/xEC is translated to \"push ebp, mov ebp, esp\", so this is standard function prolog.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user3449922",
+                    "text": "<span class=\"comment-copy\">you have right, probably it is my fault but the numbers are not exact the some:   file code: 55 8B EC 6A 0A 8B 45 08 8B 55 08 03 51 04 address: 55 8B EC 8B 45 08 03 45  it is normal ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "morsisko",
+                    "text": "<span class=\"comment-copy\">Are you sure this is correct address? In the question you have posted <code>0x40133C</code>, not <code>0x401670</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "user3449922",
+                    "text": "<span class=\"comment-copy\">0x40133C is the old project. 0x401670 is the address that IDA show me at the start of the function hook. In this case is \"main\". Now I update my question with other screenshots.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

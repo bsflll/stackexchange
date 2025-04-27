@@ -1,0 +1,40 @@
+{
+    "title": "gdb don't break when I use exec-wrapper script to exec my target binary",
+    "link": "https://reverseengineering.stackexchange.com/questions/19497/gdb-dont-break-when-i-use-exec-wrapper-script-to-exec-my-target-binary",
+    "content": "Why gdb doesn't break when I use exec-wrapper script to exec my target binary.\nHere my little test.\nI use a binary with no pie option to use predictable address.\n<pre><code>$ gcc -no-pie main.c\n</code></pre>\nI have this litle gdb exec wrapper script.\n<pre><code>$ cat wrapper.sh \n#!/bin/bash\n\nenv -i ./a.out\n</code></pre>\nThen I debug my program like this, by setting the exec-wrapper variable and a debug breakpoint at *main, the breakpoint doesn't work:\n<pre><code>$ gdb -q ./a.out \nReading symbols from ./a.out...(no debugging symbols found)...done.\n(gdb) b *main\nBreakpoint 1 at 0x401126\n(gdb) set exec-wrapper ./wrapper.sh\n(gdb) r\nStarting program: /home/snake/gdb-test/a.out \nboum !\nDuring startup program exited normally.\n(gdb)\n</code></pre>\nHere the same example without exec-wrapper variable set and a debug breakpoint at *main, the breakpoint works:\n<pre><code>$ gdb -q ./a.out \nReading symbols from ./a.out...(no debugging symbols found)...done.\n(gdb) b *main\nBreakpoint 1 at 0x401126\n(gdb) r\nStarting program: /home/snake/gdb-test/a.out \n\nBreakpoint 1, 0x0000000000401126 in main ()\n(gdb) \n</code></pre>\nWhy in the first case the breakpoint not work?\nMaybe gdb is not attached to the process run by my exec wrapper script.\nThank's for your help.\nUPDATE:\nThank's @ws, your reminder and point of view is interesting.\nI use <pre><code>env -i</code></pre> in order to start the program in an empty environment in order to have a predictable stack in a non randomized address space, in/out of gdb and in any path. But GDB lack of options to configure the binary name with a relative path to pass to argv[0] and other variables pushed on the stack will cause a stack offset according the directory location the execution context.\nSo I have build this little wrapper to overcome the problem. Maybe dirty, but work well.\n<pre><code>#include <unistd.h>\n\nint main()\n{\n  int e;\n  char *envp[] = { NULL };\n  char *argv[] = { \"./a.out\", NULL };\n\n  e = execve(\"./a.out\", argv, envp);\n}\n</code></pre>\nthen \n<pre><code>$ gcc exec_wrapper.c -o exec_wrapper\n</code></pre>\nand finaly\n<pre><code>$ gdb -q ./a.out \nReading symbols from ./a.out...(no debugging symbols found)...done.\n(gdb) set exec-wrapper ./exec_wrapper\n(gdb) b *main\nBreakpoint 1 at 0x1149\n(gdb) r\nStarting program: /home/snake/gdb-test/a.out \n\nBreakpoint 1, 0x0000555555555149 in main ()\n(gdb)\n</code></pre>\nSo I don't understand your answer very well @ws, my executable name is directly encoded in the binary, and it works well. If I understand the behavior of gdb, normally GDB monitors for the first process trap execve() start by the shell to follow it. In the case of exec-wrapper is configure, it follow the second execve(). (thank's to a friend for show me this behavior).\ngdb/nat/fork-inferior.h\n<pre><code>/* Number of traps that happen between exec'ing the shell to run an\n   inferior and when we finally get to the inferior code, not counting\n   the exec for the shell.  This is 1 on all supported\n   implementations.  */\n#define START_INFERIOR_TRAPS_EXPECTED 1\n</code></pre>\ngdb/nat/fork-inferior.c\n<pre><code>  /* The process was started by the fork that created it, but it will\n     have stopped one instruction after execing the shell.  Here we\n     must get it up to actual execution of the real program.  */\n  if (get_exec_wrapper () != NULL)\n       pending_execs++;\n</code></pre>\nMaybe I doesn't understand your answer @ws. sorry. you meant to say that gdb performs string comparison of the binary name with full path with the argv[0] of the execve() call?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "gdb"
+    ],
+    "user": null,
+    "time": "Oct 3, 2018 at 9:41",
+    "comments": [
+        {
+            "user": "w s",
+            "text": "Why not \"set exec-wrapper env -i \" ? It looks like that with a wrapper bash script your wrapper appears to be bash (because of shebang) - and it doesn't load the executable directly, which doesn't fit to the definition of gdb execution wrapper and may lead to the specified behavior.\n",
+            "time": null
+        },
+        {
+            "user": "user23611",
+            "text": "Yes, with \"set exec-wrapper env -i \" it works well, nice. Maybe my use of exec-wrapper is not good. thank's. This  behaviour is fixed for me. But I realize, is not the good answer for what I search. I will close this thread and open an other. by\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "@ws it might still be interesting to explain the difference in the behavior here. Can you add an answer with the explanation? (maybe also mention what ‘env -i’ does)\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "In short, it is bad exec-wrapper.\nExec-wrapper is defined (for example, here) as \n\nWhen ‘exec-wrapper’ is set, the specified wrapper is used to launch\n  programs for debugging. GDB starts your program with a shell command\n  of the form exec wrapper program. Quoting is added to program and its\n  arguments, but not to wrapper, so you should add quotes if appropriate\n  for your shell. The wrapper runs until it executes your program, and\n  then GDB takes control.\nYou can use any program that eventually calls execve with its\n  arguments as a wrapper. Several standard Unix utilities do this, e.g.\n  env and nohup. Any Unix shell script ending with exec \"$@\" will also\n  work.\nFor example, you can use env to pass an environment variable to the\n  debugged program, without setting the variable in your shell’s\n  environment:\n(gdb) set exec-wrapper env 'LD_PRELOAD=libtest.so' (gdb) run This\n  command is available when debugging locally on most targets, excluding\n  DJGPP, Cygwin, MS Windows, and QNX Neutrino.\n\nAs far as I can tell, your shell script doesn't fit \n\nAny Unix shell script ending with exec \"$@\" will also\n  work.\n\nand therefore will not work.\nSome explanations:\nFor the start, some definitions.\n\ngdb is a debugger, we all know what it does mean. It is written on a base of  ptrace system call, which allows (among other functionality) to debug \nand intercept system calls of the \"child process\"\nchild process is a process created by the parent process by usage of fork or clone and execve system call, which can be intercepted by ptrace.\nexec-wrapper is an execution wrapper in gdb (see the quote before). It is needed for customizing environment of the execution, see the documentation for it here.    \nenv - is a program for modifying the execution environment, for example from environment variables point of view (by the way, env -i means no environment variables at all)\n\nIf gdb intercepts the execve system call of the debugged process with ptrace (as far as I understand it should do it this way), it can not find your executable name in the system call parameters (because it is directly encoded into your script) and therefore not performs setting the breakpoint.\n",
+            "votes": "4",
+            "user": "w s",
+            "time": "Oct 3, 2018 at 6:36",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

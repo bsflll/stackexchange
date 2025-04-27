@@ -1,0 +1,53 @@
+{
+  "title": "Reverse Engineering a Firmware. Someone can help me?",
+  "link": "https://reverseengineering.stackexchange.com/questions/14539/reverse-engineering-a-firmware-someone-can-help-me",
+  "content": "I am currently trying to reverse-engineer a firmware file to learn the topic but I am a little bit stuck.\n\nI tried to use binwalk to get more information about the file but this did not produce anything useful. Below is the output of running binwalk with the -I argument which shows results marked as invalid:\n\n\nAlmost no useful information was discovered by using strings and hexdump to analyze the file. It seems that the file is encrypted or packed. Does anyone have any ideas that will help me continue investigating this? Maybe recommendations for some good tools to use?\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "10k",
+  "tags": [
+    "binary-analysis",
+    "firmware",
+    "decryption",
+    "decompress"
+  ],
+  "user": "wawouille",
+  "time": "Mar 5, 2017 at 10:25",
+  "comments": [
+    {
+      "user": "tmp",
+      "text": "I would start by using bffxtractor.py on those BFF volume entries.",
+      "time": null
+    },
+    {
+      "user": "julian",
+      "text": "Can you provide the file you are attempting to investigate and more details regarding the steps you have taken so far?",
+      "time": null
+    },
+    {
+      "user": "wawouille",
+      "text": "Hi :) thanks for your answers :) I tested with bffxtractor.py and nothing. I have this \"Unrecognized magic bytes! Quitting.\" I am checking with radare2 maybe I will find something interesting :) the file link",
+      "time": null
+    },
+    {
+      "user": "julian",
+      "text": "@wawouille Help us help you by providing as much information about the file as you can. How do you know that this file is indeed a firmware image? Where did you get it from? What was the original file name? Can you explain why it is so small ( 61K )? Do you know what device this is for? The more information you provide, the more likely it is someone will be able to provide meaningful assistance.",
+      "time": null
+    },
+    {
+      "user": "wawouille",
+      "text": "@SYS_V Yes, indeed. I found the \"firmware\" on this Web Site \"70.60.240.178:8443/CyberAuditWeb/download\" > inside the \"NGA software\" file. I do not know if it is really a firmware but they call it like that inside the file... I made researches and I found that it is maybe for a Cyberlock hub (embedded ARM device) but I am not really sure... I wanted to learn how to reverse engineer this :) I will buy the Cyberlock solution to play with.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Finding: NGA_FW_CURRENT.BIN is a compressed Videx microchip firmware image file.\n\nPreliminary Remarks\n\nThere is conflicting background information given in the comments about the file alleged to be firmware in the question.\n\nA gzip compressed data file called authorizer.tar.gz located at https://70.60.240.178:8443/CyberAuditWeb/services/nga/download/ under the header \"Web Authorizer\" from a link called \"NGA software\" contains a file called NGA_FW_CURRENT.BIN. This file is different from the file called firmware.BIN  found at http://s000.tinyupload.com/?file_id=33872947945158763451. \n\nIt is this second file, firmware.BIN, that binwalk is run against in the image in the question. The source of firmware.BIN is unknown, since information about a different file, NGA_FW_CURRENT.BIN was given instead. \n\nDiffing these two files shows that they may be related, as they are the same size of 61445 bytes and have similar structure:\n\n\n\n\n\n\n\n\n\n\nSome of this information may prove useful in subsequent analysis. Since NGA_FW_CURRENT.BIN is the file at the location stated to be the source, it is this file that will be analyzed further and not firmware.BIN.\n\nbinwalk does not detect any compression signatures in NGA_FW_CURRENT.BIN:\n\n```\n$ binwalk NGA_FW_CURRENT.BIN\n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n\n```\nEntropy analysis, based on the work done by devttys0 in his article Differentiate Encryption From Compression Using Math, suggests that the file is compressed rather than encrypted.\n\nEntropy analysis using ent:\n\n```\n$ ent NGA_FW_CURRENT.BIN\nEntropy = 7.997014 bits per byte.\n\nOptimum compression would reduce the size\nof this 61445 byte file by 0 percent.\n\nChi square distribution for 61445 samples is 253.82, and randomly\nwould exceed this value 50.92 percent of the times.\n\nArithmetic mean value of data bytes is 127.6737 (127.5 = random).\nMonte Carlo value for Pi is 3.126171875 (error 0.49 percent).\nSerial correlation coefficient is 0.028565 (totally uncorrelated = 0.0).\n\n```\nA chi square distribution of 253.82 and a pi error value of 0.49 percent is within the range expected for compressed data.\n\nHere is the entropy plot generated by binwalk:\n \n\nThis plot above suggests the following:\n\nJuxtaposition of visualizations of NGA_FW_CURRENT.BIN with the Linux utility ls using binvis.io supports the above suggestions.\n\n```\n ________ NGA_FW_CURRENT.BIN _______   ________________ ls _______________ \n|                                   | |                                   |\nv                                   v v                                   v\n\n```\n\n\n\n\n\n```\n        ^         ^          ^                ^                  ^\n        |         |          |                |                  |\n        |     small area     |             obvious          low  entropy\n        |      of low        |            structures         throughout  \n        |      entropy       |                                  file\n        |               high entropy\n   No structure        throughout file\n\n```\nAs we can see, the visualization of the structure of NGA_FW_CURRENT.BIN looks like white noise and has high entropy throughout, whereas ls has clear structures (ELF header, sections) and comparatively low entropy throughout. \n\nAdditional evidence indicating compression rather than encryption is the absence of encryption/decryption libraries and routines from the ARM ELF32 binary FWLoader, whose purpose is to load the device firmware during boot (see below).\n\nThe short answer is yes (probably). \n\nThe most direct evidence of this is found in the POSIX shell script S85_check_firmware in the system/rc3.d/ directory. \n\nHere is the source code of S85_check_firmware:\n\n```\n#!/bin/sh\n\ncd /firmware\n\n#Since this script happens very early in the boot process we the opportunity to\n#  tell the user we are actually still booting as opposed to the keypad showing it's default\n# \"READY\" message.\nngautil -p \"CHECKINGFIRMWARE\"\n\n#This script checks the videx microchip firmware and reflashes it if necessary\n\n#the FWLoader program must be executable\n#and the LBServer.ini file must exist\nif [ -x ./FWLoader -a -e ./NGA_FW_CURRENT.BIN ]\nthen\n\n        #increment the number of checks\n        echo checking >> checks.log\n        NUM_CHECKS=`grep -c checking checks.log`\n\n        #don't do the FW check if we've already checked many times with this FW version.  This prevents\n        #endless an endless cycle of firmware loading and rebooting in case the firmware file is corrupt\n        if [ $NUM_CHECKS -lt 16 ]\n        then\n                echo \"Executing firmware check #$NUM_CHECKS\"\n\n                ./FWLoader NGA_FW_CURRENT.BIN\n                #The above call to FWLoader will only attempt to load the firmware if the version in the chip\n                #is lesser than in the file.  If the chip is already in boot-load mode (because fw loading was interrupted\n                # previously) it will force loading of the firmware.\n                #If fw is reloaded succesfully the device will be rebooted\n                echo \"Firmware check complete\"\n        else\n                echo \"Firmware checking skipped (has already been checked $NUM_CHECKS times)\"\n        fi\nelse\n        echo \"Firmware check skipped (missing FWLoader or NGA_FW_CURRENT.BIN)\"\nfi \n\n```\nSince FWLoader generally \"will only attempt to load the firmware if the version in the chip is lesser than in the file\", the file in this case being NGA_FW_CURRENT.BIN, the key to decompressing NGA_FW_CURRENT.BIN must lie somewhere in FWLoader.\n\nWhen the .rodata section of FWLoader is analyzed, a clue is discovered almost immediately:\n\n```\nHex dump of section '.rodata':\n  0x000123cc 01000200 4e474120 4669726d 77617265 ....NGA Firmware\n  0x000123dc 204c6f61 64657220 7625730a 00000000  Loader v%s.....\n  0x000123ec 322e3000 55736167 653a205b 2d2d666f 2.0.Usage: [--fo\n  0x000123fc 7263655d 203c7061 74682074 6f206669 rce] <path to fi\n  0x0001240c 726d7761 72652066 696c653e 0a000000 rmware file>....\n  0x0001241c 4e6f7465 3a206669 726d7277 61726520 Note: firmrware \n  0x0001242c 66696c65 206d7573 74206265 20707265 file must be pre\n  0x0001243c 70656e64 65642077 69746820 76657273 pended with vers\n  0x0001244c 696f6e20 62797465 20616e64 20342062 ion byte and 4 b\n  0x0001245c 79746520 43524320 61732069 74206170 yte CRC as it ap\n  0x0001246c 70656172 7320696e 204c4254 6573742e pears in LBTest.\n  0x0001247c 696e690a 00000000 4661696c 65642074 ini.....Failed t\n  0x0001248c 6f207265 61642063 68697020 6669726d o read chip firm\n  0x0001249c 77617265 20766572 73696f6e 2e202853 ware version. (S\n  0x000124ac 7475636b 20696e20 626f6f74 6c6f6164 tuck in bootload\n  0x000124bc 206d6f64 653f290a 00000000 63526561  mode?).....cRea\n                     < output snipped >\n\n```\n\"Note: firmrware[sic] file must be prepended with version byte and 4 byte CRC as it appears in LBTest.\" (side note: on the download website for the authorizer.tar.gz that all of these files were extracted from, the version number was given as 37.3.3).\n\nThat basically gives it away. I'll post an update if/when I isolate the actual decompression code.\n\n",
+      "votes": "8",
+      "user": "julian",
+      "time": "Mar 5, 2017 at 9:37",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

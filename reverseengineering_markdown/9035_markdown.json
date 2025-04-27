@@ -1,0 +1,30 @@
+{
+  "title": "I cannot find a text string referened in the the .rdata",
+  "link": "https://reverseengineering.stackexchange.com/questions/9035/i-cannot-find-a-text-string-referened-in-the-the-rdata",
+  "content": "I'm trying to disassemble an application (built from a Chinese company in English).\n\nI find the text string I want:\n\n```\n.data:0041048C aEraseError     db 'Erase error !',0Ah,0 ; DATA XREF:\n.rdata:0040C624o\n.data:0041048C                                         ; .rdata:0040CF28o ...\n\n```\nBut, I cannot locate it in the code anywhere. It's strange some text strings are found but others are not. \n\nFYI: The application also loads a custom .dll file. The text is located in the main exe file's .rdata segment, but I just cannot see it in the code. I've tried with other disassemblers but I am using IDA.\n\n",
+  "votes": "3",
+  "answers": 1,
+  "views": "5k",
+  "tags": [
+    "ida"
+  ],
+  "user": "user222811",
+  "time": "May 31, 2015 at 13:54",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Your string seems to have an xref (cross reference, see below) from 0040C624. This string might just be an entry in an array of error strings, with the array itself beginning just a little before 0040C624. Your original source code may have looked like this:\n\n```\nchar *unused=\"unused string\";\nchar *errors[] = {\n    \"error 0\",\n    \"some other error\",\n    \"yet another error\",\n    \"Erase error!\",\n    \"....\",\n};\n\nvoid print_error_message(int index) {\n    puts(errors[index]);\n}\n\nint handle_erase_error() {\n    print_error_message(3);\n}\n\n```\nIf you compile this (i used gnu C on linux, gcc -m32 xref.c) and load the object code into IDA, it becomes (irrelevant parts omitted):\n\n```\n.text:08000000 print_error_message proc near           ; CODE XREF: handle_erase_error+Dp\n.text:08000000                 push    ebp\n.text:08000001                 mov     ebp, esp\n.text:08000003                 sub     esp, 18h\n.text:08000006                 mov     eax, [ebp+8]\n.text:08000009                 mov     eax, errors[eax*4]\n.text:08000010                 mov     [esp], eax      ; s\n.text:08000013                 call    puts\n.text:08000018                 leave\n.text:08000019                 retn\n.text:08000019 print_error_message endp\n\n\n.data:08000030 unused          dd offset aUnusedString ; \"unused string\"\n.data:08000034 errors          dd offset aError0       ; DATA XREF: print_error_message+9r\n.data:08000034                                         ; \"error 0\"\n.data:08000038                 dd offset aSomeOtherError ; \"some other error\"\n.data:0800003C                 dd offset aYetAnotherErro ; \"yet another error\"\n.data:08000040                 dd offset aEraseError   ; \"Erase error!\"\n.data:08000044                 dd offset a____         ; \"....\"\n\n.rodata:08000049 aUnusedString   db 'unused string',0    ; DATA XREF: .data:unusedo\n.rodata:08000057 aError0         db 'error 0',0          ; DATA XREF: .data:errorso\n.rodata:0800005F aSomeOtherError db 'some other error',0 ; DATA XREF: .data:08000038o\n.rodata:08000070 aYetAnotherErro db 'yet another error',0 ; DATA XREF: .data:0800003Co\n.rodata:08000082 aEraseError     db 'Erase error!',0     ; DATA XREF: .data:08000040o\n.rodata:0800008F a____           db '....',0             ; DATA XREF: .data:08000044o\n\n```\nYou see that each string has a pointer entry in the data section, and the ascii data in the rodata (read only data) section. And each of the ascii strings has an xref (cross reference) to the pointer that points to it - this is not a part of the binary; ida detects where each string is referenced, and generates the \"backreferences\", or xrefs.\n\nThe important thing is: you can use this to find the string table (errors, at 0x08000034) if you have only the ascii bytes. And you can find where the string table itself is used by looking at its xref - from the print_error_message function. In contrast, the unused string does not have an xref, because it isn't used anywhere.\n\nIda will allow you to double-click on the xref to move to where it 'comes from' to navigate easily.\n\nI'd check if you have an array of strings that starts a bit before the xref to your string, where it gets used, and possibly where the using function gets called.\n\nAnother possibility is something that i saw a few days ago in an ARM android shared library. The library had some strings holding function names, directly after each other, like this (translated to x86 syntax)\n\n```\nerrmsg    db 'Error in %s, file %s, line %d  \n', 0\nstrtab    db 'opencachefile', 0\n          db 'closecachefile', 0\n          db 'getcacheentry', 0\n          db 'putcacheentry', 0\n          db 'delcacheentry', 0\n\n```\nThe function that got something from cache used the third of these strings to log a possible error. The code looked like this (again, translated from arm to x86):\n\n```\n...\nmov    eax, offset strtab\nadd    eax, 29           ;<-- difference in bytes between 'open' and 'get'\npush   eax\nmov    eax, offset errmsg\npush   eax\ncall   android_log_print\n\n```\nThe other functions had similar constructs, so strtab was referenced 5 times (one in each function), and the byte difference adjusted in each of them. I sincerely don't know why a compiler would do this, but just maybe something similar is going on in your code.\n\n",
+      "votes": "7",
+      "user": "Guntram Blohm",
+      "time": "May 31, 2015 at 21:31",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user222811",
+          "text": "Thank you! This is a very good answer. Please could you show me what maybe an array of strings might look like in Assembly. Also, could you go into more details when you state: Your string seems to have an xref from 0040C624. what is an xref  0040C624",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

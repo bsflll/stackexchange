@@ -1,0 +1,35 @@
+{
+    "title": "Trying to figure out the CRC or checksum for a Fluke 233 wireless display multimeter",
+    "link": "https://reverseengineering.stackexchange.com/questions/11504/trying-to-figure-out-the-crc-or-checksum-for-a-fluke-233-wireless-display-multim",
+    "content": "Downloaded and compiled CRC_reveng, but it's not finding any solutions. Maybe I'm over-thinking this? Not knowing too many other tricks that might be performed on the data or CRC before or after it's computed, I'm looking for guidance. I tried leaving out the start byte, and tried both 8-bit and 16-bit widths. No luck. Here's some sample data packets:\n<pre><code>10020200C6FE2D00C5FE2D00047C000010038CEC \n10020200C5FE2D00C6FE2D00046D00001003DFA4 \n10020200C6FE2D00C5FE2D00015B00531003C1C4 \n10020200C5FE2D00C6FE2D0001A405534B000D004B1003F50D \n10020200C6FE2D00C5FE2D00047D00001003C7E7 \n10020200C5FE2D00C6FE2D00046E0000100313B9\n10020200C6FE2D00C5FE2D00015C155344000000000000000000008C4C08080000040D00201003BC41\n10020200C5FE2D00C6FE2D0001A505534B000D004B1003D221\n</code></pre>\nThe data shown is both directions of the Fluke 233 IR port (every other line originates from either the display or the multimeter itself). Seems like \"C6FE2D00\" and \"C5FE2D00\" might be identifiers for the display and multimeter itself, since you see the same patterns on every other line. The data was collected with a DSLogic logic analyzer, and it looks like the data is simply 19200 baud, 8 bits, no parity. Most commonly, the data packets are 20 bytes long, but as you can see, that's not always the case.\nAny ideas how I might proceed since <pre><code>reveng -w 16 -s [data]</code></pre> and <pre><code>reveng -w 8 -s [data]</code></pre> don't turn up anything?\nIf anyone else has a Fluke 233 and feels like sniffing out the same data lines to compare notes, that'd be awesome. I'm wondering too if there's a unique identifier for the wireless display or if you can simply swap out the display between units.\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "337",
+    "tags": [
+        "crc"
+    ],
+    "user": "sencore",
+    "time": "Dec 11, 2015 at 2:49",
+    "comments": [
+        {
+            "user": "sencore",
+            "text": "More data,  this time when the unit is \"off\". Looks like since it's a wireless display, there's still a heartbeat so it can wake up again automatically. <pre><code>10020200c6fe2d00c5fe2d0024cd000010032c3c 10020200c6fe2d00c5fe2d00212500531003ea35 10020200c6fe2d00c5fe2d0024ce00001003e021 10020200c6fe2d00c5fe2d002126005310032628 10020200c6fe2d00c5fe2d0024cf00001003a42a 10020200c6fe2d00c5fe2d002127005310036223</code></pre>\n",
+            "time": null
+        },
+        {
+            "user": "sencore",
+            "text": "I was able to finally get it decoded; not sure what was going on before, but it looks like the initial condition is different depending on the length of the message and perhaps something else. The polynomial is <pre><code>0x1021</code></pre>, just like CRC-16/CCITT. I've seen initial conditions for the 20-byte messages as either <pre><code>0xb37a</code></pre> or <pre><code>0x04fb</code></pre>. Other initial conditions are <pre><code>0x4259</code></pre> for the longest message, and <pre><code>0x3f12</code></pre> for a 25-byte message. Are there any systems out there that vary the initial condition based on factors such as length or a pre-shared random value?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Your algorithm is probably the following:\n<pre><code>width=16  poly=0x1021  init=0xffff  refin=true  refout=true  xorout=0xffff  check=0x906e  name=\"X-25\"\n</code></pre>\nOperating on the whole packet except the first two bytes and the last two (the CRC).\nPlaying Buckaroo\nIf a CRC analysis tool such as CRC RevEng rejects a set of codewords, it is worth starting with the smallest set and adding codewords until one is rejected, or the desired strength of confirmation is reached.  I'm trying just the 20-byte packets to avoid any complications; the first two produce results, the first three do too, the first four don't.  If I skip the fourth packet and add the fifth, I still get an answer:\n<pre><code>$ reveng -w 16 -s \"10020200C6FE2D00C5FE2D00047C000010038CEC\" \"10020200C5FE2D00C6FE2D00046D00001003DFA4\" \"10020200C6FE2D00C5FE2D00015B00531003C1C4\" \"10020200C5FE2D00C6FE2D00046E0000100313B9\"\nwidth=16  poly=0x1021  init=0xb37a  refin=true  refout=true  xorout=0x0000  check=0x006b  name=(none)\n</code></pre>\nRandom is Rare\nNow I'm confident enough to try different lengths of packet to get Init and XorOut.\n<pre><code>$ reveng -w 16 -s \"10020200C6FE2D00C5FE2D00047C000010038CEC\" \"10020200C5FE2D00C6FE2D00046D00001003DFA4\" \"10020200C6FE2D00C5FE2D00015B00531003C1C4\" \"10020200C5FE2D00C6FE2D00046E0000100313B9\" \"10020200C5FE2D00C6FE2D0001A405534B000D004B1003F50D\"\nwidth=16  poly=0x1021  init=0x7c90  refin=true  refout=true  xorout=0x07f0  check=0x5902  name=(none)\nwidth=16  poly=0x1021  init=0x8c8f  refin=true  refout=true  xorout=0xffff  check=0x5902  name=(none)\n</code></pre>\nGetting a pair of results is normal for this polynomial.  Notice the Check values are the same because, as it happens, these two models produce identical results.  One of them has <pre><code>xorout=0xffff</code></pre>, which is reassuring as it's a typical XorOut value.  However the corresponding Init value, <pre><code>0x8c8f</code></pre>, is a little unexpected, but by no means impossible.\nWhenever the Init or XorOut values look 'random', it's worth looking again at the packet format in case some of the bytes are not going into the CRC algorithm after all.  These unexpected bytes throw the search code and force the Init and/or XorOut values to adjust to accommodate them.\nI try removing equal numbers of bytes from the start of each of the packets, until I get this:\n<pre><code>$ reveng -w 16 -s \"0200C6FE2D00C5FE2D00047C000010038CEC\" \"0200C5FE2D00C6FE2D00046D00001003DFA4\" \"0200C6FE2D00C5FE2D00015B00531003C1C4\" \"0200C5FE2D00C6FE2D00046E0000100313B9\" \"0200C5FE2D00C6FE2D0001A405534B000D004B1003F50D\"\nwidth=16  poly=0x1021  init=0xffff  refin=true  refout=true  xorout=0xffff  check=0x906e  name=\"X-25\"\n</code></pre>\nCRC RevEng is searching the preset models and finding one that matches; the command can be repeated with <pre><code>-F</code></pre> to show that it has nothing up its sleeve.  The algorithm will reappear along with its identically-functioning alias, as explained above.  Accordingly, we can say the packet we rejected earlier may have a typo:\n<pre><code>$ reveng -m x-25 -c 0200C6FE2D00C5FE2D00047D00001003\nc8e7\n</code></pre>\n",
+            "votes": "3",
+            "user": "regregex",
+            "time": "Jan 12, 2017 at 0:15",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

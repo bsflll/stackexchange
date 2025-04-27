@@ -1,0 +1,84 @@
+{
+    "title": "Is Null in Windows equal to zero?",
+    "link": "https://reverseengineering.stackexchange.com/questions/26434/is-null-in-windows-equal-to-zero",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>(This question refers to assembly language.)  I'm a little bit confused.  I've encountered many times Windows functions that are supposed to return a Handle, and if they don't they return NULL.  Why do the checks afterward check against zero?  Zero isn't equal to NULL.</p>\n<p>As an example:\nGetModuleHandleA:</p>\n<p><a href=\"https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea\" rel=\"nofollow noreferrer\">https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea</a></p>\n<p><a href=\"https://i.sstatic.net/k0zxU.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/k0zxU.png\"/></a></p>\n</div>",
+    "votes": "6",
+    "answers": 4,
+    "views": "3k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "malware"
+    ],
+    "user": "Daniel Benisti",
+    "time": "Dec 9, 2020 at 12:40",
+    "comments": [
+        {
+            "user": "Alexei Levenkov",
+            "text": "<span class=\"comment-copy\">Side note: I think originally all those methods were documented with returning zero on failure but now most switched to \"NULL\", but you can still find \"zero\" - <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexa\" rel=\"nofollow noreferrer\">docs.microsoft.com/en-us/windows/win32/api/libloaderapi/…</a> (which is just Ex version of function in the question)</span>",
+            "time": null
+        },
+        {
+            "user": "Thorbjørn Ravn Andersen",
+            "text": "<span class=\"comment-copy\">You may not have to check for null because the hardware catches the bad memory reference and tells your handler.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In C, and many other low-level programming languages the term <code>NULL</code> is equivalent to <code>0</code>.</p>\n<p>The C standard requires NULL to be <code>#define</code>d to an \"implementation defined value\", however all implementations have chosen (for obvious reasons) to use <code>0</code> for that purpose. For that reason if you'll attempt to \"See definition\" for <code>NULL</code>, many IDEs will drop you in a line <code>#define NULL 0</code> or something similar.</p>\n<p>This has the additional benefit of <code>NULL</code> evaluating to <code>false</code> making conditional statements readable and intuitive.</p>\n<p>The proper way, from a strict standard following perspective, would be to use <code>NULL</code> and not 0, and that's what most developers do. The compiler (or pre-processor in the case of <code>#define NULL 0</code>) will however translate that to a <code>0</code>.</p>\n<p>Some higher level languages (such as javascript and C++) use special expressions to signify null. One example is C++'s <code>nullptr</code>, that since C++11 is the required definition of <code>NULL</code>. Javascript uses a special object, <code>null</code>.</p>\n</div>",
+            "votes": "13",
+            "user": "NirIzr",
+            "time": "Dec 3, 2020 at 17:44",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Comments are not for extended discussion; this conversation has been <a href=\"https://chat.stackexchange.com/rooms/117015/discussion-on-answer-by-nirizr-does-null-in-windows-equal-to-zero\">moved to chat</a>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>ISO C and C++ <em>allow</em> implementations to use a non-zero bit-pattern as the object representation for a null pointer, despite <a href=\"https://stackoverflow.com/questions/9894013/is-null-always-zero-in-c\">requiring</a> that a literal <code>0</code> or <code>(void*)0</code> in the source (in a pointer context) is evaluated as a null pointer, equivalent to <code>NULL</code>.  <strong>Reasoning based on source definitions like <code>#define NULL 0</code> is <em>not</em> sufficient in C or C++.</strong></p>\n<p><strong>But fortunately for everyone's sanity, all modern C and C++ implementations for x86 (and other modern ISAs) <em>do</em> use <code>0</code> in asm as the bit-pattern for NULL.</strong>  This makes non-portable code like <code>memset(ptr_array, 0, size)</code> work as expected, equivalent to a loop that sets each element to <code>NULL</code>.</p>\n<p><a href=\"https://stackoverflow.com/questions/2597142/when-was-the-null-macro-not-0\">When was the NULL macro not 0?</a> is asking about source-level non-zero definitions, but I think that's not allowed in modern C.  The answers mention several historical machines that had non-zero null pointer bit-patterns.  (i.e. what you'd see in the asm for code like <code>do {...} while(p = p-&gt;next);</code>)</p>\n<hr/>\n<p><strong>Remember that in asm, pointers are just 64-bit (or 32-bit) integers</strong>.  The whole idea of <code>NULL</code> is in-band signalling, not some special thing that isn't even a pointer-sized integer.  So we have to pick some constant.</p>\n<p><code>0</code> is a convenient sentinel value because many ISAs can branch slightly more efficiently on a value being non-zero than checking for any other value.  e.g. ARM has <code>cbnz</code> to branch on non-zero without needing a <code>cmp</code>.  x86 has a minor code-size optimization of <code>test eax, eax</code> / <code>jnz</code> instead of <code>cmp eax, 0</code> / <code>jnz</code>.  (<a href=\"https://stackoverflow.com/questions/33721204/test-whether-a-register-is-zero-with-cmp-reg-0-vs-or-reg-reg/33724806#33724806\">Test whether a register is zero with CMP reg,0 vs OR reg,reg?</a>).  If FLAGS are already set by another arithmetic instruction, no <code>test</code> would be needed, but that's unusual for null pointer tests: usually you don't do math on a pointer and <em>then</em> test for NULL.</p>\n<p>(You're not seeing that optimization in your asm because your debug build stores to memory before testing.)</p>\n<p>Also, <code>0</code> is easy to generate.  Some large number might take a larger instruction, or more instructions on some ISAs, to create in a register.  (e.g. x86 <a href=\"https://stackoverflow.com/questions/33666617/what-is-the-best-way-to-set-a-register-to-zero-in-x86-assembly-xor-mov-or-and\"><code>xor eax,eax</code></a> instead of <code>mov eax, imm32</code>).  And zero-initialized static storage like <code>static int *table = NULL;</code> can be in the BSS instead of <code>.data</code> - modern systems zero-init the BSS.</p>\n<hr/>\n<p>On some systems (especially embedded) the <code>0</code> address isn't special, and you actually have system-management stuff there, like the start of a table of interrupt handlers.  So <code>0</code> can be a valid address, as well as being equal to <code>NULL</code>.  This kinda sucks, so this is where one might actually want a non-zero object representation for null pointers.  @Simon Richter <a href=\"https://reverseengineering.stackexchange.com/questions/26434/does-null-in-windows-equal-to-zero/26442#comment40961_26435\">comments</a> about hacking an ARM compiler to use <code>0x20000000</code> as the NULL bit-pattern.</p>\n<p>On systems using virtual memory (like Windows), we can simply avoid ever mapping the page containing that address, which helps detect bugs by making sure NULL-dereference actually faults.  (Remember that undefined behaviour in C and C++ is <em>not</em> required to fault, but it's certainly convenient if it does.)</p>\n</div>",
+            "votes": "7",
+            "user": "Peter Cordes",
+            "time": "May 12, 2024 at 4:04",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">There was a useful and interesting comment here that this answer linked to, but apparently it's been deleted.  &gt;.&lt;  Some comments are worth keeping.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When looking at Windows API calls or disassembly of C/C++ code, NULL Is always 0, in Visual Studio this is defined in vcruntime.h</p>\n<pre><code>#ifndef NULL\n    #ifdef __cplusplus\n        #define NULL 0\n    #else\n        #define NULL ((void *)0)\n    #endif\n#endif\n</code></pre>\n<p>However if you are looking at higher level languages NULL will not necessarily be zero, for example within .NET C# code like this:</p>\n<pre><code>if (args == null)\n{\n    Console.WriteLine(\"null!\");\n}\n</code></pre>\n<p>Will compile to Common Intermediate Language (CIL). You can see with <strong>ldnull</strong> null is not simply zero.</p>\n<pre><code>IL_0001: ldarg.0\nIL_0002: ldnull\nIL_0003: ceq\nIL_0005: stloc.0\nIL_0006: ldloc.0\nIL_0007: brfalse.s IL_0016\nIL_000a: ldstr \"null!\"\nIL_000f: call void [mscorlib]System.Console::WriteLine(string)\n</code></pre>\n</div>",
+            "votes": "6",
+            "user": "chentiangemalc",
+            "time": "Dec 3, 2020 at 23:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\"><code>0</code> in a pointer context has special meaning in C and C++.  This definition does <i>not</i> definitively tell you that the object-representation for a null pointer is <code>0x00000000</code>.  (That is the case in all mainstream C++ implementations for x86, and almost all mainstream C and C++ implementations ever.  There are a few historical exceptions: <a href=\"https://stackoverflow.com/a/2597156\">When was the NULL macro not 0?</a> mentions some and quotes the C standard re: <code>0</code> in the source vs. the bit-pattern used.)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">This means ISO C++ doesn't guarantee that <code>memset(ptr_array, 0, 16)</code> would initialize pointers to NULL, or in the OP's case that a compare would check against zero in the generated asm.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>NULL is zero.</p>\n<p>But in the Windows SDK you can also find ERROR_SUCCESS which is also equal to 0 (as described <a href=\"https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-\" rel=\"nofollow noreferrer\">here</a>) and defined as \"the operation completed successfully\". Some Windows API functions will return ERROR_SUCCESS when successful rather than a handle.</p>\n<p>Ultimately it depends on each API and it's return values.\nIf you look at the <a href=\"https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandlea\" rel=\"nofollow noreferrer\">documentation</a> for GetModuleHandleA you can see clearly that it is said that</p>\n<p>\"<strong>Return value</strong></p>\n<p>If the function succeeds, the return value is a handle to the specified module.</p>\n<p>If the function fails, the return value is NULL. To get extended error information, call GetLastError.\"</p>\n</div>",
+            "votes": "-1",
+            "user": "rotem.salinas",
+            "time": "May 13, 2024 at 5:38",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

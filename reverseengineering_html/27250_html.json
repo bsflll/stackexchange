@@ -1,0 +1,51 @@
+{
+    "title": "Why might nm find a few undefined symbols that I can't see with xxd?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27250/why-might-nm-find-a-few-undefined-symbols-that-i-cant-see-with-xxd",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm cross-comparing a few approaches to testing for binaries that import a symbol and I noticed a YARA rule not finding one in\n  <code>\n   sudo\n  </code>\n  that nm + grep could find.\n </p>\n <p>\n  I looked at it in\n  <code>\n   xxd\n  </code>\n  to figure out why, but couldn't find a match. This explains why the YARA rule misses, but leaves me with a new question:\n  <strong>\n   how are tools like nm or objdump discovering the symbol?\n  </strong>\n </p>\n <p>\n  I checked other the other GLIBC symbols that nm reports to see how common this is, and found 5 symbols that didn't match in the output of xxd:\n  <code>\n   execve exit getpgrp sleep textdomain\n  </code>\n  . (I haven't yet manually verified whether any of the others only fail to match because they're split over a line break, but for this search I did run xxd at a width of 256 cols to minimize the likelihood).\n </p>\n <p>\n  I'm running something like:\n </p>\n <pre><code>nm --undefined $(type -p sudo)\nxxd -c 40 $(type -p sudo)\n</code></pre>\n <p>\n  Since this outputs a few thousand lines and there may be platform differences in the binary/commands, I went ahead made a GH repo for reference.\n </p>\n <ul>\n  <li>\n   <a href=\"https://github.com/abathur/sudo-make-sense/runs/2116615802\" rel=\"nofollow noreferrer\">\n    CI run itself\n   </a>\n  </li>\n  <li>\n   <a href=\"https://github.com/abathur/sudo-make-sense/blob/95214d62f61fc79ac0b22961fca60d9d2587a526/ci.log#L399-L5442\" rel=\"nofollow noreferrer\">\n    relevant section from a committed copy of the CI output for posterity\n   </a>\n  </li>\n  <li>\n   <a href=\"https://github.com/abathur/sudo-make-sense/blob/435a3df03c217d8792548c6173d9af8e86965148/.github/workflows/ci.yml#L13\" rel=\"nofollow noreferrer\">\n    actual invocation producing the CI output\n   </a>\n  </li>\n  <li>\n   <a href=\"https://github.com/abathur/sudo-make-sense/blob/main/sudo\" rel=\"nofollow noreferrer\">\n    copy of the sudo binary itself\n   </a>\n  </li>\n </ul>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "667",
+    "tags": [
+        "static-analysis",
+        "symbols"
+    ],
+    "user": "abathur",
+    "time": "Mar 18, 2021 at 19:44",
+    "comments": [
+        {
+            "user": "abathur",
+            "text": "<html><body><span class=\"comment-copy\">\n I initially posted a mangled copy of the log without realizing it; I've fixed it and updated the link as of a few minutes ago.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n how to get the binary in question?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "abathur",
+            "text": "<html><body><span class=\"comment-copy\">\n @IgorSkochinsky Not sure what you prefer. I put it in a repo so it would be easy to fork and poke at in CI, but I just now pushed a commit with a copy of the binary (\n <a href=\"https://github.com/abathur/sudo-make-sense/blob/main/sudo\" rel=\"nofollow noreferrer\">\n  github.com/abathur/sudo-make-sense/blob/main/sudo\n </a>\n ). If you have Nix installed running\n <code>\n  nix-shell -p sudo\n </code>\n should open a shell with something equivalent on PATH.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n Thanks, the Mach-O format was the clue\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "abathur",
+            "text": "<html><body><span class=\"comment-copy\">\n oof. sorry. I am sitting in front of both systems and forgot which I was on. It should be ELF. Gimme a few...\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The recent updates to the Mach-O format (the\n  <code>\n   LC_DYLD_INFO_ONLY\n  </code>\n  command) have an option of encoding the export symbol information as a trie structure. In such case it's possible that the symbol name does not appear as an exact string in the file.\n </p>\n <p>\n  However, ELF does not use such encoding so normally all symbols must be present as-is in the binary. What seems to happen in your case is that the \"missing\" symbols are substrings of other symbols with longer names, e.g.:\n </p>\n <ul>\n  <li>\n   <code>\n    getpgrp\n   </code>\n   is a suffix of\n   <code>\n    tcgetpgrp\n   </code>\n  </li>\n  <li>\n   <code>\n    execve\n   </code>\n   - of\n   <code>\n    fexecve\n   </code>\n  </li>\n  <li>\n   <code>\n    exit\n   </code>\n   - of\n   <code>\n    _exit\n   </code>\n  </li>\n  <li>\n   <code>\n    textdomain\n   </code>\n   - of\n   <code>\n    bindtextdomain\n   </code>\n  </li>\n </ul>\n <p>\n  There is no requirement that each symbol must be present as a separate string in the string table. The symbol record encodes an offset to a start of the string in string table and the dynamic linker simply uses the bytes until the next zero for matching. By reusing suffixes of other strings, the string table can be made smaller (often it is a huge contributor to the ELF file's size).\n </p>\n <p>\n  For example, here's the symbol entry for textdomain:\n </p>\n <pre><code>Elf64_Sym <offset aBindtextdomain+4 - offset unk_1DD0, 12h, 0, 0, \\ ; \"textdomain\"\nLOAD:0000000000000D38                            offset dword_0, 0>\n</code></pre>\n <p>\n  or\n </p>\n <pre><code>LOAD:0000000000000D38                 dd offset aBindtextdomain+4 - offset unk_1DD0; st_name ; \"textdomain\"\nLOAD:0000000000000D38                 db 12h                  ; st_info\nLOAD:0000000000000D38                 db 0                    ; st_other\nLOAD:0000000000000D38                 dw 0                    ; st_shndx\nLOAD:0000000000000D38                 dq offset dword_0       ; st_value\nLOAD:0000000000000D38                 dq 0                    ; st_size\n</code></pre>\n <p>\n  As you can see, it points 4 bytes into the string for\n  <code>\n   bindtextdomain\n  </code>\n  . This is perfectly legal and is a common optimization in compilers.\n </p>\n <p>\n  <a href=\"https://sourceware.org/bugzilla/show_bug.cgi?id=18451\" rel=\"nofollow noreferrer\">\n   Discussion with the patch\n  </a>\n  which added the feature to GNU ld.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Mar 18, 2021 at 19:56",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

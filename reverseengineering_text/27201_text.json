@@ -1,0 +1,65 @@
+{
+    "title": "Bypass USB key activation of a software",
+    "link": "https://reverseengineering.stackexchange.com/questions/27201/bypass-usb-key-activation-of-a-software",
+    "content": "(The software is Chinese and contains malware. I do not know if I could upload it here, so temporarily, please let me describe it)\nI am asked by a spa store to \"do something\" to make a software that looks like from 2003 for them to use, the name is \"Ehang skin analysis system\". The spa store gave me an usb key (a dongle usb), which they borrowed from another store, and they have to return it when they have a copy.\nI could not find any information about the software on google. Plus, the usb key does not appear anywhere on the computer, from emulators to rufus, not even on Linux, so that I do not figure out how to clone it, or find out if it is <pre><code>sentinel</code></pre> or <pre><code>HASP</code></pre>. So the only way is to reverse it. I am using x64dbg.\nThe software uses VMProtect, I passed it by using Scyllahide.\nBut I am stuck at this step, below is when I did not insert the USB key\nThe start of the software\n\nafter clicking \"play\" 3 times\n\nPlay 4 times, please note that the pointer is at another line, <pre><code>00478E56</code></pre> to <pre><code>00474E91</code></pre>\n\nPlay 5 times\n\nAt the 6th play, a message appeared asks to insert USB key\n\nI restarted it and insert the USB key, and at the 6th play this time, at the same line <pre><code>0047A868</code></pre> just like the very above, but this time the code turned into:\n\nClick one more play and the software worked. Still at the same line <pre><code>0047A868</code></pre>\n\nI have tried dozen times, but before and after inserting the USB key, everything just \"turned into\" other codes, not that they jump from code A to code B, <pre><code>popfd</code></pre> just turned into <pre><code>ret</code></pre> without any step. I have tried with <pre><code>step into</code></pre> and <pre><code>step over</code></pre> and <pre><code>animate</code></pre>. The pointer stand still at the same line but only the code is changed. So I do not know where to jump into the code that makes the software work.\nSo, how to make it turn into the working code without the USB key?\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "7k",
+    "tags": [
+        "x64dbg",
+        "patching",
+        "usb",
+        "vmprotect",
+        "dongle"
+    ],
+    "user": "BlackXIII",
+    "time": "Jun 17, 2021 at 15:32",
+    "comments": [
+        {
+            "user": "Abdullah Mohamed",
+            "text": "Are you able to share a dump of the USB dongle image? So basically, you plugin the USB into the computer, and from a Linux OS, you just type into a terminal <pre><code>lsblk</code></pre>, it should map the USB to a device file (not necessarily mount it), say it's <pre><code>/dev/sdb</code></pre>, you now issue the dump command <pre><code>sudo dd if=/dev/sdb of=USBdump.bin</code></pre> and share with us in here the <pre><code>USBdump.bin</code></pre> file. Also, if it's possible to share as well the software (same version you are analyzing please)?\n",
+            "time": null
+        },
+        {
+            "user": "BlackXIII",
+            "text": "Sorry, the usb cannot be detected, even from linux. There are only <pre><code>sda</code></pre> (the OS partition) when I used <pre><code>lsblk</code></pre>, or <pre><code>fdisk -l</code></pre>. About the software, please download from this link. Please note that it contains virus/malware and is vmprotected, meaning before breaking the vmprotection, you cannot make it run directly on Virtual Machine or Sandbox. I am using Shadow Defender to run it.\n",
+            "time": null
+        },
+        {
+            "user": "Abdullah Mohamed",
+            "text": "So when the USB is plugged in into the computer with the Linux OS, it's not even detected using <pre><code>lsusb</code></pre>?\n",
+            "time": null
+        },
+        {
+            "user": "Abdullah Mohamed",
+            "text": "And the same USB is used and works fine when working on the Software right? That''s interesting, I'd start with analyzing the <pre><code>Driver.exe</code></pre> file to know how the USB interacts with the computer first then go to the Software.\n",
+            "time": null
+        },
+        {
+            "user": "BlackXIII",
+            "text": "Yes, the usb cannot be detected anywhere and only be used to make the software work, as far as I know. About the driver, I think it is for the skin scanning camera, not driver for the usb.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "As expected, the USB was indeed detected but due that Linux has no idea how to deal with it without a proper driver, it only parses its hardware related parameters (Vendor and Product IDs) and stops there.\nHere are the USB device's entries in <pre><code>usb-devices</code></pre> and <pre><code>lsusb</code></pre> commands respectively:\n<pre><code># usb-devices\n[...]\nT:  Bus=01 Lev=02 Prnt=05 Port=00 Cnt=01 Dev#=  8 Spd=1.5 MxCh= 0\nD:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 8 #Cfgs=  1\nP:  Vendor=3689 ProdID=8762 Rev=02.00\nS:  Manufacturer=USBKey\nS:  Product=USBKey\nC:  #Ifs= 1 Cfg#= 1 Atr=80 MxPwr=50mA\nI:  If#= 0 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=01 Prot=00 Driver=usbhid\n[...]\n</code></pre>\n<pre><code># lsusb\n[...]\nBus 001 Device 008: ID 3689:8762\n[...]\n</code></pre>\nI came to the conclusion that this is the USB device because these are the only differences between the two files <pre><code>*with_usb*</code></pre> and <pre><code>*without_usb*</code></pre> using the commands <pre><code>lsusb</code></pre> and <pre><code>usb-devices</code></pre>.\nSo now, I would start sniffing the bytes sent from the USB to the OS as soon as the USB is plugged in, mostly won't be able to make any sense of them, but maybe writing a driver that emulates the device's communication behavior would be the quickest and easiest approach to bypass the mandatory protection policy of running the software with the USB device plugged in.\nFor the sniffing part, you can use anything based on <pre><code>libusb</code></pre>, or of course a wrapper for it in any scripting language. Myself, I'm a fan of Python, so here is a little script using Python's PyUSB library:\n<pre><code>#!/usr/bin/env python3\ntry:\n    import usb.core\n    import usb.util\nexcept ImportError:\n    print(\"Couldn't find 'pyusb' library!\")\n    exit(-1)\n\n# The 'Vendor' and 'Product' IDs from 'lsusb' or 'usb-devices' entries\nvendorID  = 0x3689\nproductID = 0x8762\n\n# Assuming the first interface\nusbIF = 0\n\n# Find the USB device\n# The USB must be plugged in before running the script\ndevice = usb.core.find(idVendor=vendorID, idProduct=productID)\n\n# Check if device exists\nif device == None:\n    print(\"Device doesn't exist!\")\n    exit(0)\n\n# Check if device is attached, detach it\nif device.is_kernel_driver_active(usbIF):\n    device.detach_kernel_driver(usbIF)\n\n# Now you will want to fuzz a bit the USB endpoints\n(inputCmds, outputCmds) = device[0][usbIF,0].endpoints()\n\n</code></pre>\nIf emulating the USB packets worked, that would be a much easier approach to work on the application without the USB device plugged in, without the need to reverse a VMProtect software.\n",
+            "votes": "1",
+            "user": "Abdullah Mohamed",
+            "time": "Mar 11, 2021 at 8:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "BlackXIII",
+                    "text": "<span class=\"comment-copy\">Thank you very much for your solution and enthusiastic help. I really appreciate that. But alas, it is just a little too late. A few hours ago the USB's owner needed it and had taken it back. I am so sorry, but we could not see the result of your script until I have the USB again. I will try to get it as soon as possible. Thank you again.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Abdullah Mohamed",
+                    "text": "<span class=\"comment-copy\">No problem. Feel free to ping me anytime in the future if you've got your hands back to the USB.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,54 @@
+{
+    "title": "Find and step VEH handlers with Olly?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8401/find-and-step-veh-handlers-with-olly",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I was looking for a way to get to the VEH handler (specified by the application being reversed) that gets called when an exception occurs. I have read <a href=\"https://reverseengineering.stackexchange.com/questions/1911/whats-fs0-doing-and-how-can-i-execute-it-step-by-step\">this</a> question and it explains some things nicely, but my situation is slightly different. The code I'm stepping/executing throws an exception:</p>\n<p><img alt=\"enter image description here\" src=\"https://i.sstatic.net/OIv0a.png\"/></p>\n<p>In that situation, what can I do to get to the handler code and step it with Olly (other than statically analyzing the executable and looking for <code>AddVectoredExceptionHandler</code> and friends)?</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "windows",
+        "ollydbg"
+    ],
+    "user": "user4520",
+    "time": "Apr 13, 2017 at 12:49",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>_LdrpVectorHandlerList seems to be undocumented and may also be not available in xp    </p>\n<p>I couldn't even land a half semi authentic googley about its inner workings   </p>\n<p>what little i could find about _LdrpVectorHandlerList seems to point that it is an EncodedPointer and not the actual handler </p>\n<p>DecodePointer is per process and executing DecodePointer in a debugger (with plugins / extensions etc) will not Decode the Debuggees  EncodedPointer one can read process memory to get the debuggees EncodedPointer HandlerList.  </p>\n<p>ollydbg 1.10 was prior to the exisitance of VEH so it knows only about SEH in view-&gt;SEH chain window</p>\n<p>ollydbg 2.01 will show the encoded pointer link and not the actual handler  in view-&gt;seh chain window as pasted below</p>\n<pre><code>VEH/SEH chain of main thread\nIndex  Type                       Link                        Handler\n1      Vectored                   00153848                    Invalid\n2      Vectored                   001537F8                    Invalid\n3      Vectored                   00153820                    Invalid\n4      SEH                        0013FF60                    00401880 _except_handler4\n5      SEH                        0013FFB0                    00401880 _except_handler4\n6      SEH                        0013FFE0                    7C839AD8 _except_handler3\n</code></pre>\n<p>to find actual veh handlers i crafted a bat file that uses windbg's local kernel debugging \n(used in xp sp3 only not sure if this still holds in newer os)  you may check it out </p>\n<pre><code>:type c:\\findveh.bat\nkd -kl -c \"$$&gt;a&lt; c:\\findveh.txt %1 ;q\" | findstr /I eval\n\n:type c:\\findveh.txt\n.foreach /pS 1 /ps 200 (place { !process 0 0 ${$arg1} } ) {.process /p /r place}\n!list -t ntdll!_SINGLE_LIST_ENTRY.Next -x \"? poi( @$extret+8 ) ^ @@(@$proc-&gt;Cookie)\" @@masm(ntdll!RtlpCalloutEntryList);\n!list -t ntdll!_SINGLE_LIST_ENTRY.Next -x \"? poi( @$extret)\" @@masm(ntdll!RtlpCalloutEntryList);\n</code></pre>\n<p>output of bat file ( the second !list command added just to show the linked EncodedPointers  for comparison it is not required)</p>\n<p>explanation of script </p>\n<p>set process context of relevent process for which we want to find veh handlers\ntraverse the SINGLE_LIST_ENTRY and print the actual handlers by xorring the EncodedPointer\nwith the specific ProcessCookie</p>\n<p>code for veh.exe is copy paste of msdn documentation sample using veh handlers</p>\n<pre><code>:findveh.bat veh.exe\n\n:kd -kl -c \"$$&gt;a&lt; c:\\findveh.txt veh.exe ;q\"   | findstr /I eval\nEvaluate expression: -169753474 = f5e1c47e\nEvaluate expression: -4290768896 = ffffffff`00401000\nEvaluate expression: -4290768848 = ffffffff`00401030\nEvaluate expression: -4290768800 = ffffffff`00401060\nEvaluate expression: 1390664 = 00153848\nEvaluate expression: 1390584 = 001537f8\nEvaluate expression: 1390624 = 00153820\nEvaluate expression: 2090329024 = 7c97e3c0\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Mar 8, 2015 at 19:56",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If you're only using export table symbols (the default), then your best bet would likely to be to set a breakpoint on <code>ntdll!KiUserExceptionDispatcher()</code>. When it's called, you can trace into it to find the vector handler list. On the other hand, if you have ntdll.dll's public symbols PDB, then you can find the vector handler list directly by looking at <code>_LdrpVectorHandlerList</code>.</p>\n<p>Honestly though, it's probably easier to just set a logging breakpoint on <code>AddVectoredExceptionHandler()</code> and record each VEH entry as it's added.</p>\n</div>",
+            "votes": "1",
+            "user": "Jason Geffner",
+            "time": "Mar 6, 2015 at 18:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">does _LdrpVectorHandlerList hold handler or Encoded Pointer ? do you have any links / documentation</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">Encoded pointer, which is why it's easier to just log calls to <code>AddVectoredExceptionHandler()</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\">BTW, @blabb, I like your WinDbg answer! Not sure if szczurcio wants to do this entirely in OllyDbg, but if not, your approach looks solid!</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">Thanksfor confirming about the Encoded Pointer i was wondering what you meant by this <b>you can find the vector handler list directly</b> in your reply if he wants to do it in ollydbg alone and xp is acceptable there is an olly plugin ollylkd that can aid him</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

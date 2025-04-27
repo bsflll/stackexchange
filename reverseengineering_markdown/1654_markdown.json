@@ -1,0 +1,69 @@
+{
+  "title": "Why would a program contain a call instruction targetting the address immediately following that instruction?",
+  "link": "https://reverseengineering.stackexchange.com/questions/1654/why-would-a-program-contain-a-call-instruction-targetting-the-address-immediatel",
+  "content": "While reversing a 32bit Mach-O binary with Hopper, I noticed this peculiar method. The instruction on 0x0000e506 seems to be calling an address right below the instruction.\n\nWhat would be the reason for this? Is it some kind of register cleaning trickery?\n\n\n\n",
+  "votes": "37",
+  "answers": 5,
+  "views": "8k",
+  "tags": [
+    "assembly",
+    "x86"
+  ],
+  "user": "Daniel Sloof",
+  "time": "Feb 19, 2024 at 21:41",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "This is for position independent code. The call 0xe50b instruction pushes the address of the next instruction, and then jumps. It jumps to the immediately following instruction, which has no effect. The next instruction, pop eax, loads its own address into eax (as it was the value pushed by call).\n\nFurther down it uses an offset from eax:\n\n```\nmov eax, dword [ds:eax-0xe50b+objc_msg_close]\n\n```\nThe value being subtracted, 0xe50b, is the address that we moved into eax. If the code hasn't been moved anywhere, eax-0xe50b will be zero, but if the code has been moved to a different location, it will be the offset. We then add the address objc_msg_close, so we'll be able to reference it, even if the code has been moved in memory.\n\nHopper is actually being quite clever about it, because the instruction just says (from ndisasm):\n\n```\nmov eax,[eax+0x45fe75]\n\n```\nbut Hopper knows that eax contains the value of the instruction pointer at 0xe50b, so uses that offset to find the symbol for you.\n\n",
+      "votes": "47",
+      "user": "Dougall",
+      "time": "May 17, 2013 at 7:47",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "This is a frequently used \"trick\" to determine the address of the instruction following the call, i.e. the call instruction pushes the return address on the stack, which in this case corresponds to 0xe50b. After the pop instruction, eax contains that address.\nFor instance, this idiom is used for position independent code (pic), but is also quite commonly seen in obfuscated code.\n\nOther disassemblers often display this code sequence as call $+5 (e.g. IDA).\n\n",
+      "votes": "17",
+      "user": "newgre",
+      "time": "Apr 8, 2013 at 12:50",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Now I cannot possibly know what the exact reason is here, but there is another very good reason, not mentioned so far, for using this kind of method: throwing off a disassembler during static analysis.\n\nThe mechanics of call $+5 have been discussed, so I'll assume they are known by now - otherwise refer to the other answers. Basically like with any call on IA-32, the return address (the address of the instruction following the call) gets pushed to the stack and the ret instruction inside that called function will presumably return to that address, assuming the stack hasn't been smashed meanwhile.\n\nWhat will even a sophisticated disassembler such as IDA do when it sees a ret opcode? Well, it'll assume that the function boundary has been reached. Here's an example:\n\n\n\nNow this not being the first time I've seen such a thing, I went on and deleted the function, so IDA stops assuming it's a function boundary. If I then tell it to disassemble the very next byte (0Fh) I get this:\n\n\n\nWhat the disassembler cannot realize and what is the reason why interactive disassemblers like Hopper and IDA rock so much, is that something special is going on here. Let's look at the instructions:\n\n```\n51                                      push    rcx\n53                                      push    rbx\n52                                      push    rdx\nE8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F 5A 5B 59                             cvtps2pd xmm3, qword ptr [rbx+59h]\n89 DF                                   mov     edi, ebx\n52                                      push    rdx\n48 31 D2                                xor     rdx, rdx\n\n```\nThe leading bytes are the actual bytes in the binary, followed by their mnemonic representation. But pay special attention to this part:\n\n```\ncall    $+5\npop     rdx ; <- = ADDR\nadd     rdx, 8\npush    rdx\nretn\n\n```\nWe get the address ADDR in rdx after the pop instruction was executed. We know this much from the description of the mechanism in the other answers. But then it gets odd:\n\n```\nadd     rdx, 8\n\n```\nwe add ... uhm eight bytes to that address (ADDR+8) and then we push it to the stack and call ret:\n\n```\npush    rdx\nretn\n\n```\nIf you remember how a call works then you'll remember that it pushes the return address to the stack, then passes execution to the called function and that function later calls ret in order to return to the address found on the stack. This knowledge is being exploited here. It manipulates the \"return address\" before \"returning\" to it. But looking back at our disassembly we find to our surprise (or not ;)):\n\n```\nE8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F 5A 5B 59                             cvtps2pd xmm3, qword ptr [rbx+59h]\n\n```\nLet's count the opcode bytes (in your tool you can also do the math via the offsets, if you're so inclined):\n\nBut wait a minute, that means we're literally passing execution to the middle of this peculiar cvtps2pd xmm3, qword ptr [rbx+59h]? That's right. Because 0Fh is one of the prefixes used when encoding instructions on IA-32. So the programmer has tricked our disassembler, but he won't trick us. Undefining that code and then skipping the 0Fh prefix we get:\n\n```\n51                                      push    rcx\n53                                      push    rbx\n52                                      push    rdx\nE8 00 00 00 00                          call    $+5\n5A                                      pop     rdx\n48 83 C2 08                             add     rdx, 8\n52                                      push    rdx\nC3                                      retn\n0F                                      db  0Fh\n5A                                      pop     rdx\n5B                                      pop     rbx\n59                                      pop     rcx\n89 DF                                   mov     edi, ebx\n52                                      push    rdx\n48 31 D2                                xor     rdx, rdx\n\n```\nor:\n\n\n\nThe apparent single four-byte instruction 0F 5A 5B 59 is now revealed to be bogus and instead we have to ignore the 0F and then resume at 5A, which decodes as pop rdx.\n\nCheck out Ange's excellent opcode tables here to find out more about how instructions get encoded on IA-32.\n\n",
+      "votes": "14",
+      "user": "0xC0000022L",
+      "time": "Apr 27, 2013 at 17:26",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "ajs410",
+          "text": "I have seen some applications (specifically, an anti-hacking protection known as MetaFortress) which use this technique as a way to embed data into the .text area of an application.  Use the call to jump over your embedded data, and then use the return address from the call as the pointer to the embedded data.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "A CALL instruction has the effect of pushing a return address onto the stack, before performing the control transfer to the call target. \n\nIn your example above, the CALL instruction will push the value 0x0000E50B onto the stack, before transferring control to 0x0000E50B. The POP instruction at 0x0000E50B will then pop the last value off of the top of the stack, into EAX. This value will be the POP instructions own address, due to the CALL instruction pushing the return value.\n\nThis is a simple technique to get an instructions location in memory at run time.\n\nAn instructions location can't always be computed by the linker at compile time as a binary may be relocated in memory due to Address Space Layout Randomization (ASLR).\n\n",
+      "votes": "11",
+      "user": "QAZ",
+      "time": "Apr 8, 2013 at 12:52",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "dyasta",
+          "text": "The answer from Dougall is superior. Linkers handle ASLR via entries in relocation/fixup tables. This mechanism isn't so much to determine the location as it is to determine the relative offset difference between the address the compiled code is expecting and the actual address at runtime.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "As others have said, this is for getting current instruction's address. But it's not recommended as it'll hurt performance because it won't return anywhere, causing disagreement of return addresses in data stack and in the CPU's internal calling stack\n\nThe recommended way is\n\n```\nGetCurrentAddress:\n    mov eax, [esp]\n    ret\n...\n    call GetCurrentAddress\n    mov [currentInstruction], eax\n\n```\n",
+      "votes": "6",
+      "user": "phuclv",
+      "time": "Sep 7, 2020 at 3:28",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+    "title": "Dll injection and GetProcAddress with the winapi",
+    "link": "https://reverseengineering.stackexchange.com/questions/2793/dll-injection-and-getprocaddress-with-the-winapi",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So i just read a little bit about how one would go about for injecting a dll into a running program <a href=\"https://en.wikipedia.org/wiki/DLL_injection\">on Wikipedia</a> (the <code>CreateRemoteThread</code> idea). I followed the steps described and eventually got it working. The thing i found interesting though which took some time to figure out are the following: When creating my remote thread and sending in the function i would like to be run as the first/starting one i hit a snag, when it was run it failed to call the proper functions, they seemed to turn into rubbish when i looked at them in OllyDBG which in turn resulted in the program crashing down on me. The code i used then was something along these lines:</p>\n<pre><code>static DWORD __stdcall inject(LPVOID threadParam)\n{\n    MessageBoxA(NULL, \"test\", \"test\", NULL);\n    LoadLibrary(\"my.dll\");\n    return 0;\n}\n</code></pre>\n<p>And somewhere else:</p>\n<pre><code>CreateRemoteThreadEx(hProcess, NULL, 0, LPTHREAD_START_ROUTINE(fnPageBase), dbPageBase, 0, NULL, &amp;threadId);\n</code></pre>\n<p>Where <code>fnPageBase</code> is the memory I've allocated in the to be injected process for my function and dbPageBase the memory I've allocated for a struct that is passed as the <code>LPVOID threadParam</code>.</p>\n<p>Something like that, the problem was that both <code>MessageBoxA</code> and <code>LoadLibrary</code> didn't get a proper address it would seem, when i checked them in OllyDBG they always pointed to something that didn't exist. I googled around a little and found out that i should be using <code>GetProcAddr</code> to get a address to ie: <code>LoadLibrary</code> which i could later use by sending in some data via the <code>LPVOID threadParam</code> in my <code>inject()</code> call. So my question is: Why does it work when i use the <code>GetProcAddr</code> and not when I just try to use it \"normally\"? Do I get some specific address that's always mapped in for everyone in the same region in memory when using that? </p>\n<p>Also, what happens to my strings in the <code>inject()</code> function? Are they moved to some other place during compile which makes them unavailable to the program i'm injecting since it's in a totally different place of the memory (i.e., it's not mapped to there?)? I worked that around by sending that along in a struct with the <code>LPVOID threadParam</code> aswell in a struct that i had copied over to memory available to the <code>.exe</code> I was injecting. </p>\n<p>If you need more info on how I did the other parts please do tell and I'll update.</p>\n</div>",
+    "votes": "11",
+    "answers": 1,
+    "views": "6k",
+    "tags": [
+        "windows",
+        "dll",
+        "c++",
+        "dll-injection"
+    ],
+    "user": "lfxgroove",
+    "time": "Sep 17, 2013 at 16:52",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>One thing you need to keep in mind is that code in your process and the code in the target process reside in <strong>different address spaces</strong>. So any address in your program is not necessary valid in the target process and vice versa.</p>\n<p>This means the code that you inject cannot make any assumptions about addresses of functions or variables. Even your <code>inject</code> function's address is valid only in <em>your</em> process; to make it available in the target process you'd have to: 1) copy the code there; and 2) make sure any functions or memory addresses it refers to are valid in the new address space.</p>\n<p>That's why the normal approach used with <code>CreateRemoteThreadEx</code> is to copy the DLL name to the target process and create the thread using the address of the <code>LoadLibrary</code> function:</p>\n<pre><code>// 1. Allocate memory in the remote process for szLibPath\npLibRemote = ::VirtualAllocEx( hProcess, NULL, sizeof(szLibPath),\n                               MEM_COMMIT, PAGE_READWRITE );\n\n// 2. Write szLibPath to the allocated memory\n::WriteProcessMemory( hProcess, pLibRemote, (void*)szLibPath,\n                      sizeof(szLibPath), NULL );    \n\n// Load \"LibSpy.dll\" into the remote process\n// (via CreateRemoteThread &amp; LoadLibrary)\nhThread = ::CreateRemoteThread( hProcess, NULL, 0,\n            (LPTHREAD_START_ROUTINE) ::GetProcAddress( hKernel32,\n                                       \"LoadLibraryA\" ),\n             pLibRemote, 0, NULL );\n</code></pre>\n<p>(snippet <a href=\"http://www.codeproject.com/Articles/4610/Three-Ways-to-Inject-Your-Code-into-Another-Proces\" rel=\"nofollow noreferrer\">from Code Project</a>)</p>\n<p>You can see that <code>pLibRemote</code> (with the address of the DLL name in the target process) is passed as the parameter to the thread routine. So the result of this is equivalent to:</p>\n<pre><code>LoadLibraryA(pLibRemote);\n</code></pre>\n<p>executed in the target process.</p>\n<p>Strictly speaking, this is not guaranteed to work because the address of <code>LoadLibraryA</code> in your process is not necessarily the same as <code>LoadLibraryA</code> in the other process. However, in practice it does work because system DLLs like kernel32 (where <code>LoadLibraryA</code> resides) are mapped to the same address in all processes, so <code>LoadLibraryA</code> also has the same address in both processes.</p>\n</div>",
+            "votes": "9",
+            "user": "Igor Skochinsky",
+            "time": "Dec 18, 2019 at 9:05",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "lfxgroove",
+                    "text": "<span class=\"comment-copy\">So theoretically we could go wrong and not get a proper address even when using <code>GetProcAddr</code>? Also, why wouldn't <code>&amp;LoadLibraryA</code> give a good address aswell if they're all mapped into the same region? Should this be posted somewhere else as a separate question or is it okay to ask here?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>&amp;LoadLibraryA</code> may return a pointer to the import stub in your process and not the final address in <code>kernel32.dll</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lorenzo Dematté",
+                    "text": "<span class=\"comment-copy\">I thought that nowadays with process space randomization you cannot even count on kernel32 being mapped at the same address... does it still work in win7/8 too?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@LorenzoDematté: AFAIK load address of kernel32 is randomized on each boot but it remains constant afterwards.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L: I did not set out to write a detailed guide to DLL injection covering every single corner case, I just tried to answer the question stated (and added a little background). If I made any specific mistakes, please point them out.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

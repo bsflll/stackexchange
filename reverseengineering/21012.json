@@ -1,0 +1,74 @@
+{
+    "title": "Modify formula by adding a subtraction",
+    "link": "https://reverseengineering.stackexchange.com/questions/21012/modify-formula-by-adding-a-subtraction",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have the following Assembler Code in a x86 Program and I need to modify it as it is buggy:</p>\n<pre><code>fld     ds:(flt_203B8 - 29C48h)[ebx]\nfdivr   dword ptr [esi+44h]\nfmul    ds:(flt_203BC - 29C48h)[ebx]\nfisttp  [ebp+var_334]\nmov     eax, [ebp+var_334]\ncmp     eax, 0Fh\njg      short greater\n\ntest    eax, eax\nmov     edx, 0\ncmovs   eax, edx\njmp     short valueWithinLimits\n\n\ngreater:\nmov     eax, 0Fh\n\nvalueWithinLimits:\n....\n</code></pre>\n<p>In Pseudocode this is</p>\n<pre><code>v29 = (signed int)(*(float *)(v3 + 68) / 40.0 * 15.0);\nif ( v29 &gt; 15 )\n{\n  v29 = 15;\n}\nelse if ( v29 &lt; 0 )\n{\n  v29 = 0;\n}\n</code></pre>\n<p>I need to insert the following line as second line:</p>\n<pre><code>v29 = 15 - v29;\n</code></pre>\n<p>Is there any way I can do that without needing any more space? I assume no but maybe someone has a smart Idea here what can be done in this case.</p>\n</div>",
+    "votes": "1",
+    "answers": 4,
+    "views": "204",
+    "tags": [
+        "x86"
+    ],
+    "user": "Roman",
+    "time": "Apr 3, 2019 at 15:41",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It's hard to say, since you didn't post the entire assembly related to the pseudocode. It seems however, that the \"if\" block is implemented via jumps. In that case, you may use <a href=\"https://www.jaist.ac.jp/iscenter-new/mpc/altix/altixdata/opt/intel/vtune/doc/users_guide/mergedProjects/analyzer_ec/mergedProjects/reference_olh/mergedProjects/instructions/instruct32_hh/vc35.htm\" rel=\"nofollow noreferrer\">conditional moves</a> instead. For example, assuming that \"if\" block is implemented like this (uses 28 bytes):</p>\n<pre><code>  cmp eax, 0Fh\n  jg greater\n  cmp eax, 0\n  jl less\n  jmp continue\nless:\n  mov [ebp+var_334], 0\n  jmp continue\ngreater:\n  mov [ebp+var_334], 0Fh\ncontinue:\n</code></pre>\n<p>You may implement it like below:</p>\n<pre><code>  mov ebx, 0Fh\n  cmp eax, 0Fh\n  cmovg eax, ebx\n  xor ebx, ebx\n  cmp eax, 0\n  cmovl eax, ebx\n  mov [ebp+var_334], eax\n</code></pre>\n<p>This implementation uses 22 bytes, which is 6 bytes lower than the previous one - exactly the space you need to insert fsubr instruction to compute 15 - st(0) before storing the result in v29.</p>\n<p>Consider this implementation:</p>\n<pre><code>  xor ebx, ebx    ; ebx = 0\n  mov bl, 15      ; ebx = 15\n  neg eax         ; eax = -eax\n  add eax, ebx    ; eax = 15 - eax\n  cmp eax, ebx    \n  cmovg eax, ebx\n  xor ebx, ebx\n  test eax, eax\n  cmovs eax, ebx\n</code></pre>\n<p>It's even shorter (occupies 20 bytes), does the whole job and doesn't require additional operations on floats.</p>\n</div>",
+            "votes": "1",
+            "user": "bart1e",
+            "time": "Apr 3, 2019 at 17:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Anonymous Anonymous",
+                    "text": "<span class=\"comment-copy\">Correct me if I'm wrong, but in your implementation there is a problem whenever 0&lt;=v29&lt;=15 leading to overwriting v29 with whatever is stored in ecx before your function (undefined behaviour?)</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">You are right. I’ve edited my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Roman",
+                    "text": "<span class=\"comment-copy\">Sorry I didn't notice that I missed part of it, I have completed it now. Seems like I could bring it down to the lower size, however I can not put the 15 anywhere, which makes it impossible to use it I think. I tried to assemble \"fsubr 15, %st\" but it doesn't work</span>",
+                    "time": null
+                },
+                {
+                    "user": "bart1e",
+                    "text": "<span class=\"comment-copy\">Well, you cannot use immediate values in fsubr (what I wrote was just a shortcut). You can, however, put a constant float equal to 15 if it is present somewhere in your program. If not, let me know and I will suggest you another solution.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Roman",
+                    "text": "<span class=\"comment-copy\">It must be present as we are multiplying with 15, however I can't get IDA to assemble with  flt_203bc either which is what the fmul uses to multiply with 15</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Actually your assembler code isn't complete. It matches to next pseodocode:</p>\n<blockquote>\n<p>v29 = (signed int)(*(float *)(v3 + 68) / 40.0 * 15.0);<br/>\n  if ( v29 &gt; 15 ) </p>\n</blockquote>\n</div>",
+            "votes": "0",
+            "user": "Igor Matyuh",
+            "time": "Apr 1, 2019 at 13:48",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If 40.0 and 15.0 are constants, you could remove division and only do multiplication with 0.375. Not sure how much space would this save.</p>\n</div>",
+            "votes": "0",
+            "user": "Rok Tavčar",
+            "time": "Apr 3, 2019 at 7:44",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You have code which scales and offsets, you need to scale and offset.  So you do not need to change the <em>code</em> at all, just the constants.</p>\n<p>Work your new operation backwards into the existing math. Change the sign of one of the constants you multiply by, and work the offset back through the multiplication and sign change and combine it with the original offset. </p>\n</div>",
+            "votes": "0",
+            "user": "Chris Stratton",
+            "time": "Apr 3, 2019 at 16:30",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

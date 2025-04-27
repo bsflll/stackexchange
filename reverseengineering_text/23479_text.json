@@ -1,0 +1,70 @@
+{
+    "title": "I can't set a hardware breakpoint on RIP + N-byte after calling NtContinue()",
+    "link": "https://reverseengineering.stackexchange.com/questions/23479/i-cant-set-a-hardware-breakpoint-on-rip-n-byte-after-calling-ntcontinue",
+    "content": "<pre><code>#include <Windows.h>\n\nint handle_exception (EXCEPTION_POINTERS *exception_pointers) {\n    exception_pointers->ContextRecord->Rip += 4;\n    return EXCEPTION_CONTINUE_EXECUTION;\n}\n\nint main () {\n    __try {\n        int number = 0;\n\n        number = 1 / number; // generate EXCEPTION_INT_DIVIDE_BY_ZERO\n    }\n    __except (handle_exception(GetExceptionInformation())) { }\n    return 0;\n}\n</code></pre>\nI built the source code, and I open it by x64dbg. And set hardware breakpoints.\n\nAn exception occurs on IDIV instruction, and run the debuggee. It always stops on a instruction after next.\n\n\nI expected it to stop at 0x0000000140001056 address because it's where 4bytes away from RIP. But it isn't.\nI think there's something I don't know under the hood. Just out of curiosity, why does it work like that? If you have a chance, please let me know. thanks. :D\nAdditional Attachments\nWhen RIP is modified in handle_exception()\nnew RIP of NtContinue()'s ThreadContext parameter is 0x0000000140001056.\n\nWhen RIP isn't modified in handle_exception()\nRIP of NtContinue()'s ThreadContext parameter is 0x0000000140001032.\n(overall, addresses have been changed, because a sourc code has been changed too. That's IDIV instruction's address.)\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "287",
+    "tags": [
+        "windows",
+        "c++",
+        "x64dbg",
+        "exception",
+        "seh"
+    ],
+    "user": "left click",
+    "time": "Mar 21, 2020 at 21:00",
+    "comments": [
+        {
+            "user": "ismael_akez",
+            "text": "Are you sure about the value of instruction pointer in your exception handler? Maybe, you should have to get first the current RIP after the IDIV instruction.\n",
+            "time": null
+        },
+        {
+            "user": "Yotamz",
+            "text": "What happens if you simply return EXEPTION_CONITNUE_EXECUTION without changing RIP?\n",
+            "time": null
+        },
+        {
+            "user": "left click",
+            "text": "@ismael_akez As I went over it from NtContinue()'s first parameter, RIP is been changed properly to <pre><code>RIP + 4</code></pre> address. (pointer to MOV instrction)\n",
+            "time": null
+        },
+        {
+            "user": "left click",
+            "text": "@Yotamz When I changed it as you said, exception occurs again on IDIV instruction. And hardware breakpoint on IDIV instruction doesn't work also, and not counted. even though I set it on IDIV instruction.\n",
+            "time": null
+        },
+        {
+            "user": "left click",
+            "text": "I wonder if other people have the same experience as me on the source code and hardware breakpoint on the MOV instruction isn't working.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "just modified your source a bit to print Rip prior and post in handler\nadded another exception and eliminated a warning (empty handler block)\nand tested with +1,+2,+3 +4 +5 on the handler Hardware breaks doesn't get hit \nI haven't checked by single stepping inside  RtlpExecuteHandlerForxxx calls    \nhere is a modified src   \n<pre><code>#include <windows.h>\n#include <stdio.h>\n#include <intrin.h>\nint handle_exception(ULONG ExceptionCode,EXCEPTION_POINTERS *exception_pointers)\n{\n    printf(\"%x\n\",ExceptionCode);\n    printf(\"%I64x\n\",exception_pointers->ContextRecord->Rip);\n    exception_pointers->ContextRecord->Rip += 4; \n    printf(\"%I64x\n\",exception_pointers->ContextRecord->Rip);\n    return EXCEPTION_CONTINUE_EXECUTION;\n}\nint main(void)\n{\n    __try\n    {\n        int number = 0;\n        number = 1 / number; // generate EXCEPTION_INT_DIVIDE_BY_ZERO\n        __debugbreak();\n    }\n    __except (handle_exception(GetExceptionCode(),GetExceptionInformation()))\n    {\n        __nop();\n    }\n    return 0;\n}\n</code></pre>\nresults for Rip =Rip+ {1,2,3,4} _CONTEXT->Rip Changed and properly Executed    \nbut hw Bp doesn't get hit  so its time to single step inside ntdll/nt/xxxx\n<pre><code>:\\>grep -i += hwbp.cpp\n    exception_pointers->ContextRecord->Rip += 1;\n\n:\\>cl /Zi /W4 /Od /analyze /nologo /EHsc hwbp.cpp /link /release\nhwbp.cpp\n\n:\\>hwbp.exe\nc0000094\n7ff7adf910a2\n7ff7adf910a3\nc0000005\n7ff7adf910a5\n7ff7adf910a6\n80000003\n7ff7adf910aa\n7ff7adf910ab\n\n:\\>grep -i += hwbp.cpp\n    exception_pointers->ContextRecord->Rip += 2;\n\n:\\>cl /Zi /W4 /Od /analyze /nologo /EHsc hwbp.cpp /link /release\nhwbp.cpp\n\n:\\>hwbp.exe\nc0000094\n7ff6696d10a2\n7ff6696d10a4\n80000003\n7ff6696d10aa\n7ff6696d10ac\nc0000005\n7ff6696d10ac\n7ff6696d10ae\n\n:\\>grep -i += hwbp.cpp\n    exception_pointers->ContextRecord->Rip += 3;\n\n:\\>cl /Zi /W4 /Od /analyze /nologo /EHsc hwbp.cpp /link /release\nhwbp.cpp\n\n:\\>hwbp.exe\nc0000094\n7ff788c510a2\n7ff788c510a5\nc0000005\n7ff788c510a5\n7ff788c510a8\n80000003\n7ff788c510aa\n7ff788c510ad\n\n:\\>grep -i += hwbp.cpp\n    exception_pointers->ContextRecord->Rip += 4;\n\n:\\>cl /Zi /W4 /Od /analyze /nologo /EHsc hwbp.cpp /link /release\nhwbp.cpp\n\n:\\>hwbp.exe\nc0000094\n7ff6f2be10a2\n7ff6f2be10a6\n80000003\n7ff6f2be10aa\n7ff6f2be10ae\n\n:\\>\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Mar 21, 2020 at 21:50",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "left click",
+                    "text": "<span class=\"comment-copy\">Thank you for the test. :) I'm so sorry I'm bad at English.. You mean.. when a context switch occurs, hardware breakpoint on new RIP doesn't work, right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">no I haven't checked what's the  puzzle I just confirmed your observation hw bps on instruction next to the Address of Instruction that caused the exception doesn't get hit and posted an observation  that Software breakpoints do gets hit   I didn't open a windbg in a full session I ran it in a script in cmdline so I cant actually set a hw breakpoint without doing some circus (The System Does a ContextSwitch During Process Initialization and will clear the Debug Registers during that period )</span>",
+                    "time": null
+                },
+                {
+                    "user": "left click",
+                    "text": "<span class=\"comment-copy\">Ahh now I unserstand what you said for me. I am grateful for your kind explanation.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

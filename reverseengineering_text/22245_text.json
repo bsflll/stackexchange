@@ -1,0 +1,67 @@
+{
+    "title": "Possible to get address of DRIVER OBJECT programmatically?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22245/possible-to-get-address-of-driver-object-programmatically",
+    "content": "I am looking into getting the address of a dispatch routine. For example, I can get it with windbg easily like so:\n<pre><code>0: kd> !drvobj HEVD 2\nDriver object (ffffa70752fdbe30) is for:\n \\Driver\\HEVD\n\nDriverEntry:   fffff8066262a134 HEVD\nDriverStartIo: 00000000 \nDriverUnload:  fffff80662625000 HEVD\nAddDevice:     00000000 \n\nDispatch routines:\n[00] IRP_MJ_CREATE                      fffff80662625058    HEVD+0x85058\n--snipped--\n[0e] IRP_MJ_DEVICE_CONTROL              fffff80662625078    HEVD+0x85078\n--snipped--\n</code></pre>\nThe IRP_MJ_DEVICE_CONTROL is the routine I am interested in getting and I am not having any luck finding a way to do so. Any knudges or help is much appreciated. \nThank you in advance!\nEdit: I would like to get by either Python or CPP\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "734",
+    "tags": [
+        "windows",
+        "c++"
+    ],
+    "user": "Jon",
+    "time": "Oct 5, 2019 at 0:56",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "in memory or from file on disk?\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "windbg just reads a struct and formats it  DRIVER_OBJECT->MajorFunction[IRP_MJ_DEVICE_CONTROL]\n",
+            "time": null
+        },
+        {
+            "user": "Jon",
+            "text": "@IgorSkochinsky I would like to get it from memory if possible but both ways will work. Basically what I'm trying to do is locate the dispatch table to scrape IOCTL's. If I am unable to find it by programming, I will just add the address to the dispatch table as a parameter to my project.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "As Commented Windbg Just Reads A Structure and Formats it \nyou can simply use the #FIELD_OFFSET macro (wdm.h)\n<pre><code>kd> ?? #FIELD_OFFSET( ntkrpamp!_DRIVER_OBJECT , MajorFunction[0])\nlong 0n56\n\nkd> ?? #FIELD_OFFSET( ntkrpamp!_DRIVER_OBJECT , MajorFunction[0xe])  <<<<<\n0xe == IRP_MJ_DEVICE_CONTROL\nlong 0n112\n\nkd> dd 0x85ded260+0n112 l1\n85ded2d0  8df7d116\n\nkd> u 8df7d116\nBeep!BeepDeviceControl:\n8df7d116 8bff            mov     edi,edi\n8df7d118 55              push    ebp\n8df7d119 8bec            mov     ebp,esp\n8df7d11b 8b4d0c          mov     ecx,dword ptr [ebp+0Ch]\n8df7d11e 8b4160          mov     eax,dword ptr [ecx+60h]\n8df7d121 8b500c          mov     edx,dword ptr [eax+0Ch]\n8df7d124 81ea00000100    sub     edx,10000h\n8df7d12a 56              push    esi\n</code></pre>\nWindbg gets all the driverObjects / or any object for that matter from the RootObjectDirectory   \nuse ReadDebuggerData() Method in IDebugDataSpaces Interface to get\nnt!obpRootDirectoryObject\nthen cast the Address properly to their types and dereference the members of Structure\na small javascript that gets the First Level Driver names is as below\nPlease note this is a hack using hardcoded 36th HashBucket For Driver DirectoryObject\nthis can bomb anytime one needs to get The TypeIndex and Compare With _OBJECT_TYPE\nfor robustness\nalso note TypeIndex in latest  windows releases undergo a xorring routine and Do not point directly to the UnderLying TypeNames   \nit is Xorred with nt!ObHeaderCookie and another Byte From Object Header Address   \nan emulated demo for the disassembly of that routine below \n<pre><code>0: kd> r $t0 = 0xffffe00e255187a0\n0: kd> r $t1 = @$t0-30\n0: kd> r $t2 = @$t0-18\n0: kd> r $t3 = by(@$t0-18)\n0: kd> r $t4 = @$t1>>8 &0xff\n0: kd> r $t5 = @$t4 ^ @$t3 ^ by(nt!ObHeaderCookie)\n0: kd> ? @$t0;? @$t1;? @$t2;? @$t3;?@$t4;? @$t5\n\nEvaluate expression: -35123616446560 = ffffe00e`255187a0\nEvaluate expression: -35123616446608 = ffffe00e`25518770\nEvaluate expression: -35123616446584 = ffffe00e`25518788\nEvaluate expression: 246 = 00000000`000000f6\nEvaluate expression: 135 = 00000000`00000087\nEvaluate expression: 3 = 00000000`00000003\n\n0: kd> dt nt!_OBJECT_TYPE poi(nt!ObTypeIndexTable + 3 *8) \n\n   +0x000 TypeList         : _LIST_ENTRY [ 0xffff920c`896b9900 - 0xffff920c`896b9900 ]\n   +0x010 Name             : _UNICODE_STRING \"Directory\"  <<<<\nxxxxxxxxxxxxxxxxxxxxxxxx\n\n\n0: kd> uf nt!ObGetObjectType\nnt!ObGetObjectType:\nfffff805`1abcbff0 488d41d0        lea     rax,[rcx-30h]\nfffff805`1abcbff4 0fb649e8        movzx   ecx,byte ptr [rcx-18h]\nfffff805`1abcbff8 48c1e808        shr     rax,8\nfffff805`1abcbffc 0fb6c0          movzx   eax,al\nfffff805`1abcbfff 4833c1          xor     rax,rcx\nfffff805`1abcc002 0fb60dcf75f8ff  movzx   ecx,byte ptr [nt!ObHeaderCookie (fffff805`1ab535d8)]\nfffff805`1abcc009 4833c1          xor     rax,rcx\nfffff805`1abcc00c 488d0d4d7cf8ff  lea     rcx,[nt!ObTypeIndexTable (fffff805`1ab53c60)]\nfffff805`1abcc013 488b04c1        mov     rax,qword ptr [rcx+rax*8]\nfffff805`1abcc017 c3              ret\n</code></pre>\nSource Code For Javascript\n<pre><code>/// <reference path=\"JSProvider.d.ts\" />\n\nfunction log(x) {\n    host.diagnostics.debugLog(x + \"\n\")\n}\n\nfunction getobroot() {\n    var obroot = host.getModuleSymbol(\"ntkrnlmp\", \"ObpRootDirectoryObject\", \"_OBJECT_DIRECTORY *\");\n    var ObHeadFields = host.getModuleType(\"nt\", \"_OBJECT_HEADER\").fields\n    var drvdirheadaddr = obroot.HashBuckets[36].ChainLink.Object.address\n    var drvdirobj = host.createPointerObject(drvdirheadaddr, \"nt\", \"_OBJECT_DIRECTORY *\")\n    //looping only Hasbuckets \n    for (i = 0; i < 37; i++) {\n        var drvobj1 = drvdirobj.HashBuckets[i].Object.address\n        //loop all the 37 HashBucket's Objects and Chainlinks->Objects for drivers x,y,z,...\n        var drvobj = host.createPointerObject(drvobj1, \"nt\", \"_DRIVER_OBJECT *\")\n        try {\n            var dname = host.memory.readWideString(drvobj.DriverName.Buffer.address)\n        } catch (error) {\n            log(error)\n        }\n        log(dname)\n    }\n}\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Oct 7, 2019 at 19:21",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jon",
+                    "text": "<span class=\"comment-copy\">Thank you for that! I didn't know that was a thing. I was leaning more towards using either Python or Cpp to get the dispatch routines for a project I'm working on. As I mentioned in the previous comments, I'm trying to locate the dispatch table to scrape IOCTL's. If not, I will just add the address manually to my project as a parameter. Thanks again, @blabb!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Biswapriyo",
+                    "text": "<span class=\"comment-copy\">@Jon you've to dig into the driver binary to get the ioctl value.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jon",
+                    "text": "<span class=\"comment-copy\">@Biswapriyo, I can get the IOCTL's easily. So right now, I can give it the address of the dispatch table and from there, itll get the IOCTL's. So right now, I have this: <code>project.exe driver address</code>    I would like to just give it the driver and do something to find the dispatch table rather than actually specifying the address as a parameter. This is being a pain in the ass, so I might just stick to that. I would still like to do it. If windbg can do it, I'm pretty sure there is a way</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">added details of how windbg gets it</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jon",
+                    "text": "<span class=\"comment-copy\">thank you blabb! Sorry, I am just now seeing it but this was quite helpful</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

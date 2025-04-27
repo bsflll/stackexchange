@@ -1,0 +1,39 @@
+{
+    "title": "Intel PIN: How to log the value of the fs and gs registers at every instruction?",
+    "link": "https://reverseengineering.stackexchange.com/questions/13643/intel-pin-how-to-log-the-value-of-the-fs-and-gs-registers-at-every-instruction",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I modified the pinatrace pintool example and managed to log all values of the \"regular\" registers:\n </p>\n <pre><code>VOID Instruction(INS ins, VOID *v)\n{\n ...\n // Instrument REGISTER writes using a predicated call, i.e.\n // the call happens iff the register store will be actually executed\n UINT32 maxNumWRegs;\n maxNumWRegs = INS_MaxNumWRegs(ins);\n for (UINT32 i=0; i<maxNumWRegs; i++)\n {\n     // --> BEFORE\n     INS_InsertPredicatedCall(\n        ins, IPOINT_BEFORE, (AFUNPTR)SaveRegWrite,\n        IARG_INST_PTR,\n        IARG_UINT32,\n        INS_RegW(ins, i),\n        IARG_END);\n    \n    if (INS_HasFallThrough(ins))\n    {\n        // --> AFTER\n        INS_InsertCall(\n            ins, IPOINT_AFTER, (AFUNPTR)LogRegWrite,\n            IARG_INST_PTR,\n            IARG_UINT32,\n            INS_RegW(ins, i),\n            IARG_CONTEXT, // to access the register value\n            IARG_END);\n    }\n    if (INS_IsBranchOrCall(ins))\n    {\n        INS_InsertCall(\n            ins, IPOINT_TAKEN_BRANCH, (AFUNPTR)LogRegWrite,\n            IARG_INST_PTR,\n            IARG_UINT32,\n            INS_RegW(ins, i),\n            IARG_CONTEXT, // to access the register value\n            IARG_END);\n    }        \n}\n</code></pre>\n <p>\n  I read\n  <a href=\"https://beta.groups.yahoo.com/neo/groups/pinheads/conversations/topics/5444\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  that\n </p>\n <blockquote>\n  <p>\n   You can't actually be sure that fs is not zero by looking at the EA, because the value in fs is an index into the table of segment descriptors, not a pointer in its own right... The pointer value is taken from the segment descriptor, but is mirrored in the Pin virtual register REG_SEG_FS_BASE.\n  </p>\n </blockquote>\n <p>\n  I am not sure how to get the value using this virtual register.\n </p>\n <p>\n  Related info from the official manual:\n </p>\n <blockquote>\n  <p>\n   When IARG_CONTEXT is used in probe mode,it is impossible to get certain register values correct. The values in these registers are meaningless when IARG_CONTEXT is used in probe mode:\nREG_SEG_GS_BASE\nREG_SEG_FS_BASE\nREG_INST_G0 - REG_INST_G19\nUsing IARG_RETURN_REGS and IARG_REG_REFERENCE is not supported in Probe mode.\n  </p>\n </blockquote>\n <p>\n  How do I print the value of the fs and gs regsiters after every instruction execution?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "x86",
+        "pintool",
+        "register",
+        "segmentation",
+        "amd64"
+    ],
+    "user": "langlauf.io",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "joxeankoret",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you using probe mode (aka hooking)? If not, doesn't this work for you?    auto reg = PIN_GetContextReg(ctx, REG_SEG_FS);\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "<html><body><span class=\"comment-copy\">\n Are you on x64 because there you cannot change segment registers.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <pre><code>const CONTEXT *ctx; (from the arguments of LogRegWrite...)\nPIN_REGISTER regval;\nPIN_GetContextRegval(ctx, REG_SEG_GS, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_FS, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_GS_BASE, reinterpret_cast<UINT8*>(&regval));\nPIN_GetContextRegval(ctx, REG_SEG_FS_BASE, reinterpret_cast<UINT8*>(&regval));\n</code></pre>\n <p>\n  You use use\n  <code>\n   PIN_GetContextRegval\n  </code>\n  API to get register value of\n  <code>\n   fs\n  </code>\n  /\n  <code>\n   gs\n  </code>\n  . As mentioned in a question on the Pinheads Yahoo group [1],\n  <code>\n   REG_SEG_GS\n  </code>\n  will only get the value of\n  <code>\n   fs\n  </code>\n  /\n  <code>\n   gs\n  </code>\n  , in other word, the index to GDT,\n  <code>\n   REG_SEG_GS_BASE\n  </code>\n  will get the base address of the corresponding entry of GDT.\n </p>\n <p>\n  [1]\n  <a href=\"https://beta.groups.yahoo.com/neo/groups/pinheads/conversations/topics/5444\" rel=\"nofollow noreferrer\">\n   https://beta.groups.yahoo.com/neo/groups/pinheads/conversations/topics/5444\n  </a>\n  , retrieved through\n  <a href=\"https://archive.org/details/yahoo-groups-2017-06-06T08-31-40Z-67aaf3\" rel=\"nofollow noreferrer\">\n   Wayback machine\n  </a>\n </p>\n <blockquote>\n  <p>\n   I think you're probably after REG_SEG_FS_BASE, which is the address of the base of the F segment.\n  </p>\n  <blockquote>\n   <p>\n    I know fs is not zero by obtaining the memop effective address (0x7ffff7fd4728 in my case).\n   </p>\n  </blockquote>\n  <p>\n   You can't actually be sure that fs is not zero by looking at the EA, because the value in fs is an index into the table of segment descriptors, not a pointer in its own right...\nThe pointer value is taken from the segment descriptor, but is mirrored in the Pin virtual register REG_SEG_FS_BASE.\n  </p>\n </blockquote>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "canihavesomecoffee",
+            "time": "Apr 1, 2021 at 15:00",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

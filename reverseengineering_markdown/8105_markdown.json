@@ -1,0 +1,58 @@
+{
+  "title": "Reverse engineering file containing sprites",
+  "link": "https://reverseengineering.stackexchange.com/questions/8105/reverse-engineering-file-containing-sprites",
+  "content": "I'm trying to reverse engineer a file that contains sprites. I want to extract the sprites out of the file. So far I've managed to find some kind of line end sequence, and with this I've been able to confirm that the sprites are in the file:\n\n\n\nI'm using C++ and SDL. I load the file as a series of chars, and then plot a white pixel if the char>128 and a black if the char<128. It's very crude and I don't know how to proceed. How do I find where color is stored? Or an alpha channel? Or what is in the header? Etc.\n\nIf you know of any online resources that could be helpfull, please let me know. I'm kind of lost at where to start. These are first couple of bytes from the file I'm trying to reverse engineer, maybe this will help:\n\n\n\nThe game is State of War. Its my childhoods' dream to write a remake of this game. I'm currently making a remake, but I'm using placeholder graphics. Thats why I need the sprites. I will not use it for commercial purposes.\n\nThere are 2 kinds of sprite files. *.tsp files, and a big sprites.data and sprites.info file. I've uploaded some files here.\n\n",
+  "votes": "7",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "binary-format"
+  ],
+  "user": "DnDiene",
+  "time": "Feb 25, 2015 at 16:18",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "You got started well; plotting unknown data as pixels immediately showed you this is indeed graphic data, not compressed (at least the buttons aren't), and in a usable RGB order. I guess the missing RGB format was what held you back; now you know it, you can write a simple program to plot in color and show offsets and widths of the images. Armed with that information, you can inspect the unknown bytes before (and possibly after) the images, and derive their meaning.\n\nThe file 001_buttons.tsp consists of a series of images, without a general file header but with a header per image.\n\nThe first long word of this header (4 bytes, little endian format) is the size of the following data in bytes, excluding the header itself (this length may be 0). Then follow width and height as words. The next 12 bytes are 3 word-sized x,y pairs; the first pair is the center of the image. The coordinates are signed words, they wrap around at 0xFFFF/2. The other pairs still serve an unknown purpose.\n\nAfter that, you have (height) times the offset of the next image scan line in words, offset from the start by 4 (so 4+2*offset = next line).\n\nEach scan line pointed to by these offsets is Run-Length Encoded (RLE) compressed. Transparent runs are indicated only by the number of horizontal pixels to skip; opaque runs can be copied directly to the screen. There is no alpha transparency in these images. Each scan line fills exactly width pixels after decompressing.\n\nThe pixel format is packed 16-bit RGB: RRRR.RGGG.GGGB.BBBB, which can be converted to 24-bit RGB in the following (not optimized) way:\n\n```\nputpixel (x,y, (((val >> 8) & 0xf8)<<16) | (((val >> 3) & 0xfc)<<8) | ((val & 0x1f)<<3) );\n\n```\nwhere val is simply the next word: data[c]+(data[c+1]<<8).\n\n\n\n\n\nAll values mentioned hereafter are word sized (2 bytes, little endian).\nEach scan line starts with the number of commands for that line and a flag indicating whether to start with a \"skip\" or \"copy\". If the flag word after the number of commands is 0000, the line starts with a \"skip\", and if it is 0001, the line starts with a \"copy\".\nAfter that, \"skip\" and \"copy\" commands alternate until the entire scan line is filled. Each command is the number of pixels to skip or copy; for \"copy\", the actual pixel values follow directly after it.\n\nAll lines should be filled entirely -- if necessary, the command list ends with a number of 'empty' pixels to skip.\n\n\n\nNot all objects in sprites.data are sprites in this format. There are at least two different types:\n\nNeither these objects nor the actual sprites have a recognizable identifier at the start, so you can only find out which is which by trial and error (for example: if the reported 'size' of an image is negative or larger than the entire data file, you know it cannot be an RLE-compressed image after all).\n\nThe index file sprite.info is obfuscated, but not by much. It has the following format:\n\n```\n4 x some byte flag (all `01` in this file)\nlong  total number of objects (377, in this file)\n377 x\n      0-terminated \"filename\" (obfuscated)\n      long offset in 'sprite.data'\n      long length in 'sprite.data'\n\n```\nThe filename is obfuscated by adding the constant 10 to each character. Decoding this, you get a list of 377 items:\n\n```\n__extras\\compplay.ps6                | 00000000 000000C0\n__extras\\dim1.ps6                    | 000000C0 00000BC4\n__extras\\dim2.ps6                    | 00000C84 00000EB4\n...\nunits\\tur_05_blue.ps6                | 01FAC346 00013E12\nunits\\tur_05_gren.ps6                | 01FC0158 00013E12\nunits\\turrets_shadow.ps6             | 01FD3F6A 00013C9C\n\n```\nThis is some sort of general index, as clearly not all images are listed. It must list only the first of an animated set; the 'length' is then the total length of all files in that particular set. The file extensions are a hint to their contents: files ending with .ps6 all contain at least one image (and may contain more), files ending with .msk are probably a monochrome mask and .sha possibly shadows. The .podigit files contain coordinate pairs.\n\n",
+      "votes": "11",
+      "user": "DnDiene",
+      "time": "Jan 30, 2015 at 11:47",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "DnDiene",
+          "text": "Wow. I keep amazing myself at how helpfull people are on the internet. I thought I'd never get a useful reply. This is so helpfull! Thank you very much.  I'm still working on integrating everything you say. Quick question, SDL works with Uint8 r, Uint8 g, Uint8 b. How would I convert the 24 bit rgb value to those 8 bit values? Will work on it myself aswell.",
+          "time": null
+        },
+        {
+          "user": "DnDiene",
+          "text": "I figured it out! Now I'll work on the other things you've said",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "FYI, I am right about those line offsets. The RLE is a bit more complicated though.",
+          "time": null
+        },
+        {
+          "user": "DnDiene",
+          "text": "Using the offsets you suggested, I seem to be getting the images from sprites.data, however, they are distorted like this. I'll keep trying stuff, but maybe this will provide clues. I feel like I'm so close!",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "That is because of the RLE compression, I already mentioned that.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "If you really want to understand every byte of the file, then, as Jason pointed out, you'll have to get the program that reads it and reverse engineer that.\n\nOf course, this might be somewhere between hard and impossible, and very time-consuming as well. So the question is what you want to do. Extract a certain sprite from the file? Change the colors of some of the sprites? Translate the game to a different language? Possibly, you won't need to understand the whole file for your purpose.\n\nIt seems you've already established the file seems uncompressed, and there seems to be one byte per pixel. Or is that two bytes? The hex dump contains a lot of 00's, so maybe these are 16-bit words where only the low bytes are used.\n\nThe whole 'one byte per pixel' thing suggests a palette colortable. You might try to replace every single pixel (=hex value) of one of the sprites with the same value. Fire up the game, check the color of the sprite. Repeat with a different value. You might be able to work out which value corresponds to which color.\n\nThe image suggests the sprites have different widths. You could count the pixels (width and height) and search the hex dump for these counts. This might help you determining the structure of the headers in front of each sprite.\n\nIf you know the size (in bytes) of each sprite, you might check for these sizes in the hex dump, or in the header of the file. Or, the header may contain the number of sprites, and an array of starting positions in the file. \n\nSo, to sum it up:\n\nAnother suggestion: When you post anything to here, include as much information as you can. For example, copyright permitting, post the whole sprite file, not an image of its hex dump - you can assume that if anyone is interested, they can download the file to a hex viewer themselves. If you have a partial source code, post a link to that source code. A lot about reverse engineering is experience, like \"i've seen something similar before - that time, it was XXX\". Someone might just look at your source and remember something. Or, someone might have an idea and see the problem as a 'puzzle challenge'. Testing this idea is much easier if your current source code is available.\n\nOnce, i had a similar problem with a file format, and google found a 7 year old forum post for me, from someone who had done a bit of research, posted his results, didn't get any further and lost interest. That helped me to get started, i contacted that guy, and together we finally got some results. So, even if noone can help you much now, you never know what's going to happen in the future.\n\n(Of course, the chance of someone finding your post with google increases a lot if you post the name of the game ...)\n\n",
+      "votes": "3",
+      "user": "Guntram Blohm",
+      "time": "Jan 27, 2015 at 17:26",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

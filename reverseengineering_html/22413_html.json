@@ -1,0 +1,51 @@
+{
+    "title": "How to calculate the size of a PE from headers?",
+    "link": "https://reverseengineering.stackexchange.com/questions/22413/how-to-calculate-the-size-of-a-pe-from-headers",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  What I am trying to do is calculate the size of a PE through it's headers. I am using WinDbg's Javascripting and in this case, it will mostly be for drivers. The idea is to dump a driver from memory through WinDbg and I can do it by dumping the BaseAddress to BaseAddress+ImageSize. The ImageSize isn't really the actual size of it on disk and I would like it to be as similar as possible, almost like copy/pasting.\n </p>\n <p>\n  I found this post:\n  <a href=\"https://stackoverflow.com/questions/29587560/self-inspection-of-the-pe-format\">\n   https://stackoverflow.com/questions/29587560/self-inspection-of-the-pe-format\n  </a>\n  I am able to get the full size on one driver, easily:\n </p>\n <pre><code>0: kd> !dh HEVD\n--snipped--\nSECTION HEADER #7\n  .reloc name\n      14 virtual size\n   8B000 virtual address\n     200 size of raw data\n    6E00 file pointer to raw data\n\n0: kd> ? 8b000 + 14\nEvaluate expression: 569364 = 00000000`0008b014\n0: kd> ? 6e00 + 200\nEvaluate expression: 28672 = 00000000`00007000\n</code></pre>\n <p>\n  The person mentioned that you should add the highest value for PointerToRawData against the SizeOfRawData, which is usually the last section. The size for this particular driver is 28,672 bytes but this doesn't always work for all drivers.\n </p>\n <p>\n  Here's an example of where it doesn't work:\n </p>\n <pre><code>0: kd> !dh RTCore64\n--snipped--\n400 size of headers\n--snipped--\nSECTION HEADER #5\n    INIT name\n     258 virtual size\n    5000 virtual address\n     400 size of raw data\n    1600 file pointer to raw data\n       0 file pointer to relocation table\n       0 file pointer to line numbers\n       0 number of relocations\n       0 number of line numbers\nE2000020 flags\n         Code\n         Discardable\n         (no align specified)\n         Execute Read Write\n0: kd> ? 1600 + 400\nEvaluate expression: 6656 = 00000000`00001a00\n</code></pre>\n <p>\n  The file size for this particular driver is 16,384 bytes on disk and 14,024 bytes regular size.\n </p>\n <p>\n  Then I found this post:\n  <a href=\"https://stackoverflow.com/questions/34684660/how-to-determine-the-size-of-an-pe-executable-file-from-headers-and-or-footers\">\n   https://stackoverflow.com/questions/34684660/how-to-determine-the-size-of-an-pe-executable-file-from-headers-and-or-footers\n  </a>\n  It was saying to add the size of headers against the SizeOfRawData for each section. That didn't work.\n </p>\n <pre><code>0: kd> ? 400 + c00 + 200 + 200 + 200 + 400\nEvaluate expression: 6656 = 00000000`00001a00\n</code></pre>\n <p>\n  I also tried this answer:\n  <a href=\"https://stackoverflow.com/questions/8197134/how-do-i-determine-exact-pe-image-file-size-using-its-headers\">\n   https://stackoverflow.com/questions/8197134/how-do-i-determine-exact-pe-image-file-size-using-its-headers\n  </a>\n  Basically it was said to add the VirtualAddress against VirtualSize, but that doesn't work. It actually gives me a number that's higher than what the actual size is.\n </p>\n <pre><code>0: kd> ? 5000 + 258\nEvaluate expression: 21080 = 00000000`00005258\n</code></pre>\n <p>\n  I also tried with this post:\n  <a href=\"https://stackoverflow.com/questions/8193862/the-size-of-a-pe-header\">\n   https://stackoverflow.com/questions/8193862/the-size-of-a-pe-header\n  </a>\n  That also didn't work. There were other posts I looked at, but they all boil down to some variation of those.\n </p>\n <p>\n  Can I get help on why I am unable to? I'm not sure what I'm missing.\n </p>\n <p>\n  Thank you in advance\n </p>\n <p>\n  Also, if you would recommend a better way of doing so, I'm all ears!\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "pe",
+        "windbg"
+    ],
+    "user": "Jon",
+    "time": "Oct 28, 2019 at 22:49",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is quickly thrown together, it's late.\n </p>\n <pre><code>// Grab first section in the image and initialize our file dump data.\nauto sec = IMAGE_FIRST_SECTION(nt);\nauto img = std::vector<uint8_t>();\n\n// Reserve (more than) enough space for the file and zero initialize it.\nimg.clear();\nimg.reserve(nt->OptionalHeaders.SizeOfImage, 0);\n\n// Grab base address for both virtual memory and file dump.\nauto img_mem = 0xDEADBEEF;\nauto img_dmp = img.data();\n\n// Save PE header to the file dump.\nmemcpy(img_dmp, img_mem, sec->PointerToRawData);\n\n// Save each sections data to the file dump, permission checks should be done here as well.\nfor (auto i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec)\n     memcpy(img_dmp + sec->PointerToRawData, img_mem + sec->VirtualAddress, sec->SizeOfRawData);\n</code></pre>\n <p>\n  Furthermore, a simple way to get the file size of a PE is just to get the highest sections PointerToRawData and add its SizeOfRawData.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Pickle Rick",
+            "time": "Oct 29, 2019 at 7:06",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jon",
+                    "text": "<span class=\"comment-copy\">Thank you, but what I did find is that won't always work. The sizes will be different doing it that way compared to what the file size is on the actual driver properties. I must be missing something, but it's one of those that made me go down the rabbit hole and now I just can't leave it alone.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Pickle Rick",
+                    "text": "<span class=\"comment-copy\">What exactly is causing your issue? Some sections might have a virtual size but no raw size (i.e from a packer) and virtual size may be larger than raw size (i.e only part of the section has initialized data) but those are easy to fix. Each section has a VirtualAddress field (rva from base when in memory), a PointerToRawData field (file offset where section data starts), and SizeOfRawData (size of section on disk). What else do you need? The highest section file offset plus raw size is the size of your image. You may also need to make sure it's aligned with FileAlignment.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Pickle Rick",
+                    "text": "<span class=\"comment-copy\">Sorry, just noticed you edited OP. If you want to upload the file (or just PE) to that RTCore driver I can take a look at it. Something weird might be going on, like maybe they embed a bunch of data after the last section. Although I don't really know why since it wouldn't be mapped anyway if it's not a part of SizeOfRawData.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jon",
+                    "text": "<span class=\"comment-copy\">Hey no worries! Yea man, that's what I was wondering too. I wasn't entirely sure what was going on so I was just like ummm...okayyy. You can snag the driver here: <a href=\"https://github.com/ch3rn0byl/Driver-Puller-Thingy/blob/master/Drivers/RTCore64.sys\" rel=\"nofollow noreferrer\">github.com/ch3rn0byl/Driver-Puller-Thingy/blob/master/Drivers/…</a>        I'm not entirely sure if the size of it will get in the way of what I'm trying to do but im basically pulling an obfuscated driver from memory to be able to view it statically through IDA. I am doing it on a driver that I know of that way I know it works first. So me wondering if that will be an issue led me down this rabbit hole. Thank you!!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Pickle Rick",
+                    "text": "<span class=\"comment-copy\">Ah, looks like the remaining bytes are all the embedded signed certificate for the driver. In this case the data isn't in a section but rather pointed to by IMAGE_DIRECTORY_ENTRY_SECURITY in the PE header.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

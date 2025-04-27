@@ -1,0 +1,88 @@
+{
+  "title": "Injecting C++ code, while also maximizing compatibility with other injections",
+  "link": "https://reverseengineering.stackexchange.com/questions/22155/injecting-c-code-while-also-maximizing-compatibility-with-other-injections",
+  "content": "Using the New Vegas Script Extender C++ API for Fallout New Vegas, I am able to write to the process' memory directly at runtime through a .dll plugin that's loaded by the NVSE injector. But it is not a debugger, like CheatEngine, so there's no automatic handling of inserting new code to an existing assembly function.\n\nBeginning of the assembly function, TryOpenPipboy, I want to inject code into: https://i.sstatic.net/xIqmA.png\n\nEquipPlayerPipboy() function I want to inject: https://i.sstatic.net/Gaujf.png\n\nThe game has a loop called MainUILoop which runs every frame, and when the player presses tab without holding it down, TryOpenPipboy is called.\n\nMy guess is that I need to somehow create a new empty block of memory, edit a copy of the original TryOpenPipboy function, then replace all TryOpenPipboy calls with my modified variant. But that would make a hard incompatibility with any other NVSE plugins that also modify the MainUILoop in any way, as well as any that edit TryOpenPipboy.\n\nEdit: Another possible way would be to change the jmp assembly to my C++ function, then call TryOpenPipboy from my function. That would mean TryOpenPipboy is still called, but is unmodified, increasing potential compatibility.\n\nSo how should I go about doing this?\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "459",
+  "tags": [
+    "windows",
+    "x86",
+    "c++",
+    "patching",
+    "game-hacking"
+  ],
+  "user": "FiftyTifty",
+  "time": "Sep 19, 2019 at 20:04",
+  "comments": [
+    {
+      "user": "Avery3R",
+      "text": "Can you copy paste the assembly/code instead of using a screenshot?",
+      "time": null
+    },
+    {
+      "user": "FiftyTifty",
+      "text": "Sorry about that. Here is the assembly code for TryOpenPipboy: pastebin.com/feMycWYW",
+      "time": null
+    },
+    {
+      "user": "FiftyTifty",
+      "text": "And here is the assembly code for where TryOpenPipboy is called: pastebin.com/mT0szzek",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "@FiftyTifty you can edit the question to add the code inline instead of images or external links (use code formatting)",
+      "time": null
+    },
+    {
+      "user": "Pickle Rick",
+      "text": "So basically you just want a hook? There are a huge number of ways to achieve this but the simplest is probably a JMP hook. I'm happy to explain the details of how it works if you want, but I suggest just using an existing library like MinHook either way. Note that if this game is online then it's very likely you'll be kicked or banned, CRC hashes on code sections is about the simplest detection of unwanted modifications you can have.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "If you just want to run code before or after TryOpenPipboy is called, you can overwrite the prologue of the function with a jmp to your function. Before you overwrite it, copy the instructions in the prologue to a new memory buffer, and add a jump to the rest of the function on the end, this is called a trampoline. You can use the trampoline to call the original function.\n\nBefore:\n\n```\n:originalFunction\npush ebp ;55\nmov ebp, esp ;89 E5\nsub esp, 0x40 ;83 EC 40\n;...\nret\n\n```\nAfter patching:\n\n```\n:originalFunction\njmp yourFunction ;?? ?? ?? ?? ??\nnop ;this used to be the 0x40 byte at the end\n:trampolinetarget\n;...\nret\n\nyourFunction:\n;do stuff\ncall trampoline ;calls the original function\n;do stuff\nret\n\ntrampoline:\npush ebp\nmov ebp, esp\nsub esp, 0x40\njmp trampolinetarget\n\n```\nIf something else tries to hook the original function, they'll just overwrite that jmp instruction, and their trampoline will call your function. Microsoft's Detours library can handle all of this for you.\n\n",
+      "votes": "1",
+      "user": "Avery3R",
+      "time": "Sep 19, 2019 at 20:04",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "FiftyTifty",
+          "text": "The examples provided in the Detours library are not that intuitive, especially with the lack of fully fledged documentation, so I tried to make use of NVSE's WriteRelCal() function, and C++'s ThisStdCall(), but I'm hopelessly lost as there's no documentation for them either. I did however find a more simple example of Detours: github.com/Alenett/TES-Reloaded-Source/blob/master/TESReloaded/…  So how would I use this? I've got the address where the ASM function is called, and I want to insert my own C++ function in the call's place, and then call the ASM function from it.",
+          "time": null
+        },
+        {
+          "user": "FiftyTifty",
+          "text": "Here is the project as it is now: mega.nz/#!HgMm2YJK!b75ABK-s4wuu63cm8FIxkNmMinmWrVW7xiLBibQv42E",
+          "time": null
+        },
+        {
+          "user": "Avery3R",
+          "text": "Take a look at this example, github.com/microsoft/Detours/blob/master/samples/opengl/… they start a transaction, tell the library which thread is the current thread, give it a pointer to the original function that will be replaced with a pointer to the trampoline, then commit it. When they commit it, the first thing it does is suspends all other threads, this is to prevent race conditions and is why you need to tell it what thread you're running on. After that, it does similar patches to what I showed in my answer. Just give it the addrof the func you want to hook, and ur func",
+          "time": null
+        },
+        {
+          "user": "FiftyTifty",
+          "text": "Thanks for that, the explanation cleared it up for me. However, Detours now throws four errors when compiling, all of them being unresolved external symbol. That error should just apply when calling a function from an #include that isn't exposed, but that's not the case here. They're too long to post in a comment, so I put them on pastebin: pastebin.com/fT7jk1Um",
+          "time": null
+        },
+        {
+          "user": "Anonymous Anonymous",
+          "text": "@FiftyTifty Some of the errors seem to originate from not linking with detours.lib (or a similar name). But especially the first and the last seem to be different. Could you post the exact code, including compiler-options here?",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Intel PIN in Probe Mode can do just. You can inject C code and PIN will even handle the context switching for you. \n\n",
+      "votes": "0",
+      "user": "MkInitCpIO",
+      "time": "Sep 21, 2019 at 6:12",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

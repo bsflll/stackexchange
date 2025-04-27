@@ -1,0 +1,54 @@
+{
+  "title": "Why does WriteProcessMemory in kernel32.dll do this? (ASM)",
+  "link": "https://reverseengineering.stackexchange.com/questions/8384/why-does-writeprocessmemory-in-kernel32-dll-do-this-asm",
+  "content": "Someone said to do something like this to avoid scans for WPM calls: \n\n```\n__declspec(naked) BOOL WINAPI SafeWriteProcessMemory(HANDLE hProcess,\n    LPCVOID lpBaseAddress, LPVOID lpBuffer, SIZE_T nSize,\n    SIZE_T *lpNumberOfBytesRead)\n{\n    __asm\n    {\n            mov edi, edi\n            push ebp\n            mov ebp, esp\n            pop ebp\n            mov eax, WriteProcessMemory\n            add eax, 6\n            jmp eax\n    }\n}\n\n```\nI put it in a program and debugged it in olly. I looked at kernel32.WriteProcessMemory. We're using the add eax, 6 to jump from here:\n\n```\nMOV EDI,EDI                              ; BOOL kernel32.WriteProcessMemory(hProcess, ...)\nPUSH EBP\nMOV EBP,ESP\nPOP EBP\nJMP <JMP.&API-MS-Win-Core-Memory-L1-1-0. ; Jump to KERNELBASE.WriteProcessMemory\n\n```\nTo there. Effectively skipping over the instructions between the two. We're executing those instructions in our own call. But I don't understand why those instructions are being executed. We're pushing EBP onto the stack, moving ESP into EBP, then restoring EBP from the stack. That shouldn't actually be doing anything.\n\nI debugged it instruction-by-instruction, and still can't figure out why it's being done.\n\nDoes it have something to do with Windows' useless mov edi,edis at the beginning of functions to allow jump patching?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "1k",
+  "tags": [
+    "windows",
+    "assembly"
+  ],
+  "user": "Pulpo",
+  "time": "Mar 4, 2015 at 22:01",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "This is the \"stolen bytes\" technique, where the first few bytes of the function are copied to a remote location and executed from there, then the original function is called from the location after the bytes that were copied.\n\nThe purpose of skipping the first few bytes of the function allows you to call the function body without being \"detected\".  That is, any code which detoured the function at exactly the start would be bypassed.\n\nIn your example, the EBP manipulation is meaningless.  Those instructions exist in the original function in order to provide a familiar signature for routines that, for example, detour the code (but which is presumably broken by also including the hot-patching support).  Note that the POP instruction did not exist in that location before Windows 7, with the introduction of the kernelbase.dll.  Previously, the real function body would have followed the MOV instruction.\n\n",
+      "votes": "2",
+      "user": "peter ferrie",
+      "time": "Mar 5, 2015 at 17:27",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "The intention was likely to cause breakpoints set on the first instruction of WriteProcessMemory() to not fire.\n\nHowever, this is a very unsafe approach and is prone to breaking should the prologue of the API function change.\n\n",
+      "votes": "3",
+      "user": "Jason Geffner",
+      "time": "Mar 4, 2015 at 22:06",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Pulpo",
+          "text": "Excuse my ignorance, but how would that prevent a breakpoint from firing? I set a breakpoint on the first instruction, and it fired correctly.",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "If you set a breakpoint on WriteProcessMemory() and call SafeWriteProcessMemory(), the breakpoint won't fire.",
+          "time": null
+        },
+        {
+          "user": "user45891",
+          "text": "But doesn't Microsoft basically guaranteed that the prologue won't change (in the forseeable future) with their introduction of Hotpatching?",
+          "time": null
+        },
+        {
+          "user": "Jason Geffner",
+          "text": "No.​​​​​​​​​​​​",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

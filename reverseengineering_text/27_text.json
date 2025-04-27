@@ -1,0 +1,69 @@
+{
+    "title": "Reverse engineering a Solaris driver",
+    "link": "https://reverseengineering.stackexchange.com/questions/27/reverse-engineering-a-solaris-driver",
+    "content": "I have several Solaris 2.6 era drivers I would like to reverse engineer.\nI have a Sparc disassembler which provides some info but it isn't maintained anymore so I think it may not give me all the information possible.\nThe drivers are for an Sbus graphics accelerator I own. Namely the ZX aka Leo one of the early 3d accelerators.\nSo what are some ways I can go about reverse engineering this driver? I can disassemble it but I am not sure what to make of the output. I also have Solaris of course so perhaps there are things I can do there as well.\nThe final goal is to have enough information to design a driver for an Operating System. There are drivers for NetBSD, although incomplete as the hardware documentation that does exist (isn't free to access) does not have the Window ID encoding as it is missing. Also, since the hardware uses an Sbus interface on a double wide mezzanine card, it would be impractical to use it on anything but a SparcStation or early UltraSparc machine.\n",
+    "votes": "10",
+    "answers": 1,
+    "views": "582",
+    "tags": [
+        "sparc",
+        "solaris",
+        "driver",
+        "sbus"
+    ],
+    "user": "cb88",
+    "time": "May 15, 2013 at 2:05",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "You probably should add what is your final goal. Do you want to use the card in another machine? Make a driver for another OS on the same box? Just curiosity?\n",
+            "time": null
+        },
+        {
+            "user": "cb88",
+            "text": "@Igor Skochinsky Good suggestion I have taken you up on it! And yes just for curiosity and fun.. Vintage SparcStations are my hobby you might say.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "If you have drivers for NetBSD I'd recommend looking at them and trying to find matches with what the Solaris driver does. This should speed up the process.\n",
+            "time": null
+        },
+        {
+            "user": "cb88",
+            "text": "Indeed however as I said...the NetBsd driver for the ZX is incomplete and it certainly doesn't cover the opengl 1.1 capability that the device has so I'll almost definitly have to get a copy of IDA or have a friend dump the assembly for me. I also have a TGS opengl driver for it that would be intersting I am sure however it requires a flexlm license which sadly I do not have.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "I also found some kind of a Linux driver that might be useful.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Well, since it's a Solaris driver, first you need to find up some docs on how Solaris drivers communicate with the kernel (or kernel with them). A quick search turned up this:\n\n<pre><code>_init()</code></pre> initializes a loadable module. It is called before any other routine in a loadable module. <pre><code>_init()</code></pre> returns the value returned by\n  <pre><code>mod_install(9F)</code></pre> . The module may optionally perform some other work\n  before the <pre><code>mod_install(9F)</code></pre> call is performed. If the module has done\n  some setup before the <pre><code>mod_install(9F)</code></pre> function is called, then it\n  should be prepared to undo that setup if <pre><code>mod_install(9F)</code></pre> returns an\n  error.\n<pre><code>_info()</code></pre> returns information about a loadable module. <pre><code>_info()</code></pre> returns the value returned by <pre><code>mod_info(9F)</code></pre>. \n<pre><code>_fini()</code></pre> prepares a loadable module for unloading. It is called when the system wants to unload a module. If the module determines that it\n  can be unloaded, then <pre><code>_fini()</code></pre> returns the value returned by\n  <pre><code>mod_remove(9F)</code></pre>. Upon successful return from <pre><code>_fini()</code></pre> no other routine\n  in the module will be called before <pre><code>_init()</code></pre> is called.\n\nThere's a nice code sample below.\nThis guide also seems relevant.\nOnce you found the entry points, it's just a matter of following the calls and pointers. \nHere's how it looks in IDA:\n<pre><code>.text:00000000 _init:                                  ! DATA XREF: leo_attach+5A8o\n.text:00000000                                         ! leo_attach+5BCo ...\n.text:00000000                 save    %sp, -0x60, %sp\n.text:00000004                 sethi   %hi(leo_debug), %i2\n.text:00000008                 ld      [leo_debug], %o0\n.text:0000000C                 cmp     %o0, 4\n.text:00000010                 bl      loc_38\n.text:00000014                 sethi   %hi(leo_state), %o0\n.text:00000018                 set     aLeoCompiledSS, %o0 ! \"leo: compiled %s, %s\n\"\n.text:00000020                 set     a141746, %o1    ! \"14:17:46\"\n.text:00000028                 sethi   %hi(aLeo_c6_6Jun251), %l0 ! \"leo.c 6.6 Jun 25 1997 14:17:46\"\n.text:0000002C                 call    leo_printf\n.text:00000030                 set     aJun251997, %o2 ! \"Jun 25 1997\"\n.text:00000034                 sethi   %hi(leo_state), %o0\n.text:00000038\n.text:00000038 loc_38:                                 ! CODE XREF: _init+10j\n.text:00000038                 set     leo_state, %i1\n.text:0000003C                 sethi   %hi(0x1800), %l0\n.text:00000040                 mov     %i1, %o0\n.text:00000044                 set     0x1980, %o1\n.text:00000048                 call    ddi_soft_state_init\n.text:0000004C                 mov     1, %o2\n.text:00000050                 orcc    %g0, %o0, %i0\n.text:00000054                 bne,a   loc_80\n.text:00000058                 ld      [%i2+(leo_debug & 0x3FF)], %o0\n.text:0000005C                 sethi   %hi(0x14C00), %l0\n.text:00000060                 call    mod_install\n.text:00000064                 set     modlinkage, %o0\n.text:00000068                 orcc    %g0, %o0, %i0\n.text:0000006C                 be,a    loc_80\n.text:00000070                 ld      [%i2+(leo_debug & 0x3FF)], %o0\n.text:00000074                 call    ddi_soft_state_fini\n.text:00000078                 mov     %i1, %o0\n.text:0000007C                 ld      [%i2+(leo_debug & 0x3FF)], %o0\n.text:00000080\n.text:00000080 loc_80:                                 ! CODE XREF: _init+54j\n.text:00000080                                         ! _init+6Cj\n.text:00000080                 cmp     %o0, 4\n.text:00000084                 bl      locret_9C\n.text:00000088                 nop\n.text:0000008C                 set     aLeo_initDoneRe, %o0 ! \"leo: _init done, return(%d)\n\"\n.text:00000094                 call    leo_printf\n.text:00000098                 mov     %i0, %o1\n.text:0000009C\n.text:0000009C locret_9C:                              ! CODE XREF: _init+84j\n.text:0000009C                 ret\n.text:000000A0                 restore\n.text:000000A0 ! End of function _init\n</code></pre>\nAt 0x60 you can see <pre><code>mod_install</code></pre> being called with a pointer to <pre><code>modlinkage</code></pre>, so you can follow there and see what the fields are pointing to.\nBut you don't even have to do that all the time. In this case, the programmers very thoughtfully left intact all the symbols and debug output. This should help you in your work :)\nDepending on situation, you may skip straight to the helpfully-named functions like <pre><code>leo_blit_sync_start</code></pre> or <pre><code>leo_init_ramdac</code></pre>. I personally prefer the first way, top-down, but to each his own.\nEDIT: one rather simple thing you can do is to patch the <pre><code>leo_debug</code></pre> variable at the start of <pre><code>.data</code></pre> section to 5 or so. That should produce a lot of debug output about the operations the driver is performing.\n",
+            "votes": "11",
+            "user": "Igor Skochinsky",
+            "time": "Mar 20, 2013 at 15:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "cb88",
+                    "text": "<span class=\"comment-copy\">Clearly IDA pro speaks for itself :) ... that said I can't afford a license for now. It is a bit off topic but per architecture licensing might be interesting for people like myself.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@cb88: I reckon it'd still be more expensive than you will like. IDA is unique. The price is fair, but not to everyone. They have student licenses, however. But I think you need someone to know you and vouch for you (if they still do that). In the past too many leaks have caused financial damage to DataRescue and later Hex-Rays.</span>",
+                    "time": null
+                },
+                {
+                    "user": "cb88",
+                    "text": "<span class=\"comment-copy\">0xC0000022L $75 would be 3x what they charge per arch in the full software and if you could later upgrade it to the full version for the full price - the single arch price that would be quite fair but I suppose it is too much to ask. I don't doubt its worth every pennny I just don't need a battleship for my paddle boat ride of a job :D</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

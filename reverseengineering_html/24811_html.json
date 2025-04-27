@@ -1,0 +1,52 @@
+{
+    "title": "What does state mean in unwinding?",
+    "link": "https://reverseengineering.stackexchange.com/questions/24811/what-does-state-mean-in-unwinding",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm looking at\n  <code>\n   UnwindMapEntry\n  </code>\n  . Here is it's declaration:\n </p>\n <pre><code>//\n// UnwindMapEntry - Description of each state transition for unwinding\n//  the stack (i.e. calling destructors).\n//\n// The unwind map is an array, indexed by current state.  Each entry specifies\n// the state to go to during unwind, and the action required to get there.\n// Note that states are represented by a signed integer, and that the 'blank'\n// state is -1 so that the array remains 0-based (because by definition there\n// is never any unwind action to be performed from state -1).  It is also\n// assumed that state indices will be dense, i.e. that there will be no gaps of\n// unused state indices in a function.\n//\n\ntypedef const struct _s_UnwindMapEntry {\n    __ehstate_t toState;                    // State this action takes us to\n#if _EH_RELATIVE_FUNCINFO\n    int         action;                     // Image relative offset of funclet\n#else\n    void        (__cdecl * action)(void);   // Funclet to call to effect state change\n#endif\n} UnwindMapEntry;\n</code></pre>\n <p>\n  Sorry if it's obvious for you but what does toState means? It is not clear for me by reading the description above.\n </p>\n <p>\n  Also there is this structure for a tryblockmaprntry which is also involved somehow:\n </p>\n <pre><code>//\n// HandlerMapEntry - associates a handler list (sequence of catches) with a\n//  range of eh-states.\n//\ntypedef const struct _s_TryBlockMapEntry {\n    __ehstate_t     tryLow;             // Lowest state index of try\n    __ehstate_t     tryHigh;            // Highest state index of try\n    __ehstate_t     catchHigh;          // Highest state index of any associated catch\n    //....\n</code></pre>\n <p>\n  What's\n  <code>\n   catchHigh\n  </code>\n  - is it always\n  <code>\n   tryHigh + 1\n  </code>\n  ?\n </p>\n <p>\n  OK It seems the\n  <code>\n   catchHigh\n  </code>\n  is continuing the state inside the catch block - because you can have exception there too. But still I don't see it's purpose - like when this field makes any difference.\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "429",
+    "tags": [
+        "x86",
+        "seh",
+        "msvc"
+    ],
+    "user": "rec",
+    "time": "May 3, 2020 at 15:04",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  the\n  <em>\n   __ehstate_t\n  </em>\n  type is defined as\n  <em>\n   int\n  </em>\n  .\n  <em>\n   toState\n  </em>\n  is the index of the next handler in the array that needs to be unwind.\n </p>\n <p>\n  <em>\n   Action\n  </em>\n  is the operation that needs to be done in order to reach the next state (the value of\n  <em>\n   toState\n  </em>\n  ). This happens until\n  <em>\n   toState\n  </em>\n  reaches -1, which is the \"blank\" state that ends the unwinding process.\n </p>\n <p>\n  The state is incremented by one every time you enter a try block or otherwise create an object that must be destructed in the unwinding process if an exception is thrown before the program called its destructor.\n </p>\n <p>\n  Example:\n </p>\n <p>\n  Say there is a function\n  <code>\n   int F1(){}\n  </code>\n </p>\n <p>\n  At the beginning of the function, the\n  <em>\n   state\n  </em>\n  for the current scope is -1 as there are no actions to take if an exception occurs.\n </p>\n <p>\n  Somewhere after the beginning of F1 an object of type ClassA is created. This calls the constructor\n  <code>\n   ClassA::ClassA()\n  </code>\n  . At this point if an exception is thrown, there is a ClassA object that needs to be deleted before the\n  <code>\n   catch\n  </code>\n  block is called. The initialization of the object incremented the\n  <em>\n   state\n  </em>\n  to 0.\n </p>\n <p>\n  Now comes a\n  <code>\n   try\n  </code>\n  block - the state is now 1. Should an exception be thrown here, the handler will have to leave the\n  <code>\n   try\n  </code>\n  block (state->0) and call\n  <code>\n   ClassA::~ClassA()\n  </code>\n  on the object that was created before (state->-1). If the execution reaches the end of the\n  <code>\n   try\n  </code>\n  block an no exception occurred, the state is decremented (state->0 again).\n </p>\n <p>\n  <em>\n   tryLow\n  </em>\n  is the target outmost state that a handler must get to before it calls the\n  <code>\n   catch\n  </code>\n  block. In our example, when entering the\n  <code>\n   try\n  </code>\n  block (state = 1), the\n  <em>\n   tryLow\n  </em>\n  value will be -1. The handler will have to get to state -1, that is, leaving the\n  <code>\n   try\n  </code>\n  block\n  <em>\n   and\n  </em>\n  calling\n  <code>\n   ClassA::~ClassA()\n  </code>\n  and only then call the\n  <code>\n   catch\n  </code>\n  block.\n </p>\n <p>\n  For reverse engineering purposes, there is a great post at OpenRCE:\n </p>\n <p>\n  <a href=\"http://www.openrce.org/articles/full_view/21\" rel=\"nofollow noreferrer\">\n   http://www.openrce.org/articles/full_view/21\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Yotamz",
+            "time": "Apr 24, 2020 at 15:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "rec",
+                    "text": "<span class=\"comment-copy\">Can you elaborate with an example algorithm of how it's done. Also if possible to include <code>tryLow</code>, <code>tryLow</code> and <code>catchHigh</code>. In the meantime I'll be continuing to try to understand this myself by looking into the msvct crt sources.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Yotamz",
+                    "text": "<span class=\"comment-copy\">Edited my answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "rec",
+                    "text": "<span class=\"comment-copy\">Also there is sometime a filler of <code>UnwindMapEntry &lt;-1, 0&gt;</code> - any ideas what that is for?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@rec: that's for empty transitions in the state machine (nothing to destruct).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Yotamz",
+                    "text": "<span class=\"comment-copy\">I guess this is a representation of the relevant UnwindMapEntry with a <i>toState</i> (-1) and an <i>action</i> function pointer (NULL).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

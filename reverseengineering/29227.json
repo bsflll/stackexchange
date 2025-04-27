@@ -1,0 +1,59 @@
+{
+    "title": "How do I interpret this double offset?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29227/how-do-i-interpret-this-double-offset",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>While looking at <em>that</em> old game I've found a class <code>CStr</code> that is used in an unusual (to me) manner. Most of the times a member of <code>CStr</code> is used, it's done as follows. In both cases, <code>this</code> is a <code>CStr *</code>.</p>\n<p>Decompilation:</p>\n<pre><code>pcVar6 = *(char **)(*(int *)(this + 4) + 8);\n// pcVar6 is then used\n</code></pre>\n<p>Disassembly</p>\n<pre><code>// since the func is a __thiscall, ECX contains \"this\"\nMOV  ESI ,ECX\nMOV  EAX ,dword ptr [ESI  + 0x4]\nMOV  EDI ,dword ptr [EAX  + 0x8]\n// EDI is then used\n</code></pre>\n<p>This strikes me as odd. If one of the members of <code>CStr</code> is a char array, why isn't it just a single offset? I'm thinking that this has something to do with inheritance, but I'm lacking experience with that to be certain.</p>\n<p>For context, this particular member seems to be a C string. The code comes from a Win32 DLL.</p>\n<p>How do I interpret this correctly? And how do I tell Ghidra how to interpret this?</p>\n<h2>EDIT: More examples</h2>\n<p>I put a lot more here at first, but deleted everything that isn't a case where the CStr object itself is used. It's just a lot more of the line already posted and I doubt that it'll clear anything up. Also, I'm yet to make significat progress in determining what the fields of the objects are, sadly :(</p>\n<hr/>\n<p>Example of CStr being used in constructor. <code>this</code> is a CMachineController here.</p>\n<pre><code>// CMachineController::CMachineController\nCStr::CStr((CStr *)&amp;this-&gt;field_0x4); // could be labeled as \"cstring\"?\n</code></pre>\n<hr/>  \n  \nPart of a longer function. It seems to acquire an instance by reading a config object, then does some manipulation and destroys the CStr.    \n  \nVar types as follows:\n - bool bVar3;\n - CConfig* pcVar8;\n - CStr aCStack20[8];\n - undefined4 local4; (a 4-byte-wide number of some kind)\n - stack0xff... is created by (`MOV this, ESP / MOV dword ptr [ESP+0x3c], ESP`)\n - CMachineController* this;\n<pre><code>// CMachineController::Init()\n...\nbVar3 = CConfig::HasValue(pCVar8,s_AutoStart_10056dc4);\nif (bVar3 != false) {\n  CConfig::GetValue(this-&gt;config,(char *)aCStack20);\n  CStr::CStr((CStr *)&amp;stack0xffffffd0,aCStack20);\n  (**(code **)(**(int **)&amp;this-&gt;field_0x18 + 0x14))();\n  CStr::~CStr(aCStack20);\n}\n...\n</code></pre>\n<p>Without any more info on what would be considered useful, this is the best I can think of atm.</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "244",
+    "tags": [
+        "windows",
+        "x86",
+        "c++",
+        "static-analysis"
+    ],
+    "user": "mindoverflow",
+    "time": "Sep 8, 2021 at 11:12",
+    "comments": [
+        {
+            "user": "mindoverflow",
+            "text": "<span class=\"comment-copy\">I'n not sure why, but the formatting for the list broke, at least for me. It looks fine in the editor preview, but not here.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You probably didn't catch that CStr is a variable in another class. This should be how it looks like from the data I can see.</p>\n<pre><code>class CStr {\n    int placeholder[2]; // unknown 0x8 bytes\n    char* somestring;\n}\nclass some1 {\n   int placeholder; // unknown 0x4 bytes\n   CStr* cstr;\n}\n</code></pre>\n<p><code>char* ptr = &amp;(some1-&gt;cstr-&gt;somestring)</code> would result in the pseudocode you see generated</p>\n<pre><code>*(char **)(*(int *)(this + 4) + 8);\n</code></pre>\n<p>EDIT : update after OP posted new pseudocode\nI should say first that I don't actually use Ghidra, so I am not very familiar with its pseudocode syntax and reliability(in how accurately it translated the asm code to pseudocode). I would suggest that you dont always trust what you see in the pseudocode, because it won't always be accurate, especially when it comes to the handling of registers and stack (frames).</p>\n<p>Here's my take based on the information you gave. Not sure how helpful it is to what your finding exactly, but i'll just write my analysis based on what I see.</p>\n<pre><code>CStr::CStr((CStr *)&amp;this-&gt;field_0x4); // could be labeled as \"cstring\"?\n</code></pre>\n<p>If Ghirda accurately converted the type, then yes you can just take <code>field_0x4</code> to be <code>CStr</code>. Its hard to say that based on just one line of code though, so lets look further.</p>\n<pre><code>// CMachineController::Init()\n...\nbVar3 = CConfig::HasValue(pCVar8,s_AutoStart_10056dc4);\nif (bVar3 != false) {\n  CConfig::GetValue(this-&gt;config,(char *)aCStack20);\n  CStr::CStr((CStr *)&amp;stack0xffffffd0,aCStack20);\n  (**(code **)(**(int **)&amp;this-&gt;field_0x18 + 0x14))();\n  CStr::~CStr(aCStack20);\n}\n...\n</code></pre>\n<p>This line is retrieving some sort of config value ? or config string, before storing it into <code>aCStack20</code></p>\n<pre><code>CConfig::GetValue(this-&gt;config,(char *)aCStack20);\n</code></pre>\n<p>Take a look at the code below.</p>\n<pre><code>  CStr::CStr((CStr *)&amp;stack0xffffffd0,aCStack20);\n  (**(code **)(**(int **)&amp;this-&gt;field_0x18 + 0x14))();\n  CStr::~CStr(aCStack20);\n</code></pre>\n<p>Notice how the function call doesn't have any parameters? Although the line before seems to manipulate/create a CStr instance and destroys it right after?</p>\n<pre><code> (**(code **)(**(int **)&amp;this-&gt;field_0x18 + 0x14))();\n</code></pre>\n<p>If a data is manipulated, it is meant to be used. Otherwise, there is no need to manipulate the data. Hence, it is likely that</p>\n<pre><code>  CStr::CStr((CStr *)&amp;stack0xffffffd0,aCStack20);\n</code></pre>\n<p>Is copying <code>aCStack20</code> into <code>stack0xffffffd0</code>.</p>\n<p>Currently we see that there are to ways to initialize a <code>CStr</code> class</p>\n<pre><code>CStr::CStr((CStr *)&amp;this-&gt;field_0x4); // CStr(CStr* callervar) - perhaps initialize with some default values? \nCStr::Cstr((CStr *)&amp;stack0xffffffd0,aCStack20); // CStr(CStr* copyto, CStr* copyfrom) - initialize copyto with copyfrom ?\n</code></pre>\n<p>When you said</p>\n<blockquote>\n<p>make significat progress in determining what the fields of the\nobjects are, sadly :(</p>\n</blockquote>\n<p>Are you referring to the <code>CStr</code> class? Or <code>&amp;this-&gt;field_0xOFFSET</code>? At this point we still do not actually know what the <code>int placeholder[2] // unknown 0x8 bytes</code> is. But my guess is probably data relating to the string, e.g size of string, type of string, what the string is used for / what does it represent and so on.\nIt may just be easier to debug the program and see what values are at the first 8 bytes of the <code>CStr</code> instance.</p>\n</div>",
+            "votes": "1",
+            "user": "Jack",
+            "time": "Sep 10, 2021 at 7:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "mindoverflow",
+                    "text": "<span class=\"comment-copy\">IIRC I've also seen this in <code>CStr::operator[]</code>, but I'll look at later today to be sure. Would this still make sense in that case? If I can provide more context for you to improve this answer even further, let me know.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack",
+                    "text": "<span class=\"comment-copy\">The class definition might change a little. But yes, more context would be helpful. I put placeholders because I am not able to identify what they are based on the existing data you gave.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack",
+                    "text": "<span class=\"comment-copy\">@mindoverflow you can take a look at my analysis and see if it helps. I think there still isnt enough information if you want me to say what the fields of the class are. May just be easier to debug and see yourself, or look at other parts of the code that uses the first 8 bytes of CStr.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack",
+                    "text": "<span class=\"comment-copy\">also, regarding the <code>CStr::operator[]</code>, this is necessary because they probably want to access <code>CStr</code> like a char array, but yet have some additional details about the string (kinda like your std::string).</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jack",
+                    "text": "<span class=\"comment-copy\">That said, RE is easiest when you are able to perform both static analysis and live debugging together. One without the other is possible, but just harder. So if you're able to do both, might as well make your life easier. This question has probably served its purpose already, so feel free to open a new question and tag me there if you need help. All the best :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

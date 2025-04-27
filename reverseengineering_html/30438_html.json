@@ -1,0 +1,52 @@
+{
+    "title": "Mov instruction from a pointed location at the beginning of a program",
+    "link": "https://reverseengineering.stackexchange.com/questions/30438/mov-instruction-from-a-pointed-location-at-the-beginning-of-a-program",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am trying to learn how to read assembly code. So far I have understood the basic instructions. Now I am trying to see if I can understand a dissassembly from a linked executable. So this is an executable that I compiled on Windows (i.e. PE/COFF). This is the first part of the executable (starting from the very first line in dissassembly, in Intel syntax)\n </p>\n <pre><code>  0000000140001000: 48 83 EC 08        sub         rsp,8\n  0000000140001004: 48 BA FF 97 9D 18  mov         rdx,4189D97FFh\n                    04 00 00 00\n  000000014000100E: 48 8B 05 F3 9E 05  mov         rax,qword ptr [000000014005AF08h] <===\n                    00\n  0000000140001015: 48 23 C2           and         rax,rdx\n  0000000140001018: 48 3B C2           cmp         rax,rdx\n  000000014000101B: 75 09              jne         0000000140001026\n  000000014000101D: 48 83 C4 08        add         rsp,8\n  0000000140001021: E9 3A 00 00 00     jmp         0000000140001060\n  0000000140001026: 8B 05 DC 9E 05 00  mov         eax,dword ptr [000000014005AF08h]\n  000000014000102C: 25 FF 97 9D 00     and         eax,9D97FFh\n  0000000140001031: 3D FF 97 9D 00     cmp         eax,9D97FFh\n</code></pre>\n <p>\n  I believe the proper program execution starts at the beginning of the program (I'm not sure this is correct). If that is the case, then how does the\n  <code>\n   mov\n  </code>\n  instruction in 3rd line work? (The line is highlighted above.)\n </p>\n <p>\n  The instruction seems to be moving the value in location\n  <code>\n   000000014005AF08h\n  </code>\n  to\n  <code>\n   rax\n  </code>\n  . But where does the location\n  <code>\n   000000014005AF08h\n  </code>\n  come from? Is it set by something else before that program execution begins? And I can't find anything around the line\n  <code>\n   000000014005AF08h\n  </code>\n  because it is not shown in the dissassembly. Please help me because I feel as if I have misunderstood something here. The executable is available\n  <a href=\"https://github.com/shoubhikraj/temporary/blob/main/test-program.exe\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  .\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 1,
+    "views": "359",
+    "tags": [
+        "disassembly",
+        "windows",
+        "assembly"
+    ],
+    "user": "S R Maiti",
+    "time": "May 25, 2022 at 18:36",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In Intel assembly commonly a leading semi-colon (\n  <code>\n   ;\n  </code>\n  ) is used to introduce a comment. The comment then continues to the end of the line. The\n  <code>\n   ;\n  </code>\n  can also occur after an instruction, but not in its middle.\n </p>\n <blockquote>\n  <p>\n   If that is the case, then how does the\n   <code>\n    mov\n   </code>\n   instruction in 3rd line work? [...]\n  </p>\n  <p>\n   The instruction seems to be moving the value in location\n   <code>\n    000000014005AF08h\n   </code>\n   to\n   <code>\n    rax\n   </code>\n   . But where does the location\n   <code>\n    000000014005AF08h\n   </code>\n   come from? Is it set by something else before that program execution begins? And I can't find anything around the line\n   <code>\n    000000014005AF08h\n   </code>\n   because it is not shown in the disassembly.\n  </p>\n </blockquote>\n <pre><code>mov rax,qword ptr [000000014005AF08h]\n</code></pre>\n <p>\n  Frankly, I have to guess here, because I don't know all the details about the binary.\n  <em>\n   With\n  </em>\n  the binary at hand my answer might be more precise.\n </p>\n <p>\n  But given the address (\n  <code>\n   000000014005AF08h\n  </code>\n  ) it stands to reason that a QWORD (e.g. a pointer value or a 64-bit integer) exists at this location (mapped from the binary) at program start. Since this is a read this could be in\n  <code>\n   .rdata\n  </code>\n  (read-only data) or\n  <code>\n   .data\n  </code>\n  (read/write data) or really in any section of the binary that will be mapped while, during process creation, the binary image gets mapped into memory.\n </p>\n <p>\n  At this point I recommend you get yourself acquainted with the relevant binary format (e.g. PE, ELF ...) and how its on-disk file structure translates into the structure in memory.\n </p>\n <p>\n  Let me give you an example. I am assuming PE (Portable Executable) now. An excellent overview is provided by Ange Albertini in his\n  <a href=\"https://raw.githubusercontent.com/corkami/pics/master/binary/pe101/pe101.svg\" rel=\"nofollow noreferrer\">\n   PE101\n  </a>\n  and\n  <a href=\"https://raw.githubusercontent.com/corkami/pics/master/binary/pe102/pe102.svg\" rel=\"nofollow noreferrer\">\n   PE102\n  </a>\n  . PE101 is probably more interesting for this particular discussion, in particular the part about Loading (towards the bottom). Ange also covers other formats, including ELF.\n </p>\n <p>\n  Inside the headers of a PE file there are two members\n  <code>\n   IMAGE_OPTIONAL_HEADER::SectionAlignment\n  </code>\n  and\n  <code>\n   IMAGE_OPTIONAL_HEADER::FileAlignment\n  </code>\n  . This is the first puzzle piece. If the section (== in-memory) and file (== on-disk) alignment were the same, the image could mostly be copied verbatim into the space that was allocated for it. If they differ, which is the usual case (moreover file alignment is usually less than section alignment), each section from file will be read as per the file alignment, then zero-padded in memory up to the section alignment.\n </p>\n <p>\n  Furthermore past the optional header there are the section headers (\n  <code>\n   IMAGE_FILE_HEADER::NumberOfSections\n  </code>\n  structs of type\n  <code>\n   IMAGE_SECTION_HEADER\n  </code>\n  ). These can contain sections who have no \"physical\" counterpart in the image file. Instead the memory they encompass will be allocated (and depending on the section attributes initialized) at load time.\n </p>\n <p>\n  In terms of the Win32 API\n  <code>\n   CreateFileMapping()\n  </code>\n  the\n  <code>\n   SEC_IMAGE\n  </code>\n  flag is what makes the difference between creating a \"flat\" mapping of the file as it appears on disk and mapping it as it would be as executable or library.\n </p>\n <p>\n  This is why it is better to use a tool like\n  <a href=\"https://cutter.re/\" rel=\"nofollow noreferrer\">\n   Cutter\n  </a>\n  ,\n  <a href=\"https://ghidra-sre.org/\" rel=\"nofollow noreferrer\">\n   Ghidra\n  </a>\n  ,\n  <a href=\"https://hex-rays.com/ida-free/\" rel=\"nofollow noreferrer\">\n   IDA (also available as freeware version)\n  </a>\n  etc. which will usually also make those sections visible to you. Using\n  <code>\n   objdump\n  </code>\n  is certainly possible, but you need to fill in a lot of blanks yourself and it's generally a more blunt tool that - in absence of debug symbols - will fail more frequently at telling apart code and data (one of the big problems in reverse engineering).\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "0xC0000022L",
+            "time": "May 25, 2022 at 10:07",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "S R Maiti",
+                    "text": "<span class=\"comment-copy\">Thanks! I have added a link to the binary executable in my question, if it can help in getting more insight about the instruction. I had never heard of Cutter, but it looks promising so I will try it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "S R Maiti",
+                    "text": "<span class=\"comment-copy\">Hi again, I have installed Cutter and I can run the debugger successfully, but how do I track the location <code>000000014005AF08h</code>? And also, does the instruction take the value at location <code>000000014005AF08h</code>, or the value pointed to by the pointer at location <code>000000014005AF08h</code>?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@SRMaiti it reads <i>from</i> the address. There are two ways: set an ordinary breakpoint on the instruction you identified already or set a hardware data breakpoint (read) on the address itself. Also be aware that the binary could well be relocated while getting mapped into memory. So its base address could be different from <code>0000000140000000h</code>. Last but not least, there is a limit on the number of hardware breakpoints, which you can only sidestep if you use an emulator (which itself could change how the code gets executed, if it tries to evade analysis; malware, say ...).</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Depends on what debugger you use. Okay, fair point. It depends what you want to achieve. <code>mov rax,qword ptr [000000014005AF08h]</code> reads an 8-byte memory location into register <code>rax</code>. So that read would be caught by a <i>read</i> breakpoint. If you want to find other code <i>writing</i> to that location you'd have to use a <i>write</i> breakpoint, correct.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">@SRMaiti that will break if the location gets written to. It's as easy as that. Haven't tried debugging with Cutter, so no idea how to do it there.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

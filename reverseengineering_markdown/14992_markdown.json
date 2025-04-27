@@ -1,0 +1,46 @@
+{
+  "title": "What are the Vectored Continue Handlers",
+  "link": "https://reverseengineering.stackexchange.com/questions/14992/what-are-the-vectored-continue-handlers",
+  "content": "Practically everyone knows what Vectored Exception Handlers are, but I couldn't find a lot of information about the similar \"Vectored Continue Handlers\" and related functions I encountered today, such as AddVectoredContinueHandler and RemoveVectoredContinueHandler.\n\nThe prototype of AddVectoredContinueHandler is very similar to AddVectoredExceptionHandler's prototype:\n\n```\nPVOID WINAPI AddVectoredContinueHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n\n```\nAnd to make things more confusing it accepts a PVECTORED_EXCEPTION_HANDLER, just as AddVectoredExceptionHandler does.\n\nWhat is the purpose of Vectored Continue Handlers and how are they used?\n\n",
+  "votes": "19",
+  "answers": 1,
+  "views": "6k",
+  "tags": [
+    "windows",
+    "exception"
+  ],
+  "user": "NirIzr",
+  "time": "Jun 25, 2017 at 14:16",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Unfortunately MSDN and windows API documentation is really scarce here, and I had difficulties finding anything other than the minimal description in MSDN.\n\nIt turns out the Vectored Continue Handlers are maintained in a Linked list very similar to the one used for Vectored Exception Handlers. They are so similar, that the function's prototypes are practically identical.\n\nTake a look at:\n\n```\nPVOID WINAPI AddVectoredExceptionHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n\n```\nCompared to:\n\n```\nPVOID WINAPI AddVectoredContinueHandler(\n  _In_ ULONG                       FirstHandler,\n  _In_ PVECTORED_EXCEPTION_HANDLER VectoredHandler\n);\n\n```\nLuckily, Vectored Exception Handlers are more commonly used and documented. For example, MSDN has a page about VEHs, containing the following paragraph:\n\nThe same page has only a laconic reference to the Add and Remove VCH APIs.\n\nAfter some research and reverse engineering of ntdll, I realized VCHs and VEHs are quite similar in implementation. For example, see how AddVectoredExceptionHandler and AddVectoredContinueHandler are identical except for the VectoredListIndex, specifying they should be added to the second VectorHandlerList in the case of VCH:\n\n\n\nSimilarly, RemoveVectoredExceptionHandler and RemoveVectoredContinueHandler are identical except for the vectored handlers list index.\n\nInside RtlpAddVectoredHandler, the VectoredListIndex is used as an index in  _LdrpVectorHandlerList, which is an array of size two of a linked list structure.\n\nIn the following picture we can see how VectoredListIndex is multiplied by the size of the list anchor object, and then added to _LdrpVectorHandlerList, which is the base offset of the array.\n\n\n\nAnd now we're getting to the interesting part - where are VEH and VCH different?\n\nIf we walk up the cross references to _LdrpVectorHandlerList, we'll notice the two flows leading up to the add/remove functions are practically identical. Aside from those four APIs, we're left with only one other function, called RtlpCallVectoredHandlers which is undocumented.\n\nIt's pretty obvious from the name, but RtlpCallVectoredHandlers iterates over the vector (vector is selected according to the index) and calls all Handlers in a sequence. Once a Vectored Handler returns EXCEPTION_CONTINUE_EXECUTION the iteration is interrupted by prematurely returning from RtlpCallVectoredHandlers and execution resumes.\n\nThe sole function calling RtlpCallVectoredHandlers is RtlDispatchException, which is the main function dispatching exception handlers.\n\nFirst, it executes all exception handlers, starting with the first Vectored Exception Handler to the last, and then going through all Structured Exception Handlers unfolding them through the stack. The first exception handler to return EXCEPTION_CONTINUE_EXECUTION (be it of type VEH or SEH) will stop the entire exception handlers execution process.\n\nLike VEHs, when VCHs are called, they are called one by one until one of them returns EXCEPTION_CONTINUE_EXECUTION (just as when VEHs are called), which signals RtlpCallVectoredHandlers to break the Vectored Handlers calling loop. This is interesting because it means installing a Vectored Continue Handler as first lets you hide exceptions from subsequent VCHs.\n\nVectored Continue Handlers are called under the following circumstances:\n\n",
+      "votes": "17",
+      "user": "NirIzr",
+      "time": "Mar 19, 2018 at 16:02",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Kentzo",
+          "text": "You say \"If an exception handler (either VEH or SEH) was called and returned EXCEPTION_CONTINUE_EXECUTION\". Did you EXCEPTION_CONTINUE_SEARCH? It does not make sense to call another handler after exception is handled.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "@Kentzo that's precisely the point of vectored continue handlers.",
+          "time": null
+        },
+        {
+          "user": "Kentzo",
+          "text": "The information I found on msdn (see a comment by MS employee) contradicts with that.",
+          "time": null
+        },
+        {
+          "user": "Kentzo",
+          "text": "Nevermind: I think I misunderstood the comment. It's indeed only called as you state.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

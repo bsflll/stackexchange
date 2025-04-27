@@ -1,0 +1,46 @@
+{
+    "title": "Trying to reverse assembly code of a game so i can write to memory",
+    "link": "https://reverseengineering.stackexchange.com/questions/12618/trying-to-reverse-assembly-code-of-a-game-so-i-can-write-to-memory",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  First of all, i want to say that this is not to be used for cheating in online games, or give me an advantage over other players, it is striclty for learning purposes, and games are fun.\n </p>\n <p>\n  I have in a long time wanted to get a bit more in depth with the memory, reading assembly and reverse engineering. So i have fired up good old Quake for a fun exercise, to give myself ammo.\n </p>\n <p>\n  So i have used a\n  <a href=\"http://www.unknowncheats.me/forum/general-programming-and-reversing/100677-crysearch-memory-scanner.html\" rel=\"nofollow\">\n   memory searcher\n  </a>\n  and found the dynamic address in memory that holds my ammo count. With the same tool i have found the address of the instruction.\n </p>\n <pre><code>42ABED  89 34 38    mov dword ptr [eax+edi], esi // Instruction\n\n// DUMP\n4E7E4A4  // 23.f Dynamic address of the ammo count\nESI = 41B80000\nEAX = 4A4\nEDI = 4E7E000\n</code></pre>\n <p>\n  Surrounding assembly code:\n </p>\n <pre><code>0042ABDC  | mov dword ptr ds:[edi],eax              | edi:DbgUiRemoteBreakin\n0042ABDE  | jmp glquake.42A6DF                      |\n0042ABE3  | mov eax,dword ptr ds:[edi]              | edi:DbgUiRemoteBreakin\n0042ABE5  | mov edi,dword ptr ds:[80B874]           |\n0042ABEB  | mov esi,dword ptr ds:[esi]              | esi:DbgUiRemoteBreakin\n0042ABED  | mov dword ptr ds:[eax+edi],esi          |\n0042ABF0  | jmp glquake.42A6DF                      |\n0042ABF5  | mov edi,dword ptr ds:[edi]              | edi:DbgUiRemoteBreakin\n0042ABF7  | mov eax,dword ptr ds:[80B874]           |\n0042ABFC  | add edi,eax                             |\n0042ABFE  | mov eax,dword ptr ds:[esi]              | esi:DbgUiRemoteBreakin\n</code></pre>\n <p>\n  So after a lot of reading forums i think i have understood some of it;\n </p>\n <p>\n  <code>\n   ESI\n  </code>\n  is what that holds my ammo, it is the hexadecimal representation of 23, which in fact is correct according to my notes.\n </p>\n <p>\n  EAX + EDI is my dynamic address for the ammo count.\n </p>\n <p>\n  <code>\n   4A4 + 4E7E000 = 4E7E4A4\n  </code>\n </p>\n <p>\n  So i took a wild guess here, if i write a byte array to the address of the instruction, would it set my ammo? sadly not and here is what i did:\n </p>\n <p>\n  <strong>\n   C#\n  </strong>\n </p>\n <pre><code>float ammoToGive = 100.0F;\nProcess gameProcess = Process.GetProcesses().Where(x => x.ProcessName.ToLower().Contains(\"glquake\")).FirstOrDefault();\nIntPtr processHandle = WinApi.OpenProcess(0x1F0FFF, false, gameProcess.Id);\nint bytesWritten = 0;\nbyte[] buffer = BitConverter.GetBytes(ammoToGive);\nWinApi.WriteProcessMemory((int)processHandle, 0x42ABED, buffer, (UInt32)buffer.Length, ref bytesWritten);\n</code></pre>\n <p>\n  So when firing of this the game crashed.. Apparently there is more to this and i cant seem to fully understand how this instruction works. What would the next steps for me be?\n </p>\n <p>\n  Is the address for the instruction the wrong place to send this? If so, how would i get the correct address in memory to send this to?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "685",
+    "tags": [
+        "assembly",
+        "memory",
+        "c#"
+    ],
+    "user": "Dan-Levi Tømta",
+    "time": "May 10, 2016 at 12:20",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<html><body><span class=\"comment-copy\">\n 0x42abed contains an instruction 0042ABED  | mov dword ptr ds:[eax+edi],esi          |  you are corrupting the whole program  before writing try reading and displaying write only when you are confident you are writing to the right place  read edi , or read [80B874] read eax  add them up and read what it contains and print it when you are sure it synces with what you are seeing physically write to that address\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Firstly, i doubt that quake uses a float variable for the ammo count; floats are much slower than integers, and there's not really a need for a floating point value. So if you had 23 ammo, and the scanner found a 23.0 float variable, you\n  <em>\n   probably\n  </em>\n  have the wrong location.\n </p>\n <p>\n  Secondly, the address that the ammo count gets written to is the sum of\n  <code>\n   eax\n  </code>\n  and\n  <code>\n   edi\n  </code>\n  , where\n  <code>\n   eax\n  </code>\n  looks like an input variable, and\n  <code>\n   edx\n  </code>\n  like a pointer that's stored in some global constant. Maybe that pointer gets initialized by\n  <code>\n   malloc()\n  </code>\n  . It may be different every time you run the program. Next run, there's something at the same address that's completely unrelated, and your program crashes because you overwrite that other thing.\n </p>\n <p>\n  Probably the best thing you can do is run the program under a debugger like\n  <a href=\"https://msdn.microsoft.com/en-us/library/windows/hardware/ff551063%28v=vs.85%29.aspx\" rel=\"nofollow\">\n   WinDBG\n  </a>\n  or\n  <a href=\"http://www.ollydbg.de/\" rel=\"nofollow\">\n   Ollydebug\n  </a>\n  , set a breakpoint at that location, and check if it really gets hit if and only if your ammo count changes (you pick up an ammo pack or fire a shot in game). Try changing the variable at that address from the debugger. If that works, start the program a few times, find out how the address changes and how to find the correct one, then code that in your C# program.\n </p>\n <p>\n  If, as you say in your comment, the debugger shows that\n  <code>\n   eax\n  </code>\n  is always\n  <code>\n   4A4\n  </code>\n  at this point, i'd change the C# program to read the content of\n  <code>\n   80B874\n  </code>\n  , add\n  <code>\n   4A4\n  </code>\n  , read the float there, and display it, along with the content of\n  <code>\n   80B874\n  </code>\n  . Start quake, run your program, play for a few minutes, run your program again. Stop quake and repeat from start a few times. Analyze if/when the content of\n  <code>\n   80B874\n  </code>\n  changes and if the ammo count is correct. Once you have your program at the point that it displays the correct ammo count, every time, start changing the ammo count.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "Guntram Blohm",
+            "time": "May 10, 2016 at 15:28",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Dan-Levi Tømta",
+                    "text": "<span class=\"comment-copy\">Hi Guntram thanks for taking your time to answer. Yes i doubt myself that this is a float it makes no sense, it should be an integer, but after a lot of testing i found this float value (search by type) which is synced with the ammo count, i have even edited it and it is changing my ammo count. Either way, i am using a debugger, x32dbg to be exact. I use CrySearch to just get to the first address an pointer and work my way from there with x32dbg, but i am completely new to this so i need a little help get going, it is a lot to take in. <code>EAX</code> is always <code>4A4</code>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I highly recommend reading through the following tutorial on creating a game trainer with C#.\n </p>\n <p>\n  <a href=\"https://sites.google.com/site/hellobigworld112/programming/gametrainerswithcsharp\" rel=\"nofollow\">\n   https://sites.google.com/site/hellobigworld112/programming/gametrainerswithcsharp\n  </a>\n </p>\n <p>\n  You can just use it for a template initially for testing until you understand everything about it, including what differs from your current solution. It's a relatively short tutorial, but it should give you a lot of ancillary research to follow through with.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "ASMStephen",
+            "time": "May 11, 2016 at 0:52",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

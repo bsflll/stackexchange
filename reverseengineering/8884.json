@@ -1,0 +1,57 @@
+{
+    "title": "How can I remove a bbl instrumentation call at a specific address in PIN?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8884/how-can-i-remove-a-bbl-instrumentation-call-at-a-specific-address-in-pin",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have created a <strong>pintool</strong> that outputs in a json file all the basic blocks executed by a program. The problem is that the <strong>instrumented program runs slow</strong> so I am <strong>trying to optimize my pintool</strong>.</p>\n<p>I was thinking I could remove the calls to the instrumentation function from a block after it's called once, but i haven't been able to find how to do that. In the official PIN documentation there is only the function <code>PIN_RemoveInstrumentation()</code> which seems to disable all the intrumentation.</p>\n<p>Can anyone tell me how to do that or if it is even possible to do it using PIN?</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "914",
+    "tags": [
+        "instrumentation",
+        "pintool"
+    ],
+    "user": "Bogdan Timofte",
+    "time": "May 13, 2015 at 16:12",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">You should investigate a bit more about the reasons of this slowness... You cannot optimize blindly, you really need to identify where the bottlenecks are in order to workaround.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>PIN does not provide a direct API to remove a basic block instrumentation call on a particular address.What you could do is keep track of basic blocks which have been executed at least once. \n<br/>You would insert instrumentation calls only for those basic blocks which have not been executed previously. </p>\n<p>Here is a crude example based on the <a href=\"https://software.intel.com/sites/landingpage/pintool/docs/65163/Pin/html/\" rel=\"nofollow\">official documentation</a>.</p>\n<pre><code>// The running count of instructions is kept here\n// make it static to help the compiler optimize docount\nstatic UINT64 icount = 0;\n\n// Count the number of instructions in this basic block\nVOID docount(UINT32 c) { icount += c; }\n\nVOID Trace(TRACE trace, VOID *v)\n{    \n    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl))\n    {   \n        ADDRINT addr = BBL_Address(bbl);\n        if (alreadyVistited(addr) == false) \n        {\n            // Add instrumentation call for this basic block\n            BBL_InsertCall(bbl, IPOINT_ANYWHERE, (AFUNPTR)docount, IARG_UINT32, BBL_NumIns(bbl), IARG_END);\n        }\n        else\n        {\n            addToVisitedList(addr);\n        }\n    }\n}\n\nint main(int argc, char * argv[])\n{\n...\nTRACE_AddInstrumentFunction(Trace, 0);\n...\n}\n</code></pre>\n<p>The overhead of this entirely depends on the complexity of the instrumentation code added. \n<br/>In general to speed things up, you should turn on maximum compiler optimizations. If possible you may also use a better compiler such as the <em><a href=\"https://software.intel.com/en-us/intel-compilers\" rel=\"nofollow\">Intel Compiler</a></em> which is capable of generating extremely fast code.</p>\n<hr/>\n<h3>UPDATE</h3>\n<p>If you use <a href=\"http://www.dynamorio.org/\" rel=\"nofollow\">dynamoRIO</a> instead of PIN, you can more easily achieve what you want to do. Here is a sample code which logs all basic blocks executed by the program in the main module.</p>\n<pre><code>#define WINDOWS\n#define X86_32\n#define _CRT_SECURE_NO_DEPRECATE\n#include \"dr_api.h\"\n#pragma comment(lib, \"dynamorio.lib\")\n\nstatic file_t logFile;\nstatic LPBYTE mainModStartAddr, mainModEndAddr;\n\n// This is called once for each basic block as it's discovered\nstatic dr_emit_flags_t event_basic_block(void *drcontext, void *tag, instrlist_t *ilist, bool for_trace, bool translating)\n{\n    // The IP of the basoc block\n    LPBYTE addr = dr_fragment_app_pc(tag);\n\n    // Basic Block must be within the main module\n    if (addr &gt;= mainModStartAddr &amp;&amp; addr &lt;= mainModEndAddr) \n        dr_fprintf(logFile, \"0x%08X\", addr);\n    return DR_EMIT_DEFAULT;\n}\n\n\nstatic void event_exit()\n{\n    dr_close_file(logFile);\n}\n\n\nDR_EXPORT void dr_init(client_id_t id)\n{\n    module_data_t *data  = dr_get_main_module();\n    mainModStartAddr = data-&gt;start;\n    mainModEndAddr = data-&gt;end;\n    dr_free_module_data(data);\n\n    logFile = dr_open_file(\"logfile.txt\", DR_FILE_WRITE_OVERWRITE);\n\n    dr_register_bb_event(event_basic_block);    \n    dr_register_exit_event(event_exit);\n}\n</code></pre>\n<p>Note that there is no analysis function needed at all. The instrumentation function <code>event_basic_block</code> will be called once per basic block. It will not be called more than once, as from second time onwards, the code will be executed from the code cache.</p>\n<p>The difference between dynamoRIO and PIN is that the former directly allows to register a callback for basic block generation. PIN on the other hand allows a callback for trace generation. A trace a collection of basic blocks. Also since not all basic blocks may be executed in a trace, using PIN in this situation is comparatively difficult.</p>\n</div>",
+            "votes": "1",
+            "user": "0xec",
+            "time": "Jul 14, 2015 at 9:20",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "rev",
+                    "text": "<span class=\"comment-copy\"><code>alreadyVistited(addr) = false</code> is that intended?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@AcidShout That function should be implemented depending on how the list of visited addresses are stored. It's not provided by the PIN api.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bogdan Timofte",
+                    "text": "<span class=\"comment-copy\">Thank you for you suggestion, it seems to work ok. I think @AcidShout men't that it should be <code>if (alreadyVistited(addr) == false)</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@BogdanTimofte Oh yes, definitely. Typo corrected.</span>",
+                    "time": null
+                },
+                {
+                    "user": "nitzanms",
+                    "text": "<span class=\"comment-copy\">Are all discovered basic blocks actually executed? Either way, I think the equivalent thing to do in Pin would be to transfer the content of your analysis function to the instrumentation function. Which is highly recommended for performance improvement, of course.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

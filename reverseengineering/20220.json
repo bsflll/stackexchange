@@ -1,0 +1,39 @@
+{
+    "title": "Find function in a stripped dynamic ELF library",
+    "link": "https://reverseengineering.stackexchange.com/questions/20220/find-function-in-a-stripped-dynamic-elf-library",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Im currently reverse engineering an android app and this app calls a function named \"getUserInfo\" in an <strong>ARM 32bit ELF library</strong> called <a href=\"https://download1494.mediafire.com/3p93kb4d39mg/6uutljplmxnsxvn/libcms.so\" rel=\"nofollow noreferrer\">\"libcms.so\"</a> (from TikTok) via the <a href=\"https://www.baeldung.com/jni\" rel=\"nofollow noreferrer\">Java Native Interface</a>.</p>\n<p>My Problem is: The function cant be found with <code>readelf --syms libcms.so</code> or <code>readelf --dyn-syms libcms.so</code> because libcms.so is stripped and the funtion is not contained in the symbol table.</p>\n<p>The app can call this function, so i know the function is there. How can i find the hex location of the function?</p>\n</div>",
+    "votes": "5",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "android",
+        "arm",
+        "elf",
+        "java",
+        "symbols"
+    ],
+    "user": "SinOfficial",
+    "time": "Dec 2, 2019 at 15:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There're two broad ways in which you can declare <code>JNI</code> functions. </p>\n<p>The first is the more obvious way in which the <code>JNI</code> function has to follow a specific naming convention like <code>JNIEXPORT void JNICALL Java_com_app_foo_bar</code>. You can easily identify such functions using <code>readelf</code>.</p>\n<p>The other not so obvious way is to use <code>RegisterNatives</code>. Here your functions can have any signature and further they not need be exported from the shared library. Typically, you would call <code>RegisterNatives</code> from <code>JNI_OnLoad</code> to register the native functions to the Java Run-time.</p>\n<p>For your binary <code>libcms.so</code>, it uses the second method.</p>\n<p><code>RegisterNatives</code> has the following prototype</p>\n<pre><code>jint RegisterNatives(JNIEnv *env, jclass clazz, const JNINativeMethod *methods, jint Methods);\n</code></pre>\n<p>If you analyze the code of <code>JNI_OnLoad</code> you will come across <code>RegisterNatives</code> call like below.</p>\n<p><a href=\"https://i.sstatic.net/0vbAK.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/0vbAK.png\"/></a></p>\n<p>The third argument points to an array of <code>JNINativeMethod</code> structures which is declared as</p>\n<pre><code>typedef struct {\n    char *name; \n    char *signature;\n    void *fnPtr;\n} JNINativeMethod;\n</code></pre>\n<p>The first member is a pointer to a null terminated string denoting the function name. However, in your case all the names and signatures are encrypted.</p>\n<p><a href=\"https://i.sstatic.net/Kyyh5.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/Kyyh5.png\"/></a>\n<a href=\"https://i.sstatic.net/dkmEL.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/dkmEL.png\"/></a></p>\n<p>These are decrypted at run-time by the <code>.datadiv_decodeXXXXXXXX</code> family of functions. The <code>.init_array</code> section contain pointers to these decryptor functions which implies they will be called at startup.</p>\n<p><a href=\"https://i.sstatic.net/02J4L.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/02J4L.png\"/></a></p>\n<p>However, that is not all. The binary also employs <a href=\"https://reverseengineering.stackexchange.com/questions/2221/what-is-a-control-flow-flattening-obfuscation-technique\">Control Flow Flattening</a> Obfuscation throughout, hence the execution path may not be easily discernible as shown below.</p>\n<p><a href=\"https://i.sstatic.net/SgpWR.png\" rel=\"noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/SgpWR.png\"/></a></p>\n<p>To analyze the binary you're better off resorting to dynamic analysis techniques using a tool such as <a href=\"https://www.frida.re/\" rel=\"noreferrer\">Frida</a>.</p>\n<p><strong>Further Read:</strong></p>\n<ul>\n<li><a href=\"https://developer.android.com/training/articles/perf-jni#native-libraries\" rel=\"noreferrer\">https://developer.android.com/training/articles/perf-jni#native-libraries</a></li>\n<li><a href=\"https://reverseengineering.stackexchange.com/questions/19024/finding-registernatives-function-calls-in-jni-onloads-assembly-code\">Finding RegisterNatives function calls in JNI_OnLoad's assembly code</a></li>\n<li><a href=\"https://stackoverflow.com/questions/13509961/which-method-eventually-calls-jni-onload\">https://stackoverflow.com/questions/13509961/which-method-eventually-calls-jni-onload</a></li>\n<li><a href=\"https://stackoverflow.com/questions/51811348/find-manually-registered-obfuscated-native-function-address\">https://stackoverflow.com/questions/51811348/find-manually-registered-obfuscated-native-function-address</a></li>\n<li><a href=\"https://stackoverflow.com/questions/1010645/what-does-the-registernatives-method-do\">https://stackoverflow.com/questions/1010645/what-does-the-registernatives-method-do</a></li>\n<li><a href=\"https://reverseengineering.stackexchange.com/questions/6285/how-to-recover-information-stored-in-ctors-section\">How to recover information stored in .ctors section?</a></li>\n</ul>\n</div>",
+            "votes": "9",
+            "user": "0xec",
+            "time": "Dec 29, 2018 at 22:04",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Gin May",
+                    "text": "<span class=\"comment-copy\">I don't understand, can dynamically load it get the function or anyway? or am I missing the point?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@GinMay To decrypt the function names you can run/emulate the <code>.datadiv_decode</code> series of functions.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

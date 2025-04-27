@@ -1,0 +1,63 @@
+{
+    "title": "Assistance in Decrypting Lua script that is obfuscated with Base64 > SSL",
+    "link": "https://reverseengineering.stackexchange.com/questions/10618/assistance-in-decrypting-lua-script-that-is-obfuscated-with-base64-ssl",
+    "content": "Can anyone on here help me on decrypting the SSL encryption that protects this LUA script linked at the end of this topic ? \nBasically they are encoded with Base64 then SSL, but I have no idea how to do the SSL portion. They are used with a program called 'Bot of Legends', and someone told me that it is possible to break the encryption by dumping the decryption function of said program and using that to get the SSL key. But, I have no clue where to even start on that. \nBasically, these scripts work by connecting to an authentication server that is coded into the script, and I have gotten a few on my own by sniffing the traffic to their authentication server from network packets to get their server link and essentially created my own authentication server with Apache, then redirected the network traffic that goes to their server to my own from the script to get the script validated response. \nFor some scripts that have stronger encryption, its not that easy and I would have to get to the source code to remove the coding that runs the authentication server checks. Up until a few days ago I had no knowledge on how lua coding worked and how to even compute how authentication server checks could be even possible for coding in a simple text file due to lua obfuscation. \nSo, bear with me, I would like if someone can chime in and give me an idea on what I can do.\nPasteBin to the script in question in raw format.\nThe Base64 section is first with the SSL section at the bottom.\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "decompilation",
+        "encryption",
+        "deobfuscation"
+    ],
+    "user": "Saeed A Suleiman",
+    "time": "Aug 13, 2015 at 11:27",
+    "comments": [
+        {
+            "user": "Jason Geffner",
+            "text": "<pre><code>_G.ScriptENV = _ENV SSL({121,244,...})</code></pre> -- At the very least you'd need to find the SSL function.\n",
+            "time": null
+        },
+        {
+            "user": "Saeed A Suleiman",
+            "text": "these numbers are basically decimal ascii code , but even if i convert it - it still makes no sense ( the key )  i would like to find that but the script is obfusicated with the ssl encryption ... that is the problems\n",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "Those numbers are not decimal ASCII codes. ASCII is a 7-bit character encoding scheme, and the decimal value <pre><code>244</code></pre> has its 8th bit set. Furthermore, aside from the function name \"SSL\", there's no evidence that actual SSL crypto is being used here.\n",
+            "time": null
+        },
+        {
+            "user": "LuaNoob",
+            "text": "Sorry for necroing, but how about SSL3 and SSL3 ?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Since it is not used anymore I'll show you :)\n<pre><code>print(\"SSL Decoder version 2.0\")\nprint(\"Copyright (C) 2015\")\nprint(\"Decoding Started...\")\n\nlocal infilename = select(1,...)\nlocal outfilename = select(2,...)\n\nlocal infile = io.open(infilename, \"r\")\n\nif not infile then\n  error(\"Failed to open input file.\")\nend\n\nlocal intext = infile:read(\"*a\")\n\ninfile:close()\n\nlocal ssltabletext = intext:match(\"SSL%s*%(%s*%{([%s,0-9]*)%}%s*%)\")\n\nif not ssltabletext then\n  error(\"Could not find ssl table in source file.\")\nend\n\nlocal ssltable = load(\"return {\"..ssltabletext..\"}\")()\n\nif #ssltable < 255 then\n  error(\"SSL table is too short -- can't find table encryption key.\")\nend\n\n-- find decryption key for the ssl table\nlocal decrypt = {}\n\ndecrypt[0] = 0\nfor i = 1,255 do\n  local dec = i\n  local enc = ssltable[i]\n  assert(decrypt[enc] == nil)\n  decrypt[enc] = dec\nend\n\n-- decrypt ssl table\nfor i = 256, #ssltable - 256 do -- not sure what last 256 bytes are\n  ssltable[i] = decrypt[ssltable[i] ]\nend\n\n-- If this does a stack overflow, easy to change to something dumb but more robust\nlocal sslcode = string.char(table.unpack(ssltable, 256, #ssltable - 256))\n\n-- This is interesting -- \n--print(sslcode)\n\nlocal keyindex = sslcode:match(\"local Key%s*=%s*'()\")\nif not keyindex then\n  error(\"Could not find key in decoded ssl table.\")\nend\n\nlocal key = sslcode:sub(keyindex)\n\nlocal length = 0\nwhile true do\n  local c = key:sub(length+1, length+1)\n  if c == \"\" then\n    error(\"Key string was not terminated.\")\n  elseif c == \"'\" then\n    break\n  elseif c == \"\\\\\" then\n    local c2 = key:sub(length+2, length+2)\n    if c2:match(\"%d\") then\n      local c3 = key:sub(length+3, length+3)\n      if c3:match(\"%d\") then\n        local c4 = key:sub(length+4, length+4)\n        if c4:match(\"%d\") then\n          length = length + 4\n        else\n          length = length + 3\n        end\n      else\n        length = length + 2\n      end\n    elseif c2 == \"x\" then\n      length = length + 4\n    else\n      length = length + 2\n    end\n  else\n    length = length + 1\n  end\nend\n\nkey = key:sub(1, length)\n\nif #key == 0 then\n  error(\"Key is empty\")\nend\n\nprint(\"Key Found! > \" .. key)\nprint(\"Decoding finished, outfile is at > \" .. outfilename)\n\n-- find base64\nlocal b64 = intext:match(\"_G.ScriptCode%s*=%s*Base64Decode%s*%(%s*\\\"([a-zA-Z0-9/+]*=*)\\\"%s*%)\")\nif not b64 then\n  error(\"Could not find Base-64 encrypted code in source file.\")\nend\n\n-- base64 decode\nlocal b64val = {}\nfor i = 0, 25 do\n  do\n    local letter = string.byte(\"A\")\n    b64val[string.char(letter+i)] = i\n  end\n  do\n    local letter = string.byte(\"a\")\n    b64val[string.char(letter+i)] = i + 26\n  end\nend\nfor i = 0, 9 do\n  local numeral = string.byte(\"0\")\n  b64val[string.char(numeral+i)] = i + 52\nend\nb64val[\"+\"] = 62\nb64val[\"/\"] = 63\nb64val[\"=\"] = 0\n\nlocal encoded = b64:gsub(\"(.)(.)(.)(.)\",function(a,b,c,d)\n  local n = b64val[a] * (64 * 64 * 64) + b64val[b] * (64 * 64) + b64val[c] * 64 + b64val[d]\n  local b1 = n % 256; n = (n - b1) / 256\n  local b2 = n % 256; n = (n - b2) / 256\n  local b3 = n\n  if d == \"=\" then\n    if c == \"=\" then\n      assert(b1 == 0 and b2 == 0)\n      return string.char(b3)\n    else\n      assert(b1 == 0)\n      return string.char(b3, b2)\n    end\n  else\n    return string.char(b3, b2, b1)\n  end\nend)\n\n-- decode\nlocal decoded = encoded:gsub(\"()(.)\", function(i, c)\n  local b = c:byte()\n  local ki = ((i - 1) % #key) + 1\n  local k = key:byte(ki,ki)\n  b = b - k\n  if b < 0 then b = b + 256 end\n  return string.char(b)\nend)\n\n-- verify\nlocal result, err = load(decoded)\nif not result then\n  error(\"Decoded file could not be loaded -- it may be corrupt... (\"..tostring(err)..\")\")\nend\n\n-- output\nlocal outfile = io.open(outfilename, \"wb\")\n\nif not outfile then\n  error(\"Failed to open output file.\")\nend\n\noutfile:write(decoded)\n\noutfile:close()\n</code></pre>\n",
+            "votes": "3",
+            "user": "0xec",
+            "time": "Sep 14, 2015 at 17:06",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Icesythe7",
+                    "text": "<span class=\"comment-copy\">Wish I could talk to Extreme Coders irl :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Saeed A Suleiman",
+                    "text": "<span class=\"comment-copy\">Thank you , they moved on to ssl 3.0 right ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Icesythe7",
+                    "text": "<span class=\"comment-copy\">yep its easy also</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

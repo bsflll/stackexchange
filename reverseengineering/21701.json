@@ -1,0 +1,50 @@
+{
+    "title": "Dump value of register using frida",
+    "link": "https://reverseengineering.stackexchange.com/questions/21701/dump-value-of-register-using-frida",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm new with frida and came to this problem.</p>\n<p>I have dll that I want to reverse engeneer(there are no debug symbols). Specifically I want to dump some data from a function. So I have this big function and here is the fragment of it:</p>\n<p><a href=\"https://i.sstatic.net/Nty3s.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/Nty3s.png\"/></a></p>\n<p>Here you can see that some string(<code>pf4</code>) is moved to <code>edx</code>, but more important thing comes after that. You can see that <code>sub_575FD30</code>\nfunction is called couple of times. </p>\n<p>The most interesting thing for me is the <code>eax</code> register after the call. So what I want to do is to dump value of <code>eax</code> after the call of this function.</p>\n<p>I can't consider dumping something from <code>sub_575FD30</code> function because that function is called from many other places and I specifically want to dump <code>eax</code> after calling it in this specific example.</p>\n<p>My question is how can I acheive it using frida? Should I hardcode the instruction address(address of <code>push eax</code>) and get value of <code>eax</code>? Is it the correct way or is there some better way to achieve it? Any direction of how to achieve it and script example would be appriciated.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "windows",
+        "debugging",
+        "functions",
+        "frida"
+    ],
+    "user": "Ojs",
+    "time": "Jul 17, 2019 at 18:23",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<span class=\"comment-copy\">why cant you dump from the function ? you always have the return address when you are in the function why cant you discard return values other than 659,66a etc</span>",
+            "time": null
+        },
+        {
+            "user": "Ojs",
+            "text": "<span class=\"comment-copy\">Thank! That is a good point! Can you give me direction or example similar to that script to get me started?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The Details are all available in the <a href=\"https://www.frida.re/docs/javascript-api/\" rel=\"nofollow noreferrer\">Javascript API documentation for Interceptor</a></p>\n<p>below is a small demo</p>\n<p>assuming you have a source code as below the adder function will be called from 3 places \nfor a total of 26 times</p>\n<pre><code>#include &lt;stdio.h&gt;\nint adder( int a , int b) {\n    return a+b;\n}\nint addonce (int a, int b) {\n    return adder(a,b);\n}\nint addtwice (int a, int b) {\n    return adder(a,b) + adder (a,b);\n}\nint addntimes(int a, int b, int c) {\n    int res = 0;\n    for (int i = 0; i &lt; c; i++ ) {\n        res = res + adder(a,b);\n    }\n    return res;\n}\nvoid main(void) {\n    getchar();\n    printf(\"%d\\n\", addonce(2,3));\n    printf(\"%d\\n\", addtwice(2,3));\n    printf(\"%d\\n\", addntimes(2,3,10));\n    printf(\"%d\\n\", addonce(2,3)+addtwice(2,3)+addntimes(2,3,10));\n}  \n</code></pre>\n<p>compiled with vs 2017 community  and executed </p>\n<pre><code>cl /Zi /W4 /analyze /Od /EHsc mulcall.cpp /link / release \n5\n10\n50\n65\n</code></pre>\n<p>Frida python script </p>\n<pre><code>import frida\nimport sys\n\nsession = frida.attach(\"mulcall.exe\")\nscript = session.create_script(\"\"\"\nInterceptor.attach\n(\n    ptr(\"%s\"),\n    {\n        onEnter: function(args) \n        {\n            console.log(\"entering  intercepted function will return to \" + this.returnAddress);\n        } ,\n        onLeave: function(retval)\n        {\n            console.log( \"leaving intercepted function returning \" + retval.toInt32());\n        }\n    }\n);\n\"\"\" % int(sys.argv[1], 16))\n\ndef on_message(message, data):\n    print(message)\nscript.on('message', on_message)\nscript.load()\nsys.stdin.read()\n</code></pre>\n<p>you need the address of adder function that you have to pass (in your case the 5xxx address of sub_yyyy) be aware ASLR may come into play you always need a fresh address of the running instance not some stale address of past instances  </p>\n<p>you will run the script like this </p>\n<pre><code>python friscript.py 7ff670901000\n</code></pre>\n<p>the 0x00007ff670901000 is the address of adder() for me\nI have executed the exe and it is waiting for a keypress \nnow I run the above script \nit attaches and waits until I press a key in the waiting instance </p>\n<p>here is the output of Frida </p>\n<pre><code>python friscript.py 7ff670901000\nentering  intercepted function will return to 0x7ff670901039\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff670901069\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff67090107a\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff6709010d4\nleaving intercepted function returning 5 (10 times)\nentering  intercepted function will return to 0x7ff670901039\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff670901069\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff67090107a\nleaving intercepted function returning 5\nentering  intercepted function will return to 0x7ff6709010d4\nleaving intercepted function returning 5 (10 times)\n</code></pre>\n<p>EDIT to address Comment</p>\n<p>if eax is a pointer to some type (ansi,wide,utf8,utf16,bytearray,struct *)</p>\n<p>use the appropriate helper function  in onLeave {}<br/>\nhere is an implementation for a function returning a struct *<br/>\nstruct { int a , char * b }   </p>\n<pre><code>  // hack for getting the next member of struct  (adding pointer size  of \n  // 32bit machine read documents to see if you can cast the return \n  // value to proper structure type \n  // so that we can use (foo *) (this.context.eax)-&gt;a \n  // instead of hacks like add(4) \n\n  foo = Memory.readPointer(this.context.eax.add(4)) \n  blah = Memory.readCString(foo)\n  log( blah )\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Jul 21, 2019 at 20:40",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ojs",
+                    "text": "<span class=\"comment-copy\">Thank you so much for an answer ! One more question please, how can I log the value of eax? <code>this.context.eax</code> seems to print the address</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ojs",
+                    "text": "<span class=\"comment-copy\">and it seems like it is a unicode string because it's something like L\"&lt;string&gt;\"</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

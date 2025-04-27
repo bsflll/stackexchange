@@ -1,0 +1,54 @@
+{
+  "title": "MachO chained fixups parsing",
+  "link": "https://reverseengineering.stackexchange.com/questions/32331/macho-chained-fixups-parsing",
+  "content": "I'm wondering how the info stored in the chained fixups in the Mach-O file is used to resolve binding and rebases?\n\nMy question originated from wanting to parse all the Objective-C classes inside a Mach-O and parse their respective objc_class and get a list of selectors.\n\nIn-order to achieve that I started by parsing the Mach-O segments to get to the section __objc_classlist and read the pointers that should point to struct of type objc_class.\n\nWhat I don't understand is how to use the stored information there to fix these pointers for example. Taking as a ref point I have a binary that the first pointer on disk (0x00231D8) in the __objc_classlist section points to 0x0025EED0 which is its related objc_class struct (validated using Ghidra). When I read from 0x00231D8 I get 0x801000000000022a which is not a valid pointer, pointing to the mapped file.\n\nAfter seeing that the pointers are invalid I was noted that I should parse and use the information stored in the chained fixups load command to fix the pointers.\n\nSo I parsed the chained fixups but I'm not sure how to use the parsed binds/rebases structs in-order to fix the pointers for example at the __objc_classlist.\n\nTaking the ref point I'm working on to validate my work, I use Ghidra to see what symbol the first pointer in the __objc_classlist actually is and I look for any binding info related to that symbol in my parsed result to find the following both in the fixups of the __DATA_CONST and the __DATA segments:\n\n```\nBIND    ordinal: 554    addend: 0   reserved: 0 (_OBJC_METACLASS_$_XYZ)\n\n```\nI understand that the ordinal is the index into the symbol table pointer to by the dyld_chained_fixups_header imports_offset which I also printed to validate the ordinal is correct:\n\n```\n    [553] lib_ordinal: 15   weak_import: 0  name_offset: 13346 (ABC)\n    [554] lib_ordinal: 0    weak_import: 0  name_offset: 13380 (_OBJC_CLASS_$_XYZ)\n    [555] lib_ordinal: 0    weak_import: 0  name_offset: 13429 (_OBJC_CLASS_$_DEF)\n\n```\nNow I'm not sure if what I should be looking for in the chained fixups in-order to fix these class pointers is rebase/bind information. I know rebase is used for ASLR when loading other libs so if the objective-c class list is the binary owned class list there's no reason for rebases at least for these pointers, on the other hand even though I find related binding information to my class I don't see why do we need this information if it's a data owned by the binary and not some other dylib, why do we need to bind it in runtime?\nEven so, how do I even use this information in-order to fix the pointer for example at 0x00231D8 in the __objc_classlist? All I have is the binding information which gives an ordinal to the chained fixups imports as-well as addend field which seems to always be 0 and I have no idea what it is used for.\n\nThe only logical jump I could've make is that if I look for the same import by its symbol name in the symbol table pointed by the symbol table command and take the n_value of the symbol I get that elusive 0x0025EED0 pointer value.\nBut that still doesn't answer on how this symbol value should be the pointer in the first address of the __objc_classlist section 0x00231D8, what BINDs them together?\n\nContinuing on, even if I read the value from disk in address 0x0025EED0 which should be the objc_class struct of that symbol that resides in __DATA.__objc_data, I get 80 10 00 00 00 00 03 c7 and by looking at the valid data in Ghidra I see f8 ee 25 00 00 00 00 00, so clearly another discrepancy and maybe this data also need rebase/binding?\nSo I tried to take the address of the struct 0x0025EED0 and see if I can find rebase information (didn't look for binding information since it's not a symbol just a struct data?) on it from the chained fixups but couldn't find any so I'm not sure what needs to be done to fix it?\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "360",
+  "tags": [
+    "ghidra",
+    "ios",
+    "mach-o",
+    "macos"
+  ],
+  "user": "Jorayen",
+  "time": "Sep 29, 2023 at 9:43",
+  "comments": [
+    {
+      "user": "Robert",
+      "text": "As Ghidra is open source it's source code may give you the necessary hints on how to parse those structures.",
+      "time": null
+    },
+    {
+      "user": "Jorayen",
+      "text": "I think actually looking at ghidra source helped me the most. The most crucial part for me missing was that we overwrite the chain address itself by the binded symbol value/ rebase strategy new value, in my mind I didn't understand where the new value should be written to, also it's binding that I need to reconstruct all the objc_class list and data not rebasing as far as my testing went",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "(short answer that targets what I think is your main confusion for now)\n\nConceptually there are two kinds of fixups to distinguish: Bind and Rebases.\n\nBinds will place a pointer to a symbol in another dylib at this location, and they contain the index into the list of imported symbols.\n\nRebases are for fixing an address that points to something inside the some binary. This is needed because pointers like inside the objc_class structs can't be relative at runtime, and the base address of the binary is only decided once the binary is being loaded. The target member of the dyld_chained_ptr_64_rebase struct contains a value that can be an offset from the base address of the binary, which the loader can then translate into an absolute address in the virtual memory space.\n\nOne problem is that the type of the struct that was used for encoding the value isn't encoded in the value itself (except for minor things like the rebase/bind difference for DYLD_CHAINED_PTR_64). This information is contained in a struct at the beginning of each fixup chain which is in a different location. So your script will have to run through the chain of all fixups if you want to correctly determine the runtime values inside the objc_class.\n\nYou are probably better off writing your script on top of some existing Mach-O parser that supports this already and loads the entire binary into a virtual memory space. Otherwise you will have to re-implement a lot of annoying struct parsing code\n\n",
+      "votes": "1",
+      "user": "Florian Magin",
+      "time": "Sep 29, 2023 at 13:57",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Jorayen",
+          "text": "I have parsed the chain fixup already it's not a problem, I just cant see how all these come together to resolve the values in the section for example in the __objc_classlist so if I take the target of a rebase and adds it to the base of the binary then what?",
+          "time": null
+        },
+        {
+          "user": "Florian Magin",
+          "text": "IIRC \"baseaddress + target\" is then the value that will be written to the location. This value is then a valid pointer",
+          "time": null
+        },
+        {
+          "user": "Jorayen",
+          "text": "will be written to what address to the address of the rebase structure? Because if so I don't have one rebase in the chain that it's address is 0x00231D8. I'm trying to dig in the dyld code but can't find what handles it",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

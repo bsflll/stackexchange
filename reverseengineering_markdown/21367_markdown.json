@@ -1,0 +1,86 @@
+{
+  "title": "Debug program using peculiar anti-debugging technique",
+  "link": "https://reverseengineering.stackexchange.com/questions/21367/debug-program-using-peculiar-anti-debugging-technique",
+  "content": "In my BA thesis, I wanted to present a program for Windows, using various anti-debugging techniques. \n\nOne of them, which I came up on my own (possibly it is well known, but I didn't find it anywhere) involves changing control flow by using signal handlers. As far as I know, when program receives certain signal and has a function registered to handle it, the main thread is paused and the execution is passed to the handler. After it returns from the function, the main thread can either continue execution, or even terminate in case where SIGFPE or SIGSEGV was passed, for example (see this question).\n\nHowever, in such a case, it is possible to cause the thread executing handler not to stop after it leaves handler scope. The anti-debugging technique I've mentioned before takes advantage of this fact and is presented below.\n\nFirst of all, I'm aware that the code I'm about to present uses concepts that should never appear in a real program, should be avoided in almost every situation and never tried at home :). After establishing this, consider the following program: (I'm using GCC targeting minGW to compile it)\n\n```\n#include <csignal>\n#include <windows.h>\n#include <cstdio>\n\nvoid handler(int)\n{\n    asm(\"jmp continue\"); // do not return from this function; just jump to another place in the code\n}\n\nint main()\n{\n    signal(SIGFPE, handler); // I know that sigaction should be used instead, but it's simpler and, as far as I know it wouldn't work for Windows\n    // and I know, that after receiving second signal, there will be undefined behaviour, but let's assume it won't happen\n    int a = 1 / 0; // cause SIGFPE to happen\n    asm(\"continue:\");\n    printf(\"continue execution  \n\");\n    Sleep(5000); // to show a printed message for a while, so that the console is not being closed immediately\n    ExitProcess(0);\n}\n\n```\nSo here comes my question: how could be such a program debugged, such that it's possible to see printf(\"continue execution  \n\"); line being executed?\n\nWhen I tried to do this using Code::Blocks debugger (GDB), only the information that a program received SIGFPE appeared and the program crushed without printing \"continue execution\" string.\n\nOn the other hand, when I tried to debug it in OllyDbg, execution just stopped, nothing was printed on the screen, and I wasn't able to continue execution to the point where this string should be printed.\n\nUpon \"normal\" execution it prints the string end finishes as expected.\n\nEdit:\nI've also tried to pass the exception to the application (using SHIFT+F7), but I only get message saying \"Debugged program was unable to process exception\" and I'm unable to continue the execution.\n\nEdit2: I will not upload the binary, since when I tried to download it, my antivirus software started to complain about it, so it would probably be marked as suspicious if someone else downloaded it.\n\n",
+  "votes": "3",
+  "answers": 3,
+  "views": "2k",
+  "tags": [
+    "windows",
+    "debugging",
+    "anti-debugging"
+  ],
+  "user": "bart1e",
+  "time": "Jun 1, 2019 at 9:13",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "signal handlers are not really a thing on Windows; are you using cygwin or mingw?",
+      "time": null
+    },
+    {
+      "user": "bart1e",
+      "text": "Well, I'm using Windows 10.",
+      "time": null
+    },
+    {
+      "user": "Igor Skochinsky",
+      "text": "what compiler are you using to build the program?",
+      "time": null
+    },
+    {
+      "user": "bart1e",
+      "text": "I'm using GCC. I'll update my question to contain this information.",
+      "time": null
+    },
+    {
+      "user": "bart1e",
+      "text": "Targeting minGW.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "This technique is equivalent to the Structured Exception Handler for Windows.\nThe application registers an exception handler, then forces an exception to occur, thereby transferring control to the exception handler.  However, when a debugger is present, it will generally intercept the exception to allow user interaction.  If your debugger allows you to pass the exception back to the program, then you will be able to continue tracing.\n\nYou can read more about the technique here: The \"Ultimate\" Anti-Debugging Reference  (pdf)\n\n",
+      "votes": "3",
+      "user": "peter ferrie",
+      "time": "Jun 1, 2019 at 2:24",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "bart1e",
+          "text": "Thank you for your answer and for posting a link to the great book. :) The thing is, I've already tried to pass the exception to the application by debugger (OllyDbg), but I just get message saying \"Debugged program was unable to process exception\" and the execution doesn't continue. I will update my question with a binary and with this information.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Not sure if the exact answer you are looking for is in there, but this presentation is one of the best I have seen on this topic:\nhttps://www.blackhat.com/presentations/bh-usa-07/Yason/Presentation/bh-usa-07-yason.pdf\n\n",
+      "votes": "1",
+      "user": "1455J8KL",
+      "time": "May 27, 2019 at 16:08",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "bart1e",
+          "text": "I didn't find the answer there, but it's good article nonetheless. Thank you for posting it.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I think I have finally found an answer to this question.\nSince I didn't find an answer anywhere in the Internet (including MSDN documentation for signal, articles covering anti debuggging techniques and exception handling on Windows) and the problem existed in all debuggers tested (OllyDbg1/2, x64dbg, IDA debugger, radare2, gdb), I analysed exception handling mechanism described in Windows Internals 6th edition. Following image and cites come from this book, from page 126.\n\nThe exception dispatching process may be illustrated this way (actions will be performed from top to the bottom on the image):\n\n\nPoints 1., 2., 3., 5. and 6. aren't surprising. However, notice the point 4. It says, that if first three points didn't handle the exception and the debugger isn’t running, environment subsystem can translate the exception into an environment-specific signal which is then sent to the application.\n\nBut that only happens when a debugger is not attatched to the process and this explains why the exception handler was only called when the program was running outside a debugger. Otherwise, point 4. from the list above was simply not performed.\n\nSo, it wasn't simply SEH anti debugging technique (signal function doesn't add a handler to the SEH chain) - in fact it used a different concept and detected debugger in a different way.\n\nSince I haven't found this anti debugging technique described anywhere, I hope this information will help someone, when he encounters such a technique during analysis. \n\nAnd, since it is not stated in the book how OS checks whether an application is being debugged at point 4., it may be necessary to change the control flow of the program manually when an exception is being processed to force it to execute the handler.\n\n",
+      "votes": "1",
+      "user": "bart1e",
+      "time": "Jun 8, 2020 at 21:31",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "I don't think point 4 applies, because you do have a handler which should be invoked. To get the full picture, you need to check how MinGW performs signal  handling (how it translates OS exceptions into signals and in what context the signal handler executes).  I'd suggest using a kernel debugger so the execution is not affected by user-mode debugger presence.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

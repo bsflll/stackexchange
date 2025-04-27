@@ -1,0 +1,34 @@
+{
+    "title": "Specifying the register value which is constant for all the functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/26915/specifying-the-register-value-which-is-constant-for-all-the-functions",
+    "content": "In the firmwares I met the situation when some register value is set at startup, and then it's implicitly used as a base address to access the variables.\ne.g. register r13 is set to 0x40000000 which is address of RAM. And then all over the code the variables are being accessed as offset to r13. Hex Rays doesn't like it at all, and generates lots of red variables for which VALUE MAY BE UNDEFINED\nIs there any way to set the register value, so that Hex Rays uses it in every function?\nEDIT: Actually IDA does it in some cases. PowerPC processor module seems to know about __init_registers() function when working with ELF files and uses r13 value to calculate the global variables offsets relative to r13.\n\nAnd I've learned that it actually creates User defined offsets in such cases.\n\nBut still don't know how it's implemented to know r13 value.\n",
+    "votes": "5",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "decompilation",
+        "hexrays"
+    ],
+    "user": "Anton Kukoba",
+    "time": "Feb 10, 2021 at 9:53",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I don't know off the top of my head if there's an option you can set for that, but that's the type of thing that's utterly trivial to write a Hex-Rays plugin for. I bet that would be less than 25 lines of code. If you can send a link to a binary, I'll write a script to demonstrate. Assuming you're writing IDAPython (the details would only be slightly different in C++), the outline would be:\n\nDerive a class from <pre><code>mop_visitor_t</code></pre>, whose <pre><code>visit_mop</code></pre> method: requires <pre><code>is_target</code></pre> to be false; compares the operand against <pre><code>mop_r</code></pre>; if so, compares the <pre><code>.r</code></pre> union element against the microregister number for <pre><code>r13</code></pre>. If found, replace the operand with\nyour constant (i.e. call <pre><code>mop_t::make_number(0x40000000)</code></pre> on the operand).\nDerive a class named <pre><code>R13ReplaceHooks</code></pre> off of <pre><code>ida_hexrays.Hexrays_Hooks</code></pre>.\nOverride its <pre><code>microcode</code></pre> method to call <pre><code>mba_t::for_all_ops</code></pre> with an instance of the visitor above.\nAt the bottom of the script, a bit of glue code to allow easy installation and removal of the hook, as in:\n\n<pre><code>try:\n    r13replacehooks.unhook()\n    del r13replacehooks\nexcept NameError as e:\n    pass\nfinally:\n    r13replacehooks = R13ReplaceHooks()\n    r13replacehooks.hook()\n</code></pre>\n\nThat's it.\n\n===== EDIT TO ADD =====\nAfter writing the answer above, I had some further thoughts on the matter.\nRed/orange variables and warnings about values being undefined is not what I would expect in this situation. Rather, I would expect that you would see a bunch of <pre><code>__usercall</code></pre> prototypes that had <pre><code>r13</code></pre> as an argument, and then you would see nasty pointer arithmetic typical of code that needs a structure definition, as in <pre><code>*(QWORD *)((QWORD)x + 20)</code></pre>. So I guess an alternative answer would be that you could add those arguments to the function prototypes, declare one big structure for the data section in question, and define the <pre><code>r13</code></pre> <pre><code>__usercall</code></pre> arguments as being pointers to that structure.\nI tend to think that the other answer would be generally easier to work with, but this approach does have one upside: you can use Hex-Rays' \"Jump to xref globally\" feature to track cross-references to the data members. This won't be the case for the register replacement approach in the other answer, since the references aren't really there in the code; in the other approach, those references will be created on the fly, and not stored in the database in a form that can be browsed through the normal cross-reference machinery. In this approach, the references will be available persistently via the structure cross-references.\n",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Feb 1, 2021 at 17:34",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Since <pre><code>r13</code></pre> is a memory mapped register, you should create a new RAM segment and define all of your registers there on the correct virtual addresses (use <pre><code>ida_bytes.create_data()</code></pre> and <pre><code>idc.set_name()</code></pre>). You can then use it in the code as a reference and it would be resolved everywhere.\n",
+            "votes": "0",
+            "user": "none32",
+            "time": "Mar 9, 2023 at 13:17",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

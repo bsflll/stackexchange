@@ -1,0 +1,51 @@
+{
+    "title": "IDA Pro failed decompilation with \"JUMPOUT\"",
+    "link": "https://reverseengineering.stackexchange.com/questions/32029/ida-pro-failed-decompilation-with-jumpout",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to reverse a crackme that is using <code>jz x; mov eax, x+1; jmp eax</code> pattern to confuse IDA. I have made a script to find all the patterns and disassemble from x+1 instead of x, but I'm running into this error.\n<a href=\"https://i.sstatic.net/q2pA9.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/q2pA9.png\"/></a></p>\n<p><a href=\"https://i.sstatic.net/eJmAe.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/eJmAe.png\"/></a></p>\n<p>The crackme is <a href=\"https://crackmes.dreamhosters.com/users/fatmike/fatmikes_crackme_3/\" rel=\"nofollow noreferrer\">https://crackmes.dreamhosters.com/users/fatmike/fatmikes_crackme_3/</a></p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "779",
+    "tags": [
+        "ida"
+    ],
+    "user": "Alvo",
+    "time": "Jul 7, 2023 at 1:11",
+    "comments": [
+        {
+            "user": "mimak",
+            "text": "<span class=\"comment-copy\">Did you try undefining the byte at <code>0x100025C0</code> and both function chunks (<code>U</code> key) then making it a function again (<code>P</code> key)? Seems like autoanalysis didnt get it right</span>",
+            "time": null
+        },
+        {
+            "user": "Alvo",
+            "text": "<span class=\"comment-copy\">I tried that and it didn't work. Thank you.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This failure happens as a result of A) the intentional obfuscation, and B) what the compiler community calls a \"phase-ordering\" problem.</p>\n<p>When Hex-Rays decompiles a function, it begins by creating the control flow graph pictured in your second screenshot. Next, it performs a \"reachability analysis\", a depth-first search starting from the entry block, to determine which blocks may ever be executed. Then, it removes blocks that it determines can never be executed. In particular, the reachability analysis only follows control flow references, not data flow references. If some basic block is only reachable by a data flow reference -- as in <code>loc_100025C1</code> in your example -- its code will be removed from the decompilation by this phase.</p>\n<p>Later on in the decompilation, Hex-Rays propagates the <code>mov eax, offset loc_100025C1</code> into the subsequent <code>jmp eax</code> instruction to determine that the <code>jmp</code> transfers control to <code>loc_100025C1</code>, and then sees whether that address is part of the code it is decompiling. Since that address was removed from the decompilation as just discussed, this fails. As a result, Hex-Rays emits the <code>JUMPOUT(0x100025C1)</code> that you see in the decompilation. If Hex-Rays had known earlier that the <code>jmp</code> would resolve to <code>loc_100025C1</code>, then it would have kept that code, so you would not see a <code>JUMPOUT</code> in the decompilation -- but it only discovers that the <code>jmp</code> resolves there after it's already removed the target, at which point it's too late.</p>\n<p>There is something you can do about this, although it is a bit of a weak solution that will require manual work and probably several iterations of refinement on your end. Namely, if you explicitly add a control flow reference from the <code>jmp eax</code> instruction to <code>loc_100025C1</code>, then Hex-Rays won't remove that block, and it will be able to decompile more of the code. You can add such a control flow reference as follows:</p>\n<p><code>ida_xref.add_cref(0x100025BE,100025C1,ida_xref.XREF_USER | ida_xref.fl_JN)</code></p>\n<p>Note, however, that you are going to have to do this for every occurrence of this obfuscation construct, which you might only discover after adding the first cross reference and then seeing new <code>JUMPOUT</code> statements. You'll probably also run into issues where IDA may not create function chunks for new parts of the code that you add cross references to, which will be annoying and painful.</p>\n<p>If I were you, I'd do this instead:</p>\n<ol>\n<li>Load the binary without performing auto-analysis.</li>\n<li>Search for the patterns of interest, which you appear to already be doing in the \"Search\" window in your third tab.</li>\n<li>Replace them with direct, unconditional jumps to the destinations. I.e. replace the <code>mov eax, offset loc_100025C1</code> / <code>jmp eax</code> with simply <code>jmp loc_100025C1</code>. You'll have more than enough space to do this; if the target is within <code>0x7F</code> bytes of the end of the <code>mov eax</code> instruction, you can simply replace it with a one-byte <code>EB XX</code> <code>jmp</code> instruction. If it's not within that many bytes, you can use the <code>E9 AA BB CC DD</code> form of the <code>jmp</code> instruction, where the distance from the end of that instruction to the destination is <code>0xDDCCBBAA</code>.</li>\n<li>Now let IDA perform auto-analysis.</li>\n</ol>\n<p>As long as your script can find the relevant entries, this should prevent you from having to create the cross-references manually (in an iterative fashion) like I described above; you'll be explicitly creating all of the cross-references at once. And by delaying auto-analysis until after your script runs, you'll prevent issues with IDA not identifying the function chunks.</p>\n<p>In response to your edit including a link to the crackme, here's an IDAPython script you can run to remove the obfuscation. When loading the binary, uncheck the \"Enabled\" checkbox under the \"Analysis\" heading. Then, run the script. Finally, go to <code>Options-&gt;General-&gt;Analysis</code> and check the \"Enabled\" checkbox. (Note that there's a bit more logic to the script than necessary; only the \"patched jmp to destination\" block ever executes.)</p>\n<pre><code>import idaapi\nimport ida_bytes\nimport ida_nalt\nimport ida_bytes\nimport ida_ida\n\nPATTERN_STR = \"B8 ? ? ? ? 3D ? ? ? ? 74 07 B8 ? ? ? ? FF E0\"\n\npatterns = ida_bytes.compiled_binpat_vec_t()\nencoding = ida_nalt.get_default_encoding_idx(ida_nalt.BPU_1B)\nimagebase = ida_nalt.get_imagebase()\nida_bytes.parse_binpat_str(patterns,imagebase,PATTERN_STR,16,encoding)\nea = imagebase\nwhile True:\n    ea = ida_bytes.bin_search(ea,ida_ida.inf_get_max_ea(),patterns,ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_CASE)\n    if ea == idaapi.BADADDR:\n        break\n\n    const1 = ida_bytes.get_dword(ea+1)\n    const2 = ida_bytes.get_dword(ea+6)\n    offs = ida_bytes.get_dword(ea+13)\n    if const1 != const2:\n        if offs == ea+0x14:\n            ida_bytes.put_byte(ea,0xEB)\n            ida_bytes.put_byte(ea+1,0x12)\n            for i in range(0x12):\n                ida_bytes.put_byte(ea+2+i,0x90)\n            print(\"%#x: patched jmp to destination\" % ea)\n        else:\n            print(\"%#x: jmp address incorrect?\" % ea)\n\n    else:\n        ida_bytes.put_byte(ea,0xEB)\n        ida_bytes.put_byte(ea+1,0x11)\n        for i in range(0x11):\n            ida_bytes.put_byte(ea+2+i,0x90)\n        print(\"%#x: patched jmp to byte after jmp eax\" % ea)\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "Rolf Rolles",
+            "time": "Jul 7, 2023 at 3:50",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Alvo",
+                    "text": "<span class=\"comment-copy\">Thank you kind sir for the detailed explanation! Adding xref using my script allowed me to connect those detached basic blocks, Although there were still some bytes that were treated as data instead of code but I was able to get the whole dllmain decompiled after turning those bytes into code! I tried the patch the program before auto analysis approach as well, I think it works as well as the xref approach since it didn't make auto analysis magically finding all the function chunks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Rolf Rolles",
+                    "text": "<span class=\"comment-copy\">No problem. See the IDAPython script in the updated answer, which removes all of the obfuscation automatically according to the steps I laid out at the bottom of the original answer.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Alvo",
+                    "text": "<span class=\"comment-copy\">You script completely fixed the auto analysis result, and I understand that the <code>jz</code> was the culprit of all the errors. It's interesting that you don't need to advance the search start point using <code>BIN_SEARCH_FORWARD</code>. Thanks for sharing, and now I'm thinking it would be fun to implement this kind of obfuscation as a llvm pass.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

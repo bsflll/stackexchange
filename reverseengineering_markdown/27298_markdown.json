@@ -1,0 +1,28 @@
+{
+  "title": "Decompilation of CIL code into some high level code - do I need to introduce new variables during data flow analysis?",
+  "link": "https://reverseengineering.stackexchange.com/questions/27298/decompilation-of-cil-code-into-some-high-level-code-do-i-need-to-introduce-new",
+  "content": "I'm writing a compiler from .NET CIL code to some high level language. Process is similar to decompilation. I have done some control flow analysis - detecting loops, ifs, and so on. In terms of data flow analysis i've done simple expression propagation by simulating some instructions involving evaluation stack - I treat evaluation stack as hidden variable, push more complex expressions on it, and whenever there is any assignment instruction to some variable (for example starg or stloc) - I pop and assign propagated expression from stack to this variable and translate this expression into statement in high language code. Of course for now it is so simple that it generates failures. Consider a function written in C#:\n\n```\nint GCD(int n1, int n2)\n{\n    while(n2 != 0)\n    {\n        int c = n1 % n2;\n        n1 = n2;\n        n2 = c;\n    }\n\n    return n1;\n}\n\n```\nThis function compiles to IL:\n\n```\n.method private hidebysig \n    instance int32 GCD (\n        int32 n1,\n        int32 n2\n    ) cil managed \n{\n    .maxstack 8\n\n    IL_0000: br.s IL_000a\n        IL_0002: ldarg.1    // load n1 on eval stack\n        IL_0003: ldarg.2    // load n2 on eval stack\n        IL_0004: rem        // pop n1 and n2 from stack, compute n1 % n2 and push it on stack\n        IL_0005: ldarg.2    // load n2 on stack\n        IL_0006: starg.s n1 // pop n2 from stack and store it in n1\n        IL_0008: starg.s n2 // pop n1 % n2 from stack and store it in n2\n\n        IL_000a: ldarg.2\n        IL_000b: brtrue.s IL_0002\n\n    IL_000d: ldarg.1\n    IL_000e: ret\n}\n\n```\nWith this simple propagation we push n1 % n2 on stack, then load n2 on stack, then we have starg instruction, so we pop expression from stack and translate assignment to statement. Then we pop again, and do the same. Result code looks like this:\n\n```\nGCD(n1, n2) {\n    while (n2) { \n        n1 = n2;\n        n2 = (n1 % n2); \n    }\n    return n1;\n}\n\n```\nThis indicates that I have to do something inverse to dead code elimination, maybe called like \"necessary code introduction\". I searched for some sources about methods to introduce new variables in decompilation, but I did not find any. Do you have any ideas?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "215",
+  "tags": [
+    "decompilation",
+    "decompile",
+    "decompiler",
+    "compilers",
+    "compiler-optimization"
+  ],
+  "user": "Zmirlacz",
+  "time": "Mar 24, 2021 at 12:35",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The problem, as I think you realise, is that you are logically moving the calculation of an expression past the point whereby one of its input values gets changed.\n\nGiven your current implementation, I'd suggest the easiest approach to handle this is -\n\nApplying this procedure to your code gives -\n\n```\nIL_0002: // stack = { n1 }\n\nIL_0003: // stack = { n2, n1 }\n\nIL_0004: // stack = { n1 % n2 }\n\nIL_0005: // stack = { n2, n1 % n2 }\n\nIL_0006: // this instruction will write to n1\n         // inspection shows that we have an expression involving n1 on the stack so\n         // (a) spill this expression to a new temporary variable and\n         // (b) replace the expression on the stack with the new temporary variable\n\n         temp = n1 % n2;     // stack = { n2, temp }\n\n         // now the write to n1 can safely take place\n\n         n1 = n2;            // stack = { temp };\n\nIL_0008: // this instruction will write to n2, \n         // inspection shows no expressions on the stack involving n2\n         // the write to n2 can safely take place\n\n         n2 = temp;         // stack = {}\n\n```\nRemoving the comments, the inner loop now looks like the original code.\n\n```\ntemp = n1 % n2;\nn1 = n2;\nn2 = temp;\n\n```\n",
+      "votes": "1",
+      "user": "Ian Cook",
+      "time": "Apr 2, 2021 at 14:43",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+    "title": "Weird instruction identified on disassembler produced assembly code",
+    "link": "https://reverseengineering.stackexchange.com/questions/6278/weird-instruction-identified-on-disassembler-produced-assembly-code",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Test is on x86 32bit Linux, Ubuntu 12.04, GCC 4.6.3 objdump 2.22</p>\n<p>Basically when I use <code>gcc</code> to produce assembly code of function <code>foo</code> like this:</p>\n<pre><code>gcc -S foo.c -O2\n</code></pre>\n<p>At the end of function <code>foo</code>, I can get a sequence of instructions like this (I modified it and attached each instruction with its machine code to make it clear):</p>\n<pre><code>             ......\n1977                                                 .cfi_restore_state\n1978  8B150000 0000                                  movl    nodes, %edx\n1979  89442410                                       movl    %eax, 16(%esp)\n1980  A1000000 00                                    movl    i_depth, %eax\n1981  8974240C                                       movl    %esi, 12(%esp)\n1982  C7442404 FC000000                              movl    $.LC55, 4(%esp)\n1983  89542414                                       movl    %edx, 20(%esp)\n1984  89442408                                       movl    %eax, 8(%esp)\n1985  C7042401 000000                                movl    $1, (%esp)\n1986  E8FCFFFF FF                                    call    __printf_chk\n1987  E937FFFF FF                                    jmp     .L181\n1988                                         .L186:\n1989  E8FCFFFF FF                                    call    __stack_chk_fail\n\nfoo1:\n</code></pre>\n<p>Which looks normal.</p>\n<p>However, when I compiled + linked to create the ELF executable file, and then disassembly it with <code>objdump</code> like this:</p>\n<pre><code>gcc foo.c -O2\nobjdump -Dr -j .text foo\n</code></pre>\n<p>The instruction produced by disassembler looks like this (I modified a little bit to make it easier to understand):</p>\n<pre><code>11856 89442410                                mov %eax,0x10(%esp)\n11857 A1000000 00                             mov 0x80851AC,%eax\n11858 8974240C                                mov %esi,0xC(%esp)\n11859 C7442404 00000000                       movl $S_0x8064658,0x4(%esp)\n11860 89542414                                mov %edx,0x14(%esp)\n11861 89442408                                mov %eax,0x8(%esp)\n11862 C7042401 000000                         movl $0x1,(%esp)\n11863 E8FCFFFF FF                             call __printf_chk\n11864 E933FFFF FF                             jmp 0x80547EB\n11865\n11866 E8FCFFFF FF                             S_0x80548BC : call __stack_chk_fail\n11867 EB0D                                    jmp foo1\n11868 90                                      nop\n11869 90                                      nop\n11870 90                                      nop\n11871 90                                      nop\n11872 90                                      nop\n11873 90                                      nop\n11874 90                                      nop\n11875 90                                      nop\n11876 90                                      nop\n11877 90                                      nop\n11878 90                                      nop\n11879 90                                      nop\n11880 90                                      nop\n11881                                         foo1:\n</code></pre>\n<p>Looking at the end of function <code>foo</code>, I find out a sequence of instructions which can not be found in the original assembly code.</p>\n<p>It seems like a padding issue, but I am not sure.</p>\n<p>So my questions are:</p>\n<ol>\n<li>What's these instruction sequences for? </li>\n<li>Is there anyway to tell (assembler? linker?) do not generate these instruction sequences..? Because basically I am working a assembly code analysis tool, and these instruction sequences annoying the coding much.</li>\n</ol>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "502",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "x86",
+        "objdump"
+    ],
+    "user": "lllllllllllll",
+    "time": "Sep 22, 2014 at 5:51",
+    "comments": [
+        {
+            "user": "evlncrn8",
+            "text": "<span class=\"comment-copy\">could it possibly be an alignment setting like the code following uses mmx / sse or similar?</span>",
+            "time": null
+        },
+        {
+            "user": "user45891",
+            "text": "<span class=\"comment-copy\"><a href=\"https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#Optimize-Options\" rel=\"nofollow noreferrer\">gcc.gnu.org/onlinedocs/gcc/…</a> -02 turns on -falign-functions</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<blockquote>\n<p>What's these instruction sequences for? </p>\n</blockquote>\n<p>They are for <strong>code optimization</strong>.</p>\n<h1>CPU cache</h1>\n<p>To optimize memory accesses, the CPU uses its own (small) internal memory called <em>cache</em>. It usually consists of several levels named <strong>L1</strong>, <strong>L2</strong> etc. A lower suffix number means that the memory is located <em>closer</em> to the CPU core, thus is <em>faster</em> to access, but it's <em>smaller</em> as well. An illustration of this concept taken from <a href=\"https://www.makeuseof.com/tag/what-is-cpu-cache/\" rel=\"nofollow noreferrer\">link</a> is given below:</p>\n<p><a href=\"https://i.sstatic.net/9Y8Bz.png\" rel=\"nofollow noreferrer\"><img alt=\"CPU cache levels\" src=\"https://i.sstatic.net/9Y8Bz.png\"/></a></p>\n<p>Accessing the CPU cache is <em>critically faster</em> than reading RAM memory (see <a href=\"https://stackoverflow.com/questions/4087280/approximate-cost-to-access-various-caches-and-main-memory\">this question</a> for more information) and that's why it is better to have data in cache instead of reading it each time from RAM (or even worse - hard disk).</p>\n<p>But the CPU doesn't cache only data - it caches <em>instructions</em> as well. And for instructions to be cached effectively, they have to be properly <em>aligned</em>. Following cite comes from <a href=\"https://www.agner.org/optimize/optimizing_assembly.pdf\" rel=\"nofollow noreferrer\">here</a>:</p>\n<blockquote>\n<p>Most microprocessors fetch code in aligned 16-byte or 32-byte blocks. If an important subroutine entry or jump label happens to be near the end of a 16-byte block then the microprocessor will only get a few useful bytes of code when fetching that block of code. It may have to fetch the next 16 bytes too before it can decode the first instructions after the label. </p>\n<p>This can be avoided by aligning important subroutine entries and loop entries by 16. [...] We may align subroutine entries by the cache line size (typically 64 bytes) if the subroutine is part of a critical hot spot and the preceding code is unlikely to be executed in the same context.</p>\n</blockquote>\n<p>So, it may be the case that under <code>foo1:</code> there is some short loop and compiler decided to align this block to put it in the CPU cache so it is executed faster.</p>\n<p>As @user45891 already stated in the comment, such an optimization in gcc is turned on with the option <code>-O2</code>, so don't use it when you don't want such optimizations.</p>\n<h1>But why the difference between the two outputs?</h1>\n<p>Because the first result comes from just two first states of compilation performed by gcc (<a href=\"https://gcc.gnu.org/onlinedocs/gcc/Overall-Options.html#Overall-Options\" rel=\"nofollow noreferrer\">link</a>):</p>\n<blockquote>\n<p>Compilation can involve up to four stages: preprocessing, compilation proper, assembly and linking, always in that order.</p>\n<p><code>-S</code></p>\n<p>Stop after the stage of compilation proper; do not assemble.</p>\n</blockquote>\n<p>While the second one is \"entirely compiled\" and linked.</p>\n</div>",
+            "votes": "2",
+            "user": "Community",
+            "time": "Jun 30, 2019 at 8:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">WOW, thank you very much for this answer. It has been about five years and I am still in the reverse engineering business. God bless us.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,37 @@
+{
+    "title": "Semantics of the RRX shift instruction in ARM and Carry flag updates?",
+    "link": "https://reverseengineering.stackexchange.com/questions/6065/semantics-of-the-rrx-shift-instruction-in-arm-and-carry-flag-updates",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Still looking at ARM assembler semantics (and, I try hard to read the specification, I ensure you!!!). I have some doubts about the ARM bit-shift instructions in general and\n  <code>\n   RRX\n  </code>\n  in particular.\n </p>\n <p>\n  Lets start with\n  <code>\n   RRX\n  </code>\n  .\n </p>\n <p>\n  From\n  <a href=\"http://www.davespace.co.uk/arm/introduction-to-arm/barrel-shifter.html\" rel=\"nofollow noreferrer\">\n   Davespace, Introduction to ARM, section\n   <em>\n    Barrel Shifter\n   </em>\n  </a>\n  , we see that\n  <code>\n   RRX\n  </code>\n  correspond to:\n </p>\n <p>\n  <img alt=\"RRX: Barrel RollRotate Right Extended\" src=\"https://i.sstatic.net/Fcyhv.png\"/>\n </p>\n <p>\n  I suppose the\n  <code>\n   C\n  </code>\n  to be the carry flag found in the CPSR, is it correct ?\n </p>\n <p>\n  Second question, in the case of the following instruction:\n </p>\n <pre><code>ands   r9, r0, r0, ror #3\n</code></pre>\n <p>\n  I read that the carry flag (\n  <code>\n   C\n  </code>\n  ) is set to the value of the last bit shifted out by the shifter operand (here\n  <code>\n   ROR\n  </code>\n  ).\n </p>\n <p>\n  My problem is that the\n  <code>\n   ands\n  </code>\n  is also supposed to update the CPSR because of its flag\n  <code>\n   s\n  </code>\n  . So, who is winning at the end ? And, what is left in the final carry flag ? The value resulting of\n  <code>\n   AND\n  </code>\n  or the value resulting of\n  <code>\n   ROR\n  </code>\n  ?\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "assembly",
+        "arm"
+    ],
+    "user": "perror",
+    "time": "Aug 13, 2014 at 13:30",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "<html><body><span class=\"comment-copy\">\n I know that I should try, but I have no easy ARM platform with a debugger at hand reach by now... (though an ARM QEmu could do it as well...).\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <ol>\n  <li>\n   <p>\n    Yes,\n    <code>\n     C\n    </code>\n    is the carry flag.\n   </p>\n  </li>\n  <li>\n   <p>\n    <code>\n     C\n    </code>\n    is set from the result of the\n    <code>\n     ROR\n    </code>\n    operation.\n   </p>\n  </li>\n </ol>\n <p>\n  Pseudocode of the\n  <code>\n   AND (register)\n  </code>\n  instruction from the\n  <a href=\"http://infocenter.arm.com/help/topic/com.arm.doc.ddi0406c/index.html\" rel=\"nofollow\">\n   ARM ARM\n  </a>\n  :\n </p>\n <pre><code>if ConditionPassed() then\n    EncodingSpecificOperations();\n    (shifted, carry) = Shift_C(R[m], shift_t, shift_n, APSR.C);\n    result = R[n] AND shifted;\n    if d == 15 then // Can only occur for ARM encoding\n        ALUWritePC(result); // setflags is always FALSE here\n    else\n        R[d] = result;\n        if setflags then\n            APSR.N = result<31>;\n            APSR.Z = IsZeroBit(result);\n            APSR.C = carry;\n            // APSR.V unchanged\n</code></pre>\n <p>\n  As you can see,\n  <code>\n   APSR.C\n  </code>\n  is set to the result of the shift operation, not the\n  <code>\n   AND\n  </code>\n  operation.\n </p>\n <p>\n  Now,\n  <code>\n   AND\n  </code>\n  is pretty straightforward but in case of e.g.\n  <code>\n   ADD\n  </code>\n  you may have carry affected by both the shift and the add. So what happens? Again, ARM ARM to the rescue:\n </p>\n <pre><code>if ConditionPassed() then\n    EncodingSpecificOperations();\n    shift_n = UInt(R[s]<7:0>);\n    shifted = Shift(R[m], shift_t, shift_n, APSR.C);\n    (result, carry, overflow) = AddWithCarry(R[n], shifted, APSR.C);\n    R[d] = result;\n    if setflags then\n        APSR.N = result<31>;\n        APSR.Z = IsZeroBit(result);\n        APSR.C = carry;\n        APSR.V = overflow;\n</code></pre>\n <p>\n  The answer: the add \"wins\" and the carry of the shift operation is discarded.\n </p>\n <p>\n  BTW, a good page to check what happens for each concrete instruction is\n  <a href=\"http://svr-acjf3-armie.cl.cam.ac.uk/main.cgi\" rel=\"nofollow\">\n   here\n  </a>\n  . For example:\n </p>\n <pre><code>ands r9, r0, r0, ror #3\nmachine code: E01091E0\n...\ncpsr.N  ←   (r0 AND r0 ROR 3)<31>\ncpsr.Z  ←   r0 AND r0 ROR 3 = 0\ncpsr.C  ←   #CARRY (ROR_C (r0,3))\nr9  ←   r0 AND r0 ROR 3\nr15 ←   r15 + 4\n\n\nadds r9, r0, r0, ror #3\nmachine code: E09091E0\n...\ncpsr.N  ←   (r0 + r0 ROR 3)<31>\ncpsr.Z  ←   r0 + r0 ROR 3 = 0\ncpsr.C  ←   #CARRY (AddWithCarry (r0,r0 ROR 3,False))\ncpsr.V  ←   #OVERFLOW (AddWithCarry (r0,r0 ROR 3,False))\nr9  ←   r0 + r0 ROR 3\nr15 ←   r15 + 4\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "perror",
+            "time": "Aug 13, 2014 at 14:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">Igor, if I meet you in real life at some point, remember me to offer you a drink (what ever you want!). :-)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,57 @@
+{
+    "title": "Is it possible to (heuristic) identify the begin addr of main function in a stripped ELF?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4349/is-it-possible-to-heuristic-identify-the-begin-addr-of-main-function-in-a-stri",
+    "content": "So basically I am working on some tripped dynamic linked ELF binaries (32 bit Linux x86), using <pre><code>objdump</code></pre> to disassemble them, modifying and trying to reassemble them.\nIn the unstripped binary, we can get the beginning address of main function based on the symbol table, however, on the stripped binary, we just don't know where the main function is.\nOf course I can just adjust the whole text section, and starting from the original entry point of the ELF.\nBut the problems are:\n\nThere is some control transfer from the prologue/epilog of this ELF (such as <pre><code>_start</code></pre>; <pre><code>__do_global_dtors_aux</code></pre>; <pre><code>__libc_csu_fini</code></pre>; <pre><code>__i686.get_pc_thunk.bx</code></pre>; <pre><code>__do_global_ctors_aux</code></pre>) into the <pre><code>.dtors</code></pre>,<pre><code>.ctors</code></pre>section, which means I have to also disassemble this section.\nI am afraid that if I start from entry point in the re-assembled ELF, then I would probably double-init some stuff, because in my re-assembled asm code, I have the code of <pre><code>_start</code></pre>; <pre><code>__do_global_dtors_aux</code></pre>; <pre><code>__libc_csu_fini</code></pre> while linker will also attach these functions in the new ELF.\n\nSo I would like to use some way to identify the <pre><code>main</code></pre> function in a stripped ELF (heuristically)...\nRight now I don't have some strategies on this issue, Could anyone give me some help?\n",
+    "votes": "4",
+    "answers": 4,
+    "views": "1k",
+    "tags": [
+        "disassembly",
+        "x86",
+        "elf",
+        "reassembly"
+    ],
+    "user": "lllllllllllll",
+    "time": "May 17, 2014 at 8:09",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The catch is to determine whether the image in question uses a \"standard\" C runtime library of sorts (glibc, musl, uclibc) or not. If it does, then you can grab the entry point address and match the code at that address against your collection of startup routines from those libraries and pinpoint the main() location as you'd know which <pre><code>call</code></pre> is the one transferring control to <pre><code>main()</code></pre>.\nThen, the image might not be linked against any well-known C runtime, say, if it's a code piece that directly invokes kernel syscalls or if it managed to whip its own CRT library.\nAnother good point would be if the program wasn't written in C at all and uses some other fancy language, but that seems to be outside the scope of the question as <pre><code>main()</code></pre> won't be relevant for those, I guess.\n",
+            "votes": "3",
+            "user": "Dmitry Janushkevich",
+            "time": "Jun 26, 2014 at 11:59",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "I started to answer to this in « Reversing ELF 64-bit LSB executable, x86-64 ,gdb », but this was focused only to AMD64.\nIndeed, the key is really to locate the <pre><code>__libc_start_main</code></pre> function and take its first argument as a pointer to the entry of the <pre><code>main</code></pre> function. The full description of this function is the following (from its manual page):\n\n<pre><code>__libc_start_main</code></pre>\nName\n<pre><code>__libc_start_main</code></pre> - initialization routine\nSynopsis\n<pre><code>int __libc_start_main(int (*main) (int, char**, char**), int argc, char** ubp_av,\n                      void (*init) (void), void (*fini) (void), \n                      void (*rtld_fini) (void), void (* stack_end));\n</code></pre>\nDescription\nThe <pre><code>__libc_start_main()</code></pre> function shall perform any necessary initialization of the execution environment, call the main function with appropriate arguments, and handle the return from <pre><code>main()</code></pre>. If the <pre><code>main()</code></pre> function returns, the return value shall be passed to the <pre><code>exit()</code></pre> function.\nNote: While this specification is intended to be implementation independent, process and library initialization may include:\n\nPerforming any necessary security checks if the effective user ID is not the same as the real user ID.\nInitialize the threading subsystem.\nRegistering the <pre><code>rtld_fini</code></pre> to release resources when this dynamic shared object exits (or is unloaded).\nRegistering the <pre><code>fini</code></pre> handler to run at program exit.\nCalling the initializer function <pre><code>(*init)()</code></pre>.\nCalling <pre><code>main()</code></pre> with appropriate arguments.\nCalling <pre><code>exit()</code></pre> with the return value from <pre><code>main()</code></pre>.\n\nThis list is an example only.\n<pre><code>__libc_start_main()</code></pre> is not in the source standard; it is only in the binary standard.\nSee Also\nThe section on Process Initialization in each of the architecture specific parts of ISO/IEC 23360.\n\nSo, the <pre><code>__libc_start_main</code></pre> gives you not only the address of the <pre><code>main()</code></pre> procedure but also access to <pre><code>int argc</code></pre>, <pre><code>char** argv</code></pre> and <pre><code>char** envp</code></pre>.\nThe point will then be to extract each of these arguments from the assembly code which may vary depending on the ABI (Application Binary Interface) you are using (function arguments may be pushed on the stack or in specific registers).\n",
+            "votes": "3",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<pre><code>objdump -f exe_name\n\nexe_name:     file format elf32-little\narchitecture: UNKNOWN!, flags 0x00000112:\nEXEC_P, HAS_SYMS, D_PAGED\nstart address 0x00306990\n</code></pre>\nThe start address mentioned above is the main entry point in the executable. You can also verify this using gdb\n<pre><code>(gdb) break *0x00306990\n</code></pre>\nNormally, the start address is mapped to symbol <pre><code>_start</code></pre>, so you can also do\n<pre><code>(gdb) break _start\n</code></pre>\nIf I recall correctly, <pre><code>_start</code></pre> calls <pre><code>__libc_start_main</code></pre> which in turn calls <pre><code>__libc_csu_init</code></pre>\n",
+            "votes": "3",
+            "user": "manav m-n",
+            "time": "Jun 26, 2014 at 15:43",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "So I am thinking that, in the asm code disassembled from <pre><code>objdump</code></pre>, we should always find this :\n<pre><code>push addr\ncall __libc_start_main\n</code></pre>\nand in a heuristical perspective, we can just consider the <pre><code>addr</code></pre> in the above code is the beginning addr of <pre><code>main</code></pre> function.\nAm I right? Is there any exception?\n",
+            "votes": "2",
+            "user": "lllllllllllll",
+            "time": "May 16, 2014 at 17:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">In fact, it depends on the ABI you are using. For example, in SystemV AMD64, you will find the first argument in the register <code>%rdi</code>.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

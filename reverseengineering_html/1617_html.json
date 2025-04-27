@@ -1,0 +1,124 @@
+{
+    "title": "Server-side Query interception with MS SQL Server",
+    "link": "https://reverseengineering.stackexchange.com/questions/1617/server-side-query-interception-with-ms-sql-server",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm researching into intercepting queries that arrive at the SQL Server 2008 process.\n </p>\n <p>\n  SQLOS architecture is divided in the following system DLLs:\n </p>\n <ul>\n  <li>\n   <strong>\n    sqlmin.dll\n   </strong>\n   : Storage, replication, security features,etc.\n  </li>\n  <li>\n   <strong>\n    sqllang.dll\n   </strong>\n   : TransactSQL query execution engine, expression evaluation, etc.\n  </li>\n  <li>\n   <strong>\n    sqldk.dll\n   </strong>\n   : Task scheduling and dispatch, worked thread creation, message loops, etc.\n  </li>\n </ul>\n <p>\n  <em>\n   SQLSERVR\n  </em>\n  service process instances the SQLOS components through\n  <em>\n   sqlboot.dll\n  </em>\n  and\n  <em>\n   sqldk.dll\n  </em>\n  , and the worker threads receive queries through the selected connection method in the server (TCP/IP, local shared memory or named-pipes).\n </p>\n <p>\n  I've debugged the sqlservr.exe process address space searching for textual queries. It seems that query strings are readable, but I could not find a point where queries can be intercepted while they enter the SQLOS scheduler.\n </p>\n <p>\n  Listening to pipes or TCP/IP is not an option at this moment; I would like to inject at a higher level, preferably at SQLOS-component level.\n </p>\n <p>\n  Any idea on where to start looking into?\n </p>\n</div>\n</body></html>",
+    "votes": "18",
+    "answers": 4,
+    "views": "6k",
+    "tags": [
+        "windows",
+        "dll",
+        "mssql"
+    ],
+    "user": "Hernán",
+    "time": "Apr 6, 2013 at 17:43",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<html><body><span class=\"comment-copy\">\n Why are you ruling out the obvious first choices in your next to last paragraph?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "RobotHumans",
+            "text": "<html><body><span class=\"comment-copy\">\n I'm with 0c00l, but my question is why don't use enter a query with some thin shim program (an odbc connector for instance) and do a run trace.  connect with a socket and do a run trace(starting with recv or whatever).  then check the union between the two traces for when they begin to intersect to see if it's a viable approach?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "sw.",
+            "text": "<html><body><span class=\"comment-copy\">\n @0xC0000022L Hernan is obviously aware of the other alternatives. He wants to know specifically where to intercept the functions at a higher level (i.e: using hooks). It would be interesting to know it because I searched and couldn't find a resource about it, while exist a lot of resources about hooking other things. I just found a recommendation from Microsoft to not instrument SQL Server: \"The use of third-party detours or similar techniques is not supported in SQL Server\"\n <a href=\"http://support.microsoft.com/kb/920925\" rel=\"nofollow noreferrer\">\n  support.microsoft.com/kb/920925\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "sw.",
+            "text": "<html><body><span class=\"comment-copy\">\n @0xC0000022L, sorry if I was rude. I think that knowing how to hook SQL Server would be interesting because of what Hernan said \"I would like to inject at a higher level, preferably at SQLOS-component level.\"\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Hernán",
+            "text": "<html><body><span class=\"comment-copy\">\n Just like @sw says, I'm aware of other alternatives such as ODBC-level interception. To be more concise, I don't want to patch at multiple points (e.g: shared memory, pipes and TCP/IP I/O) but at a single point where all queries are scheduled for planning and execution, independent of the client-server interface  or communication method.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This seemed like a fun project for a Sunday afternoon, so I had a go at it. To get straight to the point, here's the call stack for a function in SQL server that parses and then executes the query (addresses and offsets taken from SQL Server 2008 R2 running on Windows 7 SP1 32-bit):\n </p>\n <pre><code>0x7814500a msvcr80.i386!memcpy+0x5a\n0x013aa370 sqlservr!CWCharStream::CwchGetWChars+0x5c\n0x013a9db5 sqlservr!CSQLStrings::CbGetChars+0x35\n0x012ffa50 sqlservr!CParser::FillBuffer+0x3d\n0x0138bbfd sqlservr!CParser::CParser+0x3c8\n0x01352e96 sqlservr!sqlpars+0x7b\n0x013530f2 sqlservr!CSQLSource::FParse+0x16d\n0x013531ed sqlservr!CSQLSource::FParse+0x268\n0x012ff9e8 sqlservr!`string'+0x3c\n0x015894b8 sqlservr!CSQLSource::Execute+0x2c8\n0x0158ad31 sqlservr!process_request+0x2ac\n0x0158a328 sqlservr!process_commands+0x15f\n0x015cf8b4 sqlservr!SOS_Task::Param::Execute+0xdd\n0x015cf9ea sqlservr!SOS_Scheduler::RunTask+0xb4\n0x015cf575 sqlservr!SOS_Scheduler::IsShrinkWorkersNecessary+0x48\n0x77f06854 ntdll!ZwSignalAndWaitForSingleObject+0xc\n0x77e479e2 kernel32!SignalObjectAndWait+0x82\n</code></pre>\n <p>\n  Based on this, you probably want to take a close look at the\n  <code>\n   CSQLSource\n  </code>\n  class, and particularly its\n  <code>\n   Execute\n  </code>\n  method.\n </p>\n <p>\n  Armed with this information, I was also able to dig up a couple\n  <a href=\"https://docs.microsoft.com/en-us/archive/blogs/askjay/how-do-i-find-what-queries-were-executing-in-a-sql-memory-dump\" rel=\"nofollow noreferrer\">\n   blog posts\n  </a>\n  by someone at Microsoft on how to extract the query string from a memory dump of SQL Server. That post seems to confirm that we're on the right track, and gives you a place to interpose and a way to extract the query string.\n </p>\n <h1>\n  Methodology\n </h1>\n <p>\n  I felt like this would be most easily tackled using some form of Dynamic Binary Instrumentation (DBI); since we suspect the query string will be processed somewhere in the SQL Server process, we can look at memory reads and writes made by the process, searching for a point that reads or writes the query string. We can then dump the callstack at that point and see what interesting addresses show up, and map them back to symbols (since, as Rolf points out, SQL Server has debug symbols available). It really was basically as simple as that!\n </p>\n <p>\n  Of course, the trick is having something around that lets you easily instrument a process. I solved this using a (hopefully soon-to-be-released) whole-system dynamic analysis framework based on\n  <a href=\"http://wiki.qemu.org/Main_Page\" rel=\"nofollow noreferrer\">\n   QEMU\n  </a>\n  ; this let me avoid any unpleasantness involved in getting SQL Server to run under, e.g.,\n  <a href=\"http://software.intel.com/en-us/articles/pin-a-dynamic-binary-instrumentation-tool\" rel=\"nofollow noreferrer\">\n   PIN\n  </a>\n  . Because the framework includes record and replay support, I also didn't have to worry about slowing down the server process with my instrumentation. Once I had the callstack, I used\n  <a href=\"https://github.com/moyix/pdbparse\" rel=\"nofollow noreferrer\">\n   PDBParse\n  </a>\n  to get the function names.\n </p>\n</div>\n</body></html>",
+            "votes": "12",
+            "user": "OzgurH",
+            "time": "Mar 27, 2020 at 15:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ange",
+                    "text": "<span class=\"comment-copy\">just to clarify: does your method only work if the server runs inside QEMU? and side question: can you actually modify the query?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Brendan Dolan-Gavitt",
+                    "text": "<span class=\"comment-copy\">The particular method I used only works if the server runs in QEMU, yes. But you could do the same thing with, e.g., PIN, by instrumenting memory reads/writes. I'm not sure if you could modify the query at this point; I saw at least one other place where it uses the query string to construct an MD5 hash (CSQLStrings::GenerateDurableSqlHandle+0x40) so you'd have to modify it before that point.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Hernán",
+                    "text": "<span class=\"comment-copy\">Sophisticated, very interesting approach, and technically correct. Thank you for your time and help!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Hernán",
+                    "text": "<span class=\"comment-copy\">NOTE about debugging symbols:  SQL Server 2012 RTM (11.0.2100.60) has public debugging symbols. At this moment, I could not obtain PDBs for 11.0.3128.0, plus I dont know if they are available for SP1 yet (11.0.3000). So keep this in mind when playing with SQL 2012 system DLLs.   For build information see <a href=\"http://sqlserverbuilds.blogspot.com.ar/\" rel=\"nofollow noreferrer\">sqlserverbuilds.blogspot.com.ar</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "sw.",
+                    "text": "<span class=\"comment-copy\">Following Brendan answer, Hernan working example is available at: <a href=\"https://github.com/nektra/SQLSvrIntercept\" rel=\"nofollow noreferrer\">github.com/nektra/SQLSvrIntercept</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h1>\n  Sniffing traffic only ... is easy\n </h1>\n <p>\n  If you merely wanted to sniff the traffic you could\n  <a href=\"http://wiki.wireshark.org/Protocols/tds\" rel=\"nofollow noreferrer\">\n   use the TDS protocol sniffer\n  </a>\n  that comes with\n  <a href=\"http://www.wireshark.org/\" rel=\"nofollow noreferrer\">\n   WireShark\n  </a>\n  .\n </p>\n <h1>\n  Let the laziness guide you - laziness is the reverser's\n  <em>\n   friend\n  </em>\n </h1>\n <blockquote>\n  <p>\n   Listening to pipes or TCP/IP is not an option at this moment; I would\n  like to inject at a higher level, preferably at SQLOS-component level.\n  </p>\n </blockquote>\n <p>\n  I don't know why you insist on doing this a particular way when all information is readily available and all you need to do is put the jigsaw pieces together. This would seem to be the easiest, fastest - in short: laziest - method. Besides TCP/IP\n  <em>\n   is\n  </em>\n  the higher level, because you can intercept it even before it reaches the actual SQL server\n  <em>\n   machine\n  </em>\n  if you can hijack the IP/name of the SQL server and put a \"proxy\" in between. How\n  <em>\n   high level\n  </em>\n  do you want it? What you insist on is actually drilling down into the lower level guts of the MS SQL Server.\n </p>\n <p>\n  MS SQL Server uses a\n  <a href=\"http://msdn.microsoft.com/en-us/library/cc448435.aspx\" rel=\"nofollow noreferrer\">\n   documented protocol\n  </a>\n  and using\n  <a href=\"http://www.microsoft.com/msj/0599/LayeredService/LayeredService.aspx\" rel=\"nofollow noreferrer\">\n   an LSP\n  </a>\n  you should/would be able to sniff, intercept and even manipulate that traffic. As far as I recall LSPs run within the process space of the application whose traffic they're filtering. You can consider them a makeshift application-level firewall, literally.\n </p>\n <p>\n  Alternatively - and probably the better choice anyway - you could write a proxy based on the existing and free\n  <a href=\"http://www.freetds.org\" rel=\"nofollow noreferrer\">\n   FreeTDS\n  </a>\n  (licensed under LGPL). The\n  <a href=\"http://freetds.cvs.sourceforge.net/viewvc/freetds/freetds/src/pool/\" rel=\"nofollow noreferrer\">\n   <code>\n    tdspool\n   </code>\n  </a>\n  program would be a good point to start this endeavor. And yes, this should be suitable for actual\n  <em>\n   interception\n  </em>\n  , not just sniffing forwarded traffic. You can use the library (FreeTDS) to decode and re-encode the queries. That library would also be the one to use inside your LSP, obviously.\n </p>\n <p>\n  I'll save the time to go into details of the disassembly, although I installed MS SQL Server 2008 and briefly looked at it in IDA Pro.\n  <a href=\"https://reverseengineering.stackexchange.com/a/1778/245\">\n   Brendan's answer\n  </a>\n  provides a good overview, even if I disagree with this overly involved method where an easier one is available. But then,\n  <a href=\"https://reverseengineering.stackexchange.com/q/1617/245\">\n   you (Hernán) asked for it.\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "6",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  In general, what I would say is that problems like this one are application-specific.  Therefore, despite the fact that the user broadway was down-voted for his answer, it was exactly the same advice I'd give if I wasn't aware of any nice, special solutions specific to the problem.  What you're going to have to do is watch the data come into the process and then follow it as it is copied and manipulated throughout the program.  This task will be easier than the general case owing to the fact that debug symbols are available for SQL Server.  Have you attempted anything along these lines?  Say, setting a breakpoint on network receive-type functions in the context of SQL Server, setting a hardware RW breakpoint on the data that comes in over the network, and then watching how the data moves through the mass of code?\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Rolf Rolles",
+            "time": "Apr 13, 2013 at 0:19",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "dyasta",
+                    "text": "<span class=\"comment-copy\">Yea, if there is some application specific knowledge someone already has for this case, then perhaps they'll reveal it, though short of that, this is the obvious path of investigation. However, SQL servers may have fairly complex systems that execute SQL statements, so reversing may be time consuming. OR maybe it's simple. One <i>imagines</i> some function that accepts the SQL statement as input ;).</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't have any specific knowledge about that target, but the approach I would probably take is to send the same message over a pipe, tcp, and shared memory and trace them with pin, looking for where the basic block's hit converge with all traces should give you some starting points for fine tuning a good injection point.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "broadway",
+            "time": "Apr 11, 2013 at 14:34",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Lizz",
+                    "text": "<span class=\"comment-copy\">Maybe it's just me, but I can't follow your solution. Perhaps you could flesh this out with links, more information, descriptions, and specifics?</span>",
+                    "time": null
+                },
+                {
+                    "user": "dyasta",
+                    "text": "<span class=\"comment-copy\">I think he is just saying execute SQL commands, make notes of the code that seems to be executing, dive into that code, and trace it back to the first function in the chain of SQL command execution. Of course, who knows if it's 'that simple', it probably has a fairly complex execution system. Anyway, not my answer, just clarifying what I think I read.</span>",
+                    "time": null
+                },
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">Not exactly. I am saying use each of the input types to input the same query and examine the path through the program. Pin is a very accessible tool to do this sort of thing (although of course it's not the only one).</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,67 @@
+{
+    "title": "Why does `ldd` and `(gdb) info sharedlibrary` show a different library base address?",
+    "link": "https://reverseengineering.stackexchange.com/questions/6657/why-does-ldd-and-gdb-info-sharedlibrary-show-a-different-library-base-addr",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I see three different outputs for where libc should be loaded.\n </p>\n <p>\n  <code>\n   ldd\n  </code>\n  shows the loading address of libc at\n  <code>\n   0xf7e9e000\n  </code>\n </p>\n <pre><code>$ ldd ~/my_tool\n    linux-gate.so.1 =>  (0xf7ffe000)\n    libc.so.6 => /lib/i386-linux-gnu/libc.so.6 (0xf7e9e000)\n    /lib/ld-linux.so.2 (0x56555000)\n</code></pre>\n <p>\n  While gdb tells me it's loaded at\n  <code>\n   0xf7e96c60\n  </code>\n </p>\n <pre><code>(gdb) info sharedlibrary\nFrom        To          Syms Read   Shared Object Library\n0xf7fe1820  0xf7ff805f  Yes (*)     /lib/ld-linux.so.2\n0xf7e96c60  0xf7f9643c  Yes (*)     /lib/i386-linux-gnu/libc.so.6\n</code></pre>\n <p>\n  And when I manually calculate the base address based on a symbol:\n </p>\n <pre><code>(gdb) print system\n$1 = {<text variable, no debug info>} 0xf7ebb6b0 <system>\n</code></pre>\n <p>\n  <img alt=\"system offset\" src=\"https://i.sstatic.net/soMyR.png\"/>\n </p>\n <p>\n  I get this address:\n </p>\n <p>\n  <code>\n   0xf7ebb6b0-0x003b6b0 = 0xf7e80000\n  </code>\n </p>\n <p>\n  Why is that so?\n </p>\n <pre><code>calculated: 0xf7e80000\ngdb:        0xf7e96c60\nldd:        0xf7e9e000\n</code></pre>\n</div>\n</body></html>",
+    "votes": "9",
+    "answers": 2,
+    "views": "16k",
+    "tags": [
+        "linux",
+        "gdb",
+        "symbols",
+        "libraries"
+    ],
+    "user": "samuirai",
+    "time": "Nov 18, 2014 at 22:54",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h2>\n  <code>\n   ldd\n  </code>\n </h2>\n <p>\n  The program\n  <code>\n   ldd\n  </code>\n  is wrong for a few reasons.\n </p>\n <p>\n  First,\n  <code>\n   ldd\n  </code>\n  is not meant to be accurate for determining load addresses. Use the environment variable\n  <code>\n   LD_TRACE_LOADED_OBJECTS\n  </code>\n  .\n </p>\n <p>\n  Second,\n  <code>\n   ldd\n  </code>\n  will never be correct with ASLR enabled as Guntram showed.  You can disable this pretty trivially if you have\n  <code>\n   sudo\n  </code>\n  access.\n </p>\n <pre><code>$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f44dae1b000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f9b35341000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fef18efd000)\n$ echo 0 | sudo tee /proc/sys/kernel/randomize_va_space\n0\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n$ LD_TRACE_LOADED_OBJECTS=1 /bin/bash | grep libc\n        libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ffff75e7000)\n</code></pre>\n <p>\n  You can verify this by starting an instance of bash in the background and inspecting its maps file.\n </p>\n <pre><code>$ bash &\n[1] 30398\n[1]  + 30398 suspended (tty input)  bash                                                                             \n$ grep libc /proc/30398/maps | head -n1\n7ffff75e7000-7ffff77a2000 r-xp 00000000 08:01 525269                     /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\n <h2>\n  <code>\n   info sharedlibrary\n  </code>\n </h2>\n <p>\n  The address reported by\n  <code>\n   info sharedlibrary\n  </code>\n  is the address of the\n  <code>\n   .text\n  </code>\n  area.\n </p>\n <p>\n  Note that in the particular libc that I have, the .text is at\n  <code>\n   0x1f4a0\n  </code>\n  .\n </p>\n <pre><code>$ readelf --wide --section-headers /lib/x86_64-linux-gnu/libc-2.19.so | grep text\n  [12] .text             PROGBITS        000000000001f4a0 01f4a0 145c23 00  AX  0   0 16\n</code></pre>\n <p>\n  In GDB, if we look at the load addresses of\n  <code>\n   libc\n  </code>\n  , we see that it is loaded at\n  <code>\n   0x7ffff7a14000\n  </code>\n  .  This will change each time the program is run, if ASLR is enabled on the system.  If you run it under GDB, it will also disable ASLR.  Run the command\n  <code>\n   set disable-randomization off\n  </code>\n  before running the target and you will observe it change each run.\n </p>\n <pre><code>gdb-peda$ info proc mapping\n  ...\n  0x7ffff7a14000     0x7ffff7bcf000   0x1bb000        0x0 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7bcf000     0x7ffff7dcf000   0x200000   0x1bb000 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7dcf000     0x7ffff7dd3000     0x4000   0x1bb000 /lib/x86_64-linux-gnu/libc-2.19.so\n  0x7ffff7dd3000     0x7ffff7dd5000     0x2000   0x1bf000 /lib/x86_64-linux-gnu/libc-2.19.so\n  ...\n</code></pre>\n <p>\n  You can verify this by checking to see if it starts with the ELF header.\n </p>\n <pre><code>gdb-peda$ hexdump 0x00007ffff7a14000 4\n0x0000 0x00007ffff7a14000 │ 7f 45 4c 46                                      │ .ELF\n0x0004 0x00007ffff7a14004\n</code></pre>\n <p>\n  If we add the\n  <code>\n   0x1f4a0\n  </code>\n  offset from the\n  <code>\n   .text\n  </code>\n  area, we get\n  <code>\n   0x7ffff7a334a0\n  </code>\n  .\n </p>\n <pre><code>gdb-peda$ printf \"%p\n\",(0x00007ffff7a14000+0x1f4a0)\n0x7ffff7a334a0\n</code></pre>\n <p>\n  Now if we look at\n  <code>\n   info sharedlibrary\n  </code>\n  , we see exactly this address.\n </p>\n <pre><code>gdb-peda$ info sharedlibrary libc\nFrom                To                  Syms Read   Shared Object Library\n0x00007ffff7a334a0  0x00007ffff7b790c3  Yes         /lib/x86_64-linux-gnu/libc.so.6\n</code></pre>\n <h2>\n  Extra Tips\n </h2>\n <p>\n  In GDB, you should use the\n  <code>\n   info proc mapping\n  </code>\n  command to get the base address of a loaded module.\n </p>\n <p>\n  However, this is not available on FreeBSD, since GDB does not support the FreeBSD-specific APIs necessary to get module base addresses.  Instead, you must use the\n  <code>\n   info proc mapping\n  </code>\n  command and perform the translation yourself (by subtracting the address of the\n  <code>\n   .text\n  </code>\n  section).\n </p>\n</div>\n</body></html>",
+            "votes": "9",
+            "user": "Zach Riggle",
+            "time": "Nov 20, 2014 at 9:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">There is no ASLR in my case. The example I posted in the original question are constant each time.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">My answer addresses the issue.  Info sharedlibrary prints the address of the .text area, not the moduel base.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">Ping.  This is answered.  The very tl;dr is at the end.  You want \"info proc mapping\".</span>",
+                    "time": null
+                },
+                {
+                    "user": "Giuseppe Crinò",
+                    "text": "<span class=\"comment-copy\">@ZachRiggle ping, could you add an explanation for why ldd \"is not meant to be accurate\"? Also, using LD_TRACE_LOADED_OBJECTS=1 does not improve the situation: indeed reading from <code>man ldd</code>, invoking ldd is <i>equivalent</i> to explicitly call the loader with LD_TRACE_LOADED_OBJECTS variable set -- so, ldd is not using it. <a href=\"http://pastebin.com/raw/06bQjui5\" rel=\"nofollow noreferrer\">pastebin.com/raw/06bQjui5</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Zach Riggle",
+                    "text": "<span class=\"comment-copy\">@guiscri: Looking back, I'm not sure why I made that statement.  I expect there was a reason, but it's been two years and I've forgotten.  <code>ldd foo</code> and <code>LD_TRACE_LOADED_OBJECTS foo</code> should be functionally equivalent.  In either case, you shouldn't rely on it for module addresses.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  First,\n  <a href=\"http://en.wikipedia.org/wiki/Address_space_layout_randomization\" rel=\"nofollow\">\n   ASLR\n  </a>\n  will load the library at a (slightly) different address with each invocation, to help protect against malware. This is why the addresses between\n  <code>\n   ldd\n  </code>\n  and\n  <code>\n   gdb\n  </code>\n  are different, and why they may be even different each time you run\n  <code>\n   gdb\n  </code>\n  .\n </p>\n <p>\n  If i just grep for the libc executable segment on my system (64 bit, as i didn't have a 32 bit system handy):\n </p>\n <pre><code>$ grep 'r-xp.*libc-2.19' /proc/*/maps|head\n\n/proc/10987/maps:7fe455b72000-7fe455d2d000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/11880/maps:7f029dc1f000-7f029ddda000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/11884/maps:7f25a9c25000-7f25a9de0000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/15715/maps:7ffc713da000-7ffc71595000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/17705/maps:7fe9db80c000-7fe9db9c7000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/18558/maps:7fc248544000-7fc2486ff000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/20156/maps:7f0f8eb13000-7f0f8ecce000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2139/maps:7fba4c097000-7fba4c252000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2215/maps:7f934ed76000-7f934ef31000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n/proc/2224/maps:7f064d98f000-7f064db4a000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\n <p>\n  you see every process maps the same library a bit differently.\n </p>\n <p>\n  Also, when the loader loads a library, it creates several memory segments for it. The segments from the ELF file get read into these shared memory segments,\n  <em>\n   including some headers\n  </em>\n  . This is why the code start address isn't identical to the segment start address.\n </p>\n <p>\n  For example, on my system :\n </p>\n <pre><code>(gdb) info sharedLibrary\nFrom                To                  Syms Read   Shared Object Library\n0x00007ffff7a334a0  0x00007ffff7b790c3  Yes         /lib/x86_64-linux-gnu/libc.so.6\n</code></pre>\n <p>\n  and\n </p>\n <pre><code>cat /proc/26271/maps \n7ffff7a14000-7ffff7bcf000 r-xp 00000000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7bcf000-7ffff7dcf000 ---p 001bb000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7dcf000-7ffff7dd3000 r--p 001bb000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n7ffff7dd3000-7ffff7dd5000 rw-p 001bf000 08:16 23461990                   /lib/x86_64-linux-gnu/libc-2.19.so\n</code></pre>\n <p>\n  so you see the memory map for the code segment (the one that is executable, i.e. has the x bit set) ranges from 7ffff7a14000-7ffff7bcf000, but the region the actual code is loaded to is just the subset 7ffff7a334a0-7ffff7b790c3.\n </p>\n <p>\n  You can find a more thorough explanation\n  <a href=\"http://eli.thegreenplace.net/2011/08/25/load-time-relocation-of-shared-libraries\" rel=\"nofollow\">\n   here\n  </a>\n  .\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Nov 19, 2014 at 8:17",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "samuirai",
+                    "text": "<span class=\"comment-copy\">There is no ASLR in my case. The example I posted in the original question are constant each time.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,39 @@
+{
+  "title": "Radare2 Find command line arguments and location in stack",
+  "link": "https://reverseengineering.stackexchange.com/questions/18085/radare2-find-command-line-arguments-and-location-in-stack",
+  "content": "This might have a simple solution but I can't find it anywhere.\n\n```\n$> ./be1 11 AAAAA\n\n```\nWith gdb, finding argv[] and argc is simple:\n\n```\n(gdb) print argv[0]@argc\n$7 = {0xbffff872 \"be1\", 0xbffff89a \"11\", 0xbffff89d \"AAAAA\"}\n\n```\nBut, how can we do this with radare2 ?\n\n",
+  "votes": "7",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "binary-analysis",
+    "radare2"
+  ],
+  "user": "Corey",
+  "time": "Apr 25, 2018 at 15:51",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "radare2 currently doesn't flags argv and argc. Yet, it shouldn't be something complicated to implement.\n\nAlthough these arguments are not flagged by radare2, they can be easily be visible to us by inspecting the registers. Let's do it step by step.\n\nAssume we have the following program:\n\n```\n$ cat example.c\n\n#include <stdio.h>\n\nint main(int argc, char *argv[]) {\n\n   printf( \"argv[1]: %s  \n\", argv[1]);\n\n   return 0;\n}\n\n```\nAll the program is doing is to print the first argument given to it. Simple as that.\n\nLet's compile it in gcc and open it in debug-mode with radare2 using the -d flag, and pass an argument to it:\n\n```\n$ gcc example.c -o example.elf\n$ r2 -d example.elf ABCDEFGH\nProcess with PID 104 started...\n= attach 104 104\nbin.baddr 0x00400000\nUsing 0x400000\nasm.bits 64\n -- Nothing to see here. Move along.\n[0x7f3c8f000c30]> \n\n```\nLet's quickly analyze the program using aa:\n\n```\n[0x7f3c8f000c30]> aa\n[x] Analyze all flags starting with sym. and entry0 (aa)\n\n```\nNow, let's execute the program until we reach main(). We can do this by setting a breakpoint at main using db main and continue the execution until the program reaches the breakpoint using dc. Or, we can simply use dcu [addr] -- a very nice command that will continue the execution until a specific address.\n\n```\n[0x7f3c8f000c30]> dcu main\nContinue until 0x00400526 using 1 bpsize\nhit breakpoint at: 400526\n\n```\nradare2 stopped the execution of the program at main. Great! Let's move on and print the function:\n\n```\n[0x00400526]> pdf\n            ;-- main:\n            ;-- rax:\n            ;-- rip:\n╭ (fcn) sym.main 51\n│   sym.main ();\n│           ; var int local_10h @ rbp-0x10\n│           ; var int local_4h @ rbp-0x4\n│           ; DATA XREF from 0x0040044d (entry0)\n│           0x00400526      55             push rbp\n│           0x00400527      4889e5         mov rbp, rsp\n│           0x0040052a      4883ec10       sub rsp, 0x10\n│           0x0040052e      897dfc         mov dword [local_4h], edi\n│           0x00400531      488975f0       mov qword [local_10h], rsi\n│           0x00400535      488b45f0       mov rax, qword [local_10h]\n│           0x00400539      4883c008       add rax, 8\n│           0x0040053d      488b00         mov rax, qword [rax]\n│           0x00400540      4889c6         mov rsi, rax\n│           0x00400543      bfe4054000     mov edi, str.argv_1_:__s    ; 0x4005e4 ; \"argv[1]: %s  \n\"\n│           0x00400548      b800000000     mov eax, 0\n│           0x0040054d      e8aefeffff     call sym.imp.printf         ; int printf(const char *format)\n│           0x00400552      b800000000     mov eax, 0\n│           0x00400557      c9             leave\n╰           0x00400558      c3             ret\n\n```\nAs you may know, in a GCC compiled program, at main's entry, edi will hold argc and rsi (a pointer on the stack) will hold argv.\n\nWe can print their addresses like this:\n\n```\n[0x00400526]> dr rsi\n0x7ffff02302b8\n[0x00400526]> dr edi\n0x00000002\n\n```\nSo the value of argc (edi) is 0x2 which is expected since the arguments are the file name and \"ABCDEFGH\". The address of the pointer argv (rsi) is 0x7ffff02302b8. In order to print the content of * argv (rsi) we can simply use the following command:\n\n```\n[0x00400526]> psb @ [rsi]\n0x7ffff02304b7 ./example.elf\n0x7ffff02304c4 ABCDEFGH\n0x7ffff02304cd SHELL=/bin/bash\n0x7ffff02304dd TERM=xterm-256color\n0x7ffff02304f1 OLDPWD=<truncated>\n0x7ffff023050e USER=beet\n0x7ffff0230518 NAME=<truncated>\n\n```\npsb is used to print strings in the current block. Since at this point we know that argc equals 2, we can ignore anything that is beneath the second line of the output.\n\nradare2 also offers you a register telescoping using drr. This way you can easily see where rsi is pointing to:\n\n```\n[0x00400526]> drr~rsi\n   rsi 0x00007ffff1a56ab8  rsi stack R W 0x7ffff1a56cb7 -->  stack R W 0x6c706d6178652f2e (./example.elf) -->  ascii\n\n```\nAs you can see, rsi value is 0x7ffff1a56ab8 which is pointing to an address on the stack (0x7ffff1a56cb7) that contains an ascii string \"./example.elf\".\n~ is radare's internal grep.\n\nPlease consider open an issue to ask for this feature, or even better, implement it and send a pull-request.\n\n",
+      "votes": "7",
+      "user": "Megabeets",
+      "time": "Apr 25, 2018 at 7:32",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Corey",
+          "text": "Wow, thanks this is everything I wanted and much much more. Thanks again!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "the info command holds all the args passed to radare2  and you can use the internal grep too to find it \n\n```\n:\\>radare2 -Q -c \"i~ref\" -d cmdlnargs.exe firstarg secarg thirdarg\nSpawned new process with pid 6032, tid = 3196\nr_sys_pid_to_path: Cannot get module filename.= attach 6032 3196\nbin.baddr 0x01330000\nUsing 0x1330000\nSpawned new process with pid 872, tid = 2512\nr_sys_pid_to_path: Cannot get module filename.asm.bits 32\nreferer  dbg://cmdlnargs.exe firstarg secarg thirdarg\n\n```\nthe same command performed inside radare instead of shell \n\n```\n:\\>radare2 -d cmdlnargs.exe firstarg secarg thirdarg\nSpawned new process with pid 5356, tid = 2704\nr_sys_pid_to_path: Cannot get module filename.= attach 5356 2704\nbin.baddr 0x01330000\nUsing 0x1330000\nSpawned new process with pid 5296, tid = 6036\nr_sys_pid_to_path: Cannot get module filename.asm.bits 32\n -- Are you still there?\n[0x779d70d8]> i~ref\nreferer  dbg://cmdlnargs.exe firstarg secarg thirdarg\n[0x779d70d8]> q\nDo you want to quit? (Y/n) y\nDo you want to kill the process? (Y/n) y\n\n:\\>\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Apr 25, 2018 at 21:33",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

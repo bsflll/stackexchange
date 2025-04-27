@@ -1,0 +1,53 @@
+{
+    "title": "Help deciphering binary that creates 3 passwords",
+    "link": "https://reverseengineering.stackexchange.com/questions/12757/help-deciphering-binary-that-creates-3-passwords",
+    "content": "I found a binary on a device I've been working on, it's called <pre><code>genrandpass</code></pre> and the only user input is a public key (which is a .bin file) that's stored locally on the device. It also gathers some other information, possibly from the environment to produce three passwords (there is a reference to the Box ID using <pre><code>strings</code></pre>). Looking thru the shell scripts pertaining to <pre><code>genrandpass</code></pre>, it takes the three generated passwords and:\n\nuses the first password as the root password\nuses the second password is called <pre><code>$epass</code></pre> and the third is called <pre><code>$spass</code></pre> (I only note the names in case it means anything to someone smarter than I.)\nit then copies <pre><code>$epass</code></pre> and <pre><code>$spass</code></pre> to the dropbear banner file and these are displayed whenever someone connects to dropbear (prior to even logging in).\n\nThis makes me think that the developer had intended on being able to use the <pre><code>$epass</code></pre> and <pre><code>$spass</code></pre> variables to generate the actual root password. There are a few certificates and one Private key (decryption.pem) on the box itself. Not sure if it's the right key to decipher the code but I'd like to try because I have a few other models of these boxes that I haven't been able to break into yet. I'm just not sure what the correct commands are to try. Any ideas?\ngenrandpass file at https://dl.dropboxusercontent.com/u/23091/genrandpass\nexamples of the last 2 passwords generated:\n\n$epass: SxTV2Z7TFvU0XKP/lYYTDlKAhlRR2jwkDGbWPF68go/oOx6x4Pr5DeyNRlx9oQGF05sHld/vyXXchmxlbzsVzPIwocWIq3OIr3J+ZFJrJYPss9VE7YWrwpyRlGwTVHDvZGIzCKXcaipJd85ldLiWUrNxMl4g+5kzwVA2a3I8LuiuixRFVmc8ji/W2W5ZeU5FTcbaiNjlpoRHjPFUkvHKJ4nHSfXpZuLDRS53hxcSnb8ZmvTmFP4ITAdyj9Yw+C2pvD+gSEWRB/H+1cFPQOTi7wr/FY8266QEWqGZw30ZEsMCUNCC0DgiIX+H68QKcU8QFYUJC5+vui3BtcOfFXKHZl==\n$spass:\nRtcTy7fJ11XAQi1P2HiZM4MAxMZMA2NlD6wZL8jNYdrSL5i8qtkGztKDccmGqRWgjiVKI7TcVNcX3PhUSB3UfQCAF6KpBvH7NNezkExdwdM3W2mSnXJvyRLpDSJEgALs0wurUrqIYClZOjTc+xiJzOIUP0Gxb4d2ADOaKXHQ6n6H2Ss/1smITjrbXJ1K8RentZu26sAy3DW+zRIxtxnktSAGUscdG1oytlOL15aAROSL27NUcPSoA3+4o76zggq5TspIBTSmidVRUccEdXPyAzZggR0yqGNrm99uJXHlhw4zCW+GzKJFsJSTwDHZvCoeLERCLuyXFVrgmIISKf6E2V==\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "162",
+    "tags": [
+        "encryption",
+        "mips",
+        "embedded"
+    ],
+    "user": "justin",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "Your binary dynamically links libc for functions like <pre><code>fopen</code></pre>, <pre><code>fread</code></pre>, <pre><code>puts</code></pre>, which could be expected, but also a <pre><code>libjsonsigner.so</code></pre> that has functions like <pre><code>run_sha256</code></pre>, <pre><code>run_rsa_public_decrypt</code></pre> (one could guess what they do) but also <pre><code>get_finder_id_public_key</code></pre> and <pre><code>make_password</code></pre>, which seem to be crucial to understand what's going on. Please upload that library as well.\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "However, from the names <pre><code>rsa</code></pre> and <pre><code>public_key</code></pre>, i'm inclined to believe <pre><code>spass</code></pre> and/or <pre><code>epass</code></pre> are versions of the root password encrypted with a public key that's on the device, but you won't be able to derive the root password from them without the private key, which you don't have. So the vendor can get the password from devices that are \"found\" and need to be reinitialized, but noone else can (unless you can crack RSA).\n",
+            "time": null
+        },
+        {
+            "user": "justin",
+            "text": "Here is the file(s) you requested: dl.dropboxusercontent.com/u/23091/libjsonsignerintrepid.so and dl.dropboxusercontent.com/u/23091/libjsonsigner.so\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Your code has a function at 0x400960 that looks like a main function, and, omitting all initialization (everything gets initialized to 0) and error checking, looks like this:\n<pre><code>char input_file_buffer[256];\n\nint finder_id_size=16;\nchar finder_id[16];\n\nint temp_256=256;\nchar finder_public_key[256];\n\nchar password[31];\n\nint temp_32=32;\nchar sha_buffer[256];\nchar rsa_buffer[256];\nchar base64_input[256];\nchar base64_output[345];\n\nFILE *fp=fopen(argv[1], \"rb\");\nfread(input_file_buffer, 256, 1, fp);\nfclose(fp);\n\nget_finder_public_key(finder_id, &finder_id_size,\n                    finder_public_key, &finder_public_key_size);\n\nmake_password(password, 30);\n\nprintf(\"%s\n\", password);\n\nmemmove(sha_buffer+32, password, 30);\nmemmove(sha_buffer+63, finder_id, 16);\nrun_sha256(sha_buffer, 256, rsa_buffer+36, &temp_32);\nrun_rsa_public_decrypt(sha_buffer, 256, base64_input, &temp_256,\n                            input_file_buffer, 256);\n    // base64_encode is a loop calling encodeblock, not a function,\n    // in the original binary. Encodeblock encodes 3 bytes binary\n    // input 4 bytes base64 output.\nbase64_encode(base64_input, 256, base64_output, 345);\nprintf(\"%s\n\", base64_output);\n\nrsa_buffer[32]=htonl(1);\nrun_rsa_ks(rsa_buffer, 256, base64_input, &temp_256);\nbase64_encode(base64_input, 256, base64_output, 345);\nputs(base64_output);\n</code></pre>\nSo, (because some of the functions are in a shared libary, a part of this is assumptions) your code:\n\ngenerates a random password (make_password doesn't have any input)\noutputs that random password\nruns sha256 over a combination of that password and the id of your finder\nruns RSA \"decryption\" over the sha output, with the public key coming from your input file (?)\noutputs the base64 encoded RSA data\nruns rsa_ks over the different part of the sha output (a 32 byte buffer of something, preceded by a 1, somewhere in the middle of a 256 byte buffer?)\noutputs the result of rsa_ks.\n\nIn RSA, you encrypt a message with someone's public key so the someone can use their private key to decrypt it, or you encrypt something with your private key to prove your identity (because the public key can be used to decrypt it). Thus i wouldn't put too much weight on the fact the rsa function is called \"decrypt\".\nI'd assume the run_sha function generates a random 32 bit key, uses that to do the encryption, and saves it to what i call <pre><code>rsa_buffer</code></pre>. Later, run_rsa_ks (ks for key save) rsa-encrypts that sha key. So, if you lose the root password to a device, and ask the vendor for help, they\n\nuse the private key to decrypt the second code, to get the sha key\nuse the private key to decrypt the first code, to get the sha output\nuse the sha key and the sha output to get a buffer that contains your root password, and the finder id\nverify if the finder id matches the id you told them\ntell you the root password.\n\nUnfortunately, and as i already said in my comment, this means unless you can crack rsa, and don't have any other means to get the private key, your quest ends here. Unless the vendor used a very weak RSA key, but this isn't very probable when they used the effort they did to secure the root password.\nUpdate: I glanced over some of the functions in that libjsonsigner.so, and the <pre><code>get_finder_id_public_key</code></pre> as well as the rsa functions use a device named <pre><code>/dev/vixs/xcodedrv</code></pre>, which hints at a video hardware chip.  There's a <pre><code>get_certificate</code></pre> function as well which uses a <pre><code>get_device_certx</code></pre> function that uses the same device. So at least a part of the certificate stuff, as well as the rsa encryption, seem to be hardware-assisted. This means without dynamical analysis on the actual hardware, good chip documentation, and a lot of time, you won't get very much farther (and will probably still smash into a wall at some point because of RSA).\n",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "May 29, 2016 at 19:14",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "justin",
+                    "text": "<span class=\"comment-copy\">Wow this is an amazing answer! There is a file on the box with the text of \"-----BEGIN PRIVATE KEY----\". Might this be of any help? But my understanding is, even with that key unless we know <i>how</i> it's mashed together it may not be of any help. Is that right?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">The software doesn't seem to access any files other than the one in main's <code>argv[1]</code>, and from that file, it just reads a 256 byte block that doesn't seem to be in PEM format, so that file is <i>probably</i> irrelevant. Anyway, a lot of the RSA stuff seems to be hardware-assisted, see my update above. And RSA (it's the algorithm used in ssl/https) is designed to not allow you to decrypt if you have just the encryption key, and vice versa, so no, having one half of the key won't help you.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

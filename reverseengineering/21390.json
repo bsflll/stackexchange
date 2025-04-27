@@ -1,0 +1,58 @@
+{
+    "title": "Changing entry-point of and ELF file",
+    "link": "https://reverseengineering.stackexchange.com/questions/21390/changing-entry-point-of-and-elf-file",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to conduct a little experiment which basically consists of changing the EP of an ELF file and executing an exit(9) syscall, without returning to the OEP. As shown in the image everything seems fine <a href=\"https://i.sstatic.net/zGzAC.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/zGzAC.png\"/></a> </p>\n<p>However when I run the original program it segfaults rather than exiting via the <em>exit(9)</em>, I can't figure out why. <strong>What's really happening here?</strong></p>\n<p><strong>EDIT:</strong> \nHere's how I'm changing the entry-point:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n#include &lt;unistd.h&gt;\n#include &lt;sys/mman.h&gt;\n#include &lt;elf.h&gt;\n#include &lt;stdint.h&gt;\n#include &lt;sys/stat.h&gt;\n#include &lt;fcntl.h&gt;\n#include &lt;errno.h&gt;\n#include &lt;string.h&gt;\n\n\n#define INVALID_IDX -32\n#define PAGE_SIZE   4096\n\nint check_elf(uint8_t *, char **);\n\n\n\n\n// exit(9) \nunsigned char shellcode[] = \"\\x48\\x31\\xc0\"\n                \"\\xb0\\x3c\"\n                \"\\x40\\xb7\\x09\"\n                \"\\x0f\\x05\";\n\n\nunsigned char nop_sled[] = \"\\x90\\x90\\x90\\x90\\x90\"\n               \"\\x90\\x90\\x90\\x90\\x90\"\n               \"\\x90\\x90\\xcc\\x90\\x90\"\n               \"\\x90\\x90\\x90\\x90\\x90\";\n\n\nint main(int argc, char **argv)\n{\n    int fd, i;\n    uint8_t *mapped_file;\n    struct stat st;\n    char *interp;\n    int magic = 1337;\n\n    Elf64_Ehdr *ehdr = NULL;\n    Elf64_Phdr *phdr = NULL;\n    Elf64_Shdr *shdr = NULL;\n\n    if (argc &lt; 2)\n    {\n        printf(\"Usage: %s &lt;executable&gt;\\n\", argv[0]);\n        exit(EXIT_SUCCESS);\n    }\n\n    fd = open(argv[1], O_RDWR);\n\n    if (fd &lt; 0)\n    {\n        perror(\"open\");\n        exit(EXIT_FAILURE);\n    }\n\n    if (fstat(fd, &amp;st) &lt; 0)\n    {\n        perror(\"fstat\");\n        exit(EXIT_FAILURE);\n    }\n\n    /* map whole executable into memory */\n    mapped_file = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);\n\n    if (mapped_file &lt; 0)\n    {\n        perror(\"mmap\");\n        exit(EXIT_FAILURE);\n    }\n\n    check_elf(mapped_file, argv);\n\n    ehdr = (Elf64_Ehdr *) mapped_file;\n    phdr = (Elf64_Phdr *) &amp;mapped_file[ehdr-&gt;e_phoff];\n    shdr = (Elf64_Shdr *) &amp;mapped_file[ehdr-&gt;e_shoff];\n\n\n    if (ehdr-&gt;e_type != ET_EXEC)\n    {\n        fprintf(stderr, \"%s is not an ELF executable.\\n\", argv[1]);\n        exit(EXIT_FAILURE);\n    }\n\n    printf(\"Program entry point: %08x\\n\", ehdr-&gt;e_entry);\n\n\n    char jmp_code[7];\n    int text_found = 0;\n    uint64_t parasite_addr;\n    uint64_t text_end;\n    size_t parasite_len = strlen(shellcode);\n    int text_idx = INVALID_IDX;\n    for (i = 0; i &lt; ehdr-&gt;e_phnum; ++i)\n    {\n\n        if (text_found)\n        {\n            phdr[i].p_offset += PAGE_SIZE;\n            continue;\n        }\n\n\n        if (phdr[i].p_type == PT_LOAD &amp;&amp; phdr[i].p_flags == ( PF_R | PF_X))\n        {\n            // set parasite  to the end of the text segment\n            parasite_addr = phdr[i].p_vaddr + phdr[i].p_filesz;\n            text_end = phdr[i].p_vaddr + phdr[i].p_filesz;\n\n            printf(\"TEXT SEGMENT ends at 0x%x\\n\", text_end);\n            text_idx = i;\n\n            puts(\"Changing entry point...\");\n            ehdr-&gt;e_entry = (Elf64_Addr)parasite_addr;\n\n            memmove(mapped_file + phdr[i].p_offset + phdr[i].p_filesz, \n                    shellcode, parasite_len);\n\n\n\n\n            phdr[i].p_filesz += parasite_len;\n            phdr[i].p_memsz += parasite_len;    \n\n            text_found++;\n        }\n\n\n    }\n\n    //patch sections\n\n    for (i = 0; i &lt; ehdr-&gt;e_shnum; ++i)\n    {\n        if (shdr-&gt;sh_offset &gt;= parasite_addr)\n            shdr-&gt;sh_offset += PAGE_SIZE;\n\n        else\n            if (shdr-&gt;sh_size + shdr-&gt;sh_addr == parasite_addr)\n                shdr-&gt;sh_size += parasite_len;\n    }\n\n    ehdr-&gt;e_shoff += PAGE_SIZE;\n    close(fd);\n\n\n}\n\n\n\nint check_elf(uint8_t *mapped_file, char **argv)\n{\n    const uint8_t magic[] = {0x7F, 'E', 'L', 'F'};\n\n    if (memcmp(magic, mapped_file, sizeof(magic)))\n    {\n        fprintf(stderr, \"%s is not an ELF file.\\n\", argv[1]);\n        exit(EXIT_FAILURE);\n    }\n\n    return 1;\n}\n</code></pre>\n<p>As for the program whose entry-point i'm trying to change it's just a simple hello world.</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "linux",
+        "elf",
+        "x86-64"
+    ],
+    "user": "Trey",
+    "time": "Jun 13, 2019 at 17:07",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">Have you stepped through the program instructions using a debugger?</span>",
+            "time": null
+        },
+        {
+            "user": "Trey",
+            "text": "<span class=\"comment-copy\">@julian I can't, gdb won't disassemble the file, due to lack of the symbol table</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">The symbol table should not be required for disassembly, even by a tool as brittle as gdb. There are tools besides gdb that can be used for dynamic analysis.</span>",
+            "time": null
+        },
+        {
+            "user": "Trey",
+            "text": "<span class=\"comment-copy\">@julian like what? radare2 also fails to set  a bp</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">Since the problem is at runtime, please share the binary so that we can analyze it ourselves and hopefully reproduce the behavior you are observing . Besides the large array of debuggers and similar tools available, there are also dynamic instrumentation frameworks such as pintool and pyrebox that can be leveraged. Pintool could be used to log memory accesses to pinpoint the instruction causing the segmentation fault, for example.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p><strong>Comment out or simply remove lines</strong></p>\n<pre><code>ehdr-&gt;e_shoff += PAGE_SIZE;\n\nif (text_found)\n{\n    phdr[i].p_offset += PAGE_SIZE;\n    continue;\n}\n</code></pre>\n<p><strong>and change</strong> <code>shdr-&gt;sh_offset</code>'<strong>s to</strong> <code>shdr[i].sh_offset</code>'<strong>s</strong>. </p>\n<p><strong>Explanation:</strong>\nYou may run <code>readelf -a hello</code> for more details. It will output following problems:</p>\n<pre><code>readelf: Error: Reading 1856 bytes extends past end of file for section headers\nreadelf: Error: Section headers are not available!\nreadelf: Warning: note with invalid namesz and/or descsz found at offset 0xc\nreadelf: Warning:  type: 0x600ff0, namesize: 0x00000000, descsize: 0x00150003, alignment: 4\n</code></pre>\n<p>It means that your <code>section headers</code> address was increased by <code>PAGE_SIZE</code> too. Indeed, after modification it equals:</p>\n<pre><code>Start of section headers:          10544 (bytes into file)\n</code></pre>\n<p>And before:</p>\n<pre><code>Start of section headers:          6448 (bytes into file)\n</code></pre>\n<p>So you don't want to add <code>PAGE_SIZE</code> to <code>ehdr-&gt;e_shoff</code>, since otherwise the start of <code>section headers</code> now points to some random data.</p>\n<p>Regarding <code>phdr[i].p_offset</code>'s, I don't think you have to change them at all, since they are just segment offsets.</p>\n<p><strong>Note:</strong> <code>GCC</code> by default compiles to position independent executable, so it will have <code>e_type</code> equal <code>3</code> (<code>ET_DYN</code> instead of <code>ET_EXEC</code>), but will still be an <code>ELF</code> executable.</p>\n</div>",
+            "votes": "1",
+            "user": "bart1e",
+            "time": "Jun 13, 2019 at 20:46",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Trey",
+                    "text": "<span class=\"comment-copy\">Thank you @bart1e! That worked perfectly. About changing <i>phdr[i].p_offset</i> i though I had to, since I'm injecting code there</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,45 @@
+{
+    "title": "Unknown decompression algorithm",
+    "link": "https://reverseengineering.stackexchange.com/questions/8593/unknown-decompression-algorithm",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I work on the reverse engineering of the ChessBase archive (.cbv).\n </p>\n <p>\n  I found the general structure of the file and can already decompress some files.\n </p>\n <p>\n  You can see my current work\n  <a href=\"https://github.com/antoyo/uncbv\" rel=\"noreferrer\">\n   here\n  </a>\n  .\n </p>\n <p>\n  However, some .cbv files that are bigger seems to use a second compression algorithm.\n </p>\n <p>\n  I was able to find the first compression algorithm by debugging the\n  <a href=\"http://download.chessbase.com/Download/ChessBaseReader/Setup.msi\" rel=\"noreferrer\">\n   ChessBase Reader 2013\n  </a>\n  software, but I cannot make sense of the second compression algorithm.\n </p>\n <p>\n  I tried some tools like\n  <code>\n   signsrch\n  </code>\n  to find out what algorithm was used without any luck: it seems to be a custom algorithm.\n </p>\n <p>\n  Here is a\n  <a href=\"http://en.chessbase.com/portals/4/files/news/2014/common/cbm/cbm163/CBM163D85.cbv\" rel=\"noreferrer\">\n   file\n  </a>\n  that I am able to partly decompress with my\n  <a href=\"https://github.com/antoyo/uncbv\" rel=\"noreferrer\">\n   tool\n  </a>\n  (my tool will print\n  <code>\n   What to do?\n  </code>\n  when it detects that the unknown compression algorith was used).\n </p>\n <p>\n  Do you have any idea of what compression algorithm is used?\n </p>\n <p>\n  If not, do you have any way of finding it by looking at the compressed file?\n </p>\n <p>\n  I am able to create archives so I can have files that are both compressed and not: I wonder if there is any way to find a compression pattern in such a situation.\n </p>\n</div>\n</body></html>",
+    "votes": "7",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "decompress"
+    ],
+    "user": "antoyo",
+    "time": "Mar 29, 2015 at 17:10",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  After downloading ChessBase Reader and playing with ProcMon a bit to find the function that reads the archive and writes the data file, i loaded up the whole thing in IDA to analyze it. The data is\n  <a href=\"http://en.wikipedia.org/wiki/Huffman_coding\" rel=\"noreferrer\">\n   Huffman-coded.\n  </a>\n </p>\n <p>\n  Each data block has the following structure. Note that Huffman compression works with bits, not bytes, so each size in the following table is in bits as well. The block length is 16 bits, or 2 bytes, for example.\n </p>\n <pre><code>+----------------------------------------------+\n|                                              |\n|16 bits - uncompressed block length (len)     |\n|                                              |\n+-----------+----------------------------------+\n|           |                                  |\n|Repeat     |  4 bits - length of entry (n)    |\n|256        |                                  |\n|times      +----------------------------------+\n|           |                                  |\n|one entry  |  n bits - tree left/right        |\n|per byte   |  information for this byte       |\n|(0-255)    |                                  |\n|           |                                  |\n+-----------+----------------------------------+\n|                                              |\n| Huffman encoded bit sequences. The number of |\n| bits isn't stored anywhere, but the number   |\n| of sequences, which is equal to the number   |\n| of output bytes, is the block length (len)   |\n|                                              |\n+----------------------------------------------+\n</code></pre>\n <p>\n  Assuming the word \"foobar\" was coded in this scheme, this would possibly  result in (i made up the bit values for the characters):\n </p>\n <pre><code>+----------------+\n|Huffman code for|\n|character   is  |\n+--------+-------+\n|        |       |\n| o      |   0   |\n| f      |   100 |\n| b      |   101 |\n| a      |   110 |\n| r      |   111 |\n|        |       |\n+--------+-------+\n</code></pre>\n <p>\n  This would result in the word foobar being coded as\n  <code>\n   100 0 0 101 110 111\n  </code>\n  . The length is 6 bytes, or\n  <code>\n   0000 0000 0000 0110\n  </code>\n  in 16 bits.\n </p>\n <p>\n  The bitarray for\n  <code>\n   foobar\n  </code>\n  , formatted to the above table, would read\n </p>\n <pre><code>0000 0000 0000 0110                      (16 bit output length)\n.....    array index   0 for byte '\\0'\n.....    array index   1 for byte '\\1'\n.....\n0011 110 array index  97 for byte 'a'    (3 bits)\n0011 101 array index  98 for byte 'b'    (3 bits)\n.....\n0011 100 array index 102 for byte 'f'    (3 bits)\n.....\n0001 0   array index 111 for byte 'o'    (1 bit)\n.....\n0011 101 array index 114 for byte 'r'    (3 bits)\n.....                                    remaining bit combos - 255\n\n100 0 0 101 110 111                      foobar text\n</code></pre>\n <p>\n  The implementation builds a binary tree from the code table. When it reads the data, it starts at the root of the tree; each bit moves down the tree, to the left or right, depending on the next bit value. When a leaf is reached, the corresponding byte is being output. This repeats until the length of the output stream is reached.\n </p>\n <p>\n  The related functions from the binary are these:\n </p>\n <p>\n  <code>\n   BECAA0\n  </code>\n  : decodes the archive data. Reads 16 bits for the length; then reads the encoding table into two arrays at offsets\n  <code>\n   080A\n  </code>\n  (bits) and\n  <code>\n   0E10\n  </code>\n  (bit lengths) within the decoder class. After this, call\n  <code>\n   BEC930\n  </code>\n  to decode the data bytes.\n </p>\n <p>\n  <code>\n   BEBF30\n  </code>\n  : One parameter (number of bits), gets this many bits from the input array. At the end of the function, the word at offset\n  <code>\n   1014\n  </code>\n  has these bits.\n </p>\n <p>\n  <code>\n   BEBAD0\n  </code>\n  : Builds the tree from the arrays at\n  <code>\n   080A\n  </code>\n  and\n  <code>\n   0E10\n  </code>\n </p>\n <p>\n  <code>\n   BEC930\n  </code>\n  : Calls\n  <code>\n   BEBAD0\n  </code>\n  to build the tree, then reads the remaining bits from the input stream. Walks the tree for each bit; emits a byte when a leaf is found. At the end, calls\n  <code>\n   BEBA90\n  </code>\n  to destroy the tree.\n </p>\n <p>\n  <code>\n   BEBA90\n  </code>\n  : Recursively delete a node by deleting the left and right children, the the node itself.\n </p>\n <p>\n  I don't think debugging the writer would be easier if you want to read the files; compression has a lot of logic and data structures, and knowing how 'one way' works doesn't neccesarily help you with the other way round. In this case, luckily, its a well known algorithm, but if the algorithm is unknown it can be quite hard to compress effectively if you just know how to decompress.\n </p>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "Guntram Blohm",
+            "time": "Mar 31, 2015 at 10:08",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">database encryption is certainly an option. See <a href=\"http://www.chesscentral.com/basic_chess_database_a/300.htm\" rel=\"nofollow noreferrer\">chesscentral.com/basic_chess_database_a/300.htm</a> so it's possible that's what you're looking at.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">@broadway Thank you for pointing this out. Howeverm in the meantime, i've massaged IDA a bit more; i'm quite sure this is a huffman decompression algorithm, although i don't have everything worked out yet.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Looking at the last few kilobytes, you can see 'normal text' fragments interspersed with binary codes. Definitely a Huffman variant.</span>",
+                    "time": null
+                },
+                {
+                    "user": "antoyo",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer: I'll look at this. @Jongware: I already know the compression algorithm used when we see normal text fragments (see my tool on github). My issue is when there is no text fragments. By the way, would it be easier to figure out the algorithm by debugging the application that creates such archives (ChessBase)?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

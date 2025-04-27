@@ -1,0 +1,58 @@
+{
+    "title": "How to identify functions in a stripped binary on x86 32bit?",
+    "link": "https://reverseengineering.stackexchange.com/questions/5830/how-to-identify-functions-in-a-stripped-binary-on-x86-32bit",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am trying to generate a <em>coarse-grained</em> Call Graph based on some assembly code disassembled from binary on x86 32 bit platform.</p>\n<p>It is very hard to generate a precise Call Graph based on asm code, thinking of various indirect control flow transfer, so right now I <strong>only consider direct control flow transfer</strong>.</p>\n<p>So firstly I am trying to identify <code>functions</code> (begin and end addresses) in the disassembled assembly code \nfrom a <strong>stripped</strong> binary on x86, 32bit.</p>\n<p>Right now, my plan is somehow like this:</p>\n<p>As for the begin addresses, I might conservatively consider any assembly code looks like this</p>\n<pre><code>    push %ebp\n</code></pre>\n<p>indicates the beginning address of a function.</p>\n<p>and also, I might scan the whole problem, identifying all the <code>call</code> instruction with the destination, the consider these function call's destinations as all the function begin address</p>\n<p>The problems are:</p>\n<ol>\n<li><p>some of the functions defined in a binary might never be called.</p></li>\n<li><p>some of the <code>call</code> has been optimised as <code>jump</code> by compiler (thinking of tail recursive call)</p></li>\n</ol>\n<p>As for the end address, things become more tricky because multiple <code>ret</code> could exist in one single function...</p>\n<p>So I am thinking that I might conservatively consider the range between any nearest <strong>function begin addresses</strong>, as one function..</p>\n<p>Am I right? Is there any better solution..?</p>\n</div>",
+    "votes": "5",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "binary-analysis",
+        "static-analysis"
+    ],
+    "user": "lllllllllllll",
+    "time": "Jul 11, 2014 at 18:30",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">The easiest way would probably be to get IDA 5.0 (the free version) and let it do the work.</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">You may also consider using radare2. See, the question: <a href=\"http://reverseengineering.stackexchange.com/questions/4260/recursive-traversal-disassembling-with-radare2\">Recursive traversal disassembling with Radare2?</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Reversing the call graph or the control flow graph of a binary isn't for the faint of heart, and is still a hot topic for researchers.</p>\n<p>Your approach looks promising; but, unfortunately for you, you'll stumble upon lots of barriers.</p>\n<p>One, following <code>call</code> instructions is most likely to give great results, if analyzing statically the binary file. The only problem is that, sometimes, you'll have indirect calls/jumps. Meaning, the operand will be a register containing the target address. This will occur very often if the target binary file original source code was written in <code>C++</code> (virtual functions) for example. One way to obtain the target address in this case is to emulate or run the chunk of code that computes it. Another is to assess its value heuristically (heuristics are hell). </p>\n<p>Two, you can run your binary file with multiple input data sets and dynamically extract the call graphs (this can be performed through instrumentation). You can then cross reference all the obtained call graphs ...</p>\n<p>Three, I would recommend a <a href=\"https://en.wikipedia.org/wiki/Basic_block\">basic-block</a> centric approach rather than a functional one. Mainly, because a function is a basic-block in itself and you'll have more luck finding functions this way than trying to match patterns which can change from one compiler to another, or from one version of a compiler to another. </p>\n<p>The following publications are extremely interesting : <a href=\"http://www.cse.scu.edu/~atkinson/papers/apsec-04a.pdf\">[1]</a>, <a href=\"http://www.cse.scu.edu/~atkinson/papers/serp-02.pdf\">[2]</a>, <a href=\"http://ftp.cs.wisc.edu/pub/paradyn/papers/Harris05WBIA.pdf\">[3]</a>, and also I would encourage you to check <code>DynInst</code> and <code>callgrind</code> if you want to learn more about the subject.    </p>\n</div>",
+            "votes": "8",
+            "user": "yaspr",
+            "time": "Jul 11, 2014 at 8:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">I've had some success in following <code>call</code>s and doing (minimal!) emulation for register jumps. <a href=\"http://reverseengineering.stackexchange.com/questions/2895/delphi-pascal-try-except-finally-block\">See a sample output snippet here</a>. Recommended on-line reading: <a href=\"http://www.backerstreet.com/decompiler/introduction.htm\" rel=\"nofollow noreferrer\">Decompiler Design</a> -- esp. <a href=\"http://www.backerstreet.com/decompiler/basic_blocks.php\" rel=\"nofollow noreferrer\">the Basic Block approach</a>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Generally, the solutions to this problem can be classified to:</p>\n<ul>\n<li><p>Pattern matching heuristics. Just like what you are proposing. For example, searching for <code>push</code>es in the binary can provide a (rather) rough approximation of function starts. Things are more difficult if you want to locate function ends though.</p></li>\n<li><p>Machine learning. Pattern matching can be automated using machine learning. There are several proposals in the literature like [<a href=\"https://www.aaai.org/Papers/AAAI/2008/AAAI08-127.pdf\" rel=\"nofollow noreferrer\">1</a>], [<a href=\"https://www.usenix.org/system/files/conference/usenixsecurity14/sec14-paper-bao.pdf\" rel=\"nofollow noreferrer\">2</a>], and [<a href=\"https://www.usenix.org/system/files/conference/usenixsecurity15/sec15-paper-shin.pdf\" rel=\"nofollow noreferrer\">3</a>]. All of which attempt to learn byte-level features of function starts and ends. However, modern compiler optimizations make it challenging for such approaches to generalize to binaries beyond the training set.</p></li>\n<li><p>CFG-based techniques. This is the most promising approach based on [<a href=\"https://doi.org/10.1145/2968455.2968505\" rel=\"nofollow noreferrer\">4</a>] (disclosure: first author here) and concurrently [<a href=\"https://doi.org/10.1109/EuroSP.2017.11\" rel=\"nofollow noreferrer\">5</a>]. Basically, it proceeds with (1) direct call target analysis, (2) CFG traversal to locate function ends, and (3) tail-call target analysis.</p></li>\n<li><p>Call frame information (CFI) records. Before doing anything fancy, checkout the CFI records in the <code>.eh_frame</code> section. There is a good chance that functions are defined there already. In order to dump CFI records, you can use something like <code>readelf --debug-dump=frames /bin/ls</code>.</p></li>\n</ul>\n<p>I've recently revisited the problem of function identification in this blog <a href=\"https://blog.formallyapplied.com/2020/05/function-identification/\" rel=\"nofollow noreferrer\">post</a> where I provide more details.</p>\n</div>",
+            "votes": "1",
+            "user": "Codoka",
+            "time": "May 27, 2020 at 7:19",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Cool. Thank you for summarizing the problem in a nice way. It's 2020 now and go solo to publish research papers on \"identifying function boundaries\" might not be as promising as when I posted this question five years ago. But yes, it's always nice to see binary hacking folks constantly explore and publish papers in this field.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

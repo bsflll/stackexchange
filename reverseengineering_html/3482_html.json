@@ -1,0 +1,53 @@
+{
+    "title": "Does code injected into process memory always belong to a page with RWX access?",
+    "link": "https://reverseengineering.stackexchange.com/questions/3482/does-code-injected-into-process-memory-always-belong-to-a-page-with-rwx-access",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I've seen a few memory forensics tutorials, which start by looking for injected code in the \"victim's\" process memory. They always seem to find the injected code in pages which have RWX access (i.e. PAGE_EXECUTE_READWRITE).\n </p>\n <p>\n  Does this assumption always hold? Does code injected (e.g. by malware) into the process memory of a \"victim\", always belong to a page with RWX access? Or can the page access be changed, by the code that is injected? If so, how can this change be done via winapi?\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 3,
+    "views": "6k",
+    "tags": [
+        "windows",
+        "memory",
+        "winapi"
+    ],
+    "user": "Benny",
+    "time": "Jan 19, 2014 at 11:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The assumption does not hold true, as it is possible to alter page protection flags\n  <em>\n   after\n  </em>\n  you've allocated memory.\n </p>\n <p>\n  The usual mechanism for code injection on Windows is as follows:\n </p>\n <ol>\n  <li>\n   Call\n   <code>\n    OpenProcess\n   </code>\n   for the target process, to get a handle that has appropriate access privileges.\n  </li>\n  <li>\n   Use\n   <code>\n    VirtualAllocEx\n   </code>\n   to allocate a buffer in the target process, with a set of memory page access flags.\n  </li>\n  <li>\n   Use\n   <code>\n    WriteProcessMemory\n   </code>\n   to copy the memory to the target.\n  </li>\n  <li>\n   Either patch existing code to jump to the new code block, or use\n   <code>\n    CreateRemoteThread\n   </code>\n   to execute within the process via a new thread.\n  </li>\n </ol>\n <p>\n  Now, there are two options here. The first is that you can specify\n  <code>\n   PAGE_EXECUTE_READWRITE\n  </code>\n  as a flag to\n  <code>\n   VirtualAllocEx\n  </code>\n  , so that you have the right to use\n  <code>\n   WriteProcessMemory\n  </code>\n  on that page, and also the right to execute that memory when you get to step 4. This is the \"lazy\" way that leads to having RWX buffers hanging around. The alternative way is to pass\n  <code>\n   PAGE_READWRITE\n  </code>\n  when allocating the block, then write the code, and call\n  <code>\n   VirtualProtectEx\n  </code>\n  to swap the flag over to\n  <code>\n   PAGE_EXECUTE_READ\n  </code>\n  before step 4. This gives you an RW buffer when copying data, then an RX buffer when executing.\n </p>\n <p>\n  Pseudocode:\n </p>\n <pre><code>rights = PROCESS_VM_OPERATION |\n         PROCESS_VM_READ | PROCESS_VM_WRITE | \n         PROCESS_QUERY_INFORMATION | \n         PROCESS_CREATE_THREAD;\n\nhandle = OpenProcess(rights, false, pid);\n\ntargetAddr = VirtualAllocEx(handle, NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);\n\nbuffer = \"Hello, world!\\0\";\nbytesWritten = 0;\nWriteProcessMemory(handle, targetAddr, buffer, 14, &bytesWritten);\n\noldProtect = 0;\nVirtualProtectEx(handle, targetAddr, 4096, PAGE_EXECUTE_READ, &oldProtect);\n\nthreadId = 0;\nCreateRemoteThread(handle, NULL, 0, targetAddr, NULL, 0, &threadId);\n</code></pre>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "Polynomial",
+            "time": "Jan 19, 2014 at 13:20",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Benny",
+                    "text": "<span class=\"comment-copy\">thanks for the detailed answer. In the alternative (\"non-lazy\") way of code injection you described, is it possible to swap the PAGE_EXECUTE_READWRITE with PAGE_EXECUTE or PAGE_EXECUTE_WRITECOPY, as an alternative to PAGE_EXECUTE_READ which you gave in your example?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Polynomial",
+                    "text": "<span class=\"comment-copy\">PAGE_EXECUTE should work fine, but looks weird since it's rare to see PAGE_EXECUTE on allocations. Using PAGE_EXECUTE_WRITECOPY <i>should</i> work, but VirtualAllocEx doesn't support it. I don't know if VirtualProtectEx does.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The reason for targeting the RWX pages is that the injected code most often carries data in the same region as the code, and requires that the data are writable.  Thus the W flag is needed.  The X flag is required to support DEP, in case the process opted in, or if the system enforces it for everyone.  The R flag is entirely optional when requesting the page.  Windows will ensure that it is set anyway.\nIt is of course possible for malware to allocate two regions, one [R]X and one [R]W, and write only to the writable section, but I don't recall ever seeing this technique being used.  For one thing, it complicates the injected code.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "peter ferrie",
+            "time": "Jan 20, 2014 at 4:39",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Page access can be changed. See\n  <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/aa366898%28v=vs.85%29.aspx\" rel=\"nofollow\">\n   VirtualProtect\n  </a>\n  ,\n  <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/aa366786%28v=vs.85%29.aspx\" rel=\"nofollow\">\n   Memory Protection Constants\n  </a>\n  and\n  <a href=\"http://msdn.microsoft.com/en-us/library/windows/desktop/aa366899%28v=vs.85%29.aspx\" rel=\"nofollow\">\n   VirtualProtectEx\n  </a>\n  documentation.\nInjected code should be executable and readable, but not necessarily \n writable.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "w s",
+            "time": "Jan 19, 2014 at 12:40",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

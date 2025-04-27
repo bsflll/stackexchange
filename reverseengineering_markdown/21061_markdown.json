@@ -1,0 +1,66 @@
+{
+  "title": "Edit an .so file",
+  "link": "https://reverseengineering.stackexchange.com/questions/21061/edit-an-so-file",
+  "content": "I have here an .so file that contains a language pack and I want to edit them. My problem is that I don't always have enough space for a clean translation.\nI know that I can change the texts if they keep the same length or become shorter (fill the rest with NULL). Is if it is possible to create more space?\nplaceholder and resize the file and jump to the end of the binary file?\nor maybe a reference to a .txt file?\n\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "4k",
+  "tags": [
+    "disassembly",
+    "elf",
+    "binary-editing"
+  ],
+  "user": "Alonia",
+  "time": "May 1, 2020 at 14:42",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Note: My original answer was formulated without an access to the file you wanted to modify, so here comes another one, based on the file you have uploaded.\n\nIn the case you want to modify data in the program, it's essential to get grasp on how (and where) it is accessed. In your case, there are three section involved:\n\nAll strings in the file are referenced via the .data section, which contains an array with pointers to entries in .data.rel.ro, where the actual pointers to strings in .rodata are stored. After analysis in radare2, .data looks like:\n\n\nHence it's just the array of pairs containing pointer and index of each string item. This is the only section from before mentioned three, that you don't need to change.\n\nIt contains all strings used in the file both in English and Chinese versions.\n\n\nThis is the section I recommend to change first - replace all Chinese string with their German counterparts. You may do it in a way described in my previous answer, that is replacing the entire section with a content of previously created file.\n\nIt is the last section you want to modify. It contains pointers to the strings that were in the .rodata section before you modified them.\n\nSo, now you need to fix all of the pointers contained here to point on the strings in the new .rodata section you have just created. Notice that each entry here is just a pointer (i.e. contains 4 bytes, so it has fixed length), so you may just patch it right away, without need to replace this section using objcopy.\n\nAfter doing these steps, you should have all strings translated.\n\n",
+      "votes": "2",
+      "user": "Community",
+      "time": "Jun 17, 2020 at 9:54",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Alonia",
+          "text": "With your contribution I was able to successfully write a program in C#. It exports the .rodata in a CSV. After editing it you can import it and the pointers in the .data.rel.ro are patched automatically. But now I have another binary file where it is different. You are welcome to have a look at it: reverseengineering.stackexchange.com/questions/25943/…",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Yes, it is possible. Although you could solve your problem in several ways, I'll provide you with the easiest one in my opinion. The tool you could use is objcopy. It allows you to change contents of ELF files and I'll show you step-by-step example how to use it to achieve your goal. In the example presented below, I'm working on 64bit Linux machine.\n\nConsider the following C program:\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n\n#define NUM_OF_LANGUAGES 5\n#define MAX_STR_LENGTH 21\n\nconst char LANGUAGES_TABLE[NUM_OF_LANGUAGES][MAX_STR_LENGTH] = {\n    \"stringInEnglish\",\n    \"stringInPolish\",\n    \"stringInSpanish\",\n    \"stringInItalian\",\n    \"stringInFrench\"\n};\n\nchar* someOtherData = \"some other data\";\nchar* lastString = \"last string in file\";\n\nint main(int argc, char** argv)\n{\n    int langID = atoi(argv[1]);\n    printf(\"%s  \n\", LANGUAGES_TABLE[langID]);\n    return 0;\n}\n\n```\nLet's pretend for a moment that we don't have its source code (since I wanted to make it as simple as possible, there is no error checking here). As you see, it takes argument (index of language) at its start and prints string in given language. But we want to add an extra string, say stringInYourFavouriteLanguage and make our program capable of printing it as well.\n\nOur first step will be finding ELF section containing all strings in different languages. To do this, you may use objdump - just look at the section name, where you see these strings. In my case it is .rodata as you may see below:\n\nPlease note that we encounter additional problem here - every string in LANGUAGES_TABLE takes only 21 bytes, while stringInYourFavouriteLanguage uses 30. I'll return to it in a while.\n\nNow, we would like to prepare a file, say langData, containing data we would like to have in new .rodata section. I recommend you just copy the existing one and then append patched version of strings in different languages - this way you will avoid changing all offsets in .rodata accesses in code; you will only need to change these related to languages. \n\nIn our example, we also need to change the second dimension of LANGUAGES_TABLE to 30, so we will add 9 NULL bytes at the end of every string in this array. Then we append stringInYourFavouriteLanguage+NULL to the end of the file. Before appending to file containing entire data from .rodata, our file looks like this:\n\nNow, we may concatenate these files and get one file - langData containing new data to be added to .rodata. Then we use objcopy like this:\n\n```\nobjcopy --update-section .rodata=langData langPack langPackPatched\n\n```\n, where langPack is the ELF file we want to modify and langPackPatched is the output file. You may now check this file with objdump and see that changes were indeed made.\n\nSo now, we have .rodata having desired content. Now we want to make our executable capable of printing stringInYourFavouriteLanguage as well.\n\nTo achieve that, we will need to actually change some code in our program - firstly, we have to change offsets, so that every memory access to LANGUAGES_TABLE will use our appended data and, secondly, we need to change scaling, so that instead of printing PATCHED_LANGUAGES_TABLE[21*arg], our program will print PATCHED_LANGUAGES_TABLE[30*arg]. And that is the trickiest part of the whole process.\n\nFirst of all, you need to find the piece of code to patch. In our example it is:\n\nNote that 21 bytes starting from offset 0x6e8 are actually responsible for multiplying arg by 21 and loading address of LANGUAGES_TABLE to RDX. Here, lea computes this offset using RIP. What we need to do, is to determine offset we want to add to RIP to achieve LANGUAGES_TABLE_PATCHED.\n\nAnd here, please keep in mind an important thing - we have to determine this offset depending on the address of this lea instruction in our patched\n file. \n\nSo, either we leave it at its place and change only offset (that is last 4 bytes of opcode), so that it points to our patched table, or we just write our code and then add relevant number of nops (we could then write lea as lea [rip] and then simply check the required offset with a debugger and change this to lea [rip+offset]) - that's what I did. Nevertheless, our patched code may look like this:\n\n\nIt's responsible for calculating address of LANGUAGES_TABLE_PATCHED[30*arg].\n\nSo, that's it! We may now test it; if we run ./langPackPatched 5, we get:\n\n```\nstringInYourFavouriteLanguage,\n\n```\nas desired, while program behaviour remains unchanged for other arguments.\n\n",
+      "votes": "4",
+      "user": "bart1e",
+      "time": "Apr 8, 2019 at 9:33",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Alonia",
+          "text": "Thanks for your idea 💡   Can you help me, please? I can follow you, but I can't do it.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "Of course I can. Could you specify which part of answer is unclear?",
+          "time": null
+        },
+        {
+          "user": "Alonia",
+          "text": "I don't know how to apply that to my file. Can I send personal messages here? I haven't found the point yet. Then I can show you the file.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "As far as I know it's not possible to send PMs here.  So you may consider uploading it here, or asking another question precisely describing the point where you have difficulties.",
+          "time": null
+        },
+        {
+          "user": "bart1e",
+          "text": "I'll look at it, but I encourage you to update your question with these files, so that other users can help you too.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

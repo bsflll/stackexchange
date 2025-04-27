@@ -1,0 +1,70 @@
+{
+    "title": "How can I demangle the name in an RTTI Type Descriptor?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20516/how-can-i-demangle-the-name-in-an-rtti-type-descriptor",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm currently browsing through RTTI information available in an MSVC++2003 executable (writing an IDAPython script to recreate structs for the class hierarchy). Apparently, as visualized\n  <a href=\"http://www.openrce.org/articles/img/igor2_rtti1.gif\" rel=\"nofollow noreferrer\">\n   here\n  </a>\n  , the RTTI Type Descriptor stores something like the name of the classes or their constructor:\n </p>\n <pre><code>.?AVexception@@\n    .?AUescaped_list_error@boost@@\n    .?AVruntime_error@stlp_std@@\n</code></pre>\n <p>\n  However, it sports a mangling scheme I do not recognize yet. The name starts with a\n  <code>\n   .\n  </code>\n  which, according to this\n  <a href=\"https://en.wikiversity.org/wiki/Visual_C%2B%2B_name_mangling#Basic_Structure\" rel=\"nofollow noreferrer\">\n   wiki\n  </a>\n  , is not even a valid start for a mangled MSVC name. IDA and\n  <a href=\"http://demangler.com/\" rel=\"nofollow noreferrer\">\n   an online name demangler\n  </a>\n  also cannot demangle these names. According\n  <a href=\"http://www.openrce.org/downloads/details/196\" rel=\"nofollow noreferrer\">\n   to these scripts\n  </a>\n  (s. ms_rtti4.idc) these should map to:\n </p>\n <pre><code>typeid(struct exception)\n    typeid(struct boost::escaped_list_error)\n    typeid(struct stlp_std::runtime_error)\n</code></pre>\n <p>\n  I tried removing the leading dot to get a valid start at least, but it is still invalid. Quickly writing an overly simplistic python line to at least fix namespaced class names...\n </p>\n <pre><code>return \"::\".join(reversed(name[4:-2].split(\"@\")))\n</code></pre>\n <p>\n  ...it of course fails with generic type names, as with these classes here:\n </p>\n <pre><code>ns::FunctionBase             (.?AVFunctionBase@ns@@)\n    ns::Z::P6AXPAX::?$FunctionT  (.?AV?$FunctionT@P6AXPAX@Z@ns@@)\n    ns::Z::P6AHH::?$FunctionT    (.?AV?$FunctionT@P6AHH@Z@ns@@)\n    ns::Z::P6AHPB_W::?$FunctionT (.?AV?$FunctionT@P6AHPB_W@Z@ns@@)\n    ns::Z::P6AHI::?$FunctionT    (.?AV?$FunctionT@P6AHI@Z@ns@@)\n</code></pre>\n <p>\n  I noticed removing the\n  <code>\n   .?AU\n  </code>\n  or\n  <code>\n   .?AV\n  </code>\n  prefix from those yields kinda useful results (missing the namespace sadly):\n </p>\n <pre><code>FunctionT@ns@@\n    FunctionT<void (__cdecl*)(void *)>\n    FunctionT<int (__cdecl*)(int)>\n    FunctionT<int (__cdecl*)(wchar_t const *)>\n    FunctionT<int (__cdecl*)(unsigned int)>\n</code></pre>\n <p>\n  ...but again that one now doesn't work for non-generic names.\n </p>\n <p>\n  I wonder if the RTTI Type Descriptor name scheme is documented, or if there is logic turning this into an actual RTTI name I can demangle with the usual tools?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "msvc",
+        "name-mangling"
+    ],
+    "user": "Ray",
+    "time": "Jan 31, 2019 at 13:43",
+    "comments": [
+        {
+            "user": "Nordwald",
+            "text": "<html><body><span class=\"comment-copy\">\n I think\n <a href=\"https://github.com/REhints/BlackHat_2015/blob/master/CodeXplorer%20v2.0%20%5BBH%20Edition%5D/source%20code/HexRaysCodeXplorer/ObjectFormatMSVC.h\" rel=\"nofollow noreferrer\">\n  CodeXplorers source code\n </a>\n could contain some hint: but they annotate AV as function and AU as structure but that does not seem to match your example\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ray",
+            "text": "<html><body><span class=\"comment-copy\">\n That's interesting though, I found out (via Igor Skochinsky's RTTI scripts), that these type \"names\" are actually equivalent to\n <code>\n  typeid(struct xyz)\n </code>\n as added to my question now. I found a way to abuse demangling a valid ctor from it and then stripping out the class name which I post as an answer for now.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "mrexodia",
+            "text": "<html><body><span class=\"comment-copy\">\n Check out the clang for windows source code. They claim binary compatibility with msvc rtti iirc.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ray",
+            "text": "<html><body><span class=\"comment-copy\">\n @mrexodia Interesting, I get back to it when working on this part of the script again.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  vc++filt seems to demangle it\n </p>\n <pre><code>?AVexception@@\n ?? AVexception\n?AUescaped_list_error@boost@@\n ?? boost::AUescaped_list_error\n?AVruntime_error@stlp_std@@\n ?? stlp_std::AVruntime_error\n?AUescaped_list_error@boost@@\n ?? boost::AUescaped_list_error\n</code></pre>\n <p>\n  src slightly edited to strip . in front\n </p>\n <pre><code>cat cpp.cpp\n#include <windows.h>\n#include <stdio.h>\n#include <dbghelp.h>\n#pragma comment(lib,\"dbghelp.lib\")\n#define MAXLEN 0x1000\nchar buff[MAXLEN];\nint main (int argc , char * argv[])\n{\nmemset(buff,0,MAXLEN);\nif( argc !=2 )\n    {\n        printf (\"usage %s undemsym\",argv[0]);\n        exit(-1); \n    }\n    char *nodot;\n    if( *(char *) argv[1] == '.'  )\n    {\n        nodot = argv[1]+1;\n    }\n    else if (*(char *) argv[1] == '?')\n    {\n        nodot = argv[1];\n    }\n    else\n    {        \n        printf(\"not a valid msvc mangled name\n\");\n        exit(-2);\n    }\n    if ( ( UnDecorateSymbolName(nodot , buff,MAXLEN,UNDNAME_COMPLETE)) !=0 )\n        {\n            printf (\"%s\n\",buff);\n        }\n        else\n        {\n            printf(\"error %x\n\" , GetLastError());\n        }\n}\n</code></pre>\n <p>\n  compile link\n </p>\n <pre><code>cl /Zi /W4 /analyze /Od cpp.cpp /link /release\n</code></pre>\n <p>\n  test\n </p>\n <pre><code>cpp.exe\nusage cpp.exe sym\ncpp.exe .?AVruntime_error@stlp_std@@\n.?AVruntime_error@stlp_std@@\n\ncpp.exe ?AVruntime_error@stlp_std@@\n ?? stlp_std::AVruntime_error\n</code></pre>\n <p>\n  edit for comment (add these lines to src above)\n </p>\n <pre><code>if ( ( UnDecorateSymbolName(nodot , buff,MAXLEN,  UNDNAME_NO_ARGUMENTS )) !=0 )\n{\n    printf (\"%s\n\",buff);\n}\nelse\n{\n    printf(\"error %x\n\" , GetLastError());\n}\n</code></pre>\n <p>\n  result\n </p>\n <pre><code>cppundem.exe .?AUescaped_list_error@boost@@\n ?? boost::AUescaped_list_error\nstruct boost::escaped_list_error\n</code></pre>\n <p>\n  full results\n </p>\n <pre><code>:\\cat mang.txt\n.?AVFunctionBase@ns@@\n.?AV?$FunctionT@P6AXPAX@Z@ns@@\n.?AV?$FunctionT@P6AHH@Z@ns@@\n.?AV?$FunctionT@P6AHPB_W@Z@ns@@\n.?AV?$FunctionT@P6AHI@Z@ns@@\n:\\for /F %i in (mang.txt) do cppundem.exe %i\n\n:\\cppundem.exe .?AVFunctionBase@ns@@\n ?? ns::AVFunctionBase\nclass ns::FunctionBase\n\n:\\cppundem.exe .?AV?$FunctionT@P6AXPAX@Z@ns@@\n?AV?$FunctionT@P6AXPAX@Z@ns@@\nclass ns::FunctionT<void (__cdecl*)(void *)>\n\n:\\cppundem.exe .?AV?$FunctionT@P6AHH@Z@ns@@\n?AV?$FunctionT@P6AHH@Z@ns@@\nclass ns::FunctionT<int (__cdecl*)(int)>\n\n:\\cppundem.exe .?AV?$FunctionT@P6AHPB_W@Z@ns@@\n?AV?$FunctionT@P6AHPB_W@Z@ns@@\nclass ns::FunctionT<int (__cdecl*)(wchar_t const *)>\n\n:\\cppundem.exe .?AV?$FunctionT@P6AHI@Z@ns@@\n?AV?$FunctionT@P6AHI@Z@ns@@\nclass ns::FunctionT<int (__cdecl*)(unsigned int)>\n\n:\\\n</code></pre>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jan 31, 2019 at 17:48",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Ray",
+                    "text": "<span class=\"comment-copy\">Hey there, thanks for your work on this; however, the resulting names are not fully correct, <code>AV</code> and <code>AU</code> are not part of the name but output in your sample.</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">well if you need type pass UNDNAME_NO_ARGUMENTS</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ray",
+                    "text": "<span class=\"comment-copy\">I see, yeah that looks better.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Via\n  <a href=\"http://www.openrce.org/downloads/details/196\" rel=\"nofollow noreferrer\">\n   Igor Skochinsky's classic IDA RTTI scripts\n  </a>\n  , I found out that the names I posted are equivalent to\n  <code>\n   typeid(struct xyz)\n  </code>\n  (as I've added to my question).\n </p>\n <p>\n  Abusing creating a valid mangled dtor name from a substring of them and then stripping the ctor parts from the result yields great class names.\n </p>\n <p>\n  Here's my Python script and the results:\n </p>\n <pre><code>def demangle(name):\n    # Check if this even is a problematic typeid.\n    if name.startswith(\".?A\"):\n        # Remove the .?AU or .?AV prefix.\n        name = name[4:]\n        # Demangle it as a default public destructor call.\n        dtor_name = \"??1\" + name + \"QAE@XZ\"\n        name = your_default_msvc_demangler.demangle(dtor_name)\n        # Strip destructor pre and suffixes again (accessor / cconv and parameter list).\n        name = name[len(\"public: __thiscall \"):name.rfind(\"(\")]\n        # Remove dtor name.\n        parts = name.split(\"~\")\n        return parts[0][:-2]\n    else:\n        return your_default_msvc_demangler.demangle(name)\n</code></pre>\n <p>\n  And here are sample results for the names given in my question:\n </p>\n <pre><code>exception\n    boost::escaped_list_error\n    stlp_std::runtime_error\n\nns::FunctionBase::FunctionBase\n    ns::FunctionT<void (__cdecl *)(void *)>\n    ns::FunctionT<int (__cdecl *)(int)>\n    ns::FunctionT<int (__cdecl *)(wchar_t const *)>\n    ns::FunctionT<int (__cdecl *)(unsigned int)>\n</code></pre>\n <p>\n  Probably not very elegant, but working.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "Ray",
+            "time": "Feb 20, 2022 at 23:30",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

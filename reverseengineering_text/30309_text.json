@@ -1,0 +1,42 @@
+{
+    "title": "PPPoE username and password from ZTE ZXHN F680 V6",
+    "link": "https://reverseengineering.stackexchange.com/questions/30309/pppoe-username-and-password-from-zte-zxhn-f680-v6",
+    "content": "I'm trying to extract the PPPoE username and password from a ZTE ZXHN F680 V6 router. I have obtained several files from the router and can get access to other files if needed.  Here is where I'm at.\nI have obtained the <pre><code>cspd</code></pre> file after reading this Q&A.  I also have a <pre><code>config.bin</code></pre> file but was unable to determine any information from it using <pre><code>binwalk</code></pre> or <pre><code>strings</code></pre> commnads.  Both returned empty results and indicated high level of entropy.\nHere is a link to the files extracted from router.\nI assume that the PPPoE file will be in an encoded or encrypted or both .xml file.  So, my search in the <pre><code>cspd</code></pre> file for strings resulted in potentially useful information.\n<pre><code>$ strings cspd | grep .xml\n/var/tmp/db_user_cfg.xml\nCP download xml doc failed!\n/etc/db_user_cfg.xml\nplease input cfg file(/proc/cfg/db_user_cfg.xml) eg.\n/var/tmp/db_cp_cfg.xml\n/var/tmp/db_reload_cfg.xml\n/var/tmp/db_backup_cfg.xml\n/etc/db_default_%s_cfg.xml\n/var/tmp/db_Decry_cfg.xml\n/var/tmp/usb_rst_cfg.xml\ndbc_mgr_file_xml.c\nat %d line of xml file\nsbsize(%d) xmlsize(%d)\n/userconfig/cfg/db_user_cfg.xml\n/etc/db_default_cfg.xml\n/userconfig/cfg/db_backup_cfg.xml\n</code></pre>\nI think the best candidates for containing the PPPoE username and password are <pre><code>/userconfig/cfg/db_backup_cfg.xml</code></pre>,  <pre><code>/userconfig/cfg/db_user_cfg.xml</code></pre> and <pre><code>/etc/db_default_cfg.xml</code></pre>.\nI have checked those files using <pre><code>binwalk</code></pre> and it seems they are high level of entropy with only one section (no obvious header), so have been encrypted, not simply encoded:\n<pre><code>binwalk -E db_user_cfg.xml\n\nWARNING: Failed to import matplotlib module, visual entropy graphing will be disabled\n\nDECIMAL       HEXADECIMAL     ENTROPY\n--------------------------------------------------------------------------------\n0             0x0             Rising entropy edge (0.954061)\n</code></pre>\nI following the above linked post I have used Ghidra 10 to de-compile the <pre><code>cspd</code></pre> file and searched for these strings, as well as functions for decryption.  I found the following files:\n\nAES_set_decryption_key\nAESDecrypt\nAESCBCDecry\ndbcCfgSetAesKey\nDecryByAES\nDecryByAESCBC\n\nI think the most likely candidate to get a key for decryption is <pre><code>dbcCfgSetAesKey</code></pre>, but that's only because of the name of the function and the target .xml files have cfg in their names.\nThe body of the <pre><code>dbcCfgSetAesKey</code></pre> function is below.  It only accepts one variable and :\n<pre><code>undefined4 dbcCfgSetAesKey(void *param_1)\n\n{\n  if (param_1 != (void *)0x0) {\n    memcpy(g_szMD5Key,param_1,0x20);\n    return 0;\n  }\n  return 0xffffffff;\n}\n</code></pre>\nI searched Ghidra for <pre><code>g_szMD5Key</code></pre> and found there was only a Label with that name, no function. It appears to me that the above <pre><code>dbcCfgSetAesKey</code></pre> function is copying the config file AES key to a memory location to be accessed later by the decryption process.  They key may be some type of MD5 hash?\nMy questions are:\n\nWhat are my options for extracting the key to decrypt the .xml files?  Am I right that they PPPoE data will likely be in the above mentioned .xml files?\nAm I generally on the right track to extract config data from a ZTE router such as ZTE ZXHN F680 V6?  I know that they are all different, and have looked at some other tools such as zte-config-utility which I see requires having a key to extract the config files.\nWhat am I missing about this approach to reverse-compiling the router configuration.\n\nI know my questions will be rather noob since I am just starting to learn reverse engineering / compiling.  I am fairly good with encryption and modes, but not create with Ghidra or C++.  If my question is much to simple and uninformed just let me know.\n",
+    "votes": "1",
+    "answers": 0,
+    "views": "5k",
+    "tags": [
+        "firmware",
+        "router"
+    ],
+    "user": "I'm Root James",
+    "time": "Apr 23, 2022 at 7:01",
+    "comments": [
+        {
+            "user": "xax",
+            "text": "Can you upload cspd file?\n",
+            "time": null
+        },
+        {
+            "user": "I'm Root James",
+            "text": "@xax I have uploaded a zip file of the files extracted from the router.  There is also a directory tagparam with a p12 certificate, and config.bin.  All seem encrypted. drive.google.com/file/d/1UEV9xGcFIq4aQfRj-k9_uJx4CEPirykA/…\n",
+            "time": null
+        },
+        {
+            "user": "xax",
+            "text": "This config file using AES-256-CBC algorithm and deflate zlib compression. key_str = \"C1DB7A773d634602dc8c\", iv_str = \"ZTE%FN$GponNJ025\" -> key = sha256(key_str), iv = first 16byte of sha256(iv_str) -> key = 4a5e07466a0777eb2650bbd4fc85bb7498e3048d4219916c5f50576ad5c25bce iv    = 83197b65889558bb6723df979895bb36 Decrypt method in  function DecryByAESCBC and key_str C1DB7A773d634602dc8c I find from paramtag file. But this decrypt success only file db_backup_cfg.xml.\n",
+            "time": null
+        },
+        {
+            "user": "I'm Root James",
+            "text": "Thanks for that info.  I assume that the zlib decompress must happen first because when I open the file as bytes in Python3 and check the length of the db_backup_cfg.xml file <pre><code>print(len(payload) % 16)</code></pre> the output is 8.  So the file is not padded the right length for  AES 256 CBC mode decryption.  But when I try to zlib decompress using python3, <pre><code>payload = zlib.decompress(payload)</code></pre> I get the error, <pre><code>zlib.error: Error -3 while decompressing data: incorrect header check</code></pre>.\n",
+            "time": null
+        },
+        {
+            "user": "xax",
+            "text": "hex view You can use decode.py db_backup_cfg.bin db_backup_cfg.xml after decrypt or using my script using zcu zte_f608.py zte_f608.py --key-prefix C1DB7A773d634602dc8c --iv-prefix ZTE%FN$GponNJ025 db_backup_cfg.xml out.xml\n",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

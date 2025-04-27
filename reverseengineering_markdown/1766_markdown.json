@@ -1,0 +1,56 @@
+{
+  "title": "What is Data Interleaving? [closed]",
+  "link": "https://reverseengineering.stackexchange.com/questions/1766/what-is-data-interleaving",
+  "content": "What is data interleaving? Is this something I can use to obfuscate collections of variables?\n\n",
+  "votes": "-6",
+  "answers": 1,
+  "views": "748",
+  "tags": [
+    "obfuscation"
+  ],
+  "user": "dyasta",
+  "time": "12 years ago",
+  "comments": [
+    {
+      "user": "Ange",
+      "text": "if you do (ask and answer yourself), it should at least be a question that others are likely to ask too - I've never heard of Data Interleaving until now. otherwise we can't expect anyone else to answer, which is not why 'answering your own question' is encouraged.",
+      "time": null
+    },
+    {
+      "user": "Rolf Rolles",
+      "text": "Can you provide an example of a protection that uses such a technique?",
+      "time": null
+    },
+    {
+      "user": "asheeshr",
+      "text": "I may be wrong, but shouldn't something you just thought and may have applications in the field belong in a blog post, or in certain cases a technical paper rather than a Q&A here ?",
+      "time": null
+    },
+    {
+      "user": "Ange",
+      "text": "I see your point, but if it's a new idea not seen anywhere else before, it's 'too early' for it for QA (which is the format here), and @RolfRolles is right, if there is not even a PoC somewhere, there's hardly no experience about it.. for this, I'd write a blog post somewhere or present in conference, submit to reddit, let people learn first about it. then individual problems related to that idea could be discussed here. SE is not for any discussion, but more for problem solving (I know, the interwebs can't make things simply).",
+      "time": null
+    },
+    {
+      "user": "dyasta",
+      "text": "You guys really need to vote this down 6 times?  Is it that offensive? I think I could post some pr0n and get less votes down",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Data Interleaving is a term I made up to reflect an idea I've been contemplating lately; interleaving the bits of a set of variables into a single binary blob. Any number and types of variables could be interleaved together. Access to variables in the interleaved blob can even be on-demand, with a controller class encoding or decoding variables on the fly.\n\nData Interleaving is the process of translating any number of variables to a single binary blob by interleaving the bits of the variables. This obfuscates the variables in memory or external storage. The entire blob need not be decoded to access member variables, though it can be for improved performance.\n\nThis will help complicate reverse engineering of code. It will particularly deter identifying data types and variables. Plaintext is also well obfuscated with this interleave.\n\nThe variables to be encoded could be defined by an array of byte sizes of those variables and, optionally, pointers to a location in memory to retrieve or store their reconstituted form. In the case of on-demand access to an interleaved blob, individual variables can be decoded and re-encoded on the fly, so buffers for reconstituted storage are optional (though they may be temporarily reconstituted by the controller class as members are modified).\n\nThe members of the bitwise interleave can be referenced in the source code via their indices. For instance, index 0 may be MY_VARIABLE_INSTANCE. By passing the variable index to an interleave blob controller class, it knows the size and, optionally, a pointer for constituted storage.\n\nMember data types can be anything. They need not be similar. When one variable ends, it is simply ended. See a few paragraphs below for what happens when a single variable is longer than the others.\n\n```\n/* member information */\n/* optional pointer to its normal, constituted storage location */\n/*  (for use in encoding and decoding the member) */\n/* and the size of the member */\nclass CInterleaveMember\n{\n  void *pvConstitutedStore;\n  unsigned long nMemberByteSize;\n};\n\n/* INTERLEAVE MAP */\nCInterleaveMember aInterleaveMap[]\n  { szSomeString, sizeof(szSomeString) },\n  { &nIntegerMan, sizeof(nIntegerMan) },\n  { &cMyClass , sizeof(cMyClass) };\n\nvoid *pBLOB;  /* interleaved data stored in a dynamically allocated blob */\n\n```\nThe total size of the blob need not be stored, as it is the sum of all member sizes in the interleave map. The interleave map provides everything we need to know.\n\nIn case it is not clear, the process for the interleave would go something like this: The array of members is 'walked', putting or getting the current bit index from each member variable, advancing to the next bit index after the entire array has been walked. When a member variable is full of bits (exhausted), it is skipped in subsequent interleave iterations (more on long vars later).\n\nFor simplicity, let me define a few variables in bits only (not matching above):\n\n```\nszSomeString 0 1 1 1 0 0 1 0 \nnIntegerMan  1 1 1 0 0 0 1 1 1 0 0 1 0 0 0 1\ncMyClass     0 0 0 1\n\n```\nFor the interleave, a bit is taken from each variable in succession.\n\n```\nFirst iteration of the interleave, get first bit from each ...\n 0 1 0\nNext iteration(s), get the next bit from each ...\n 0 1 0 1 1 0\n 0 1 0 1 1 0 1 1 0\n ...\n\n```\nIn the case where one variable is much longer than the others, thus having no pair to encode with, one could use a simple XOR, and/or toss in redundant, unused data from the prior members. Any number of strategies are possible to prevent plaintext storage in the case of an abnormally long variable not having an interleave partner for its ending bits.\n\nFor example, the following pseudo-code represents this algorithm:\n\n```\n/* PROTECTED VARIABLES */\n/* These get stored in an bitwise interleave in the binary blob */\nchar szSomeString = \"Is there anybody out there?\";\nunsigned long nIntegerMan = 0x9090; \nMyClass cMyClass(\"whoopie\");\n\nclass CInterleaveMember\n{\n  void *pvConstitutedStore;\n  unsigned long nMemberByteSize;\n};\n\n/* INTERLEAVE MAP */\nCInterleaveMember aInterleaveMap[]\n  { szSomeString, sizeof(szSomeString) },\n  { &nIntegerMan, sizeof(nIntegerMan) },\n  { &cMyClass , sizeof(cMyClass) };\n\n/* NOTE: Total size of the resultant bitwise interleave is the sum of the members of a Interleave Map */\n\n/* INTERLEAVE REFS */\ntypedef enum \n{\n  _szSomeString=0,\n  _nIntegerMan,\n  _cMyClass,\n} InterleavedVariables;\n\nvoid *pBinaryBlob;  /* dynamically allocated blob storage */\n\n/* Fictional class constructor, passing the interleave map to it */\n/* From the interleave map, it can calculate the total blob size, */\n/* then dynamically allocate storage for the blob. */\nCBitInterleaver cBitInterleave(aInterleaveMap);\n\n/* If the blob is externally loaded, or needs externally stored, we */\n/* may need to get access to the blob buffer. Fictional example: */\n/* We know the blob size from map! The input size is for safety. */\ncBitInterleave.SetBlob(pIncomingBlob, nSrcBufferSize);  \n\n/* Or we can get the blob */\nnBlobSize=cBitInterleave.GetBlob(ppOutgoingBlob);\n\n/* Example to encode or decode the entire blob to constituted */\n/* storage. We already provided the map, and it decodes or encodes */\n/* to the listed pointers.\ncBitInterleave.EncodeBlob();\ncBitInterleave.DecodeBlob();\n\n/* Example call to decode a member of the array */\n/* We pass it the INDEX into the MAP, and dest buffer */\n/* From the Index of _nIntegerman, we ALREADY know the size */\n/* The out size is for safety. */\ncBitInterleave.GetVariable(_nIntegerMan, &nIntegerMan, sizeof(nIntegerMan));\n\n/* OR we can use the default storage address in the interleave map */      \ncBitInterleave.GetVariable(_nIntegerMan);\n\n/* Example call to encode a member of the array */\n/* We pass it the INDEX into the MAP, and input reference */\ncBitInterleave.SetVariable(_szSomeString, &szSomeString, sizeof(szSomeString));\n\n/* And so on... I'm literally coding this in this answer, like a fool */\n\n```\n",
+      "votes": "1",
+      "user": "dyasta",
+      "time": "Apr 14, 2013 at 18:47",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "dyasta",
+          "text": "And why vote the answer down? You should have been accountants if you enjoy classification, lol. It discourages anything to be posted, off topic or not.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

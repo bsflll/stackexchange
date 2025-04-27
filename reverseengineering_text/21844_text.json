@@ -1,0 +1,108 @@
+{
+    "title": "What information may supply the uninitialized data to security team?",
+    "link": "https://reverseengineering.stackexchange.com/questions/21844/what-information-may-supply-the-uninitialized-data-to-security-team",
+    "content": "When I was reversing some well known Android chat applications (I can not disclose which specific ones, but all of them where owned by companies with 1 billion+ capital and have hundreds of millions of accounts), I saw an interesting feature in C++ code.\nThese applications read uninitialized data and sent it to their web service.\nIn pseudocode, they do the following job:\n<pre><code>static constexpr const size_t uninitialized_data_size = 1024;\nauto uninitialized_data = malloc(uninitialized_data_size);\nHttpPost(\"http://my-url.com\", uninitialized_data, uninitialized_data_size);\n</code></pre>\nOf course, we can think that it is just a bug... But when multiple huge companies do the same thing, I'm starting to think: why?\nDoes anyone have idea what information uninitialized data can supply to security team? Is it just repeated error made by accident, or they extract some useful information from uninitialized data that they send to their server on regular basis?\n",
+    "votes": "5",
+    "answers": 4,
+    "views": "219",
+    "tags": [
+        "c++",
+        "android"
+    ],
+    "user": "Vitalii",
+    "time": "Aug 5, 2019 at 15:45",
+    "comments": [
+        {
+            "user": "Kerim Can Kalıpcıoğlu",
+            "text": "Interesting question. Is it on a .so file or these applications all written in C++?\n",
+            "time": null
+        },
+        {
+            "user": "Vitalii",
+            "text": "It is SO file that implements Java native methods via JNI in typical Android application. I suspect that it may be any security algorithm. At least on application startup, uninitialized data has more or less predictable values; as longer application runs, as more random data is here. However, it is question if <pre><code>malloc</code></pre> can return memory used by <pre><code>Java</code></pre> before that; I have no idea how does Java handles memory in low level. Most of code runs via Java, so Java memory is less predictable than C++ one in such application.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "Are you sure you have an actual malloc() call and not something else, e.g. calloc()?\n",
+            "time": null
+        },
+        {
+            "user": "Vitalii",
+            "text": "Yes, sure, <pre><code>malloc</code></pre>.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "There were some cases where uninitialized memory was used as an entropy source, e.g. OpenSSL, but I doubt this is happening here. Possibly there is something not present in the snippet you posted, or it could indeed be a genuine bug.\n",
+            "votes": "1",
+            "user": "Igor Skochinsky",
+            "time": "Aug 7, 2019 at 10:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Vitalii",
+                    "text": "<span class=\"comment-copy\">But why to send entropy from Android device to server? I suspect they somehow detect emulators in this way; for example, may be emulator has different base address range, etc. But I have no specific idea.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">maybe emulator always has memory filled with a specific pattern?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I have not 100% idea how do they use this information, but what I suspect from information supplied by other participants of this conversation and also information from Internet:\n\nIn Android JNI application, <pre><code>Java</code></pre> doesn't use <pre><code>malloc</code></pre> to allocate Java object. Instead, Java has its own memory manager. So, Java code has a very little influence on what <pre><code>malloc</code></pre> return.\n<pre><code>malloc</code></pre> prefers to use the same arena for the same thread if possible; so, in most cases other JNI calls made from other threads will not influence what does <pre><code>malloc</code></pre> returns.\nIt means, that <pre><code>malloc</code></pre> will often return data allocated by the same thread. In JNI, we usually don't create long living C/C++ objects and prefer to use Java as memory manager, because it is problematic to free C++ memory in Java. <pre><code>finalize</code></pre> doesn't provide any guarantees! So, even if we will try to free C++ data associated with Java object in <pre><code>finalize</code></pre>, we can never know for sure that we'll not get memory leak, because OS will never call <pre><code>finalize</code></pre>.\nSo, we may expect that 99% of <pre><code>malloc</code></pre> made during JNI call will call <pre><code>free</code></pre> during the same call.\nSo, we can use uninitialized data to detect (with some probability) that our shared library is loaded in some unusual environment.\n\nLets imagine following code:\n<pre><code>void MarkHeap()\n{\n    static const char *ones = \"11....1\"; // String that contains 1024 ones\n    auto some_data = malloc(1024);\n    memcpy(some_data, ones, 1024);\n    free(some_data);\n}\n\nsize_t CheckMarkHeap()\n{\n    auto some_data = malloc(100);\n    size_t ones_count = 0;\n    for(size_t i = 0; i < 100; ++i)\n        if(some_data[i] == '1')\n            ++ones_count;\n    free(some_data);\n    return ones_count;\n}\n\nMarkHeap();\nauto ones_count = CheckMarkHeap()\n</code></pre>\nHere we can expect that very often <pre><code>ones_count</code></pre> will equal to 100! We can now use this strategy to check (with some probability) if <pre><code>CheckMarkHeap</code></pre> is called soon after <pre><code>MarkHeap</code></pre>.\nIn situation where <pre><code>CheckMarkHeap</code></pre> calculates any kind of security token, we can afraid that anyone will try to use our own shared library to bypass our protection; in case of Android, we can extract shared library from APK and try to interpret it with Android emulator or any embedded ARM emulation library like <pre><code>unicorn</code></pre>. If we implemented <pre><code>MarkHeap</code></pre> in another shared library that doesn't draw attacker attention and somehow call it before <pre><code>CheckMarkHeap</code></pre>, we have a good chance to detect that our security library is loaded from unusual context.\nOf course, we can not ban immediately for that, because any random events may affect <pre><code>ones_count</code></pre>. However, if <pre><code>ones_count</code></pre> is not 100 in more than 60% of calls, we can make any soft penalty to suspicious account (for example, ask for phone verification, SafetyNet verification, show CAPTCHA more often, send account to human moderation, etc).\n",
+            "votes": "1",
+            "user": "Vitalii",
+            "time": "Aug 29, 2019 at 10:41",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "The exact behavior would depend on the implementation details of the memory manager behind <pre><code>malloc()</code></pre>. But it is a common case that memory managers would reuse memory blocks previously released with <pre><code>free()</code></pre>. If <pre><code>malloc()</code></pre> recycles a memory block which is not zeroed (for example using <pre><code>memset()</code></pre>) before being released, the block will generally contain buffer content remaining from previously executed functions inside the process.\nGiven that the memory manager does not initialize blocks upon allocation and release, the implications of this pseudocode is that it will repeatedly take random memory samples (of 1k size) within the process' memory address space, which will occasionally catch some data remained from the workings of previously executed code.\n",
+            "votes": "0",
+            "user": "Anton Angelov",
+            "time": "Aug 6, 2019 at 9:28",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Vitalii",
+                    "text": "<span class=\"comment-copy\">It is obvious that <code>malloc</code> contains data used previously; the question is how may they use this information?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">Kinda important that this is <i>within</i> the same process. Because that limits the utility of such an attack, methinks ...</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Maybe to steal data?\nWhen you request memory via malloc you will get a block of memory that was used by other applications or the os before. I think, it should be possible to extract valuable information (like hashes that were not properly cleaned up by password-managers and other credentials) from there, in respect to the large user-base and th computational power these companies have available.\nLet's do some calculations (unfortunately in code tags, becuase RE-Ex does not have MathJax):\nLet...\n\n<pre><code>n</code></pre> be the number of memory from which malloc can choose\n<pre><code>m</code></pre> be the size of the window we can search in\n<pre><code>l</code></pre> be the size of the searched sequence\n\nThe amount of different positions the window can have is given by <pre><code>n - m + 1</code></pre>.\nThe amount of positions, which will fully include a sequence of size <pre><code>l</code></pre> is <pre><code>m - l + 1</code></pre>.\nTherefore the probability, that a random chosen search window will include our sequence is \n<pre><code>p = (m - l + 1)/(n - m + 1)</code></pre>\nWe will assume,\n\nthat the average available memory in the smartphone is <pre><code>n = 4GB</code></pre>\nthe size of our search window is <pre><code>m = 1024</code></pre>\nthat the length of the sequence is <pre><code>l = 16</code></pre> (the size of an MD5-Hash)\n\nThis gives us a probability of <pre><code>p = (1024 - 16 + 1)/(4e9 - 1024 + 1) ~= 2.5225e-7</code></pre>.\nLet's do some more assumptions: Suppose the messenger has <pre><code>1.5 billion users</code></pre> (like WhatsApp has). Let's also suppose the code sends the data <pre><code>twice a day</code></pre> and <pre><code>one thousandth</code></pre> of the users have an unreserved MD5 hash somewhere in memory.\nThat gives us a total size of <pre><code>1.5e9 / 1000 * 2 = 3e6</code></pre> samples to evaluate each day.\nWe will approximate the expected numbers of useful hashes with the normal distribution: \n<pre><code>sigma = sqrt(3e9*2.5225e-7*(1-2.5225e-7)) ~= 27.50909</code></pre> (so the approx. should yield good results) \n<pre><code>my = 3e9*2.5525e-7 ~= 756.75</code></pre>\nSo the company will get with an certainty of 99.73% between 701 and 812 (<pre><code>my-2*sigma, my+2*sigma</code></pre>) usable hashes each day.\nDisclaimer: I am not certain how java handles memory and how plausible (and effective) this scenario is. Nor do I have used any wellfounded values - I just plugged in some pseudo-logic numbers. I give also no guarantee for the corecctness of my calculations (I never really liked statistics).\nNontheless: Feel free to play around with the values and correct me if I did some miscalculations.\n",
+            "votes": "-1",
+            "user": "Anonymous Anonymous",
+            "time": "Aug 10, 2019 at 20:58",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Chris Stratton",
+                    "text": "<span class=\"comment-copy\">The premise of your idea is false in practice.  Of course if unallocated memory contained data used by the system or other applications, that would be a <i>huge</i> security flaw.  <b>Which is why it doesn't - <i>sane</i> operating systems don't hand dirty pages to a process.</b>  Any data that is there belonged to this process or its ancestor.  And the common ancestor of it all, zygote, is presumably careful about such things, in part by being too <i>early</i> and <i>undifferentiated</i> to contain much of interest in the way of user data.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Anonymous Anonymous",
+                    "text": "<span class=\"comment-copy\">@ChrisStratton Could you please explain why do you think that a \"sane OS would not hand over dirty pages\"? I did some research myself and could not find anything regarding the OS doing any cleanup on it's memory (it would be very ineffeicient too), nor regarding allocating the proccess'es heap in some specific place. Until now I did not had the time to try my thesis out, but I will probably be able to run some tests this evening (GMT). But I would be very grateful if you could point me to some paper explaining this more - I am always eager to learn more about low-level memory management :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Chris Stratton",
+                    "text": "<span class=\"comment-copy\">If you look you'll find debates over zeroing released pages in a background kernel thread vs doing it on assigning them to a process.  <b>Everyone agrees it has to be done</b>, the only question is between doing so in advance vs upon need.  Seems the trend is now towards doing it on assignment as it doesn't take long.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

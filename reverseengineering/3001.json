@@ -1,0 +1,77 @@
+{
+    "title": "String extraction from an iNES ROM dump",
+    "link": "https://reverseengineering.stackexchange.com/questions/3001/string-extraction-from-an-ines-rom-dump",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I want to extract the strings in <a href=\"http://www.speedyshare.com/NGGVr/Shadowgate-U.nes\">Shadowgate for NES</a>. I ran <code>file</code> on the image and then <code>strings</code>, no luck. I found <a href=\"http://fms.komkon.org/EMUL8/NES.html#LABM\">some information about the NES cartridge file format</a>. The docs mention the use of “Name Tables”. Is there a way to disassemble this file and view the strings? I tried</p>\n<pre><code> strings -e -T rom.bin\n</code></pre>\n<p>I also tried :</p>\n<pre><code> objdump -i rom.bin\n</code></pre>\n<p>The processor looks to be an M6502 processor and there are Windows disassemblers available.</p>\n</div>",
+    "votes": "8",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "strings"
+    ],
+    "user": null,
+    "time": "Nov 3, 2013 at 2:19",
+    "comments": [
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">If you read that document, you will see that \"Name Table\" has nothing to do with <i>strings</i>. This rather seems to relate to the NES way of storing <i>sprite tiles</i>, as used for scrolling backgrounds.</span>",
+            "time": null
+        },
+        {
+            "user": "user3094",
+            "text": "<span class=\"comment-copy\">If you say so - \"0-3 String \"NES^Z\" used to recognize .NES files.\" Unfortunately this was the only reference to 'string' i could find in that document. I'm not an iNES hacker - I presume you are? The C definition of string is \"abcd\\0\" - this in itself tells us nothing about how the string is going to be drawn does it? \"Name Tables\" is discussed under \"PPU Memory\" and this is what it says: \"A Name Table is very similar to the text mode screen buffer which contains codes of characters to display on the screen.\" PLEASE READ CAREFULLY \"very similar to the text mode screen buffer\"</span>",
+            "time": null
+        },
+        {
+            "user": "user3094",
+            "text": "<span class=\"comment-copy\">aren't strings written to a text mode screen buffer?</span>",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">The Name table is for tiles what the text buffer is for text -- that's why they are \"very much <i>like</i>\", but not <i>equal</i>. As for your original question: <code>strings</code> looks for a very specific type of text: ASCII text only. I scanned your file for non-ASCII strings and found none (useful or otherwise). The strings must be encrypted or compressed, and it may need disassembly to find them.</span>",
+            "time": null
+        },
+        {
+            "user": "user3094",
+            "text": "<span class=\"comment-copy\">This is what the man page for strings has to say: \"-e encoding Select the character encoding of the strings that are to be found. ... Useful for finding wide character strings.\" Or encoded?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There are several approaches to locating strings in an unknown file. One you already tried: <code>strings</code>. This looks for plain, unencoded ASCII text:</p>\n<blockquote>\n<p>Strings  looks  for  ASCII  strings in a binary file [..] A  string is any sequence of 4 (the default) or more printing characters ending with a newline or a  null. (<code>man strings</code>)</p>\n</blockquote>\n<p>But there are many reasons why this naive approach may fail. First off: not every text in the world is ASCII encoded. In fact, examining your file with a binary editor, you can find graphic images for the font used in the game at offset 0x20010 -- monochrome bitmaps of 8x16 pixels. If you assume the first character (a '0') is numbered zero, then 'A' is at position 31 -- definitely <em>not</em> ASCII text. Of course, it's possible the text drawing routine knows this, and re-orders characters to be printed according to this scheme; but, given the age of this particular game (1987) it is more likely that the textual data is <em>stored</em> according to this weird encoding.</p>\n<p>In itself, however, this should not be a problem.</p>\n<p>Googling for this game provides a number of screen shots, and you can read some of the texts that may appear -- \"The last thing you remember\", \"Word of your historic quest\", etc. --, and a noteworthy point is that all text appears to be in ALL CAPS.</p>\n<p>How does that help? Well, if the encoding is <em>remotely</em> 'normal', the character code of an 'A' might be anything, but you can safely assume that <code>code+1</code> is 'B', <code>code+2</code> is 'C', and so on. Now let's assume the text \"THE\" occurs <em>anywhere</em> (a safe assumption). Subtract 'T' from the first byte in the data and note the difference. Subtract this difference from the next byte and test if it is an 'H'; if so, test the same difference on the <em>next</em> byte and see if it is an 'E'. Three times is a charm (in this case), and since the string \"THE\" ought to come up very frequent, you should see lots of hits with the same difference. Then you can write a custom routine to 'convert' <em>all</em> data bytes according to this scheme, and check again if you find useful strings.</p>\n<p>That didn't work for Shadowgate.</p>\n<p>Another option is that the text has been deliberately obfuscated. A popular (because <em>fast</em>) option was to <a href=\"http://en.wikipedia.org/wiki/Xor\">XOR</a> text with a constant. That way the text was not readily visible when inspected with a hex viewer, yet could easily be displayed. So I did the same as above, only now with a XOR operation instead of a constant subtraction. It didn't work either.</p>\n<p>Next: given that SG is a <em>text</em> adventure, it stands to reason the writers tried to stuff as much as possible text into the poor NES memory. To find <em>real world compression</em> (ZIP, LZW) in such an old game is fairly rare, the compression schemes tended to be quite simple. After all, not only RAM was limited but CPU speed as well. What if every character is stored as a 5-bit sequence? That would save lots of memory -- every 8 characters of text could be stored in just 5 bytes, a compression rate of 62.5%.</p>\n<p>Why \"5-bit\"? We're talking English text here, plus a handful of punctuation characters, plus (maybe) digits '0' to '9'. The alphabet itself is 26 characters long, which leaves another 6 values for anything else -- and, hey, one of the extra codes could mean \"for the next character use all 8 bits\".</p>\n<p>Checking every 5 bits against my test string (which in cryptography is called a <a href=\"http://en.wikipedia.org/wiki/Crib_%28cryptanalysis%29\">\"crib\"</a>), I found the following:</p>\n<pre><code>candidate at 0570, delta is 41 H_A\\`THE[TROLL[\ncandidate at 0670, delta is 41 _H\\`ATHE[TROLL[\ncandidate at 0878, delta is 41 `AN`QTHE[TROLL[\ncandidate at 09E3, delta is 41 FROM^THE[DEPTHS\ncandidate at 1380, delta is 41 E[OF[THEM_A[THI\ncandidate at 13F0, delta is 41 ]NX_ATHE[WORDS[\ncandidate at 14C0, delta is 41 PD^`QTHE[FLAME[\ncandidate at 1BBA, delta is 41 UDGE[THEM[BY_A_\ncandidate at 22E0, delta is 41 ]BX_ATHE[GLASS[\ncandidate at 230D, delta is 41 ID_A[THE^SIGN[O\ncandidate at 2375, delta is 41 S[ON[THEM_A\\`AB\ncandidate at 2390, delta is 41 LLOW[THE^VISCOU\ncandidate at 2528, delta is 41 F]PX_THE[STONE[\ncandidate at 25E6, delta is 36 @CP=KTHE@?OFHBS\ncandidate at 27F8, delta is 41 YDP]ATHE[BARK[O\ncandidate at 2B1E, delta is 41 D_H\\]THE[WATER[\n</code></pre>\n<p>.. and many more. You can see it works, because I also decoded a few bytes before and after the test string, and that's recognizable as 'something' as well. The 'delta' shown is the difference between the five-bit code (0..31) and ASCII, and you can see it's <code>41</code> for the majority of strings (the only exception seems a false positive).</p>\n<p>To assure that this <em>is</em> correct, I tried with another crib: <code>KING</code> (it's a fantasy game):</p>\n<pre><code>candidate at 0661, delta is 41 Y[LOOKING[SPEAR\ncandidate at 23B4, delta is 41 [DRINKING[TAR_A\ncandidate at 2B5D, delta is 41 [DRINKING_A\\`AA\ncandidate at 8E1B, delta is 43 \\XVFDKINGDHEEVE\ncandidate at 146F9, delta is 34 JL54HKING48A4:D\n</code></pre>\n<p>That seems to work out as well: not the 'king' I was expecting, but nevertheless good results with a delta of 41, random stuff with another delta.</p>\n<p>But finding useful strings this way is rather fortunate, because of course there is no guarantee that reading every 5 bits <em>starting at the first byte</em> should display anything useful. There may be lots of other strings in between the ones shown, but they didn't happen to start on a multiple of 5*8 bits. Suppose there was no text at position #0, but there <em>was</em> at position #1, then I cannot see it:</p>\n<pre><code> bits for byte 0,1\n 0000.0000 TTTT.T000 (T = Text character bits)\n ---\n reading 1st 5 bits\n 1111.1??? ????.????\n 2nd 5 bits -- the wrong ones!\n .... .111 11??.????\n</code></pre>\n<p>To properly decode <em>all</em> strings, you'd now take the following route:</p>\n<ul>\n<li>my list of results contain readable text, but some garbage as well. Find out what the 'garbage' is (<code>[</code> appears to be a simple space, but <code>THEM_A\\'AB</code> needs a closer look).</li>\n<li>find as much as possible <em>string starts</em> and note down their addresses</li>\n<li>search the binary for these addresses. After all, if they are 'used', there needs to be some reference to them.</li>\n<li>Before and after these addresses, there will be more. These are addresses of strings the search algorithm did <em>not</em> find, but still may be valid.</li>\n<li>Usually, a list of this kind is a contiguous one (although there may be some data associated with each string). Scan the binary up and down for similar addresses, until you found what's sure to be the start and the end.</li>\n<li>Loop over the list and display everything you can according to the decoding scheme.</li>\n<li>Sit back and enjoy a job well done.</li>\n</ul>\n</div>",
+            "votes": "13",
+            "user": "Jongware",
+            "time": "Nov 2, 2013 at 23:36",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user3094",
+                    "text": "<span class=\"comment-copy\">wow! cool! Thanks :) that was very clear!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Here is a time-saver you might want to know about: the input file consists of several parts (I think this mimicks the original physical ROM chips). The first 16 bytes are 'header' and can be ignored. Then follow 65,536 bytes of code, and the rest is graphics data -- uninteresting for your purpose. You only need to scan the code part.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user3094",
+                    "text": "<span class=\"comment-copy\">hi! did you use a tool to do the scanning?? I'm using python to script manually.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Another ROM oddity: the first half and the second half of the 64K image are swapped! No wonder it took me to 3.00/night to find anything useful. By the way, a list of useful string offsets is at <code>0x8000</code> (after correcting the ROM image file); for example, at offset A182: \"DOST THOU KNOW? BRING^ME( THE )ANSWER TO MY^RIDDLE AND I SHALL LET^THEE PASS.\" Oh, and I use plain C. Not that the language matters--as long as you can manipulate bit streams, you're good.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Actually, scratch the bit about the ROM halves. The entire thing is <i>definitely</i> not in a logical order, but it's not as easy as I figured. This needs a real NES-ROM hacker to make sense of. Ripping out strings still works, but the 'find offsets' part cannot if you can't get 'actual' addresses.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

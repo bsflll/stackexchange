@@ -1,0 +1,43 @@
+{
+    "title": "Frida hook InsertMenuItemW",
+    "link": "https://reverseengineering.stackexchange.com/questions/30253/frida-hook-insertmenuitemw",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to get information about menu items in an application. Experimentally established that InsertMenuItemW is called. Thanks to the documentation, I set the number of input parameters and wrote this hook.</p>\n<pre><code>var InsertMenuItemW = Module.findExportByName(\"user32.dll\", \"InsertMenuItemW\");\nconst oInsertMenuItemW = new NativeFunction(InsertMenuItemW, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);\nInterceptor.replace(oInsertMenuItemW, new NativeCallback((pathPtr, pathPtr1, pathPtr2, pathPtr3) =&gt; {\n    console.log(\" \"+pathPtr, pathPtr1, pathPtr2, pathPtr3);\n    const fd = oInsertMenuItemW(pathPtr, pathPtr1, pathPtr2, pathPtr3);\n    return fd;\n}, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']));\n</code></pre>\n<p>According to the documentation, I can get information about the new menu item by calling MENUITEMINFOA. But I can't figure out how to do it with Frida.</p>\n<p><a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-insertmenuitemw\" rel=\"nofollow noreferrer\">https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-insertmenuitemw</a></p>\n<p><strong>Question update</strong></p>\n<p>I was advised in the comments to use Memory.alloc.</p>\n<p>On the Internet, I found this example where the hook allows you to read downloaded files.</p>\n<pre><code>var pGetFileInformationByHandleEx = Module.findExportByName(\"kernel32.dll\", \"GetFileInformationByHandleEx\");\n\nvar fGetFileInformationByHandleEx = new NativeFunction(pGetFileInformationByHandleEx, \"bool\",[\"pointer\", \"uint\", \"pointer\", \"uint\"]);\n\nfunction getNameFromHandle(hFile) {\n    var lpFileInformation = Memory.alloc(0x200);\n    // 0x2 -&gt; FILE_NAME_INFO\n    var callRes = fGetFileInformationByHandleEx(hFile, 0x2, lpFileInformation, 0x200);\n    if (callRes) {\n        console.log(\"|_ hFile: \" + (lpFileInformation.add(0x4)).readUtf16String());\n    } else {\n        console.log(\"|_ hFile: N/A\");\n    }\n}\n</code></pre>\n<p>According to the documentation the third parameter (output).</p>\n<pre><code>BOOL GetFileInformationByHandleEx(\n  [in]  HANDLE                    hFile,\n  [in]  FILE_INFO_BY_HANDLE_CLASS FileInformationClass,\n  [out] LPVOID                    lpFileInformation,\n  [in]  DWORD                     dwBufferSize\n);\n</code></pre>\n<p>in the code you can see that we are passing the third parameter:<code>Memory.alloc(0x200);</code></p>\n<pre><code>var callRes = fGetFileInformationByHandleEx(hFile, 0x2, lpFileInformation, 0x200)\n</code></pre>\n<p>But according to the InsertMenuItem documentation the fourth parameter is <code>[in, out]</code></p>\n<pre><code>BOOL GetMenuItemInfoA(\n  [in]      HMENU           hmenu,\n  [in]      UINT            item,\n  [in]      BOOL            fByPosition,\n  [in, out] LPMENUITEMINFOA lpmii\n);\n</code></pre>\n<p>As I understand it, we must pass the lpmi of our InsertMenuItem as the fourth parameter. But how do we get out?</p>\n<p><strong>My current code</strong></p>\n<pre><code>var InsertMenuItemW = Module.findExportByName(\"user32.dll\", \"InsertMenuItemW\");\nvar GetMenuItemInfoW = Module.findExportByName(\"user32.dll\", \"GetMenuItemInfoW\");\n\n\nvar fGetMenuItemInfoW = new NativeFunction(GetMenuItemInfoW, \"bool\",[\"pointer\", \"pointer\", \"pointer\", \"pointer\"]);\nfunction getHandle(hmenu, item, fByPosition, lpmi) {\n    var lpFileInformation = lpmi || Memory.alloc(0x200);\n    var lpFileInformation2 = Memory.alloc(0x200);\n    var callRes = fGetMenuItemInfoW(hmenu, item, fByPosition, lpmi);\n    console.log(lpFileInformation2);\n    console.log(\"-----------\");\n}\nconst oInsertMenuItemW = new NativeFunction(InsertMenuItemW, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);\nInterceptor.replace(oInsertMenuItemW, new NativeCallback((hmenu, item, fByPosition, lpmi) =&gt; {\n    \n    //call GetMenuItemInfoW\n    getHandle(hmenu, item, fByPosition, lpmi);\n    const fd = oInsertMenuItemW(hmenu, item, fByPosition, lpmi);\n    return fd;\n}, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']));\n</code></pre>\n</div>",
+    "votes": "2",
+    "answers": 0,
+    "views": "131",
+    "tags": [
+        "javascript",
+        "winapi",
+        "frida"
+    ],
+    "user": "user123",
+    "time": "Apr 13, 2022 at 11:15",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "<span class=\"comment-copy\">I would start by importing <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuiteminfoa\" rel=\"nofollow noreferrer\">InsertMenuItemW</a> the same way you imported <code>InsertMenuItemW</code>. For the out parameter you will have to allocate memory using <code>Memory.alloc</code>.</span>",
+            "time": null
+        },
+        {
+            "user": "user123",
+            "text": "<span class=\"comment-copy\">Thanks for the answer. Can you explain why I need to use GetMenuItemInfoA and not GetMenuItemInfoW ?</span>",
+            "time": null
+        },
+        {
+            "user": "Robert",
+            "text": "<span class=\"comment-copy\">It doesn't matter which version you use. Unless your system language uses multi-byte characters you don't need to use the <code>W</code> version. Usually handling of <code>W</code>ide strings (UTF-16) is often more complicated. Not sure about Frida if wide strings are well supported.</span>",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">@Robert doesn't it still matter whether the applications against which you use it uses the <code>A</code> <i>or</i> the <code>W</code> variety? I don't quite get your reasoning here. Unless you hook the underlying functionality from <code>win32u.dll</code> (previously <code>user32.dll</code>) these would be different code paths. Also note: ECMAscript uses UTF-32 internally, so I'd expect UTF-16 to be no issue.</span>",
+            "time": null
+        },
+        {
+            "user": "user123",
+            "text": "<span class=\"comment-copy\">From the documentation, it's not entirely clear to me how to get out. The documentation says that the fourth parameter is both input and output. I found an example on the Internet but it does not quite fit this case. Updated the question.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": []
+}

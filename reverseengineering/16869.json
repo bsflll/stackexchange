@@ -1,0 +1,31 @@
+{
+    "title": "Generating symbol file for closed-source binary by hand",
+    "link": "https://reverseengineering.stackexchange.com/questions/16869/generating-symbol-file-for-closed-source-binary-by-hand",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have a closed-source binary (<code>minecraft-pi</code>). For a given section of the assembly like so:</p>\n<pre><code>   a2ed4:       e92d45f8        push    {r3, r4, r5, r6, r7, r8, sl, lr}\n   a2ed8:       e1a04000        mov     r4, r0\n   a2edc:       e59d0024        ldr     r0, [sp, #36]   ; 0x24\n   a2ee0:       e352007f        cmp     r2, #127        ; 0x7f\n   a2ee4:       d3a02000        movle   r2, #0\n   a2ee8:       c3a02001        movgt   r2, #1\n   a2eec:       e1922fa0        orrs    r2, r2, r0, lsr #31\n   a2ef0:       1a000015        bne     a2f4c\n</code></pre>\n<p>conveniently there's another binary <code>libminecraftpe.so</code> that has code with symbols while containing similar disassembled instructions, and similar relative placement among functions e.g.:</p>\n<pre><code>0013a3ac &lt;_ZN5Level11hasChunksAtEiiiiii&gt;:\n  13a3ac:       e92d 43f8       stmdb   sp!, {r3, r4, r5, r6, r7, r8, r9, lr}\n  13a3b0:       2a7f            cmp     r2, #127        ; 0x7f\n  13a3b2:       4604            mov     r4, r0\n  13a3b4:       9809            ldr     r0, [sp, #36]   ; 0x24\n  13a3b6:       bfd4            ite     le\n  13a3b8:       2200            movle   r2, #0\n  13a3ba:       2201            movgt   r2, #1\n  13a3bc:       ea52 72d0       orrs.w  r2, r2, r0, lsr #31\n  13a3c0:       d119            bne.n   13a3f6 &lt;_ZN5Level11hasChunksAtEiiiiii+0x4a&gt;\n</code></pre>\n<p>(<code>_ZN5Level11hasChunksAtEiiiiii</code> ~ <code>Level::hasChunksAt(int, int, int, int, int, int)</code> according to c++filt).</p>\n<p>This matches up because despite one being ARM + Linux and the other ARM/Thumb + Android, they come from roughly the same codebase.</p>\n<p>It's thus appealing to build a symbol file for <code>minecraft-pi</code> by hand and use it in gdb. Even when primarily stepping through assembly it would be very helpful if I could set breakpoints on function names and see informative backtraces.</p>\n<p>So if I have written up a map of addresses to symbol names, how can I generate a corresponding symbol file binary (to be loaded in gdb via the <code>symbol-file</code> command, or even embedded into the executable)?</p>\n<p>I'm familiar with human-readable debug symbol formats like Breakpad syms, but are there tools for generating a DWARF binary in this manner?</p>\n<p>I found other questions on Stack Exchange related to IDA integration, <code>dwarfexport</code>, <code>pwndebug</code>, and <code>unstrip</code> (included in links below). florisschabert/unstrip has ARM support but seems to be geared toward inserting symbols based on Objective-C standard libraries, which isn't applicable here. Using IDA with <code>dwarfexport</code> could be an option, but I'd prefer a command-line solution that I could script. I'm basically looking for advice on generally recommended practices before I try out these various tools with limited documentation.</p>\n<p>Links:</p>\n<ul>\n<li><a href=\"https://reverseengineering.stackexchange.com/questions/1935/how-to-handle-stripped-binaries-with-gdb-no-source-no-symbols-and-gdb-only-sho\">How to handle stripped binaries with GDB? No source, no symbols and GDB only shows addresses?</a></li>\n<li><a href=\"https://reverseengineering.stackexchange.com/questions/15899/loading-user-specified-ida-symbols-in-gdb\">Loading user specified IDA symbols in GDB</a></li>\n<li><a href=\"https://github.com/alschwalm/dwarfexport\" rel=\"noreferrer\">https://github.com/alschwalm/dwarfexport</a></li>\n<li><a href=\"https://github.com/pzread/unstrip\" rel=\"noreferrer\">https://github.com/pzread/unstrip</a></li>\n<li><a href=\"https://github.com/florischabert/unstrip\" rel=\"noreferrer\">https://github.com/florischabert/unstrip</a></li>\n</ul>\n</div>",
+    "votes": "9",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "gdb",
+        "debugging-symbols"
+    ],
+    "user": "jdonald",
+    "time": "Nov 30, 2017 at 18:37",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">These articles might be helpful in the event that you perform manual analysis to recover symbol and section information: 1) <a href=\"https://em386.blogspot.com/2006/10/resolving-elf-relocation-name-symbols.html\" rel=\"nofollow noreferrer\">em386.blogspot.com/2006/10/…</a> 2) <a href=\"https://em386.blogspot.com/2006/10/elf-no-section-header-no-problem.html\" rel=\"nofollow noreferrer\">em386.blogspot.com/2006/10/…</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>For what I know, this is really uncommon to insert DWARF information in a binary program. Yet, one way to do would be to use the <code>objcopy</code> program that allows to rebuild the binary and add a few more things in your binary file.</p>\n<p>Here is a way to add a symbol named <code>my_func_name</code> in your <code>prog.symb</code> binary through a copy of the original <code>prog</code> program:</p>\n<pre class=\"lang-console prettyprint-override\"><code>#&gt; objcopy --add-symbol my_func_name=.text:0x900,function,global prog prog.symb\n</code></pre>\n<p>And, if you manage to create a full debuglink file with all you need, you can add it to your binary with <code>objcopy</code> also:</p>\n<pre class=\"lang-console prettyprint-override\"><code>#&gt; objcopy --add-gnu-debuglink=prog.debug prog prog.symb\n</code></pre>\n<p>I did not found how to dynamically add it to a <code>gdb</code> session. If somebody knows how to do it, I am also interested!</p>\n</div>",
+            "votes": "1",
+            "user": "perror",
+            "time": "Mar 25 at 14:28",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

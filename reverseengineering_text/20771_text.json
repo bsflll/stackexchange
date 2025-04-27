@@ -1,0 +1,67 @@
+{
+    "title": "Reverse engineering file format - ImageLink",
+    "link": "https://reverseengineering.stackexchange.com/questions/20771/reverse-engineering-file-format-imagelink",
+    "content": "I have some technical documentation which is supplied in the form of a generic Windows viewer and a database. The database contains different \"books\", which are represented by a bunch files:\n\nbook.bbi - book index i.e. what pages are in the book\na bunch of .bli's - text entries on the page, that's a guess\na bunch of .ilg's - media on the page, that's a guess too\n\nAll these files have a plaintext header and what's remaining is the data which is compressed or encrypted in some way:\nupd: the data_header is actually the uncompressed length of the data\n\nI tried running binwalk and XorSearch, but with no success. I guess now I have to debug it, but I am very, very unfamiliar with it. I am using x32dbg with the xAnalyzer plugin. I tried setting a breakpoint on ReadFile and tracing from there, but it produces an enormously large log. However I can see that it uses crush32.dll - \"old C/Win32 compression library\" and runs some ors/xors and byte shifts(shr) which kinda reinforces my thought about compression/encryption usage.\n\nSo my question is how do I approach it from here? How do I at least dump all strings with the correspoding instructions i.e. get to the point where this byte-mess becomes readable strings? I am absolutely stuck. Thanks in advance!\n",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "file-format",
+        "decryption",
+        "decompress",
+        "x64dbg"
+    ],
+    "user": "intelligentpotato",
+    "time": "Mar 6, 2019 at 23:16",
+    "comments": [
+        {
+            "user": "wisk",
+            "text": "Not a real answer, but have you take look into the executable for cryptographic functions? (outside crush32.dll). I'm not familiar with crush32.dll, but you can also set a breakpoint on its exported functions and dump the input / output for each call.\n",
+            "time": null
+        },
+        {
+            "user": "intelligentpotato",
+            "text": "@wisk thanks! I remember crush32 had some functions like cxOpen, might be worth looking into it. And how do I determine that a particular function is cryptographic? Look for various shifts etc.? Also my executable doesn't contain function names, all are just sub.*** :(\n",
+            "time": null
+        },
+        {
+            "user": "loluengo",
+            "text": "Did you manage to reverse engineer the file format? I am looking for the same :) It would be nice to have more information about the file format.\n",
+            "time": null
+        },
+        {
+            "user": "intelligentpotato",
+            "text": "@loluengo I gave up halfway. There's a C# library to decompress crush32, you can find it here: github.com/cyberjunk/meridian59-dotnet/blob/master/Meridian59/… I'll drop the code I used into an answer. After decompression in my case there was some other proprietary file format which I wasn't able to reverse, so I approached it another way.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I grabbed some <pre><code>crush32.dll</code></pre> from the Internet and it has some very interesting exports:\n\n<pre><code>cxBufDecrypt</code></pre>\n<pre><code>cxCompressFile</code></pre>\n<pre><code>cxExpandFile</code></pre>\n<pre><code>cxBuf2BufCompress</code></pre>\n<pre><code>cxBuf2BufExpand</code></pre>\n\nI'd set a breakpoint on all of them, let your program run, wait for a bp to hit, inspect the stack arguments to find input/output buffers, let the function run and then look for readable data.\n",
+            "votes": "2",
+            "user": "Johann Aydinbas",
+            "time": "Mar 5, 2019 at 16:10",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "intelligentpotato",
+                    "text": "<span class=\"comment-copy\">Thank you! I've placed breakpoints on crush32 functions and found out that it runs cxInit when the program starts and then runs cxBuf2BufInit and cxBuf2BufExpand after reading the data chunk of a file. Tracing execution of the cxBuf2BufExpand results in 324000 instructions being logged. I've also googled these instructions and found out that this thing is \"Crusher! Data Compression Toolkit\" created in the early 90s. Quite a few code implementations of how to unpack it can be found, but so far I am only getting memory allocation error from crush32.dll when trying to unpack.</span>",
+                    "time": null
+                },
+                {
+                    "user": "intelligentpotato",
+                    "text": "<span class=\"comment-copy\">Aight, I've managed to unpack .bbi and .bli. Will submit a detailed post once I also unpack .ilg.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "This is the code I used for decompression. It uses Crush32.cs from https://github.com/cyberjunk/meridian59-dotnet/blob/c45a65552333509220b11b41ecc46d75023b5acd/Meridian59/Files/BGF/BgfBitmap.cs and Kaitai Struct (https://kaitai.io/) to slice the files. It should work for book.bbi and probably for other formats as well, it's been a long time so I don't exactly remember all the difficulties I ran into while decompressing and tinkering with these files.\n<pre><code>foreach (string dir in Directory.EnumerateDirectories(@\"F:\\database\\komatsu\")) {\n    foreach (string file in Directory.EnumerateFiles(dir, \"book.bbi\")) {\n        Console.WriteLine(\"Decompressing \" + file);\n        Bbi03 page = Bbi03.FromFile(file);\n        \n        byte[] decompressedData = new byte[(int)page.UncompressedLength1];\n        bool status = Crush32.Decompress(page.Data, 0, decompressedData, 0, (int)page.UncompressedLength1, (int)page.CompressedLength);\n        Console.WriteLine(status);\n        File.WriteAllBytes(@\"saa6d1jc\\\" + Path.GetFileNameWithoutExtension(file) + \".bin\", decompressedData);\n    }\n}\n</code></pre>\nAnd here are the .ksy files:\nbook_bbi.ksy\n<pre><code>meta:\n  id: book_bbi\n  endian: le\n  encoding: ASCII\n  \nseq:\n  - id: file_header\n    type: str\n    size: 22\n  - id: date\n    type: str\n    size: 16\n  - id: magic\n    # bbi 03-04.030: [0xff, 0x7f, 0xff, 0x7f]\n    # bbi 04.100: [0x88, 0x03, 0xca, 0x03]\n    size: 4\n  - id: data_header_start\n    contents: [0x02, 0x00]\n  - id: compressed_length_with_header\n    type: u4\n  - id: uncompressed_length\n    type: u4\n  - id: uncompressed_length_2\n    type: u2\n  - id: compressed_length\n    type: u2\n  - id: data_header_end\n    contents: [0x00, 0x00]\n  - id: data\n    size: compressed_length\n  \n</code></pre>\nbli_03.ksy\n<pre><code>meta:\n  id: bli_03\n  endian: le\n  encoding: ASCII\nseq:\n  - id: file_header\n    type: str\n    size: 22\n  - id: date\n    type: str\n    size: 16\n  - id: data_header_start\n    contents: [0x02, 0x00]\n  - id: compressed_length_with_header\n    type: u4\n  - id: uncompressed_length_1\n    type: u4\n  - id: uncompressed_length_2\n    type: u2\n  - id: compressed_length\n    type: u2\n  - id: data_header_end\n    contents: [0x00, 0x00]\n  - id: data\n    size: compressed_length\n</code></pre>\nilg_00.ksy\n<pre><code>meta:\n  id: ilg_00\n  endian: le\n  encoding: ASCII\nseq:\n  - id: header\n    type: str\n    size: 22\n    size: 16\n  - id: smth1\n    size: 4\n  - id: width\n    type: u2\n  - id: height\n    type: u2\n  - id: bits_per_pixel\n    type: u2\n  - id: dpi\n    type: u2\n  - id: smth2\n    size: 12\n  - id: data_length\n    type: u4\n  - id: smth3\n    size: 12\n  - id: data\n    size: data_length\n</code></pre>\nilg_03.ksy\n<pre><code>meta:\n  id: ilg_03\n  endian: le\n  encoding: ASCII\nseq:\n  - id: header\n    type: str\n    size: 22\n  - id: date\n    type: str\n    size: 16\n  - id: smth1\n    size: 4\n  - id: width\n    type: u2\n  - id: height\n    type: u2\n  - id: bits_per_pixel\n    type: u2\n  - id: dpi\n    type: u2\n  - id: smth2\n    size: 12\n  - id: data_length\n    type: u4\n  - id: smth3\n    size: 12\n  - id: data\n    size: data_length\n</code></pre>\n",
+            "votes": "1",
+            "user": "intelligentpotato",
+            "time": "Sep 30, 2020 at 18:34",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,48 @@
+{
+  "title": "__security_cookie for function pointers in Windows 10",
+  "link": "https://reverseengineering.stackexchange.com/questions/22182/security-cookie-for-function-pointers-in-windows-10",
+  "content": "I'm curious about this __security_cookie that I keep seeing all over the msvcp140.dll from my Windows 10 x64 (insider build.) \n\nHere's an example:\n\n\n\nNote that the address for indirect function call (or qword_18009FBD0) is taken somewhere from the .data section:\n\n\n\nThen it is XOR'ed with the __security_cookie:\n\n\n\nI thought that __security_cookie is something that is used on the stack to guard against buffer-overflows. So they must be using some new security technique. Any idea what that is?\n\nAnd a follow up question. I'm trying to statically analyze this binary code with IDA and this __security_cookie makes it very difficult to see what function is actually being called. For instance, here's how qword_18009FBD0 looks like:\n\n\n\nAny idea how to make those function addresses more legible?\n\n",
+  "votes": "6",
+  "answers": 1,
+  "views": "3k",
+  "tags": [
+    "ida",
+    "windows",
+    "security"
+  ],
+  "user": "c00000fd",
+  "time": "Sep 24, 2019 at 10:38",
+  "comments": [
+    {
+      "user": "Biswapriyo",
+      "text": "Probably similar with this.",
+      "time": null
+    },
+    {
+      "user": "c00000fd",
+      "text": "@Biswapriyo no, it's not the \"GS cookie\", even though it uses the same global variable name. Look at it, it has nothing to do with stack canaries, or \"buffer overflows\".",
+      "time": null
+    },
+    {
+      "user": "Limina102",
+      "text": "a much easier approach: use visual studio cl.exe to compile a random c source, generating assembly listing with /Fa /FAs",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Look for the writes to the qword_18009FBD0 to see where it's initialized.\n\nApparently it's a part of an array called   __encodedKERNEL32Functions where various pointers to kernel32 functions are stored after being XORed with __security_cookie. You can rename the pointer to the kernel32 function's name to better see what is happening:\n\n```\n  ;(from initialize_pointers)\n  lea     rdx, aClosethreadpoo ; \"CloseThreadpoolTimer\"\n  mov     rcx, rbx        ; hModule\n  mov     cs:qword_180092498, rax\n  call    cs:__imp_GetProcAddress\n  xor     rax, cs:__security_cookie\n  lea     rdx, aCreatethreadpo_0 ; \"CreateThreadpoolWait\"\n  mov     rcx, rbx        ; hModule\n  mov     cs:pCloseThreadpoolTimer_xored, rax ;<- variable renamed\n\n__crtCloseThreadpoolTimer proc near \n                sub     rsp, 28h\n                mov     rax, cs:pCloseThreadpoolTimer_xored\n                xor     rax, cs:__security_cookie\n                jz      short loc_180036A8A\n                call    cs:__guard_dispatch_icall_fptr ; calls CloseThreadpoolTimer()\nloc_180036A8A:  \n                add     rsp, 28h\n                retn\n__crtCloseThreadpoolTimer endp\n\n```\nThis mitigation is not actually new and was already used in VS2013 CRT although in a slightly different form. It is probably aimed at reducing the number of available API pointers in standard CRT DLLs to make exploitation harder.\n\nAlthough __security_cookie is most commonly used for protecting data on the stack (GS and EH cookies), nothing prevents programmers from using it for other purposes as a simple source of entropy.\n\n",
+      "votes": "4",
+      "user": "Igor Skochinsky",
+      "time": "Sep 25, 2019 at 17:25",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "c00000fd",
+          "text": "Yeah, I saw that too. There's a large function that repeatedly calls GetProcAddress on various system functions and populates that array. Unfortunately I can't load symbols to see its name. By the way, do you know the name of this security mitigation that they are using there? I haven't seen this before, although it uses the name of the stack canary cookie.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

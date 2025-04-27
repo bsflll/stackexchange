@@ -1,0 +1,89 @@
+{
+    "title": "Locating Linux Kernel Symbols on ARM",
+    "link": "https://reverseengineering.stackexchange.com/questions/1922/locating-linux-kernel-symbols-on-arm",
+    "content": "Igor posted a great answer previously on SO about the format of the Linux kernel image on ARM.\nAssuming I can't boot my kernel image, can someone give me pointers on finding this compressed symbol table in the binary?\n",
+    "votes": "13",
+    "answers": 3,
+    "views": "11k",
+    "tags": [
+        "linux",
+        "arm"
+    ],
+    "user": "mrduclaw",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "on what basis do you assume there are symbols? It is possible they have been stripped, because they're only needed - for example - to load kernel modules. If everything is linked into the kernel there is no need to have symbols. ARM being used disproportionately on embedded devices, there could be good reasons to strip symbols out of concern for size. On a (similar) running kernel (or in an emulator like QEMU), have you tried Igor's suggestions to see whether symbols exist?\n",
+            "time": null
+        },
+        {
+            "user": "mrduclaw",
+            "text": "@0xC0000022L I have a running copy of the kernel and can <pre><code>cat /proc/kallsyms</code></pre> but they don't have the addresses, just the names (addresses appear as 0).  I'm trying to understand (1) where these names are coming from -- I'm assuming it's from that compressed table, but I'm academically interested in seeing it; (2) how to resolve the addresses.\n",
+            "time": null
+        },
+        {
+            "user": "Mellowcandle",
+            "text": "0xC0000022L keeping the symbol is an option you can choose on menu config. Without symbols kernel oops will be meaningless. I have strong reason to believe that the symbols weren't stripped.\n",
+            "time": null
+        },
+        {
+            "user": "mrduclaw",
+            "text": "@Mellowcandle do you happen to know which menu config option removes the symbols?\n",
+            "time": null
+        },
+        {
+            "user": "0xC0000022L",
+            "text": "@mrduclaw: fair enough, just trying to make sure we all aren't chasing a ghost ;) - Mellowcandle: if size is a main motivation then kernel OOPS are meaningless by themselves, because if the kernel doesn't fit on the device, it won't run anyway :)\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "After decompressing and loading the kernel, you need to find a couple of tables that encode the compressed symbol table. These are (in the usual order they are placed in binary):\n\n<pre><code>kallsyms_addresses</code></pre> - a table of addresses to all public symbols in the kernel\n<pre><code>kallsyms_num_syms</code></pre> - not a table but just an integer with total number of symbols (should match previous table)\n<pre><code>kallsyms_names</code></pre> - a list of length-prefixed byte arrays that encode indexes into the token table\n<pre><code>kallsyms_token_table</code></pre> - a list of 256 zero-terminated tokens from which symbol names are built\n<pre><code>kallsyms_token_index</code></pre> - 256 shorts pointing to the corresponding entry in <pre><code>kallsyms_token_table</code></pre>\n\nThey're not hard to find with some experience. A good way to find the first one is to look for several 0xC0008000 values in a row, because a typical kernel symbol table starts like this:\n<pre><code>C0008000 T __init_begin\nC0008000 T _sinittext\nC0008000 T _stext\nC0008000 T stext\n</code></pre>\nAfter locating the tables the symbol recovery is trivial. I made a script for IDA that does it automatically, you can find it here (<pre><code>kallsyms.py</code></pre> in the tools zip).\nFor more the details of how it's implemented in the kernel, see <pre><code>kernel/kallsyms.c</code></pre>.\n",
+            "votes": "13",
+            "user": "Igor Skochinsky",
+            "time": "Apr 25, 2013 at 4:48",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">Ah, this is exactly what I was looking for.  Thank you!  So far I was able to identify the <code>kallsyms_addresses</code>, <code>kallsyms_num_syms</code>, and <code>kall_syms_names</code>.  I <i>thought</i> I had located the other two, but your script failed to decode the names; I'm sure I did something wrong.  It seems difficult to know how large the <code>kallsyms_names</code> table will be.  Do you have any suggestions? Thank you again!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\"><code>kallsyms_token_table</code> should be pretty obvious - it will look similar to <code>\"tcp_\",0,\"ca\",0,\"unc_\",0,...</code> etc.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">Damn, I think that's the one I found.  I'll play with it some more.  I'm sure it's something incredibly silly on my part.  Thanks again!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "You mentioned that you do have a running kernel available.  It is possible to obtain symbol information from a running kernel by reading <pre><code>/proc/kallsyms</code></pre>.  On newer distributions, this information is disabled by default for security reasons (all symbols will be displayed as 0x0 addresses), but you can manually enable it by running the following command as root:\n<pre><code>echo 0 > /proc/sys/kernel/kptr_restrict</code></pre>\nOnce you've obtained the list of kernel symbols/address pairs, it should be easy to convert to any format desired, e.g. an IDA <pre><code>.idc</code></pre> script for import.\n",
+            "votes": "9",
+            "user": "0xC0000022L",
+            "time": "Apr 25, 2013 at 14:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "mncoppola",
+                    "text": "<span class=\"comment-copy\">@0xC0000022L He responded to you in the comments: \"I have a running copy of the kernel and can cat /proc/kallsyms but they don't have the addresses, just the names (addresses appear as 0).\"</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "This is a bit tricky to answer without getting my hands on the file and verifying a few assumptions based on the question and the linked answer. However, let me try, perhaps we can extend it further if you elaborate more on some aspects of the file.\nWe know it's an ARM file and from your description this pretty much sounds like an ARM kernel image for U-Boot. Now the problem is that I cannot know whether that's true, but you could run the oft mentioned <pre><code>binwalk</code></pre> or <pre><code>firmware-mod-kit</code></pre> on the file to see what that gives you.\nIf this is an ARM kernel image for U-Boot, you can likely get to the <pre><code>gzip</code></pre> data by skipping the first 64 Bytes of the image (see this answer over at StackOverflow). The gist is:\n<pre><code>dd if=<image> of=<recovered file> bs=64 skip=1\n</code></pre>\nThis skips 1 block of 64 bytes and otherwise writes the data from <pre><code><image></code></pre> into <pre><code><recovered file></code></pre>. Essentially it reverses - in part - the effects of the <pre><code>mkimage</code></pre> tool, which is part of U-Boot.\nNow, assuming everything so far works - and that is a huge assumption - you should be able to decompress (<pre><code>gzip -d</code></pre>) the resulting file and end up with something you can hopefully <pre><code>grep</code></pre>. If I was you I'd then use <pre><code>file</code></pre> to check what kind of file it is and process it further if I happened to get anything meaningful out of it. If not, I would treat the file with <pre><code>binwalk</code></pre> again and failing that run <pre><code>strings</code></pre> on it.\n\nEdit x+1:\nOkay, tried the process myself. Downloaded this Debian package, unpacked it, got a <pre><code>zImage-2.6.28.10-power51</code></pre> which I then looked at in 010 Editor and it's true, this is an ARM kernel image according to the marker (see reading section below):\n\nAfter that I tried to skip the first 64 Byte and then decompress the rest, to no avail. Investigating a bit more.\nIf you manage to get more information using this incomplete answer, please edit your question and I'll amend my answer once I notice your edit, to add more (hopefully useful) information.\nEdit x+2:\nOkay, for the zImage in question it turns out <pre><code>binwalk</code></pre>, mentioned in my original answer, can at least handle the file and outputs:\n<pre><code>12900           0x3264          gzip compressed data, from Unix, last modified: Mon Jul 23 13:41:37 2012, max compression\n</code></pre>\nLovely. Do let's run <pre><code>dd</code></pre> to extract the <pre><code>gzip</code></pre> stuff and then extract it:\n<pre><code>dd if=zImage-2.6.28.10-power51 of=extract.gz bs=12900 skip=1 && gunzip extract.gz && ls -l extract\n</code></pre>\nOnce I extracted it, I ran <pre><code>binwalk</code></pre> again after noticing that <pre><code>file</code></pre> didn't yield a result:\n<pre><code>DECIMAL         HEX             DESCRIPTION\n-------------------------------------------------------------------------------------------------------\n135456          0x21120         gzip compressed data, from Unix, last modified: Mon Jul 23 13:38:47 2012, max compression\n973460          0xEDA94         ELF\n1070320         0x1054F0        CramFS filesystem, big endian size 2126262976 CRC 0xdc0a0e1, edition 4040895977, 78662882 blocks, 271618533 files\n</code></pre>\nHowever, I don't want to  proceed now without further input from you. Just an example how it could be investigated. One more thing <pre><code>strings</code></pre> does produce a list of symbols, but since I presume you want symbols and their addresses, I reckon there is more to be investigated.\n\nFurther reading:\n\nthis documentation to verify whether this indeed is an ARM kernel image in the format we expect/assume. In particular check the assumption that <pre><code>0x016F2818</code></pre> can be found at offset <pre><code>0x24</code></pre>.\nthis forum entry, in particular the post by user fattire, which mentions\n\nThere's a 64 byte header you have to cut off of uRamdisk/uRecRam:\n<pre><code>dd if=uRamdisk of=uRamdisk.cpio.gz bs=64 skip=1</code></pre>\n<pre><code>gunzip uRamdisk.cpi.gz</code></pre>\n<pre><code>cpio -i -F uRamdisk.cpio</code></pre>\n\nwhich essentially implies that you have to expect an <pre><code>initrd</code></pre> (hence the CPIO format) at offset 64. That is, the \"kernel image\" would actually turn out to be the old kernel format which embedded the <pre><code>initrd</code></pre> (also see <pre><code>mkimage</code></pre> man page under \"Create old legacy image\").\n",
+            "votes": "5",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,47 @@
+{
+    "title": "Why would a vtable reference the same function multiple times?",
+    "link": "https://reverseengineering.stackexchange.com/questions/17048/why-would-a-vtable-reference-the-same-function-multiple-times",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I decompile a VC++ application in IDA 7, and I often find vftables referencing the same function multiple times, like the one I called \"Object__pure\" here, part of a \"heavy-base\" <code>Object</code> class inherited by almost every other class in the application:</p>\n<pre><code>seg002:008F4748     const Object::`vftable' dd offset Object__free ; DATA XREF: Object__ctor+12↑o Object__dtor+A↑o Object__copy+16↑o\nseg002:008F474C         dd offset Object__vsub_7D0990\nseg002:008F4750         dd offset Object__vsub_7D09A0\nseg002:008F4754         dd offset Object__pure\nseg002:008F4758         dd offset Object__pure\nseg002:008F475C         dd offset Object__pure\nseg002:008F4760         dd offset Object__pure\nseg002:008F4764         dd offset Object__vsub_47B660\n</code></pre>\n<p>Child classes in my executable inheriting from <code>Object</code> typically have their own custom functions instead of those \"pure\" (how I called them) ones in their vtable. </p>\n<p>Not really knowing what that could be, I gave it the name \"pure\", thinking about it like a virtual or pure virtual call. The function itself does nothing other than calling a completely empty <code>Object__vsub_80CD50</code>:</p>\n<pre><code>seg000:007E4580     Object__pure proc near ; CODE XREF: &lt;lots!&gt;\nseg000:007E4580\nseg000:007E4580     a1  = dword ptr -4\nseg000:007E4580     arg_0= dword ptr  8\nseg000:007E4580\nseg000:007E4580 000     push    ebp\nseg000:007E4581 004     mov     ebp, esp\nseg000:007E4583 004     push    ecx\nseg000:007E4584 008     mov     [ebp+a1], ecx\nseg000:007E4587 008     mov     eax, [ebp+arg_0]\nseg000:007E458A 008     push    eax\nseg000:007E458B 00C     mov     ecx, [ebp+a1] ; this\nseg000:007E458E 00C     call    Object__vsub_80CD50 ; Call Procedure\nseg000:007E4593 00C     mov     esp, ebp\nseg000:007E4595 004     pop     ebp\nseg000:007E4596 000     retn    4 ; Return Near from Procedure\nseg000:007E4596     Object__pure endp\n\n...\n\nseg000:0080CD50     Object__vsub_80CD50 proc near ; CODE XREF: &lt;lots again!&gt;\nseg000:0080CD50\nseg000:0080CD50     var_4= dword ptr -4\nseg000:0080CD50\nseg000:0080CD50 000     push    ebp\nseg000:0080CD51 004     mov     ebp, esp\nseg000:0080CD53 004     push    ecx\nseg000:0080CD54 008     mov     [ebp+var_4], ecx\nseg000:0080CD57 008     mov     esp, ebp\nseg000:0080CD59 004     pop     ebp\nseg000:0080CD5A 000     retn    4 ; Return Near from Procedure\nseg000:0080CD5A     Object__vsub_80CD50 endp\n</code></pre>\n<p>Why is such a function referenced multiple times? Is it due to optimization, unifying functions that do nothing? Are those functions typically virtual / pure virtual?</p>\n</div>",
+    "votes": "3",
+    "answers": 1,
+    "views": "464",
+    "tags": [
+        "ida",
+        "vtables",
+        "msvc"
+    ],
+    "user": "Ray",
+    "time": "Dec 25, 2017 at 22:23",
+    "comments": [
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">These two functions don't exactly do \"nothing\". They both consume an integer from the stack, even if they don't do anything with it. Thus, it may be remnants of debuggin helpers. A more typical \"empty\" routine would just be <code>retf</code>; a 'pure' virtual function may output a warning.</span>",
+            "time": null
+        },
+        {
+            "user": "Ray",
+            "text": "<span class=\"comment-copy\">Thanks for the information, the note about debug remnants is interesting. About the methods doing nothing, isn't the last method (<code>vsub_80CD50</code>) even effectively doing nothing if interpreted like a <code>__thiscall</code> (which it seems to be), just pushing over the <code>this</code> pointer in ecx, but then returning immediately?</span>",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">The second routine ends with <code>retn *immediate*</code>, so it also removes a value from the stack. If you look up where it is called from, you will see an extra argument is pushed – apart from initializing <code>ecx</code> (and possibly other registers).</span>",
+            "time": null
+        },
+        {
+            "user": "Ian Cook",
+            "text": "<span class=\"comment-copy\">Under certain conditions, the compiler may optimise different source code functions with the same implementation to use the same object code when compiled.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As I guessed and was confirmed in the comments, this is apparently some compiler optimization reusing methods executing the same logic.</p>\n<p>This got clear to me when I reversed the methods of one of the more specific objects, like the data stream reader / writer here:</p>\n<pre><code>seg002:008F4FC4     const DataStream::`vftable' dd offset DataStream__readByte ; DATA XREF: DataStream__ctor+12↑o\nseg002:008F4FC8         dd offset DataStream__readWord\nseg002:008F4FCC         dd offset DataStream__readDword\nseg002:008F4FD0         dd offset DataStream__readBytes\nseg002:008F4FD4         dd offset DataStream__canReadWrite\nseg002:008F4FD8         dd offset DataStream__writeByte\nseg002:008F4FDC         dd offset DataStream__writeWord\nseg002:008F4FE0         dd offset DataStream__writeDword\nseg002:008F4FE4         dd offset DataStream__writeBytes\nseg002:008F4FE8         dd offset DataStream__canReadWrite\n</code></pre>\n<p>You can see that the methods <code>canRead</code> and <code>canWrite</code> were simply optimized into one method (which I named <code>canReadWrite</code>) as the logic for both is the same (hexrays output):</p>\n<pre><code>bool __thiscall DataStream::canReadWrite(DataStream *this, int lengthRequired)\n{\n    return this-&gt;members.pData &lt;= this-&gt;members.pDataEnd\n        &amp;&amp; this-&gt;members.pDataEnd - this-&gt;members.pData &gt;= lengthRequired;\n}\n</code></pre>\n<p>It <em>may</em> be the case that some other data stream class (like a read- or write-only one) will implement each method differently (returning simply <code>false</code> for said cases), but not in this class.</p>\n<p>Thus, for an even more generic base class like <code>Object</code> above, a lot of methods do nothing specific in particular, and are optimized into one.</p>\n</div>",
+            "votes": "3",
+            "user": "Ray",
+            "time": "Dec 29, 2017 at 11:52",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

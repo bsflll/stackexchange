@@ -1,0 +1,33 @@
+{
+  "title": "Simple angr example not working",
+  "link": "https://reverseengineering.stackexchange.com/questions/25237/simple-angr-example-not-working",
+  "content": "I am trying to learn angr from beginning. Due to lack of simple tutorials I programmed my own little executable which angr should solve.\n\nThe C code looks as follows:\n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main(int argc, char *argv[]) {\n    char buffer[20];\n    printf(\"Password  \n\");\n    fgets(buffer,20,stdin);\n    if (strcmp(buffer,\"super!  \n\")==0) {\n        printf(\"SUCCESS!  \n\");\n    } else {\n        printf(\"FAIL!  \n\");\n    }\n    return 0;\n}\n\n```\nWhen compiled and opened in binary ninja I see the printfs at following addresses:\n\nSo I created following angr python3 code:\n\n```\nimport angr\nfrom angr.state_plugins import SimSystemPosix\n\np = angr.Project('./test')\nstate = p.factory.entry_state()\n\n\n\nsm = p.factory.simulation_manager(state)\nsm.explore(find=0x40118c, avoid=0x40119a)\n\nprint(sm.found)\n\n```\nRunning the python code shows following output:\n\nThe [] indicates that it did not find any solution.\n\nCan anybody tell me what I did wrong?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "c",
+    "angr"
+  ],
+  "user": "User64234",
+  "time": "Jun 8, 2020 at 8:10",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I believe that the issue is related to the way gets symbolic procedure implemented in angr. You are asking to read 20 bytes, and as far as I understand, the actual symbolic memory that is allocated is of the size of 20 (19 string characters and a NULL terminator). Later, when you call to strcmp, the comparison will always fail, because you compare 20 bytes string to super!  \n which is shorter. So the compare result will never be 0, and angr's symbolic execution engine will never reach the printf(\"SUCCESS!  \n\"); clause.\n\nIf you modify your code to be:\n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main(int argc, char *argv[]) {\n    char buffer[20];\n    printf(\"Password  \n\");\n    fgets(buffer,8,stdin); // <-------------- Adjust size to be same as \"super!  \n\"\n    if (strcmp(buffer,\"super!  \n\")==0) {\n        printf(\"SUCCESS!  \n\");\n    } else {\n        printf(\"FAIL!  \n\");\n    }\n    return 0;\n}\n\n```\nThis way it works fine and reaches printf(\"SUCCESS!  \n\");\n\n",
+      "votes": "2",
+      "user": "macro_controller",
+      "time": "Jun 8, 2020 at 14:20",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "If you can't modify the binary but through the static analysis you get the number of bytes you need to provide as a flag, you can construct bit vector\n\n```\nflag_chars = [claripy.BVS('flag_%d' % i, 8) for i in range(6)]\nflag = claripy.Concat(*flag_chars + [claripy.BVV(b'  \n')])\n\n```\nand pass that to the entry_state since the flag is provided as an input through stdin to this binary.\n\n```\np = angr.Project('test')\nstate = p.factory.entry_state(args=['./test'], stdin=flag)\n\n```\nWith such setup, angr will successfully find the solution.\n\nAdditionally, if you would like to extract the flag\n\n```\nfound = sm.found[0]\nflag_str = found.solver.eval_upto(flag, 7, cast_to = bytes)\nprint(flag_str)\n\n```\n",
+      "votes": "0",
+      "user": "Paweł Łukasik",
+      "time": "Jun 8, 2020 at 15:56",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

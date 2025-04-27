@@ -1,0 +1,34 @@
+{
+  "title": "Restoring original stack variable in IDA Pro?",
+  "link": "https://reverseengineering.stackexchange.com/questions/27875/restoring-original-stack-variable-in-ida-pro",
+  "content": "I would like to convert an instruction like:\nlea     ecx, [esp+150h+var_13E+2]\nto:\nlea     ecx, [esp+14h]\nI know it's possible to do this with the key K. But I'm writing an IDAPython plugin that needs an automatic conversion of instructions like the one above.\n\nEdit:\nAre there any idaapi functions to do this?\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "71",
+  "tags": [
+    "ida",
+    "idapython",
+    "ida-plugin"
+  ],
+  "user": "Žiga Šumenjak",
+  "time": "Jun 22, 2021 at 12:17",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "```\nidaapi.op_seg(idc.get_screen_ea(), -1)\nidaapi.op_stkvar(idc.get_screen_ea(), -1)\n\n```\n",
+      "votes": "1",
+      "user": "0xC0000022L",
+      "time": "Jun 22, 2021 at 15:06",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Disclaimer: I am the author of the ida-minsc plugin (which aims to make idapython not suck) at https://github.com/arizvisa/ida-minsc\n\nUsing minsc, toggling the representation of an operand between hexadecimal or a frame variable can be done with instruction.op_hexadecimal or instruction.op_stack. These functions act on a single operand and take an address and an operand number.\n\n```\nPython>db.disasm()\n'401304: lea ecx, [esp+14h]'\n\nPython>ins.op_stack(h(), 1)\n<member '$ F4012D0.var_284' index=5 offset=-0x288 size=+0x4 typeinfo='LPDWORD'>\n\nPython>db.disasm()\n'401304: lea ecx, [esp+298h+var_284]'\n\nPython>ins.op_hex(1)\n0x14\n\nPython>db.disasm()\n'401304: lea ecx, [esp+14h]'    \n\n```\nSelecting these instructions within a function can then be done with the function.register function. Despite the semantics of Intel's lea instruction having the effect of doing SIB arithmetic and storing the result to a register, this can be treated as a load instruction using the %esp register. This should be parallel to the o_mem and o_displ operand types documented in the SDK as Operand types.\n\n```\nPython>for ref in func.register('esp', load=True):\nPython> print(db.disasm(ref))\nPython>\n401304: lea ecx, [esp+14h]\n\n```\nHowever, it's pretty likely that we'd also want instructions that write to the %esp register as well. To enumerate both loads and stores depending on the %esp register (and eventually change the operand), we can chain them together using itertools.chain...essentially ORing them.\n\n```\nPython>for ref in itertools.chain(func.register(ins.reg.esp, store=True), func.register(ins.reg.esp, load=True)):\nPython> print(db.disasm(ref))\nPython>\n\n40177f: mov dword ptr [esp+8], offset ConnectionHandler(x)\n401787: mov dword ptr [esp+4], 0\n40178f: mov dword ptr [esp], 0\n...\n4017a9: mov [esp], eax\n401304: lea ecx, [esp+14h]\n\n```\nIf you're not in a function (which makes no sense for frame variables), you can also use the instruction.ops_register function to filter an instruction's operands. By combining this with the database.address function, you can do a similar selection on any number of instructions that interact with registers in a particular way.\n\n```\nPython>for ea in db.a(function.chunk()):\nPython> for ref in ins.ops_register(ea, ins.reg.esp, write=True, store=False):\nPython>  print([ins.op_repr(ref), db.disasm(ref)])\nPython>\n\n['esp', '4012d4: sub esp, 294h']\n['esp', '4012da: and esp, 0FFFFFFF0h']\n['esp', '401466: sub esp, 8']\n...\n['esp', '401714: sub esp, 4']\n['esp', '40173a: sub esp, 4']\n['esp', '40174e: sub esp, 4']\n['esp', '40179b: sub esp, 18h']\n['esp', '4017b1: sub esp, 4']\n\n```\nThese results can then be combined with the instruction.op_stack function. The following python changes everything to a stack variable, outputs the reference, the result, and a disassembly of the modified instruction (for the purpose of demonstrating all of the available input types and their usage).\n\n```\nPython>for ref in itertools.chain(func.register(ins.reg.esp, store=True), func.register(ins.reg.esp, load=True)):\nPython> lvar = ins.op_stack(ref)\nPython> print(ref, lvar)\nPython> print(db.disasm(ref))\nPython>\n\nopref_t(address=0x40176d, opnum=0, access=access_t(&w)) <member '$ F4012D0.arg_C' index=24 offset=0x10 size=+0x4 typeinfo='DWORD'>\n40176d: mov [esp-4+arg_C], 0\nopref_t(address=0x40177b, opnum=0, access=access_t(&w)) <member '$ F4012D0.envp' index=23 offset=0xc size=+0x4 typeinfo='const char**'>\n40177b: mov [esp-4+envp], eax\nopref_t(address=0x40177f, opnum=0, access=access_t(&w)) <member '$ F4012D0.argv' index=22 offset=0x8 size=+0x4 typeinfo='const char**'>\n40177f: mov [esp-4+argv], offset ConnectionHandler(x)\n...\nopref_t(address=0x401787, opnum=0, access=access_t(&w)) <member '$ F4012D0.argc' index=21 offset=0x4 size=+0x4 typeinfo='int'>\n401787: mov [esp-4+argc], 0\nopref_t(address=0x401304, opnum=1, access=access_t(&r)) <member '$ F4012D0.var_284' index=5 offset=-0x288 size=+0x4 typeinfo='LPDWORD'>\n401304: lea ecx, [esp+298h+var_284]\n\n```\nSimilarly, it can also be combined with the instruction.op_hex function, or really any of the instruction.op_* functions.\n\n```\nPython>for ref in itertools.chain(func.register(ins.reg.esp, store=True), func.register(ins.reg.esp, load=True)):\nPython> discarded = ins.op_hex(ref)\nPython> print(db.disasm(ref))\n\n40176d: mov dword ptr [esp+10h], 0\n40177b: mov [esp+0Ch], eax\n40177f: mov dword ptr [esp+8], offset ConnectionHandler(x)\n...\n401787: mov dword ptr [esp+4], 0\n40178f: mov dword ptr [esp], 0\n4017a9: mov [esp], eax\n401304: lea ecx, [esp+14h]\n\n```\n",
+      "votes": "1",
+      "user": "Ali Rizvi-Santiago",
+      "time": "Aug 12, 2024 at 18:27",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

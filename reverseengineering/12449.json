@@ -1,0 +1,65 @@
+{
+    "title": "Java byte code equivalent of IDA function signatures",
+    "link": "https://reverseengineering.stackexchange.com/questions/12449/java-byte-code-equivalent-of-ida-function-signatures",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I remember IDA (Interactive Disassembler) has a really neat feature of function signatures where you don't have to reverse engineer code found inside standard libraries.<br/>\nIs there a similar feature for Java byte code, especially for obfuscated code? </p>\n</div>",
+    "votes": "10",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "java",
+        "byte-code"
+    ],
+    "user": "Dr Deo",
+    "time": "Nov 18, 2018 at 22:12",
+    "comments": [
+        {
+            "user": "tmr232",
+            "text": "<span class=\"comment-copy\">The IDA feature is using actual binary signatures. No such approach will work for obfuscated code as there will not be a binary signature.</span>",
+            "time": null
+        },
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\"><a href=\"https://www.pnfsoftware.com/blog/jeb-1-3-how-to-sign-and-match-third-party-library-code/\" rel=\"nofollow noreferrer\">JEB Decompiler</a> has signature feature for java bytecode.</span>",
+            "time": null
+        },
+        {
+            "user": "Luca D'Amico",
+            "text": "<span class=\"comment-copy\">@ExtremeCoders but I don't think that this will work for obfuscated functions.</span>",
+            "time": null
+        },
+        {
+            "user": "0xec",
+            "text": "<span class=\"comment-copy\">@LucaD'Amico Ofcourse. Signatures won't work for obfuscated functions.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>There is no similar feature for Java byte code.</p>\n<p>When you compile a C program, and statically link it to a standard library, the library code will be present, more or less unmodified, within the binary (except for addresses which will change), but there won't be any hint that a particular function had a particular name before being compiled (unless debugging is enabled while compiling/linking). But, any given function has a more or less fixed pattern of bytes, and by recognizing these bytes, IDA can assign the original name to the function.</p>\n<p>In Java bytecode, there is no necessity to do this. Function names, variable names, and similar information is present in the compiled bytecode anyway. The \"standard library\", <code>rt.jar</code>, isn't embedded into the bytecode either, so if a class uses an <code>ArrayList</code>, the class will have a reference to <code>java.util.ArrayList</code> even after the obfuscation process. So, nothing to do here for a signature analyzer.</p>\n<p>If the application chooses to obfuscate the standard library as well, it needs to include that obfuscated library into its own jar files. This will probably raise some licensing issues, but apart from that, as the obfuscator will rename methods and fields, the byte code of that obfuscated library will be too different from the original byte code to be recognizable by a feature like IDA's FLIRT. Also, you can't just rename the method in IDA, because you'd have to modify all the references as well.</p>\n<p>However, there is at least one open source project that has a similar problem like yours, and they seem to have solved it quite well. <a href=\"https://minecraft.net/\" rel=\"nofollow noreferrer\">Minecraft</a> is a popular game that includes a server that's written in Java (and obfuscated); the <a href=\"https://www.spigotmc.org/\" rel=\"nofollow noreferrer\">Spigot</a> project decompiles this server, changes some things, adds an API, and distributes the result. Specifically, to avoid licensing issues, they distribute a build system which downloads, decompiles, patches, and recompiles the Minecraft server on the user's machine.</p>\n<p>They use the <a href=\"https://github.com/fesh0r/fernflower\" rel=\"nofollow noreferrer\">fernflower</a> decompiler, which has an option to rename symbols while decompiling, and include an extensive map of obfuscated-to-readable symbol names. Example:</p>\n<pre><code>AttributeInstance a ()LIAttribute; getAttribute\nAttributeInstance a (D)V setValue\nAttributeInstance e ()D getValue\nAttributeMapServer b ()Ljava/util/Set; getAttributes\nAxisAlignedBB b (DDD)LAxisAlignedBB; grow\n</code></pre>\n<p>The source code, which is generated using these maps, is obviously way more readable than the original one. And, at least for the spigot project, recompiling this source (after adding some patches to create an API) yields a working Minecraft server.</p>\n<p>So, maybe, this could be a way for you to proceed - use fernflower to decompile your classes, load them into an editor to find some useful code and assign readable class names, write a mapping file, and repeat this a few times. Then, when you want to do some dynamic analysis, recompile the decompiled Java code and load that into IDA.</p>\n<p>Of course, this approach still has some problems:</p>\n<ul>\n<li>you will still have to identify each function manually - but as i said, you probably won't find any standard library functions in your code anyway. And, there are no existing signature libraries for whichever method you use, so there's probably no way around that.</li>\n<li>the decompiled/recompiled code may not work, because of bugs/shortcomings in the Java decompiler itself</li>\n<li>the decompiled/recompiled code may not work because of the obfuscator; for example, the obfuscator might replace all string constants with something like <code>Obfuscator::decode(\"some_crypted_stuff\")</code>, where the <code>decode</code> function uses the name of the calling class as its decryption key, meaning the decryption fails when the class gets renamed</li>\n<li>the obfuscator might bring its own class loader, which mangles the class name before loading it; for example, it might know to turn a <code>com.obfuscate.SOME_BASE_64_STRING</code> class into the decoded base64 string, so <code>com.obfuscate.amF2YS51dGlsLkFycmF5TGlzdAo.something()</code> would call <code>java.util.ArrayList.something()</code>. This breaks the visible connection between caller and callee (but the name mapping could solve this problem quite well and you could automate a lot)</li>\n</ul>\n<p>Even if you can't get a decompiled, recompilable, version of your binary, you can probably write some code that works on the decompiled source to identify functions by their behaviour, using some heuristics, Then, have your code write a mapping table, and write a python plugin to import that mapping table into your code as comments.</p>\n<p>It's questionable if these approaches beat manual reverse engineering within IDA, but as IDA doesn't have this feature, and as there are no generic signature libraries (and they wouldn't work anyway, see above), it's the best i have to offer.</p>\n<h2>Edit 2016-04-17</h2>\n<p>Turns out I have a little project where I could use some deobfuscation mapping myself, and checked into the deobfuscation process of the Minecraft decompiling step a bit more.</p>\n<p>Turns out they don't even use fernflowers remapping feature. Instead, they have their own set of tools. These are lamentably underdocumented, but there seems to be a <a href=\"https://github.com/md-5/SpecialSource\" rel=\"nofollow noreferrer\">GitHub Repository</a>.</p>\n<p>The first one, <a href=\"https://hub.spigotmc.org/stash/projects/SPIGOT/repos/builddata/browse/bin/SpecialSource.jar\" rel=\"nofollow noreferrer\">SpecialSource.jar</a>, compares an obfuscated jar with an unobfuscated version, and generates a mapping table. This seems to allow to build new tables quickly when a new version of the obfuscated original comes out. There is, however, no documentation about what's exactly being compared.</p>\n<p>The second one, <a href=\"https://hub.spigotmc.org/stash/projects/SPIGOT/repos/builddata/browse/bin/SpecialSource-2.jar\" rel=\"nofollow noreferrer\">SpecialSource-2.jar</a>, remaps class and method references and names <em>directly in the jar file</em>, without a decompilation/compilation step, so it avoids all the problems that come with that. So once you have a mapping file, you can apply it to the jar to get an output jar, which you can then feed into IDA, or a decompiler of your choice.\nUsage is</p>\n<pre><code>java -jar /path/to/SpecialSource-2.jar map -m mapping.csrg \\\n-i obfuscated.jar -o readable.jar\n</code></pre>\n<p>with the mappings file looking like this</p>\n<pre><code># This renames a class, given the obfuscated name and the readable one\ncom/example/ab/a MyNiceClassName\n# This renames a method, given the class, method, signature, and readable name.\nMyNiceClassName a (D)I doubleToInt\n</code></pre>\n</div>",
+            "votes": "12",
+            "user": "Glorfindel",
+            "time": "Nov 18, 2018 at 22:12",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If the control flow graph has not been obfuscated then you could use those to match methods. The biggest hurdle to this is building up the database of library signatures. </p>\n<p>Control flow graphs are the structure that the basic blocks make when viewed as a directed graph. [1] These represent the possible paths of execution in a method. They are relatively easy to parse out and recover from a compiled application. Most Android and Java obfuscation focuses on method names and not on control flow. Also, the Java / Dalvik bytecode can change between compilations if the methods are modified or moved. That's where comparing structure comes in handy, unless serious changes are made, the control flow is likely to remain the same.</p>\n<p>I did some work with control flow graph matching in Android applications. [2][3] The project's real strength turned out to be malware strain clustering. It would match methods that were of similar structure and you could see that certain applications shared methods with other applications, and how the strains evolved.</p>\n<p>If you are looking to create a Java function signature a combination between structural and byte base matching would be very powerful.</p>\n<ol>\n<li><a href=\"https://en.wikipedia.org/wiki/Control_flow_graph\">https://en.wikipedia.org/wiki/Control_flow_graph</a></li>\n<li><a href=\"https://github.com/douggard/CFGScanDroid\">https://github.com/douggard/CFGScanDroid</a></li>\n<li><a href=\"http://www.irongeek.com/i.php?page=videos/derbycon4/t420-control-flow-graph-based-virus-scanning-douglas-goddard\">http://www.irongeek.com/i.php?page=videos/derbycon4/t420-control-flow-graph-based-virus-scanning-douglas-goddard</a></li>\n</ol>\n</div>",
+            "votes": "5",
+            "user": "douggard",
+            "time": "Apr 19, 2016 at 18:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">From the 3 minutes i spent glancing over the repo, this sounds very interesting, especially for the purpose of  \"updating\" an obfuscated-to-readable map to a newer version of the obfuscated binary. Will your project work with .jar files as well, or only with dex files?</span>",
+                    "time": null
+                },
+                {
+                    "user": "douggard",
+                    "text": "<span class=\"comment-copy\">Only dex files, much of the code could be reused though, it would just be a matter of getting the bytecode from the class files and parsing out the methods. I'm sure there is a Java library made for that. The CFG extraction might be a little different going from Dalvik to Java, but probably nothing huge.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

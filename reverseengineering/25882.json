@@ -1,0 +1,32 @@
+{
+    "title": "Password evaluated from the sum of ASCII letters",
+    "link": "https://reverseengineering.stackexchange.com/questions/25882/password-evaluated-from-the-sum-of-ascii-letters",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>After analyzing the code, I have been able to understand and recreate the algorithm used to check if the password the binary takes is correct, but don't know how to solve it (or at least can't think of any approach that would be performant enough to finish within feasible time).</p>\n<p>The first three letters of the expected password can be easily seen in the disassembly, as well as the length of the password being 16 letters.</p>\n<p>Then it gets a little tricky, as the program enters a loop summing up the ASCII values of different letters of the password into 4 variables, which are afterwards checked against a value each after being taken modulo 100, which have to be met for the password to be regarded as \"correct\"</p>\n<p>To be more exact, the letters are summed up as follows (indices in the password starting from 1:\nVar1: 1, 3, 4, 6, 7, 11, 12, 14, 15\nVar2: 1, 3, 5, 7, 9, 11, 13, 15\nVar3: 2, 5, 8, 11, 14\nVar4: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15</p>\n<p>This also tells me, that given I didn't understand the code completely wrong, the last letter of the password is not relevant as well.</p>\n<p>Anyways, my question would be, if with the information present this problem is even solvable, and if yes, what approach would make sense, as brute-forcing obviously doesn't.</p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "82",
+    "tags": [
+        "static-analysis",
+        "encodings",
+        "crackme"
+    ],
+    "user": "M4l1s",
+    "time": "Sep 14, 2020 at 12:42",
+    "comments": [
+        {
+            "user": "David",
+            "text": "<span class=\"comment-copy\">This would be a perfect problem for a SMT solver. See <a href=\"https://en.m.wikipedia.org/wiki/Satisfiability_modulo_theories\" rel=\"nofollow noreferrer\">en.m.wikipedia.org/wiki/Satisfiability_modulo_theories</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>You may be able to set up a system of equations and try and narrow this down with linear algebra. Because you have more unknowns than knowns, you will not be able to know the original password, but you can still get one the passes the validation routine. You already know some of the letters due to seeing them in the disassembly.</p>\n<p>As a smaller example, say we know the first letter of a password is <code>G</code> and the that there are 6 letters. The program then sums up the letters into three variables as follows:</p>\n<pre><code>var1 = password[0] + password[1] + password[5]\nvar2 = password[0] + password[4]\nvar3 = password[0] + password[1] + password[2] + password[3] + password[4]\n</code></pre>\n<p>Then later we see that it checks:</p>\n<pre><code>var1 == 225\nvar2 == 160\nvar3 == 392\n</code></pre>\n<p>We can set up a matrix for this:</p>\n<pre><code>[1 1 0 0 0 1 | 225]\n[1 0 0 0 1 0 | 160]\n[1 1 1 1 1 0 | 392]\n</code></pre>\n<p>Using <code>SymPy</code> or something similar, we can reduce this matrix down:</p>\n<pre><code>from sypy import *\nA = Matrix([[1,1,0,0,0,1,225],[1,0,0,0,1,0,160],[1,1,1,1,1,0,392]])\nA.rref()\n\n(Matrix([\n[1, 0, 0, 0,  1,  0, 160],\n[0, 1, 0, 0, -1,  1,  65],\n[0, 0, 1, 1,  1, -1, 167]]), (0, 1, 2))\n</code></pre>\n<p>Our pivots are <code>password[0]</code>, <code>password[1]</code> and <code>password[2]</code>. We already know <code>password[0] == 71</code>, we will select whatever we want for <code>password[1]</code> &amp; <code>password[2]</code> and will try to get everything else in terms of these.</p>\n<p>Since we know that the first letter is <code>'G'</code> and has a value of <code>71</code>, the first equation is <code>72 + password[4] = 160</code>. We now know <code>password[4]</code> is <code>89</code> or <code>Y</code>.</p>\n<p>Knowing this, we can look at our next equation. <code>password[1] - 89 + password[5] = 65.</code> Rewriting: <code>password[5] = 154 - password[1]</code>.</p>\n<p>We can now look at the last equation:\n<code>password[2] + password[3] + 89 - password[5] = 167</code>\nRewriting: <code>password[3] = password[5] - password[2] + 78</code></p>\n<p>Putting it all together:</p>\n<pre><code>password[0] = 'G'\npassword[1] = pivot\npassword[2] = pivot\npassword[3] = password[5] - password[2] + 78\npassword[4] = 'Y'\npassword[5] = 154 - password[1]\n</code></pre>\n<p>Now we just assign whatever we want for <code>password[1]</code> and <code>password[2]</code> and we will get a valid password.</p>\n<pre><code>password[1] = 'A'\npassword[2] = 'A'\n</code></pre>\n<pre><code># Find password[5]\nchr(154 - ord('A'))\n'Y'\n\n# Find password[3]\nchr(ord('Y') - ord('A') + 78)\n'f'\n\n# Validate password\npassword = \"GAAfYY\"\nvar1 = ord(password[0]) + ord(password[1]) + ord(password[5])\nvar2 = ord(password[0]) + ord(password[4])\nvar3 = ord(password[0]) + ord(password[1]) + ord(password[2]) + + ord(password[3]) + ord(password[4])\n\n(var1 == 225) and (var2 == 160) and (var3 == 392)\nTrue\n</code></pre>\n<p>It will be harder for your specific one because you the numbers are being taken <code>% 100</code>, but you know how many characters there are and what value range ASCII falls in so it shouldn't be too hard to set a limited range for the possible values.</p>\n</div>",
+            "votes": "0",
+            "user": "Shane Reilly",
+            "time": "Sep 14, 2020 at 15:09",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

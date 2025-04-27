@@ -1,0 +1,115 @@
+{
+    "title": "Calculation of jmp address through subtraction",
+    "link": "https://reverseengineering.stackexchange.com/questions/19459/calculation-of-jmp-address-through-subtraction",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't get why the two addresses of the functions are subtracted in order to get the jump destination.\n </p>\n <pre><code>mov    eax, [ebp+func1]\nsub    eax, [ebp+func2]\nsub    eax, 5\nmov    [ebp+var_4], eax\n</code></pre>\n <p>\n  Which is then used as follows:\n </p>\n <pre><code>mov    edx, [ebp+func2]\nmov    [edx], 0E9h         ;E9 is opcode for jmp\nmov    eax, [ebp+func2]\nmov    ecx, [ebp+var_4]\nmov    [eax+1], ecx\n</code></pre>\n <p>\n  The intention of this code should be that at the beginning of\n  <code>\n   func2\n  </code>\n  a jump to\n  <code>\n   func1\n  </code>\n  should be inserted. The jump location is calculated in the first snippet. Is that right?\n </p>\n <p>\n  I don't understand why the location is calculated by difference of the two memory addresses? Why don't use directly the address of\n  <code>\n   func1\n  </code>\n  ?\n </p>\n <p>\n  <em>\n   Note: This example is from the Practical Malware Analysis book (Lab11-2) on the topic of Inline Hooking.\n  </em>\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 4,
+    "views": "7k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "x86",
+        "function-hooking"
+    ],
+    "user": "pudi",
+    "time": "Sep 26, 2018 at 20:37",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "<html><body><span class=\"comment-copy\">\n This question was already asked a while back on Stack Overflow:\n <a href=\"https://stackoverflow.com/questions/1546141/jmp-to-absolute-address-op-codes\" title=\"jmp to absolute address op codes\">\n  stackoverflow.com/questions/1546141/…\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "pudi",
+            "text": "<html><body><span class=\"comment-copy\">\n It was similar, but wouldn't have clarified the question/problem the way you did and not entirely.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "NirIzr",
+            "text": "<html><body><span class=\"comment-copy\">\n I was not complaining or suggesting you did something wrong. I just post it here for future references.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <em>\n   I'll start with briefly going over the code for completeness's sake even though OP clearly understands what's going on and mostly asks about the reasoning behind it\n  </em>\n  .\n </p>\n <p>\n  The first snippet of code can be easily written like the following in C:\n </p>\n <pre><code>dword var_4 = &func1 - &func2 - 5;\n</code></pre>\n <p>\n  This piece of code, by itself, raises a few questions we'll answer in a bit but first lets dig a little deeper into the second assembly snippet:\n </p>\n <pre><code>mov    edx, [ebp+func2]\nmov    [edx], 0E9h         ;E9 is opcode for jmp\n</code></pre>\n <p>\n  The first byte of\n  <code>\n   func2\n  </code>\n  is set to\n  <code>\n   0xE9\n  </code>\n  , which is the opcode for a \"Jump near, relative, immediate\" jump.\n </p>\n <pre><code>mov    eax, [ebp+func2]\nmov    ecx, [ebp+var_4]\nmov    [eax+1], ecx\n</code></pre>\n <p>\n  Then, the next four bytes of\n  <code>\n   func\n  </code>\n  (1 through 5) are set to the offset previously calculated in the first snippet.\n </p>\n <p>\n  Now, this may raise a couple of questions:\n </p>\n <blockquote>\n  <p>\n   why is the offset then decreased by\n   <code>\n    5\n   </code>\n   ?\n  </p>\n </blockquote>\n <p>\n  This is done because a relative jump is relative to\n  <em>\n   the next instruction\n  </em>\n  , thus subtracting 5 removes the 5 additional bytes of the jump instruction itself. A more\n  <em>\n   accurate\n  </em>\n  way of looking at it is that the offset should be calculated from\n  <code>\n   &func2 + 5\n  </code>\n  . The original equation (\n  <code>\n   &func1 - &func2 - 5\n  </code>\n  ) is obviously identical to\n  <code>\n   &func1 - (&func2 + 5)\n  </code>\n  .\n </p>\n <blockquote>\n  <p>\n   Why do we care so much about instruction length to begin with?\n  </p>\n </blockquote>\n <p>\n  So, as some people here already implied, the length of a hook jump is important. That is very much true (although does not tell the whole reason behind the relative jump preference). The length of the hook (or jump sequence) is important because it can create weird edge cases. This isn't just about some minor performance optimization or keeping things simple, as one might assume.\n </p>\n <p>\n  One big consideration is that you'll need to replace any instructions you overwrite. Those bytes you use for your jump had a meaning. And they have to be preserved somewhere. Overwriting more bytes means you have to copy more of them elsewhere. With relative instructions on the original instruction sequence fixed, for example. You'll need to make sure you do not leave half-instructions after you.\n </p>\n <blockquote>\n  <p>\n   why use a relative jump and not an absolute address?\n  </p>\n </blockquote>\n <p>\n  <em>\n   Sorry it took a while to get here ;D\n  </em>\n </p>\n <p>\n  I think a lot of people overlook or forget that over time, but as carefully reviewing the\n  <a href=\"https://c9x.me/x86/html/file_module_x86_id_147.html\" rel=\"nofollow noreferrer\">\n   jump instruction\n  </a>\n  will reveal, the x86 jump opcodes\n  <em>\n   lacks a\n   <strong>\n    near\n   </strong>\n   ,\n   <strong>\n    immediate\n   </strong>\n   ,\n   <strong>\n    absolute\n   </strong>\n   jump\n  </em>\n  .\n </p>\n <p>\n  We've got three different types of jumps in x86:\n </p>\n <ol>\n  <li>\n   <code>\n    E9\n   </code>\n   for\n   <em>\n    near immediate\n   </em>\n   offsets (offsets hard coded directly as an integer inside the instruction itself).\n  </li>\n  <li>\n   <code>\n    FF /4\n   </code>\n   for\n   <em>\n    near absolute\n   </em>\n   jumps.\n  </li>\n  <li>\n   we've got\n   <code>\n    EA\n   </code>\n   for\n   <em>\n    far immediate absolute\n   </em>\n   jumps.\n  </li>\n </ol>\n <p>\n  The\n  <strong>\n   far\n  </strong>\n  jump opcode (\n  <code>\n   EA\n  </code>\n  ) is slow and mostly used for changing segment registers (which have a completely different use in protected mode), it is therefore rarely used as a\n  <em>\n   normal jump\n  </em>\n  per-se, but as a call-gate, for switching between execution contexts, etc.\n </p>\n <p>\n  The\n  <strong>\n   absolute address\n  </strong>\n  jump opcode (\n  <code>\n   FF /4\n  </code>\n  )\n  <em>\n   does not accept\n  </em>\n  an immediate value. It can only jump to a value stored in a register or stored in memory.Therefore, using it will require you either:\n </p>\n <ol>\n  <li>\n   Storing the absolute offset at some reserved memory space, specifically allocated by the hook routine for each hook function for that purpose, or\n  </li>\n  <li>\n   Hard-coding an register load instruction, which will set a register to the absolute value. Something like\n   <code>\n    mov eax, <absolute value> / jump eax\n   </code>\n   or\n   <code>\n    push <absolute value> / ret\n   </code>\n   .\n  </li>\n </ol>\n <p>\n  Understanding this, it is clear that using the near, immediate, relative jump is far easier than both of these approaches.\n </p>\n <p>\n  So although it is accurate to say using an absolute address will require longer instruction sequence, it does not tell the whole story.\n </p>\n <p>\n  This, then raises another question:\n </p>\n <blockquote>\n  <p>\n   Why, then, isn't there a near, immediate, absolute jump in x86?\n  </p>\n </blockquote>\n <p>\n  Simple answer is that there just isn't one. One can speculate about the reasoning behind the instruction set design decisions but adding instructions is expensive and complex. I assume there was no real need for near absolute immediate jump, as it is indeed a rare occasion where you need to jump to an address known ahead of time and a relative jump won't do.\n </p>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "NirIzr",
+            "time": "Oct 1, 2018 at 19:30",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "pudi",
+                    "text": "<span class=\"comment-copy\">Great post. Thank you for this informative and helpful answer! Now the background becomes clear.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Thanks you for the compliment and for the great question! Please lmk if there are any unclarities and I'll elaborate.</span>",
+                    "time": null
+                },
+                {
+                    "user": "user2347953",
+                    "text": "<span class=\"comment-copy\">Actually, there is an immediate absolute jump in x86: EA. It's a far jump; long and slow (and therefore rarely used now that we don't really use segments anymore), but it does exist.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@user2347953 You're right. I was implicit about using <i>near</i> jumps because, as you said, far jumps are slow and rarely used as normal jumps in protected mode. I'll edit my answer to reflect/address that. Thanks!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <code>\n   E9\n  </code>\n  is a relative jump and since it was supposed to be inserted at the beginning of the function then\n  <code>\n   sub\n  </code>\n  -tracting the two addresses is the way to go for calculating the difference in bytes.\n </p>\n <p>\n  Why relative jump instead of an absolute? It's shorter so if one needs to remember the original bytes it's just 3 instead of 5 bytes.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Paweł Łukasik",
+            "time": "Sep 26, 2018 at 17:40",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "pudi",
+                    "text": "<span class=\"comment-copy\">Yeah I get that part, but not the reason behind. Is there any reason why a relative jump is done here instead of simply using the location of the function?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Paweł Łukasik",
+                    "text": "<span class=\"comment-copy\">see updated answer</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I don't have access to the book so let's say\n  <code>\n   func1\n  </code>\n  starts at address\n  <code>\n   0x10\n  </code>\n  and\n  <code>\n   func2\n  </code>\n  starts at\n  <code>\n   0x30\n  </code>\n  . The distance between\n  <code>\n   func2\n  </code>\n  and\n  <code>\n   func1\n  </code>\n  is therefore\n  <code>\n   0x20\n  </code>\n  bytes.\n </p>\n <p>\n  If you want to jump from the beginning of\n  <code>\n   func1\n  </code>\n  to\n  <code>\n   func2\n  </code>\n  you have two options (using pseudo assembly):\n </p>\n <ul>\n  <li>\n   <p>\n    using relative jump (opcode\n    <code>\n     E9\n    </code>\n    ):\n   </p>\n   <pre><code>0x10 JR +0x20 ; will jump to 0x10 + func2-func1 = 0x10 + 0x30-0x10 = 0x30\n</code></pre>\n  </li>\n  <li>\n   <p>\n    using absolute jump (opcode\n    <code>\n     EA\n    </code>\n    ):\n   </p>\n   <pre><code>0x10 JP 0x30 ; will jump 0x30 = func2\n</code></pre>\n  </li>\n </ul>\n <p>\n  Both achieve the same in your case. The advantage of a relative jump is that you only have to know how far\n  <code>\n   func2\n  </code>\n  is from\n  <code>\n   func1\n  </code>\n  . You don't have to know or care where exactly in the memory the executable loader will load the binary. In my example it was\n  <code>\n   0x10\n  </code>\n  for\n  <code>\n   func1\n  </code>\n  and\n  <code>\n   0x30\n  </code>\n  for\n  <code>\n   func2\n  </code>\n  but in reality the the program might end up at\n  <code>\n   0x120\n  </code>\n  for\n  <code>\n   func1\n  </code>\n  and\n  <code>\n   0x140\n  </code>\n  for\n  <code>\n   func2\n  </code>\n  . If you had an absolute jump, you'd have to jump to\n  <code>\n   0x140\n  </code>\n  but if you have a relative jump the difference between\n  <code>\n   func2\n  </code>\n  and\n  <code>\n   func1\n  </code>\n  remains the same\n  <code>\n   0x20\n  </code>\n  .\n </p>\n <p>\n  In your example you already know the actual address of\n  <code>\n   func2\n  </code>\n  so you can just as well jump straight to\n  <code>\n   func2\n  </code>\n  .\n </p>\n <p>\n  Relative jump opcode takes fewer bytes than the absolute jump but the disadvantage is that if the distance between\n  <code>\n   func2\n  </code>\n  and\n  <code>\n   func1\n  </code>\n  is too big (depending on your addressing mode), you wouldn't be able to use it.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "zxxc",
+            "time": "Sep 26, 2018 at 19:06",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">\"You don't have to know or care where exactly in the memory the executable loader will load the binary\" Although in your example function addresses are indeed known before hand, OPs example clearly shows function addresses are <i>dynamic</i> and not known at compile time. Moreover, hooking is often done at runtime on functions loaded in different modules, so the offset does change (even without ASLR).</span>",
+                    "time": null
+                },
+                {
+                    "user": "zxxc",
+                    "text": "<span class=\"comment-copy\">I agree. I oversimplified my answer, not being sure what exactly the OP was asking about and what was the expected level of detail. Your answer covers all details well.</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Thanks, and welcome to RE.SE! I hope I'll get to see more of your answers in here :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Let me try a possible explanation for your code snippet, independent of the fact that a relative addressing seems by far the most straightforward solution, as already pointed out by Pawel.\n </p>\n <p>\n  If you write a little program with\n  <code>\n   func1\n  </code>\n  and\n  <code>\n   func2\n  </code>\n  , say in VS2015, and inspect what the compiler generates, you might find the following:\nThe compiler generates a long relative jmp to enter function\n  <code>\n   func1\n  </code>\n  . In its realization, the opcode\n  <code>\n   E9\n  </code>\n  is already in place.\n </p>\n <p>\n  This is what the compiler generates:\n </p>\n <pre><code>func1:\n003D1226 E9 B5 0B 00 00       jmp         func1 (03D1DE0h) \n</code></pre>\n <p>\n  For the real call to\n  <code>\n   func1\n  </code>\n  (written by the programmer in C), it generates the following:\n </p>\n <pre><code>003D4D6B E8 B6 C4 FF FF       call        func1 (03D1226h)\n</code></pre>\n <p>\n  Now, if you try to replace the compiler's relative jmp with a direct absolute jmp (your question), you must find an assembler statement which is not longer than the relative jmp (5 Bytes), in order not to destroy the subsequent code. I think this will not be easy.\n </p>\n <p>\n  You may find a discussion about a similar question\n  <a href=\"https://stackoverflow.com/questions/32706833/how-to-code-a-far-absolute-jmp-call-instruction-in-masm\">\n   here.\n  </a>\n </p>\n <p>\n  BTW, if you want to try it out yourself, you must make sure that the code segment is writeable, which it is normally not. In Windows you could use a proper call to \"VirtualProtect\" to achieve it.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "NirIzr",
+            "time": "Sep 26, 2018 at 22:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

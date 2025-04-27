@@ -1,0 +1,35 @@
+{
+  "title": "Where is ntdll.dll?",
+  "link": "https://reverseengineering.stackexchange.com/questions/4465/where-is-ntdll-dll",
+  "content": "I am trying to get the base address of ntdll.dll over the PEB. So, what I did was to dump the PEB (d fs:[30]). Then, I tried to get to PEB_LDR_DATA over the offset 0xC. Over the offset 0x1C of PEB_LDR_DATA I found the the pointer of InInitializationOrderModuleList and I was told that I can find the ntdll.dll address there. And that I should first find the address of kernel32.dll (which is always the second entry). So, I was able to find the address of kernel32.dll but it seems like I can't find the address of ntdll.dll. \n\n```\n00251ED8  .ܛὈ%Ậ%ὐ%Ẵ%.....@ᐴ@怀.TVٜڔ倀...뉨粘뉨粘趨即....ꮫꮫꮫꮫ......ܨ‐%Ỡ%‘%Ứ%\n00251F58  †%Ẽ%.粑Ⱘ粒怀:Ȉ퀨粘⅘粓䀄耈..니粘니粘뾿䠂....ꮫꮫꮫꮫ......ܵC:\\WINDOWS\\system32\\\n00251FD8  kernel32.dll.ꮫꮫꮫꮫﻮﻮﻮ......߁⅐%Ὀ%⅘%ὐ%Ⅰ%὘%.粀똾粀耀@Bᾰ%Ῐ%䀄耈..늰粘늰粘뿀䠂\n00252058  ....ꮫꮫꮫꮫ.....ߎC:\\WINDOWS\\WinSxS\\x86_Microsoft.VC90.CRT_1fc8b3b\n002520D8  9a1e18e3b_9.0.21022.8_x-ww_d08d0375\\MSVCR90.dll.ꮫꮫꮫꮫ.....ߩẬ%‐%\n00252158  Ẵ%‘%Ẽ%†%.硒ⵀ硔　.¾À⁸%℠%䀆逈..닀粘닀粘㷎䜱....ꮫꮫꮫꮫ....ߊ.ᓮîŸ%Ÿ%ﻮﻮﻮﻮﻮﻮﻮﻮﻮﻮﻮﻮ\n\n```\nThis is the part where I have found the kernel32.dll. But in the fact of that this a linked list. Shouldn't I be able to find ntdll.dll too? \n\nWhen, I open up the window of \"Executable Modules\" I can see the ntdll.dll but it seem I am not able to find the base address inside of the Struct. \n\nPlease tell me if you need clarification or if I am grievously mistaken.\n\n",
+  "votes": "9",
+  "answers": 2,
+  "views": "5k",
+  "tags": [
+    "windows",
+    "assembly",
+    "memory",
+    "immunity-debugger"
+  ],
+  "user": "Dirk",
+  "time": "May 28, 2014 at 7:12",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The code below will set EAX to the image base address of ntdll.dll:\n\n```\nMOV EAX, DWORD PTR FS:[30]     ; EAX = PEB\nMOV EAX, DWORD PTR DS:[EAX+0C] ; EAX = PEB->Ldr\nMOV EAX, DWORD PTR DS:[EAX+1C] ; EAX = PEB->Ldr.InInitializationOrderModuleList.Flink\nMOV EAX, DWORD PTR DS:[EAX+8]  ; EAX = image base of ntdll (LDR_MODULE's BaseAddress)\n\n```\nBased on your question above, it seems like you understand everything through the MOV EAX, DWORD PTR DS:[EAX+1C] instruction. Since ntdll.dll is the first module loaded, it's the first LDR_MODULE entry in InInitializationOrderModuleList. So with EAX pointing to PEB->Ldr.InInitializationOrderModuleList.Flink, [EAX+0] points to the list entry's Flink, [EAX+4] points to the list entry's Blink, and [EAX+8] is the BaseAddress value of the first LDR_MODULE entry (ntdll.dll's LDR_MODULE).\n\nThis image from http://blog.csdn.net/programmingring/article/details/11357393 may help:\n\nWhen EAX is set to PEB->Ldr.InInitializationOrderModuleList.Flink, it's pointing to the orange Flink in the first LDR_MODULE above. It's followed by the Blink at [EAX+4], and the \"DllBase\" (BaseAddress) at [EAX+8].\n\n",
+      "votes": "12",
+      "user": "Jason Geffner",
+      "time": "May 27, 2014 at 16:11",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "Assuming you want to see it in Windbg.\n\nYou can follow this walk through for each pointer points to successive LDR_DATA_TABLE_ENTRY the output is from calc.exe. \n\n```\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(@$peb+c)+c)\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\calc.exe\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(@$peb+c)+c))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32  \ntdll.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(@$peb+c)+c)))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\kernel32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(@$peb+c)+c))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\SHELL32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(@$peb+c)+c)))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\ADVAPI32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\RPCRT4.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c)))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\Secur32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\GDI32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c)))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\USER32.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c))))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\msvcrt.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c)))))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\SHLWAPI.dll\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c))))))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"\"\n0:000> dt ntdll!_LDR_DATA_TABLE_ENTRY -y Full poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(poi(@$peb+c)+c)))))))))))))\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\calc.exe\"\n\n```\nan alternate representation of the above method\n\n```\nlkd> dt nt!_ldr_data_table_entry -y Full @@c++(@$peb->Ldr->InLoadOrderModuleList.Flink)\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\Program Files\\Windows Kits\\8.0\\Debuggers\\x86\\windbg.exe\"\nlkd> dt nt!_ldr_data_table_entry -y Full @@c++(@$peb->Ldr->InLoadOrderModuleList.Flink->Flink)\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32  \ntdll.dll\"\nlkd> dt nt!_ldr_data_table_entry -y Full @@c++(@$peb->Ldr->InLoadOrderModuleList.Flink->Flink->Flink)\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\kernel32.dll\"\nlkd> dt nt!_ldr_data_table_entry -y Full @@c++(@$peb->Ldr->InLoadOrderModuleList.Flink->Flink->Flink->Flink)\n   +0x024 FullDllName : _UNICODE_STRING \"C:\\WINDOWS\\system32\\ADVAPI32.dll\"\n\n```\n",
+      "votes": "4",
+      "user": "blabb",
+      "time": "May 30, 2014 at 8:05",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

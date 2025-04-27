@@ -1,0 +1,77 @@
+{
+  "title": "How is CreateProcessAsUser impersonation implemented in Windows services?",
+  "link": "https://reverseengineering.stackexchange.com/questions/17010/how-is-createprocessasuser-impersonation-implemented-in-windows-services",
+  "content": "CreateProcessAsUser is often used by Windows services in case an executable is started that the user has specified in order to run it with Medium Integrity Level to ensure privilege isolation.\n\n\n\nLooking at the signature, a hToken has to be provided. From my observation, Windows services always pick the currently logged on user that performed this action.\n\n```\nBOOL WINAPI CreateProcessAsUser(\n  _In_opt_    HANDLE                hToken,\n  _In_opt_    LPCTSTR               lpApplicationName,\n  _Inout_opt_ LPTSTR                lpCommandLine,\n  _In_opt_    LPSECURITY_ATTRIBUTES lpProcessAttributes,\n  _In_opt_    LPSECURITY_ATTRIBUTES lpThreadAttributes,\n  _In_        BOOL                  bInheritHandles,\n  _In_        DWORD                 dwCreationFlags,\n  _In_opt_    LPVOID                lpEnvironment,\n  _In_opt_    LPCTSTR               lpCurrentDirectory,\n  _In_        LPSTARTUPINFO         lpStartupInfo,\n  _Out_       LPPROCESS_INFORMATION lpProcessInformation\n);\n\n```\nQ: What mechanism determines that \"current user\"?\n\nI'm double quoting \"current user\", because it seems very vague to assume a single point of implementation. I currently assume that every function that calls CreateProcessAsUser has its own implementation of retrieving the \"current user\" in order to pass its token.\n\nI would like to understand what this logic looks like and on what criteria the hToken is selected. Since user mode process creation is performed by many Windows services, I would have to assume there is a common logic for it, but I don't see it in the stack traces (see image).\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "windows",
+    "process"
+  ],
+  "user": "bytecode77",
+  "time": "Dec 19, 2017 at 22:14",
+  "comments": [
+    {
+      "user": "0xC0000022L",
+      "text": "Well, one rather popular method underlying also several COM/RPC methods is to be found in ImpersonateNamedPipeClient. However, given that services run in the TCB they could just as easily \"steal\" an existing token from some process or forge their own token. Last but not least several internals have changed with Windows versions, so what version are you asking for? Oh and this may actually be better suited over on StackOverflow.",
+      "time": null
+    },
+    {
+      "user": "bytecode77",
+      "text": "I'm looking at the current version of Windows 10 x64. Sure, a SYSTEM process can take any token as it has sufficient privileges. But it picks the current user's token - based on [...] and this is what I'm particularly curious about. On StackOverflow I think it would be offtopic, because it's not much about programming directly.",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "Well, the clue really is in the name. Any service doing a job for a user has some way of communicating with the user's security context. That way - at least in all instances I've investigated, be it COM, RPC or other - in the end turned out to be named pipes. So re-read my above comment. I simply don't have the time to go into more detail than this right now (hopefully someone else will). And regarding your other remark, perhaps. However, it's also not about RCE directly.",
+      "time": null
+    },
+    {
+      "user": "bytecode77",
+      "text": "One trigger I have found is a HWND broadcast (0xffff, ...) - When looking at that example, where is the pipe from the user to the service? Interestingly enough that UIPI doesn't block it.",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "This is not a predefined window message, so you'd have to figure out who looks for it and processes it (window hooks may come in handy as they run in the target process, mind the bitness, though). However, how do you know it's a trigger (correlation != causation).",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "A while back I wrote some Delphi code to do this when running a program as SYSTEM. Instead of a service, I was executing from a SYSTEM cmd prompt, which I invoked using psexec: psexec -s -i -d cmd.exe). Logic flowed like this:\n\nHere's a similar example in C#.\n\nYou can use Process Explorer to view the session that process is being run within.\n\n\n",
+      "votes": "4",
+      "user": "Mick",
+      "time": "Dec 28, 2017 at 16:48",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "bytecode77",
+          "text": "Ah, I see! And because the SessionID = 1, the user is me. What about processes that run in Session 0 - what will CreateProcessAsUser do? I'm aware this depends on the specific implementation. But if CreateProcessAsUser is called from a process in Session 0, will it spawn a SYSTEM process instead?",
+          "time": null
+        },
+        {
+          "user": "Mick",
+          "text": "Well, you can create a process as any user, and choose the desktop it is shown on. In my Delphi code I linked above, I retrieve the logged-on user's token from the first explorer.exe I find, and then I create a new process on the logged-on user's desktop by hardcoding the lpDesktop as Winsta0\\default. So that means I have a new process created on the user's desktop, but launched with a merge of SYSTEM's token and the user's token.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "Not a really good idea on a multi-user OS.",
+          "time": null
+        },
+        {
+          "user": "Mick",
+          "text": "@0xC0000022L - agree. In the specific use case I wrote the program for, this met the need and works consistently. However, the right way to do it is to call WTSQueryUserToken, which I commented out in my program, to retrieve the user's token.",
+          "time": null
+        },
+        {
+          "user": "Remko",
+          "text": "WTSQueryUserToken already returns the user's primary access token so it's not needed to duplicate it.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

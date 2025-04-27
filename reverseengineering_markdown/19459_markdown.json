@@ -1,0 +1,115 @@
+{
+  "title": "Calculation of jmp address through subtraction",
+  "link": "https://reverseengineering.stackexchange.com/questions/19459/calculation-of-jmp-address-through-subtraction",
+  "content": "I don't get why the two addresses of the functions are subtracted in order to get the jump destination. \n\n```\nmov    eax, [ebp+func1]\nsub    eax, [ebp+func2]\nsub    eax, 5\nmov    [ebp+var_4], eax\n\n```\nWhich is then used as follows:\n\n```\nmov    edx, [ebp+func2]\nmov    [edx], 0E9h         ;E9 is opcode for jmp\nmov    eax, [ebp+func2]\nmov    ecx, [ebp+var_4]\nmov    [eax+1], ecx\n\n```\nThe intention of this code should be that at the beginning of func2 a jump to func1 should be inserted. The jump location is calculated in the first snippet. Is that right?\n\nI don't understand why the location is calculated by difference of the two memory addresses? Why don't use directly the address of func1? \n\nNote: This example is from the Practical Malware Analysis book (Lab11-2) on the topic of Inline Hooking.\n\n",
+  "votes": "4",
+  "answers": 4,
+  "views": "7k",
+  "tags": [
+    "disassembly",
+    "assembly",
+    "x86",
+    "function-hooking"
+  ],
+  "user": "pudi",
+  "time": "Sep 26, 2018 at 20:37",
+  "comments": [
+    {
+      "user": "NirIzr",
+      "text": "This question was already asked a while back on Stack Overflow: stackoverflow.com/questions/1546141/…",
+      "time": null
+    },
+    {
+      "user": "pudi",
+      "text": "It was similar, but wouldn't have clarified the question/problem the way you did and not entirely.",
+      "time": null
+    },
+    {
+      "user": "NirIzr",
+      "text": "I was not complaining or suggesting you did something wrong. I just post it here for future references.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I'll start with briefly going over the code for completeness's sake even though OP clearly understands what's going on and mostly asks about the reasoning behind it.\n\nThe first snippet of code can be easily written like the following in C:\n\n```\ndword var_4 = &func1 - &func2 - 5;\n\n```\nThis piece of code, by itself, raises a few questions we'll answer in a bit but first lets dig a little deeper into the second assembly snippet:\n\n```\nmov    edx, [ebp+func2]\nmov    [edx], 0E9h         ;E9 is opcode for jmp\n\n```\nThe first byte of func2 is set to 0xE9, which is the opcode for a \"Jump near, relative, immediate\" jump.\n\n```\nmov    eax, [ebp+func2]\nmov    ecx, [ebp+var_4]\nmov    [eax+1], ecx\n\n```\nThen, the next four bytes of func (1 through 5) are set to the offset previously calculated in the first snippet.\n\nNow, this may raise a couple of questions:\n\nThis is done because a relative jump is relative to the next instruction, thus subtracting 5 removes the 5 additional bytes of the jump instruction itself. A more accurate way of looking at it is that the offset should be calculated from &func2 + 5. The original equation (&func1 - &func2 - 5) is obviously identical to &func1 - (&func2 + 5).\n\nSo, as some people here already implied, the length of a hook jump is important. That is very much true (although does not tell the whole reason behind the relative jump preference). The length of the hook (or jump sequence) is important because it can create weird edge cases. This isn't just about some minor performance optimization or keeping things simple, as one might assume.\n\nOne big consideration is that you'll need to replace any instructions you overwrite. Those bytes you use for your jump had a meaning. And they have to be preserved somewhere. Overwriting more bytes means you have to copy more of them elsewhere. With relative instructions on the original instruction sequence fixed, for example. You'll need to make sure you do not leave half-instructions after you. \n\nSorry it took a while to get here ;D\n\nI think a lot of people overlook or forget that over time, but as carefully reviewing the jump instruction will reveal, the x86 jump opcodes lacks a near, immediate, absolute jump.\n\nWe've got three different types of jumps in x86:\n\nThe far jump opcode (EA) is slow and mostly used for changing segment registers (which have a completely different use in protected mode), it is therefore rarely used as a normal jump per-se, but as a call-gate, for switching between execution contexts, etc.\n\nThe absolute address jump opcode (FF /4) does not accept an immediate value. It can only jump to a value stored in a register or stored in memory.Therefore, using it will require you either:\n\nUnderstanding this, it is clear that using the near, immediate, relative jump is far easier than both of these approaches.\n\nSo although it is accurate to say using an absolute address will require longer instruction sequence, it does not tell the whole story. \n\nThis, then raises another question:\n\nSimple answer is that there just isn't one. One can speculate about the reasoning behind the instruction set design decisions but adding instructions is expensive and complex. I assume there was no real need for near absolute immediate jump, as it is indeed a rare occasion where you need to jump to an address known ahead of time and a relative jump won't do.\n\n",
+      "votes": "7",
+      "user": "NirIzr",
+      "time": "Oct 1, 2018 at 19:30",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "pudi",
+          "text": "Great post. Thank you for this informative and helpful answer! Now the background becomes clear.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "Thanks you for the compliment and for the great question! Please lmk if there are any unclarities and I'll elaborate.",
+          "time": null
+        },
+        {
+          "user": "user2347953",
+          "text": "Actually, there is an immediate absolute jump in x86: EA. It's a far jump; long and slow (and therefore rarely used now that we don't really use segments anymore), but it does exist.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "@user2347953 You're right. I was implicit about using near jumps because, as you said, far jumps are slow and rarely used as normal jumps in protected mode. I'll edit my answer to reflect/address that. Thanks!",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "E9 is a relative jump and since it was supposed to be inserted at the beginning of the function then sub-tracting the two addresses is the way to go for calculating the difference in bytes. \n\nWhy relative jump instead of an absolute? It's shorter so if one needs to remember the original bytes it's just 3 instead of 5 bytes.\n\n",
+      "votes": "3",
+      "user": "Paweł Łukasik",
+      "time": "Sep 26, 2018 at 17:40",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "pudi",
+          "text": "Yeah I get that part, but not the reason behind. Is there any reason why a relative jump is done here instead of simply using the location of the function?",
+          "time": null
+        },
+        {
+          "user": "Paweł Łukasik",
+          "text": "see updated answer",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I don't have access to the book so let's say func1 starts at address 0x10 and func2 starts at 0x30. The distance between func2 and func1 is therefore 0x20 bytes.\n\nIf you want to jump from the beginning of func1 to func2 you have two options (using pseudo assembly):\n\nBoth achieve the same in your case. The advantage of a relative jump is that you only have to know how far func2 is from func1. You don't have to know or care where exactly in the memory the executable loader will load the binary. In my example it was 0x10 forfunc1 and 0x30 for func2 but in reality the the program might end up at 0x120 for func1 and 0x140 for func2. If you had an absolute jump, you'd have to jump to 0x140 but if you have a relative jump the difference between func2 and func1 remains the same 0x20.\n\nIn your example you already know the actual address of func2 so you can just as well jump straight to func2.\n\nRelative jump opcode takes fewer bytes than the absolute jump but the disadvantage is that if the distance between func2 and func1 is too big (depending on your addressing mode), you wouldn't be able to use it.\n\n",
+      "votes": "2",
+      "user": "zxxc",
+      "time": "Sep 26, 2018 at 19:06",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "NirIzr",
+          "text": "\"You don't have to know or care where exactly in the memory the executable loader will load the binary\" Although in your example function addresses are indeed known before hand, OPs example clearly shows function addresses are dynamic and not known at compile time. Moreover, hooking is often done at runtime on functions loaded in different modules, so the offset does change (even without ASLR).",
+          "time": null
+        },
+        {
+          "user": "zxxc",
+          "text": "I agree. I oversimplified my answer, not being sure what exactly the OP was asking about and what was the expected level of detail. Your answer covers all details well.",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "Thanks, and welcome to RE.SE! I hope I'll get to see more of your answers in here :)",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Let me try a possible explanation for your code snippet, independent of the fact that a relative addressing seems by far the most straightforward solution, as already pointed out by Pawel.\n\nIf you write a little program with func1 and func2, say in VS2015, and inspect what the compiler generates, you might find the following:\nThe compiler generates a long relative jmp to enter function func1. In its realization, the opcode E9 is already in place. \n\nThis is what the compiler generates:\n\n```\nfunc1:\n003D1226 E9 B5 0B 00 00       jmp         func1 (03D1DE0h) \n\n```\nFor the real call to func1 (written by the programmer in C), it generates the following:\n\n```\n003D4D6B E8 B6 C4 FF FF       call        func1 (03D1226h)\n\n```\nNow, if you try to replace the compiler's relative jmp with a direct absolute jmp (your question), you must find an assembler statement which is not longer than the relative jmp (5 Bytes), in order not to destroy the subsequent code. I think this will not be easy.\n\nYou may find a discussion about a similar question here.  \n\nBTW, if you want to try it out yourself, you must make sure that the code segment is writeable, which it is normally not. In Windows you could use a proper call to \"VirtualProtect\" to achieve it.\n\n",
+      "votes": "1",
+      "user": "NirIzr",
+      "time": "Sep 26, 2018 at 22:54",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

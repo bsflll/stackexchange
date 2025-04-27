@@ -1,0 +1,59 @@
+{
+  "title": "Non standard LZ77 compression header",
+  "link": "https://reverseengineering.stackexchange.com/questions/6591/non-standard-lz77-compression-header",
+  "content": "I'm working on reversing the SJ4000 camera firmware but I found a problem unpacking it.\n\nThis is the header I found on the image:\n\n```\n00000000  42 43 4c 31 81 66 00 09  00 54 68 e0 00 2f 2b bf  |BCL1.f...Th../+.|\n\n```\nAs you can see BCL1 is the header for 'Basic Compression Library' ( http://bcl.comli.eu/home-en.html ) using LZ77 algorithm but I can't decompress the image with it.\n\nI built some files using BCL, compared to the firmware header and found this:\n\n```\n00000000  42 43 4c 31 81 66 00 09  00 54 68 e0 00 2f 2b bf  |BCL1.f...Th../+.| < FIRMWARE\n00000000  42 43 4c 31 00 00 00 09  00 00 4f 88 99 7f 45 4c  |BCL1......O...EL| < LZ\n00000000  42 43 4c 31 00 00 00 02  00 00 4f 88 20 03 06 90  |BCL1......O. ...| < HUFFMAN\n00000000  42 43 4c 31 00 00 00 01  00 00 4f 88 99 7f 45 4c  |BCL1......O...EL| < RLE\n00000000  42 43 4c 31 00 00 00 0a  00 00 4f 88 56 01 64 9f  |BCL1......O.V.d.| < SF\n00000000  42 43 4c 31 00 00 00 03  00 00 4f 88 00 7f 45 4c  |BCL1......O...EL| < RICE8\n00000000  42 43 4c 31 00 00 00 04  00 00 4f 88 00 45 7f 46  |BCL1......O..E.F| < RICE16\n00000000  42 43 4c 31 00 00 00 05  00 00 4f 88 00 46 4c 45  |BCL1......O..FLE| < RICE32\n\n```\nAccording to this the compression algorithm is LZ77 and it follows the same structure except for 2 bytes.\n\n```\n42 43 4c 31 < Magic Number\n81 66 00 09 < unknown 2 bytes + 2 standard bytes \n00 54 68 e0 < Original Size\n00 2f 2b bf < Compressed Size\n\n```\nAny idea what these 2 bytes mean?\n\nEDIT: I tried to edit that 2 bytes and override them with 00 00 so the header matches the standard. After that tried to uncompress it with BCL LZ77 and it prompts a segmentation fault:\n\n```\nLZ77 decompress FW96655A_ZERO.bin to test...\nInput file: 3091395 bytes\nOutput file: 5531872 bytes\nSegmentation fault\n\n```\nChecking the lenght bytes I got the following result:\n\n```\n0x005468E0 > Big Endian Long: 5531872\n0x002F2BBF > Big Endian Long: 3091391\n\n```\nAs you can see for the compressed data length there is a difference of 4 bytes that might be causing the Seg. fault.\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "2k",
+  "tags": [
+    "firmware",
+    "unpacking",
+    "decompress",
+    "magic-number"
+  ],
+  "user": "Nucklear",
+  "time": "Nov 5, 2014 at 14:47",
+  "comments": [
+    {
+      "user": "Libor Tomsik",
+      "text": "Are you sure that the FW is realy compressed? Using strings -n 9 FW I'm getting quite a lot of readable data which are obviously not compressed. Maybe just part of the file is?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I don't know for sure but can think of two possibilities.  \n\nAll of the samples of that camera's firmware that I was easily able to locate on the internet use the standard 00 00 00 09 tag, which may indicate that the first possibility is the more likely.\n\nAfter checking with the binary you mentioned, it became clear that there was simply an error in the bfc.c file.  Specifically, around line 192 of bfc.c it says:\n\n```\nif( command == 'd' )\n{\n    /* Read header */\n    algo = ReadWord32( f );  /* Dummy */\n    algo = ReadWord32( f );\n    outsize = ReadWord32( f );\n    insize -= 12;\n}\n\n```\nHowever, this is incorrect because it fails to read the infile size as written in the header.  To quickly fix this, just change those lines to these and recompile:\n\n```\nif( command == 'd' )\n{\n    /* Read header */\n    algo = ReadWord32( f );  /* Dummy */\n    algo = ReadWord32( f );\n    outsize = ReadWord32( f );\n    ReadWord32( f );\n    insize -= 16;\n}\n\n```\nWhen I do that, there is no problem decompressing the code.  To make the corresponding change to the output file (that is, compressing), change the code around line 364 of bfc.c from this:\n\n```\n/* Write output file */\nWriteWord32( outsize, f );\nfwrite( out, outsize, 1, f );\nfclose( f );\n\n```\nto this:\n\n```\n/* Write output file */\nfwrite( out, outsize, 1, f );\nfclose( f );\n\n```\nI should probably mention the likely reason this change was done.  In the original program, the file size can be used to determine the size, but in an undifferentiated array of bytes (i.e. no file system) as is often the case in ROM, it is useful to encode both input and output files sizes within the header.\n\n",
+      "votes": "5",
+      "user": "Edward",
+      "time": "Nov 5, 2014 at 19:12",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Nucklear",
+          "text": "I guess that too and I tried that way, but had a new issue. Check my edit for more information",
+          "time": null
+        },
+        {
+          "user": "Edward",
+          "text": "@Nucklear Can you point me to a copy of the image you're using?",
+          "time": null
+        },
+        {
+          "user": "Nucklear",
+          "text": "Here is the download link sjcamindonesia.com/wp-content/uploads/2014/09/…",
+          "time": null
+        },
+        {
+          "user": "Nucklear",
+          "text": "That was exactly what I was thinking about but I couldn't find the error on bfc.c thank you for the patch I was able to decompress the file. Again thank you so much for the help",
+          "time": null
+        },
+        {
+          "user": "Edward",
+          "text": "You're welcome.  I also added a note to the answer to clarify the likely reason for this change, from the point of view of the firmware designers.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

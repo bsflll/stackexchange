@@ -1,0 +1,99 @@
+{
+    "title": "Control flow graph reconstruction projects",
+    "link": "https://reverseengineering.stackexchange.com/questions/13411/control-flow-graph-reconstruction-projects",
+    "content": "I'm looking for projects providing reconstructed Control Flow Graphs from binaries while supporting more than one platform (e.g. x86, x64, arm). For example, considering this short assembler program:\n<pre><code>.global main\n.intel_syntax noprefix\n\n.extern getchar\n.extern printf\n\n.section .data\njmpTable:\n    .long _stub0\n    .long _stub1\n    .long _stub2\nfmt: .asciz \"%x\n\"\n\n\n.section .text\n\nmain:\n    call getchar\n    mov dl, 4\n    imul dl\n    add eax, offset jmpTable\n    jmp [eax]\n    .long 3851\n_stub0:\n    mov eax, 0\n    jmp end\n    .long 3851\n_stub1:\n    mov eax, 1\n    jmp end\n    .long 3851\n_stub2:\n    mov eax, 2\n    jmp end\n    .long 3851\nend:\n    push eax\n    push offset fmt\n    call printf\n    add esp, 8\n    ret\n</code></pre>\nProjects I've considered:\n\nIDA (best so far, extraction painful)\nBARF (naive, limited approach)\nAngr (breaks easily or computes forever)\nRadare2 (is there any api to export cfg data?)\nJakStab (limited to x86)\n\nrather obvious choice, still, exporting a interprocedural CFG is still a pain. Also, although it is able to find all basic blocks of this example, it misses all indirect edges.\nThe projects should offer come kind of API to provide the cfg. I know solving this problem with static-analysis alone may be infeasible. I'm looking for a best-effort approach.\n",
+    "votes": "10",
+    "answers": 4,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "binary-analysis",
+        "static-analysis",
+        "control-flow-graph"
+    ],
+    "user": "Nordwald",
+    "time": "Sep 2, 2016 at 6:46",
+    "comments": [
+        {
+            "user": "NirIzr",
+            "text": "What part of extracting the information from IDA is particularly painful? to me it looks like writing an IDAPython script for that is rather easy. Then, you could structure your own interface if IDA's raw API is cumbersome for you.\n",
+            "time": null
+        },
+        {
+            "user": "Nordwald",
+            "text": "IDA exposes lots of internal structures and has a own understanding of controll flow graphs. Main critique is the focus on functions and the treatment (and labeling) of edges.\n",
+            "time": null
+        },
+        {
+            "user": "viv",
+            "text": "McSema and CMU BAP seem promising.\n",
+            "time": null
+        },
+        {
+            "user": "musgravejw",
+            "text": "Filed a critical issue with angr about this, and they never even looked at it. @CoreDev, Fish. Any level of support whatsoever would be nice.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "For now, the most efficient approaches in practice seems to follow the principle of symbolic execution. This technique, originally developed to automatically build-up a set of test cases based on a given source code, has been recently used in binary analysis to discover and (partially) recover the CFG of the analyzed binary program.\nMost of the time, if you want to deal with several assembly languages, you need to use an intermediate representation for the programs. For now, there have been a lot of these generic models and none did really got the supremacy over the others. Yet, the most populars seems to be the intermediate representation of LLVM (many tools use it), the second most popular seems to be VEX, the intermediate representation used in Valgrind (as used in Angr). The one from QEMU or the language RREIL might also be an option, but they are less commonly used. But, most of the projects come with their own intermediate representation.\nThen, what you need to build up a CFG-recovery program based on symbolic execution are the following modules:\n\nLoader: This module is in charge to take your binary program (it may be an executable or a library) and simulate the work of the native loader to build a realistic memory image of what you get after the loading process has been achieved.\n\nDecoder: This module is in charge of translating the native hexadecimal opcodes encountered while symbolically executing the program into some mnemonics or simplified instructions (the Capstone library is usually perfect for that).\n\nLifter: It is in charge of lifting the result of the decoder into your own intermediate representation which hold the semantics of the execution path. It might be expressed in a different format (eg SMT-LIB fomula). It is a quite lengthy (and painful) piece of code to implement! So, be prepared to suffer while doing this.\n\nSymbolic execution engine: Usually based on an SMT-solver using the logic QF_AUFBV (Quantifier Free / Arrays / Uninterpreted Function / Bitvectors), the symbolic execution engine can really be a performance bottleneck if you code it naively because the recovery of the CFG will use it a lot. Here, having a good formula simplification (or slicing) module is really the key.\n\n\nApart from these modules, you might also improve your tools by adding more advanced analysis and start coding an abstract interpretation framework that can be added on the top of your intermediate representation, just to have chance to unveil some parts of the CFG that cannot be discovered just through the power of the SMT-solvers.\nAlso, performance is really the key to make your tools really usable. So, be able to capture the exact scope of a variable or the ability to detect a function or a module/object in the binary code helps a lot to reduce the size of the code you have to consider at once.\nNow, I could give you a lot of pointers and articles about this topic, but I lack a bit of time. I might come back to finish writing an extensive list later on, but the general idea has been, hopefully, given above. Hope this might help you.\n",
+            "votes": "7",
+            "user": "perror",
+            "time": "Jun 17, 2022 at 8:15",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Nordwald",
+                    "text": "<span class=\"comment-copy\">Thanks for your explanation. I hoped this has been done before in a more reliable manner than the <i>hacky</i> implementation in angr. Do you know any other projects offering this kind of functionality?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">Some time ago, I wrote this <a href=\"http://reverseengineering.stackexchange.com/questions/4678/code-coverage-fuzzing/4679#4679\">list of tools</a> that perform symbolic execution (or that can be used as a module helping to do it). Maybe you can find some hints there.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Extracting control flow graph in JSON with radare2:\n<pre><code>$> python\nimport r2pipe\nr2 = r2pipe.open(\"/bin/ls\")\nr2.cmd(\"aaa\") # See radare.today/posts/analysis-by-default/\ncfg = r2.cmdj(\"agj\")\n</code></pre>\nhttps://github.com/radare/radare2-bindings/tree/master/r2pipe/python\n",
+            "votes": "11",
+            "user": "Maijin",
+            "time": "Sep 4, 2016 at 16:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Nordwald",
+                    "text": "<span class=\"comment-copy\">doesn't radare have some kind of 'real' api?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Maijin",
+                    "text": "<span class=\"comment-copy\">It does and not just one: <a href=\"https://github.com/radare/radare2-bindings\" rel=\"nofollow noreferrer\">github.com/radare/radare2-bindings</a>. r2pipe is just a wrapper for r_core_cmd(), it spawns or connects to an r2 session and runs commands and returns the output. As long as many commands have json output you can use cmdj() that will return a native object for the langauge you use. from my tests, this is way faster than using the swig bindings because the data serialization and ffi are really expensive. and json parsers are WAY faster. r2pipe requires no maintainance, and it will help you in most of the usecases you want.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Moltres",
+                    "text": "<span class=\"comment-copy\">this gives the control flow of the whole program with functions as nodes. Is there anyway to expand those nodes as to finally have basic blocks (of opcodes) as nodes</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Angr (breaks easily or computes forever)\n\nIf you are still interested in finding a solution, you might want to give angr another try. You should hop on our slack channel (angr.slack.com, please get an invite from http://angr.io) so we can solve any CFG recovery issues together.\nI believe angr gives you the best flexibility out of all solutions you have mentioned, without going into the symbolic execution hell.\nDisclaimer: I'm a core angr developer.\n",
+            "votes": "1",
+            "user": "Fish",
+            "time": "Aug 16, 2017 at 9:15",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "I think Radare2's 'agj' command only extract function call graph, which is different from CFG(control flow graph where a node represent a basic block).\n",
+            "votes": "0",
+            "user": "Bowen",
+            "time": "Sep 10, 2020 at 3:18",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

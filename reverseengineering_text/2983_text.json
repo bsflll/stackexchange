@@ -1,0 +1,39 @@
+{
+    "title": "How to predict address space layout differences between real and gdb-controlled executions?",
+    "link": "https://reverseengineering.stackexchange.com/questions/2983/how-to-predict-address-space-layout-differences-between-real-and-gdb-controlled",
+    "content": "It's something that puzzle me for a long time. I can observe that there is a difference between the real execution of a program and the <pre><code>gdb</code></pre>-controlled one.\nBut, here is an example:\n\nFirst, here is the example code (we use an automatic variable to get the location of the stack):\n<pre><code>#include <stdio.h>\n#include <stdlib.h>\n\nint main ()\n{\n  char c = 0;\n\n  printf (\"Stack address: %p\n\", &c);\n\n  return EXIT_SUCCESS;\n}\n</code></pre>\nThen, we disable the ASLR (we use the personality flags of the process and not the system-wide method through <pre><code>/proc/sys/kernel/randomize_va_space</code></pre>):\n<pre><code>$> setarch `uname -m` -R /bin/bash\n</code></pre>\nThen, get a run in the real memory environment:\n<pre><code>Stack address: 0x7fffffffe1df\n</code></pre>\nAnd, the same through <pre><code>gdb</code></pre>:\n<pre><code> (gdb) r\n Starting program: ./gdb-against-reality\n Stack address: 0x7fffffffe17f\n [Inferior 1 (process 5374) exited normally]\n (gdb) \n</code></pre>\n\nSo, here we have a difference of 96 bytes between the two runs. But, how can I predict this difference for a given program without having it running in the real memory layout (just by knowing the <pre><code>gdb</code></pre> memory layout) ?\nAnd, also, from where/what is coming this difference ?\n",
+    "votes": "19",
+    "answers": 2,
+    "views": "15k",
+    "tags": [
+        "gdb",
+        "memory"
+    ],
+    "user": "perror",
+    "time": "Oct 30, 2013 at 11:15",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "There could be other factors involved, but my guess would be that changes in the process environment variables, which are stored on the stack, are what's causing this issue.\nRunning a small program that just prints out the environment variables reveals a couple variations in environment variables when run inside vs outside gdb on my system.\n<pre><code>int main(int argc, char **argv, char** envp)\n{\n  char** env;\n  for (env = envp; *env != 0; env++)\n  {\n    char* thisEnv = *env;\n    printf(\"%s\n\", thisEnv);    \n  }\n}\n</code></pre>\nFirst, when running under gdb, there is a LINES variable that isn't present when the process is started outside of gdb:\n<pre><code>LINES=83\n</code></pre>\nSecondly, the underscore environment variable is different. When running outside of gdb, it is set to the name of the executable:\n<pre><code>_=./gdbtest\n</code></pre>\nBut when started from inside gdb, it is set to the path of the gdb binary:\n<pre><code>_=/usr/bin/gdb\n</code></pre>\nYou can try to run the program normally, then attach to it with gdb/gdbserver, which should avoid these variations in environment variables (assuming that is in fact what is causing your problem).\nIf your process is short-lived, it can be hard to pause the process before it exits. Maybe someone else has some good suggestions on starting a process in a paused state; I usually use a second program like this one to catch the process as it is starting and pause it so I can attach a debugger to it.\n",
+            "votes": "17",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Vitaly Osipov",
+                    "text": "<span class=\"comment-copy\">This answer on stackoverflow shows how to run gdb with a controlled environment <a href=\"https://stackoverflow.com/a/17775966\">stackoverflow.com/a/17775966</a>. You can simply use his script (remember to run <code>unset</code> commands inside <code>gdb</code>)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Just to add to the answers, I can tell how to get close to a clean environment despite <pre><code>gdb</code></pre>. In fact, there are two methods to reach this:\n\nWe can get rid of the extra environment variables added by <pre><code>gdb</code></pre> as follow:\n<pre><code>(gdb) unset environment LINES\n(gdb) unset environment COLUMNS\n</code></pre>\nWrite these commands before running the program, and you should be close to the normal environment. Note that you still have to take care of the <pre><code>_</code></pre> variable.\nOne can also generate a memory core of the vulnerable program and analyze it with <pre><code>gdb</code></pre>:\n<pre><code>$> gdb vuln_program core\n</code></pre>\nYou should just look at the memory and never <pre><code>run</code></pre>, <pre><code>next</code></pre>, <pre><code>step</code></pre>, ... because doing so will force you to restart the program with a fresh memory (with the shift).\n\nThat was two methods you can use with <pre><code>gdb</code></pre> to follow a program without too much differences with the real execution. But, they are many others!\n",
+            "votes": "4",
+            "user": "perror",
+            "time": "Aug 10, 2017 at 9:02",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

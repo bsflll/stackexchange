@@ -1,0 +1,43 @@
+{
+    "title": "Inject ELF with an entierly self-contained code section that can statically call standard library functions",
+    "link": "https://reverseengineering.stackexchange.com/questions/32867/inject-elf-with-an-entierly-self-contained-code-section-that-can-statically-call",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h1>\n  What I want to do\n </h1>\n <p>\n  What I want to do is inject an existing ELF binary with additional code that runs before the original .text section and then transfers control back to it.\n </p>\n <h1>\n  What I can already do\n </h1>\n <p>\n  Now, I have the following sorted:\n </p>\n <ul>\n  <li>\n   Insert new ELF section and section header\n  </li>\n  <li>\n   Insert new ELF program header that loads the section\n  </li>\n  <li>\n   Modify entrypoint in the ELF header to point to my new section's VA entrypoint\n  </li>\n  <li>\n   Be able to write POC assembly code, compile with NASM into headerless raw cpu instructions format\n  </li>\n  <li>\n   Return control back to original entrypoint\n  </li>\n  <li>\n   All the above works and runs well\n  </li>\n </ul>\n <h1>\n  What I can't do\n </h1>\n <p>\n  What I haven't been able to do is use GCC instead of NASM and use the standard library. Take the following example code:\n </p>\n <pre><code>#include <stdio.h>\n\nvoid foo() {\n    printf(\"hello world\");\n    // ignore the fact that this does not return control to the original ELF entry point\n}\n</code></pre>\n <p>\n  If I were to compile this with\n  <code>\n   gcc -fPIC -c -o hello.o\n  </code>\n  and then yank the .text section from the generated object file with\n  <code>\n   objcopy -O binary -j .text hello.o hello.bin\n  </code>\n  and try to use that as a new section, it simply won't work.\n  <code>\n   hello.bin\n  </code>\n  will contain the following instructions when inspected with\n  <code>\n   objdump\n  </code>\n  :\n </p>\n <pre><code>Disassembly of section .data:\n\n00000000 <.data>:\n   0:   55                      push   %rbp\n   1:   48 89 e5                mov    %rsp,%rbp\n   4:   48 8d 3d 00 00 00 00    lea    0x0(%rip),%rdi        # 0xb\n   b:   b8 00 00 00 00          mov    $0x0,%eax\n  10:   e8 00 00 00 00          callq  0x15\n  15:   90                      nop\n  16:   5d                      pop    %rbp\n  17:   c3                      retq\n</code></pre>\n <p>\n  The above code has a couple of issues. It was yanked from an object file that expects to be linked and relocated into an executable binary that will have\n  <code>\n   .plt\n  </code>\n  and\n  <code>\n   .got\n  </code>\n  sections. Through these PLT stubs it will be able to call\n  <code>\n   printf\n  </code>\n  that will be located in the standard shared library loaded by\n  <code>\n   ld\n  </code>\n  somewhere in memory.\n </p>\n <h1>\n  What I suppose it boils down to\n </h1>\n <p>\n  I want GCC to produce an entirely self-contained object file that has a\n  <code>\n   .text\n  </code>\n  section that does not expect to be relocated, already contains\n  <code>\n   libc\n  </code>\n  statically and is position independent. So that it can just be put anywhere and do its thing.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "elf",
+        "gcc",
+        "instrumentation",
+        "nasm"
+    ],
+    "user": "PaperTsar",
+    "time": "Apr 4, 2024 at 21:44",
+    "comments": [
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<html><body><span class=\"comment-copy\">\n This is not a real answer, but you're going to want to split up the way you think about it a bit. GCC will produce an object file, but it's not going to be self-contained. This is because certain symbol types it can emit literally requre knowing the address of a segment. Your linker (ld), however, is directly responsible for performing these calculations, determining the layout, and putting segments together. You can use a linker script to get most of the way there (applying relos and an elf), but some crt's require rt linking and you'll want a static crt/libc that's more compartmentalized.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<html><body><span class=\"comment-copy\">\n In summary, use the rt linker with its abilities to resolve symbols and apply relocations as suggested in the other answer. It'll likely be far easier for your needs and for your libc (depending on which one you're using). If you really want to do it the other way, you'll need to be aware of the segment address and stripping the relocations when copying out your segments.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Ali Rizvi-Santiago",
+            "text": "<html><body><span class=\"comment-copy\">\n Actually...wrote a blogpost that contains an ld-script you can probably use as a base that is referenced at\n <a href=\"https://www.reddit.com/r/ReverseEngineering/comments/1bnljpl/reversing_justsystems_ichitaro_office_suite_to/\" rel=\"nofollow noreferrer\">\n  reddit.com/r/ReverseEngineering/comments/1bnljpl/…\n </a>\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <h2>\n  Using LD_PRELOAD\n </h2>\n <p>\n  I suggest to use the ELF constructor instead:\n </p>\n <ul>\n  <li>\n   mark your entry point function with\n   <code>\n    __attribute__((constructor))\n   </code>\n  </li>\n  <li>\n   compile your code as\n   <code>\n    -shared\n   </code>\n  </li>\n  <li>\n   inject it using the\n   <code>\n    LD_PRELOAD\n   </code>\n   environment variable\n  </li>\n </ul>\n <p>\n  Your function will be executed before the\n  <code>\n   main\n  </code>\n  function of the targeted executable. The ELF loader will take care of everything for you.\n </p>\n <h2>\n  The manual approach\n </h2>\n <p>\n  All your steps in \"What I can already do\" seems correct, but you probably don't have to add a new section, most (if not all) ELF loaders work with segments, not sections.\n </p>\n <p>\n  The problem with this line\n  <code>\n   objcopy -O binary -j .text hello.o hello.bin\n  </code>\n  is you only keep the program code: in your disassembly listing, you can see\n  <code>\n   lea    0x0(%rip),%rdi\n  </code>\n  is PIC but the actual data (\"hello world\" should in in .rodata) will be missing because it's not stored into the .text section.\n </p>\n <p>\n  You can use\n  <code>\n   __attribute__((section(\".text\")))\n  </code>\n  to move data inside the .text section, but keep in mind that .text is R-X by default, you will have to patch the segment to be RWX if you need non-const data.\n </p>\n <p>\n  The last part is \"relocations\" (which on ELF include resolving external symbols), assuming you just need external symbols: you will have find or rewrite\n  <code>\n   dlopen\n  </code>\n  and\n  <code>\n   dlfunc\n  </code>\n  to resolve symbols at runtime and it's OS dependent.\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "wisk",
+            "time": "Apr 4, 2024 at 23:23",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

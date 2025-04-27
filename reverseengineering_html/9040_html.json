@@ -1,0 +1,79 @@
+{
+    "title": "Ida Pro: parsing complex operand expression using IDAPython",
+    "link": "https://reverseengineering.stackexchange.com/questions/9040/ida-pro-parsing-complex-operand-expression-using-idapython",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Say given the following line in Ida Pro:\n </p>\n <pre><code>mov     [rsp+3F8h+var_3F8], 0\n</code></pre>\n <p>\n  How can I parse and access the items inside the\n  <code>\n   [ ]\n  </code>\n  ?\nWhat I tried:\n </p>\n <ul>\n  <li>\n   <code>\n    idc.GetOpnd(addr, n)\n   </code>\n   # returns a string '\n   <code>\n    [rsp+3F8h+var_3F8]\n   </code>\n   '\n  </li>\n  <li>\n   <code>\n    idc.GetOperandValue(addr, n)\n   </code>\n   # returns\n   <code>\n    4\n   </code>\n   , which is explained in the\n   <a href=\"https://code.google.com/p/idapython/source/browse/trunk/python/idc.py\" rel=\"noreferrer\">\n    idc.py\n   </a>\n   file as follows\n  </li>\n </ul>\n <blockquote>\n  <p>\n   def GetOperandValue(ea, n):\n  \"\"\"\n   \n\n   Get number used in the operand\n  </p>\n  <p>\n   This function returns an immediate number used in the operand\n  </p>\n  <p>\n   @param ea: linear address of instruction @param n: the operand number\n  </p>\n  <p>\n   @return:\n  </p>\n  <p>\n   value operand is an immediate value => immediate value\n  </p>\n  <p>\n   operand has a displacement => displacement\n  </p>\n  <p>\n   operand is a direct memory ref => memory address\n  </p>\n  <p>\n   operand is a register => register number\n  </p>\n  <p>\n   operand is a register phrase => phrase number\n  </p>\n  <p>\n   otherwise => -1\n   \n\n   \"\"\"\n  </p>\n </blockquote>\n <p>\n  How can I access the elements of the 'phrase', i.e. the\n  <code>\n   rsp\n  </code>\n  ,\n  <code>\n   3F8h\n  </code>\n  , and\n  <code>\n   var_3F8\n  </code>\n  ? I am looking for something like this:\n </p>\n <pre><code>my_op_phrase = idc.ParseOperandPhrase(ea, n)\nmy_op_phrase[0] #-> 'rsp'\nmy_op_phrase[0].type #-> idaapi.o_reg\n\nmy_op_phrase[1] #-> 0x3F8h\nmy_op_phrase[1].type #-> idaapi.o_imm\n\nmy_op_phrase[2] #-> 'var_3F8'\n…\n</code></pre>\n <p>\n  Is this even possible or am I misunderstanding something?\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 3,
+    "views": "5k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "idapython"
+    ],
+    "user": "langlauf.io",
+    "time": "Jun 29, 2023 at 21:29",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Note that the original assembly instruction was\n  <em>\n   probably\n  </em>\n  <code>\n   mov [rsp+4], 0\n  </code>\n  (*). This is why\n  <code>\n   idc.GetOperandValue\n  </code>\n  returns 4.\n </p>\n <p>\n  Especially with older compilers, that used\n  <code>\n   push\n  </code>\n  and\n  <code>\n   pop\n  </code>\n  a lot, the value of\n  <code>\n   rsp\n  </code>\n  varies wildly during the execution of a function. What is\n  <code>\n   esp+8\n  </code>\n  now would be\n  <code>\n   esp+12\n  </code>\n  after a push; what would be\n  <code>\n   rsp+8\n  </code>\n  now would be\n  <code>\n   rsp\n  </code>\n  after a pop. So, while reading a piece of (plain) assembly code it's very difficult to keep track of which stack location gets accessed when.\n </p>\n <p>\n  (This has improveed recently; x64 abis use registers to pass parameters so the code doesn't\n  <code>\n   push\n  </code>\n  and\n  <code>\n   pop\n  </code>\n  as much anymore, and compilers like\n  <code>\n   gcc\n  </code>\n  make enough space on the stack and directly put parameters in addresses relative to\n  <code>\n   esp\n  </code>\n  even on 32 bit, so\n  <code>\n   esp\n  </code>\n  /\n  <code>\n   rsp\n  </code>\n  don't change that much anymore. But still, there's a lot of old code to reverse.)\n </p>\n <p>\n  To improve the situation, IDA assigns variable names to stack locations, like your\n  <code>\n   var_3F8\n  </code>\n  . Whenever an instruction does some\n  <code>\n   sp\n  </code>\n  relative addressing, IDA uses the variable name, and emits an additional offset to account for changes to the stack pointer since the function start. So if your original code looks like\n </p>\n <pre><code>mov [rsp+8], rax\nsub rsp, 128\nmov [rsp+136], rbx\npush rcx\nmov [rsp+144], rdx\n</code></pre>\n <p>\n  it accesses the same memory address in every case. Ida converts this to\n </p>\n <pre><code>mov [rsp+0+var_8], rax\nsub rsp, 128\nmov [rsp+128+var_8], rbx\npush rcx\nmov [rsp+136+var_8], rdx\n</code></pre>\n <p>\n  However, these changes are display only, they do not change your binary! Getting the operands will still return\n  <code>\n   8\n  </code>\n  ,\n  <code>\n   136\n  </code>\n  and\n  <code>\n   144\n  </code>\n  , not the values ida displays to you.\n </p>\n <p>\n  If you want to analyze this automatically, you can\n  <em>\n   either\n  </em>\n  keep track of the stack pointer offset yourself, and adjust the result of\n  <code>\n   GetOperandValue\n  </code>\n  accordingly,\n  <em>\n   or\n  </em>\n  you'll have to use the python string functions on the output of\n  <code>\n   GetOpnd\n  </code>\n  , throw away the middle part, and compare the right part (the variable names).\n </p>\n <p>\n  (*) which seems a bit strange now i think of it, since you're obviously using 64 bit, as your stack pointer is\n  <code>\n   rsp\n  </code>\n  , which would hint at 8 byte alignment.\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Guntram Blohm",
+            "time": "Jun 1, 2015 at 14:17",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Is this the \"current stack delta\" what you are referring to? It can be retrieved with <code>GetSpd</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "langlauf.io",
+                    "text": "<span class=\"comment-copy\">@Guntram Blohm: Are you sure about the reason why <code>GetOperandValue()</code> returns 4? The <code>idc.py</code> says: \"operand is a register phrase   =&gt; phrase number\". I understand this as: \"if there is a register 'phrase', <code>GetOperandValue()</code> returns the <i>phrase number</i>.\" I don't know though what is meant by this <i>phrase number</i>. What do you think?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">I don't have access to my office computer at the moment, where IDA is installed, but i'd assume <code>register phrase</code> is almost the same as <code>register name</code>, so each processor register is assigned a number, and ida returns that number if the operand is a register name, or something similar denoting a register on exotic hardware.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Assuming\n  <code>\n   addr\n  </code>\n  is the EA of\n  <code>\n   mov [rsp+3F8h+var_3F8], 0\n  </code>\n  :\n </p>\n <pre><code>re.findall('\\[(.*)\\]', idc.GetDisasm(addr))[0].split('+')\n</code></pre>\n <p>\n  yields the list\n </p>\n <pre><code>['rsp', '3F8h', 'var_3F8']\n</code></pre>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Jason Geffner",
+            "time": "Jun 1, 2015 at 14:22",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Polynomial",
+                    "text": "<span class=\"comment-copy\">This works until you hit a subtraction or multiplication, e.g. <code>mov edx, [eax+ecx*4]</code>. Regex is not really a great option here, but unfortunately it doesn't seem like IDA really gives us much of a choice.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jason Geffner",
+                    "text": "<span class=\"comment-copy\"><i>\"This works until you hit a subtraction or multiplication\"</i> -- Yes, but that's not what the question asked :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Orwellophile",
+                    "text": "<span class=\"comment-copy\">@JasonGeffner <b>(a)</b> Easier to do regex <code>GetOpnd(ea, 0)</code> == <code>[rsp+3F8h+var_3F8]</code> <b>(b)</b> How to get the value of var_x (<i>guessable</i>) and arg_x (<i>not su much) <b>(c)</b>  In cases such as these (*register + displacement</i>) just <code>GetOperandValue(ea, 1) if GetOpType(ea, 1) == o_displ else None</code> == <code>48</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Orwellophile",
+                    "text": "<span class=\"comment-copy\">@Polynomial: that type of operand can be detected by <code>GetOpnd(ea,1) == o_phrase</code>  and is probably the only kind of operand you would use regex for, except maybe for o_displ.  Although, since you can't resolve it to an actual value, it's probably not likely to ever become an issue.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  If you want to avoid using a regular expression to extract the base, index, scale from that specific operand type, you can use the\n  <a href=\"https://arizvisa.github.io/ida-minsc/modules/instruction.html#instruction.op\" rel=\"nofollow noreferrer\">\n   <code>\n    instruction.op\n   </code>\n  </a>\n  function from the minsc plugin at\n  <a href=\"https://github.com/arizvisa/ida-minsc/tree/persistence-refactor\" rel=\"nofollow noreferrer\">\n   https://github.com/arizvisa/ida-minsc\n  </a>\n  .\n  <em>\n   Disclaimer: I maintain the ida-minsc plugin.\n  </em>\n </p>\n <pre><code>Python>db.disasm()\n'1c00b2f7f: mov rcx, [rbp+57h+var_20]'\n\nPython>ins.op(1)\nSegmentOffsetBaseIndexScale(segment=%ss, offset=0x37, base=%rbp, index=None, scale=1)\n\n# If you need the symbols that compose the expression...\n# (although, it's not really that useful compared to a real symbolic language)\nPython>[item for item in ins.op(1).symbols]\n[<class 'register_t' index=31 dtype=dt_word name='ss' position=0+16>, <class 'register_t' index=5 dtype=dt_qword name='rbp' position=0+64>]\n\n# Translate the address if you need to.\nPython>ins.op(idc.here(), 1) + 0x1000\nSegmentOffsetBaseIndexScale(segment=%ss, offset=0x1037, base=%rbp, index=None, scale=1)\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Ali Rizvi-Santiago",
+            "time": "Jul 21, 2024 at 7:12",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

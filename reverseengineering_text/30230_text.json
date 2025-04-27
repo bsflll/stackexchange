@@ -1,0 +1,52 @@
+{
+    "title": "Where can I find the encryption algorithm in source code?",
+    "link": "https://reverseengineering.stackexchange.com/questions/30230/where-can-i-find-the-encryption-algorithm-in-source-code",
+    "content": "When I submit a Customer Reference ID in an Android Application it POSTs an encrypted string to an API endpoint.\nFor example, if I enter the following CR ID :\n\"SR-54585482\"\nit POSTs the following Encrypted Data:\n<pre><code>splainText : \"vpEz/Vm8Yi9v5/fzNE+MDoMIQGZ0vNvjPuX8UNAi26c=\"\n\n     Count : 31\n</code></pre>\nHow do I find the encryption algorithm in the source code of the APK?\nIn which file can I find about this encryption?\nDex2Jar File here : https://www.mediafire.com/file/hs0qyirhuk4ygo8/test-dex2jar.jar/file\nAPK from here :\nhttps://play.google.com/store/apps/details?id=com.sundirect.sundth\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "encryption",
+        "android",
+        "java"
+    ],
+    "user": "Cruzer Blade",
+    "time": "Apr 10, 2022 at 17:03",
+    "comments": [
+        {
+            "user": "Robert",
+            "text": "First the encrypted text is obviously base64 encoded which hides too much information, better look at it in raw or at least he's encoding. Second, why do you think this is an information security question(there is a stack exchange site dedicated to reverse engineering which would suite much better)? And third have you at least tried to most obvious search for <pre><code>Cipher.getInstance</code></pre> in Jadx when you are searching for a cipher?\n",
+            "time": null
+        },
+        {
+            "user": "schroeder",
+            "text": "If you just want to know how to analyse the source code to locate the encryption algorithm, then all of the details about what the algorithm does to specific strings is irrelevant.\n",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "The screenshot just contains some numbers which are not relevant to any crypto but the way assets and resources are handled. Better option is to share the apk. Also I see references to <pre><code>mono</code></pre> and <pre><code>xamarin</code></pre> in the screenshot so maybe the app is not built in java but .NET.\n",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "I won't be able to help you privately. You can share the apk here if possible.\n",
+            "time": null
+        },
+        {
+            "user": "sudhackar",
+            "text": "The screenshots offer no additional use - only waste space. Please use text to share code in any post.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Based on your screenshots (as already mentioned in comments) - references to <pre><code>mono</code></pre> and <pre><code>xamarin</code></pre> help us understand that the apk is probably built with .NET. In this method the code is probably written as C# and then compiled to DLLs depending on what classes you use in the code.\nSee : https://github.com/xamarin/xamarin-android for more details on this.\nA simple unzip will confirm that too.\n<pre><code>$ unzip ../Sun.apk -d .\n...\nassemblies/xxx.dll\n...\n</code></pre>\nNow most of the static analysis can be based on decompiling .NET dlls which can be done using something like ILSpy.\nLooking at the type of dlls\n<pre><code>$ file assemblies/xxx.dll\nassemblies/xxx.dll : data\n</code></pre>\nThe dlls are actually compressed with lz4 based on this PR and then can be uncompressed using a script\n<pre><code>$ find . -type f -name \"*.dll\" -exec mv {} {}.lz4 \\;\n$ find . -type f -name \"*.lz4\" -exec python Xamarin_XALZ_decompress.py {} {}.dll \\;\n</code></pre>\nNow ILSpy can load and decompile these DLLs.\nBased on the ciphertext you provide it looks like a block cipher such as AES. Look around for that in the decompiled code in <pre><code>Sundirect.dll</code></pre>\nWe find this snippet in <pre><code>Sundirect.Services</code></pre>\n<pre><code>using System;\nusing System.Security.Cryptography;\nusing System.Text;\n\npublic static string Encrypt(string inputText, string encryptionKey)\n{\n    UTF8Encoding uTF8Encoding = new UTF8Encoding();\n    RijndaelManaged rijndaelManaged = new RijndaelManaged();\n    rijndaelManaged.Mode = CipherMode.CBC;\n    rijndaelManaged.Padding = PaddingMode.PKCS7;\n    rijndaelManaged.KeySize = 128;\n    rijndaelManaged.BlockSize = 128;\n    byte[] bytes = Encoding.UTF8.GetBytes(encryptionKey);\n    byte[] array = new byte[16];\n    int num = bytes.Length;\n    if (num > array.Length)\n    {\n        num = array.Length;\n    }\n    Array.Copy(bytes, array, num);\n    rijndaelManaged.Key = array;\n    rijndaelManaged.IV = array;\n    string result = Convert.ToBase64String(rijndaelManaged.CreateEncryptor().TransformFinalBlock(uTF8Encoding.GetBytes(inputText), 0, uTF8Encoding.GetBytes(inputText).Length));\n    rijndaelManaged.Dispose();\n    return result;\n}\n</code></pre>\nRight Click -> Analyze to see what code uses this function and we see that is is used to encrypt post data\n<pre><code>...\nSundirect.Services.LoginAPIServices.LoginAync(string, string) : Task<LoginDetailsOutputDto>\nSundirect.Services.LoginAPIServices.GetUserPasswordAsync(string) : Task<UserPasswordDto>\n...\n</code></pre>\nClick and browse to that location and you see that the key to encrypt is hardcoded\n<pre><code>...\nstring value2 = BaseServices.Encrypt(input, \"419201ddtuz3082249879134d06093b95991g6f70d\");\n...\n</code></pre>\nThis can help us write a simple decryptor like this\n<pre><code>using System.Diagnostics;\nusing System.Security.Cryptography;\nusing System.Text;\n\npublic class Test\n{\n    public static string Encrypt(string inputText, string encryptionKey)\n    {\n        UTF8Encoding uTF8Encoding = new UTF8Encoding();\n        Aes? rijndaelManaged = Aes.Create(\"AesManaged\");\n        rijndaelManaged.Mode = CipherMode.CBC;\n        rijndaelManaged.Padding = PaddingMode.PKCS7;\n        rijndaelManaged.KeySize = 128;\n        rijndaelManaged.BlockSize = 128;\n        byte[] bytes = Encoding.UTF8.GetBytes(encryptionKey);\n        byte[] array = new byte[16];\n        int num = bytes.Length;\n        if (num > array.Length)\n        {\n            num = array.Length;\n        }\n        Array.Copy (bytes, array, num);\n        rijndaelManaged.Key = array;\n        rijndaelManaged.IV = array;\n        string result =\n            Convert\n                .ToBase64String(rijndaelManaged\n                    .CreateEncryptor()\n                    .TransformFinalBlock(uTF8Encoding.GetBytes(inputText),\n                    0,\n                    uTF8Encoding.GetBytes(inputText).Length));\n        rijndaelManaged.Dispose();\n        return result;\n    }\n\n    public static string Decrypt(string inputText, string encryptionKey)\n    {\n        UTF8Encoding uTF8Encoding = new UTF8Encoding();\n        Aes? rijndaelManaged = Aes.Create(\"AesManaged\");\n        rijndaelManaged.Mode = CipherMode.CBC;\n        rijndaelManaged.Padding = PaddingMode.PKCS7;\n        rijndaelManaged.KeySize = 128;\n        rijndaelManaged.BlockSize = 128;\n        byte[] bytes = Encoding.UTF8.GetBytes(encryptionKey);\n        byte[] array = new byte[16];\n        int num = bytes.Length;\n        if (num > array.Length)\n        {\n            num = array.Length;\n        }\n        Array.Copy (bytes, array, num);\n        rijndaelManaged.Key = array;\n        rijndaelManaged.IV = array;\n        byte[] b64 = Convert.FromBase64String(inputText);\n        string result =\n            System.Text.Encoding.UTF8.GetString(rijndaelManaged\n                    .CreateDecryptor()\n                    .TransformFinalBlock(b64,\n                    0,\n                    b64.Length));\n        rijndaelManaged.Dispose();\n        return result;\n    }\n\n    public static void Main()\n    {\n        string key = \"419201ddtuz3082249879134d06093b95991g6f70d\";\n        string e = Decrypt(Encrypt(\"input\", key), key);\n        Debug.Assert(e==\"input\");\n        Console.WriteLine(Decrypt(\"vpEz/Vm8Yi9v5/fzNE+MDoMIQGZ0vNvjPuX8UNAi26c=\", key));\n    }\n}\n</code></pre>\nwhich on running decrypts\n<pre><code>\"vpEz/Vm8Yi9v5/fzNE+MDoMIQGZ0vNvjPuX8UNAi26c=\"\n</code></pre>\nto\n<pre><code>CR-13261150|03|2022-04-04 22:40\n</code></pre>\n",
+            "votes": "2",
+            "user": "sudhackar",
+            "time": "Apr 11, 2022 at 6:48",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

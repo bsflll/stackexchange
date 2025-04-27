@@ -1,0 +1,32 @@
+{
+    "title": "Executing CMP DS:[] by inline assembly inline hooks",
+    "link": "https://reverseengineering.stackexchange.com/questions/20680/executing-cmp-ds-by-inline-assembly-inline-hooks",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I need to execute some instructions of library I'm using (ws2_32.dll) inside my C code, but I have a problem with a simple cmp instruction. \nFollowed by IDA, this instruction is: </p>\n<pre><code>cmp off_41AE7048, offset sub_41AC2E29\n</code></pre>\n<p>When I run my application in debugger, this above pice of code becomes: </p>\n<pre><code>CMP DWORD PTR DS:[77517048],WS2_32.774F2E29\n</code></pre>\n<p>What does this excatly mean? \nWhere this address(?) 77517048 came from? </p>\n<p>I code comething like this</p>\n<pre><code>mov eax, DWORD ptr DS:[0x41AE7048]\ncmp eax, DWORD ptr DS:[0x41AC2E29]\n</code></pre>\n<p>but as I expected it doesn't work -&gt; program crashes.</p>\n\n###### EDIT\n\n<p>A little bit of explanation. I'm doing inline hook on listen function  from ws2_32.dll library. </p>\n<p>I have my own dll  - hook.dll, which will be loaded into remote process. \nInside this dll I have funcion called listen_hook_wrapper; </p>\n<p>After the dll is loaded into remote process, inside dllMain I'm overriding a few first instructions of 'listen' function, by loading my own code which is simple jump into 'listen_hook_wrapper'. To simplify, let's called this jump as trampoline.</p>\n<p>Inside listen_hook_wrapper I'm taking listen's arguments, process them, and after all I would like to return executing to listen function, but before I will jump into listen function, I must execute listen's instructions which were overrided by my 'trampoline'.</p>\n<p>The instructions of listen function, which were overriden by my trampoline are: </p>\n<pre><code>mov edi, edi\npush ebp\nmov ebp, esp\npush ecx\ncmp off_41AE7048, offset sub_41AC2E29 \n</code></pre>\n<p>After I execute this set of instruction I can jump back into listen function, and it should continue executing properly.</p>\n<p>When I was writing this post I couldn't figure out what excatly is (what it is doing):</p>\n<blockquote>\n<p>cmp off_41AE7048, offset sub_41AC2E29 </p>\n</blockquote>\n<p>and why executing this inside my trampoline causes errors, but now I think that it's because relocations. </p>\n<p>As I mentioned above, when I take a look inside listen function during execution, the instrucion above becomes: </p>\n<blockquote>\n<p>CMP DWORD PTR DS:[77517048],WS2_32.774F2E29</p>\n</blockquote>\n<p>Let's compare this two addresses: </p>\n<blockquote>\n<p>41AE7048 and 77517048. </p>\n</blockquote>\n<p>They have common part which is ****7048. \nAs I know the 4**** is the default base address assigned during compile process, and the 7**** is address where usually dlls are loaded. So I think I need just update the instruction:</p>\n<blockquote>\n<p>cmp off_41AE7048, offset sub_41AC2E29 </p>\n</blockquote>\n<p>by applying relocations, using the base address which was assigned in runtime by aslr mechanism.</p>\n<p>I can't test it right now, but I think that it makes sense isn't it? </p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "282",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "function-hooking"
+    ],
+    "user": "bielu000",
+    "time": "Feb 22, 2019 at 7:28",
+    "comments": [
+        {
+            "user": "Nordwald",
+            "text": "<span class=\"comment-copy\">What are you trying to accomplish and what is the function in question?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Thanks for your ellaborations. All I had was the Win10 (64bit) version of winsock. The start of the listen function looks like this:</p>\n<p><a href=\"https://i.sstatic.net/ob4m2.png\" rel=\"nofollow noreferrer\"><img alt=\"listen function prolog\" src=\"https://i.sstatic.net/ob4m2.png\"/></a></p>\n<p>As you can see, the cmp instruction compares a fixed 32bit value (<code>0x4f7902a0</code>) to something in the <code>.data</code>-section of the library. As you can see, in the case they are not equal, there is another check of a data value and in the end its seems to decide whether to set a local variable to zero.</p>\n<p><a href=\"https://i.sstatic.net/XwQPo.png\" rel=\"nofollow noreferrer\"><img alt=\"data section\" src=\"https://i.sstatic.net/XwQPo.png\"/></a></p>\n<p>As you can see, the global variable which is checked contains the right value as per default. I can only speculate what is does... When you use the acutal pdb, you can see that it is a function pointer (PrologPointer).</p>\n<p><a href=\"https://i.sstatic.net/egdQh.png\" rel=\"nofollow noreferrer\"><img alt=\"data section with pdb\" src=\"https://i.sstatic.net/egdQh.png\"/></a></p>\n<p>But back to the core question. Without any meta information, when we decompile the instruction in question, we get the following output:</p>\n<pre><code>8b3500507c4f   mov    esi,DWORD PTR [rip+0x4f7c5000]\n</code></pre>\n<p>The library wants to be loaded at <code>0x4f780000</code>. And the data is supposed to be read from <code>rip+0x4f7c5000</code>. Basically, this code is position independent and utilized a fixed offset between the dll base and its code section.</p>\n<p>Normally, you should be able to install your hook in less than 9 bytes. Windows functions conveniently always utilize the standard function preamble, which is pretty easy to hook (e.g. with a far jump (5 bytes)). If that is not the case, you'll have to account for the relative address or skip the check altogether.</p>\n</div>",
+            "votes": "1",
+            "user": "Nordwald",
+            "time": "Feb 22, 2019 at 11:49",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

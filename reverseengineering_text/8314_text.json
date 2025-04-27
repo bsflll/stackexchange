@@ -1,0 +1,59 @@
+{
+    "title": "Single step exception at the beginning of an unrelated function",
+    "link": "https://reverseengineering.stackexchange.com/questions/8314/single-step-exception-at-the-beginning-of-an-unrelated-function",
+    "content": "I'm reversing an application and I know for a fact it employs CRC checks, so if I modify the code, for instance hooking something, it'll be detected. The application uses a DLL which I replaced with my custom one and I'm trying to get around the CRC checks. The symptoms are, however, puzzling me. This is what happens if I modify the code and it gets detected:\n\nHowever, it seems that the code at this address is just the start of some unrelated function:\n\n\nI find that a bit puzzling; I expected something like\n<pre><code>if (detected) RaiseException(EXCEPTION_SINGLE_STEP)</code></pre>, and instead it simply \"crashes\" at the start of this function.\n\nWhat does that mean?\nAm I right in thinking that what we see in the first screenshot implies RaiseException must be deliberately called somewhere in the code?\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "758",
+    "tags": [
+        "exception",
+        "crc"
+    ],
+    "user": "user4520",
+    "time": "Feb 22, 2015 at 17:11",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "It simply means the application has set the trap flag (presumably as a response to your modifications).\nHowever, this doesn't necessarily have to happen via RaiseException. Instead, it could have been done like this:\n<pre><code>pushf\npop eax\nor eax, 100h\npush eax\npopf\n</code></pre>\nOr by a simple variaion of that code.\nUpdate:\nNote that a single step exception is in fact a trap exception (as opposed to a fault exception). A trap is raised after the instruction executed that caused the trap, whereas a fault is raised before the instruction executes that would generate that fault.\nFor example, a page fault is raised before the instruction that references paged memory actually executes. For the same reason you have division by zero faults, you better get the exception before dividing by zero ;)\nSo the code in your application might conceptually look like this:\n<pre><code>pushf\npop eax\nor eax, 100h\npush eax\npopf\ncall MySub\n</code></pre>\nAnd you get the exception at the entry of MySub, which makese sense because the exception is raised after the call executed.\nAnother possible explanation could be, that an SEH exception is raised and the TF is enabled in the cpu context upon return from the kernel.\n",
+            "votes": "1",
+            "user": "newgre",
+            "time": "Feb 23, 2015 at 0:08",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "user4520",
+                    "text": "<span class=\"comment-copy\">Okay, and why does MSVC claim it happens at that address? Is that correct? If yes, what does the function have to do with anything?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Instead of <code>popf</code>, the code might be pushing the address of your function, then use <code>iret</code> to return to that function and pop the changed flags at the same time. If i remember correctly, if the <code>NT</code> (nested task) flag isn't set, the protected mode <code>iret</code> works very much like the real mode <code>iret</code> (<code>pop ip</code>, <code>pop cs</code>, <code>pop flags</code>, execute next instruction at <code>ip</code>). Did you check the xref at <code>0x41de94</code> ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "newgre",
+                    "text": "<span class=\"comment-copy\">@Guntram yes this would work, but then he'd get the exception after the first instruction in the function above, not before the first instruction.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Hmmm, last time i played with the trap flag was in DOS times - must be 20 years ago. So this means that after setting the trap flag, one more instruction gets executed before the trap happens. So a <code>jmp</code>  after the <code>popf</code> should do the trick, shouldn't it?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Oops, didn't see the update.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Okay, after a few more days I sort of have a solution.\nFirst off, I still have absolutely no idea what the code is doing to cause the exception - this is what the only call to the function looks like (and I've made sure this is how the code gets there - the return address is the same):\n\nNo RaiseException, the trap flag is not set - I have no ideas what this means. Regardless, I was able to discard the exception in this way:\n<pre><code>LONG WINAPI VEH_Handler(struct _EXCEPTION_POINTERS *ExceptionInfo)\n{\n    printf(\"Got an exception %X at address %X\n\", ExceptionInfo->ExceptionRecord->ExceptionCode, ExceptionInfo->ExceptionRecord->ExceptionAddress);\n\n    if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP)\n    {\n        printf(\"patching trap flag\n\");\n\n        __asm PUSHF\n        __asm POP EAX\n        __asm AND EAX, 0xFEFF\n        __asm PUSH EAX\n        __asm POPF\n\n        return EXCEPTION_CONTINUE_EXECUTION;\n    }\n\n    return EXCEPTION_CONTINUE_SEARCH;\n}\n</code></pre>\nIt works, which I find somewhat amusing.\n",
+            "votes": "0",
+            "user": "user4520",
+            "time": "Feb 26, 2015 at 20:16",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

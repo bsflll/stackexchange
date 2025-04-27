@@ -1,0 +1,53 @@
+{
+    "title": "What is a \"far call\" in an x86 or x86_64 cpu",
+    "link": "https://reverseengineering.stackexchange.com/questions/31060/what-is-a-far-call-in-an-x86-or-x86-64-cpu",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I do not understand the usefulness of the \"far call\" instruction in a 86 CPU.</p>\n<p>On a 32 bits CPU for example each process has an addressing space of 4Gb (0x00000000 to 0xFFFFFFFF).</p>\n<p>There can be several executable memory regions in this 4Gb address space.</p>\n<p>A \"basic CALL\" instruction can call any address in this space. for example:</p>\n<pre><code>CALL 0x12345678\n</code></pre>\n<p>In this case, EIP register will be pushed on the stack and 0x12345678 value will be assigned to EIP.</p>\n<p>To me, a \"Far call\" is exactly the same thing but it also changes the CS (Code Segment) register. What is the goal of changing this register value ?</p>\n<p>Why changing CS register value ?</p>\n<p>Thanks</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "1k",
+    "tags": [
+        "assembly",
+        "x86",
+        "x86-64",
+        "calling-conventions"
+    ],
+    "user": "Bob5421",
+    "time": "Oct 31, 2022 at 8:46",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>to perform inter segement branching (jump/call) cs needs to be changed</p>\n<p>from windbg you can observe kernel code is running in code segment 0x10 while user mode code is running in 0x33 (64 bits) or 0x23 (32 bits)</p>\n<pre><code>:\\&gt;livekd -b  -c rcs;q | findstr \"cs=\"\ncs=0010\n\n:\\&gt;cdb -c \"r cs;q\" cdb.exe | findstr \"cs=\"\ncs=0033\n\n\n:\\&gt;cd \"c:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x86\"\n\n:\\&gt;.\\cdb -c \"r cs;q\" .\\cdb.exe | findstr \"cs=\"\ncs=0023  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246\ncs=00000023\n</code></pre>\n<p>a 32 bit binary when running in a 64 bit windows uses WoW (windows on windows ) layer to run 64 bit code to perform syscalls employing inter segement calls with same privileges but different selector</p>\n<pre><code>ntdll!Wow64SystemServiceCall:\n77cf8b40 ff252892d977    jmp     dword ptr [ntdll!Wow64Transition (77d99228)] ds:002b:77d99228=77c67000\n0:000&gt; t\neax=0007000e ebx=00000000 ecx=ffffffff edx=77cf8b40 esi=77d95ce0 edi=77c76a78\neip=77c67000 esp=04a7f510 ebp=04a7f788 iopl=0         nv up ei pl zr na pe nc\n&gt;&gt;&gt;cs=0023&lt;&lt;&lt;\nss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246\n77c67000 ea0970c6773300  jmp     0033:77C67009  &lt;&lt;&lt;&lt; calling \n</code></pre>\n<p>EDIT:</p>\n<p>the queries you pose in edit are probably worth a few lectures and can't be answered justifiably in Q.A site.</p>\n<p>you may need to look for Segment Descriptor , Segment Selector ,<br/>\nGlobal Descriptor Table , Local Descriptor Table , Segment Translation<br/>\nand run through AMD and Intel Manuals a few times to get a grip.</p>\n<p>cs , fs, ss, es ,gs ds are segment selectors a 16 bit entity</p>\n<p>bit 0,1 denotes Requested Privilege Level or RPL</p>\n<p>bit 2 denotes Which Descriptor Table (Table Indicator or TI) to use<br/>\n( GDT or LDT )</p>\n<p>bit 3 to 15 denotes the Index</p>\n<p>SELECTORS Dissected</p>\n<pre><code>hex | bin               |    index          |  TI     | RPL         |\n10  | 0000000000010000  | 0000000000010=0X2 | 0=GDT   | 00=R0/KERNEL|\n23  | 0000000000100011  | 0000000000100=0X4 | 0=GDT   | 11=R3/USER  |\n33  | 0000000000110011  | 0000000000110=0X6 | 0=GDT   | 11=R3/USER  |\n</code></pre>\n<p>DUMPING First 8 Global Descriptor Table Entries</p>\n<pre><code>0: kd&gt; dpp @gdtr L8\nfffff804`43856fb0  00000000`00000000\nfffff804`43856fb8  00000000`00000000\nfffff804`43856fc0  00209b00`00000000 &lt;&lt; 0X2\nfffff804`43856fc8  00409300`00000000\nfffff804`43856fd0  00cffb00`0000ffff &lt;&lt; 0X4\nfffff804`43856fd8  00cff300`0000ffff\nfffff804`43856fe0  0020fb00`00000000 &lt;&lt; 0X6\nfffff804`43856fe8  00000000`00000000\n</code></pre>\n<p>using dg command to dissect the raw bytes dumped above</p>\n<pre><code>0: kd&gt; dg 0x10\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n0010 00000000`00000000 00000000`00000000 Code RE Ac 0 Nb By P  Lo 0000029b\n0: kd&gt; dg 0x20\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n0020 00000000`00000000 00000000`ffffffff Code RE Ac 3 Bg Pg P  Nl 00000cfb\n0: kd&gt; dg 0x30\n                                                    P Si Gr Pr Lo\nSel        Base              Limit          Type    l ze an es ng Flags\n---- ----------------- ----------------- ---------- - -- -- -- -- --------\n0030 00000000`00000000 00000000`00000000 Code RE Ac 3 Nb By P  Lo 000002fb\n0: kd&gt;\n</code></pre>\n<p>so between selector <strong>4 and 6 or cs = 0x23 and cs = 0x33</strong></p>\n<p>difference in both cs selector is in 0x33 Long Mode or 64 bit code execution is possible<br/>\nwhereas  with cs = 0x23 executing 64 bit instruction is not possible</p>\n<p>a practical usage can be observed below in the disassembly of same bytes between cs changes</p>\n<pre><code>0:000:x86&gt; ? cs\nEvaluate expression: 35 = 00000023\n0:000:x86&gt; $$ cs is now in 2 bit mode and disassembly will be as x86 see prompt also\n0:000:x86&gt; u . l4\nwow64cpu!KiFastSystemCall:\n77c67000 ea0970c6773300  jmp     0033:77C67009\n77c67007 0000            add     byte ptr [eax],al\n77c67009 41              inc     ecx\n77c6700a ffa7f8000000    jmp     dword ptr [edi+0F8h]\n0:000:x86&gt; $$ lets single step\n0:000:x86&gt; t\nwow64cpu!KiFastSystemCall+0x9:\n00000000`77c67009 41ffa7f8000000  jmp     qword ptr [r15+0F8h] ds:00000000`77c64758={wow64cpu!CpupReturnFromSimulatedCode (00000000`77c61782)}\n0:000&gt; $$ see the x86 garbage disassembly has now a meaningful x64 instruction\n0:000&gt; $$ and prompt is not x86 anymore but x64\n\n0:000&gt; u .-9 l6\nwow64cpu!KiFastSystemCall:\n00000000`77c67000 ea              ???\n00000000`77c67001 0970c6          or      dword ptr [rax-3Ah],esi\n00000000`77c67004 7733            ja      wow64cpu!KiFastSystemCall+0x39 (00000000`77c67039)\n00000000`77c67006 0000            add     byte ptr [rax],al\n00000000`77c67008 0041ff          add     byte ptr [rcx-1],al\n00000000`77c6700b a7              cmps    dword ptr [rsi],dword ptr [rdi]\n0:000&gt; disassembling x86 code as x64 results ingarbage now\n</code></pre>\n</div>",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Nov 1, 2022 at 19:00",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">Thanks for your answer but i do not understand something: CS is a base address or a prefix ? What means 0x0010 for example ? If i make a \"JMP FAR 0x0010:0x2000\" what will happen ? a jump to 0x2010 ? And what's the difference if i make a near Jump like this: \"JMP 0x2010\" ?  Thanks</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">edited in a few details take a look but you may have to read a lot  about gdt ldt segment selector etc etc</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">Thanks a lot. But I do not understand the role of \"index\" (bits 3 to 15). It as no link with memory addresses ?</span>",
+                    "time": null
+                },
+                {
+                    "user": "blabb",
+                    "text": "<span class=\"comment-copy\">i have already stated that the index denotes which gdt / ldt entry to use  gdtr * mygdtr[gdtl  ]  ;  x= mygdtl[index_x]  y = mygdtl[index_y]  etc etc</span>",
+                    "time": null
+                },
+                {
+                    "user": "Bob5421",
+                    "text": "<span class=\"comment-copy\">On a x86 32 bits cpu, do you think it is possible to access for example 0x12341234 address by multiple ways using different selector value ? Thanks</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

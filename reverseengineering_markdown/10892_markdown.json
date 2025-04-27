@@ -1,0 +1,41 @@
+{
+  "title": "Illegal entry point of an ELF file",
+  "link": "https://reverseengineering.stackexchange.com/questions/10892/illegal-entry-point-of-an-elf-file",
+  "content": "I have encountered a quite obscure 32-bit ELF file (that is a crackme) and I still cannot figure out how can it execute. First, beside some \"understandable\" property that it has not any section:\n\n```\n# readelf --sections SimpleVM\n\nThere are no sections in this file.\n\n```\nConsidering the segments:\n\n```\n# readelf --segments SimpleVM\n\nElf file type is EXEC (Executable file)\nEntry point 0xc023dc\nThere are 2 program headers, starting at offset 52\n\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  LOAD           0x000000 0x00c01000 0x00c01000 0x013c7 0x013c7 RWE 0x1000\n  LOAD           0x00019c 0x0804b19c 0x0804b19c 0x00000 0x00000 RW  0x1000\n\n```\nI observe that the first segments LOAD has size 0x13c7 bytes, and mapped into memory at 0xc01000; the second one is not important because its size is zero. But, the entry point of the ELF file is at 0xc023dc, that means outside any segment LOAD!!!\n\nI use also IDA 6.8 (evaluation ver.) to load this file, and IDA says that the entry point is illegal.\n\nSince the program has no INTERP segment, the first executed instruction must be at 0xc023dc. But this address is outside any \"reliably\" mapped data, we cannot sure which instruction will be executed. I think that this ELF should have some random behaviors (e.g. it should be crashed usually), but it is not, it executes normally, without any crash.\n\nSo my question is: how can this happen?\n\nNB1. In case of someone wants to look at this file, I give the link here, but please do not give directly the solution. I want to handle it myself.\n\nNB2. Using a Pintool to trace out what happens, I find the OEP of the program is at 0xc01dfa since its trace is:\n\n```\n0xc023dc  mov dword ptr [0xc01bf0], 0x252e8 <=== modify address 0xc01bf0\n0xc023e6  jmp 0xc01bf0\n0xc01bf0  call 0xc01e47                     <=== modified instruction\n0xc01e47  pop ebp                           <=== OEP\n0xc01e48  call 0xc01dfa\n0xc01dfa  pop esi\n0xc01dfb  lea eax, ptr [ebp-0x9]\n0xc01dfe  mov edi, dword ptr [eax]\n0xc01e00  sub eax, edi\n0xc01e02  mov edx, eax\n0xc01e04  add eax, dword ptr [eax+0x48]\n0xc01e07  add eax, 0xfff\n0xc01e0c  and eax, 0xfffff000\n0xc01e11  push 0x1\n0xc01e13  push eax\n....\n\n```\nBut I still cannot understand why the instruction at 0xc023dc is always mov dword ptr [0xc01bf0], 0x252e8 (so the binary is somehow \"self-modified\")\n\n",
+  "votes": "4",
+  "answers": 1,
+  "views": "1k",
+  "tags": [
+    "disassembly",
+    "elf"
+  ],
+  "user": "Ta Thanh Dinh",
+  "time": "Sep 20, 2015 at 23:11",
+  "comments": [
+    {
+      "user": "Ian Cook",
+      "text": "File/memory mappings are always multiples of the page size, on x86 this is usually 4k.  The mapping length here, 0x13c7  will be rounded up to a multiple of the page size meaning that  0x2000 bytes will be mapped.  If you look the raw file at offset 0x13dc you should find these 'extra' instructions.",
+      "time": null
+    },
+    {
+      "user": "Ta Thanh Dinh",
+      "text": "Thanks a lot @IanCook, this is exactly what you say. Indeed, at 0x13dc is the opcode (10 bytes) of the first instruction. I do not know that the mapping size should be rounded up to page size.",
+      "time": null
+    },
+    {
+      "user": "Ta Thanh Dinh",
+      "text": "...then the OS will copy more data from LOAD segments regardless of theirs size in the header. Would you mind let your comment as an answer?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "File/memory mappings are always multiples of the page size, on x86 this is usually 4k. The mapping length here, 0x13c7 will be rounded up to a multiple of the page size meaning that 0x2000 bytes will be mapped. If you look the raw file at offset 0x13dc you should find these 'extra' instructions.\nThe rounding up to page size is necessary because the memory manager and processor page tables work on 4k granularity to reduce the overhead of memory management.\n\nThere is self-modification going on too. It is the write to memory from the instruction at 0xc023dc which creates the CALL (0xE8) instruction you see at address 0xC01BF0.  This won't be in the raw file.   The write to the code is possible because the code is, unusually, mapped with write (W) access in the program header.\n\n",
+      "votes": "5",
+      "user": "Ian Cook",
+      "time": "Sep 18, 2015 at 8:03",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

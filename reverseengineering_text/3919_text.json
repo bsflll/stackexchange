@@ -1,0 +1,149 @@
+{
+    "title": "Reverse engineering T-Disk barcodes for Tassimo coffee makers",
+    "link": "https://reverseengineering.stackexchange.com/questions/3919/reverse-engineering-t-disk-barcodes-for-tassimo-coffee-makers",
+    "content": "In hope this is appropriate\nI have a Bosch Tassimo TAS2002EE coffee maker that uses T-Disks. Those contain coffee/milk/something else, and a barcode that is supposed to tell the machine how to deal with the disk.\nWhat I want to do is understand the barcode and come up with some different barcodes that would be accepted as valid and let me adjust e.g. drink volume.\nAt first I wasn't able to find any decent information about these barcodes, among the top Google hits were things like this rather useless rant. Surprisingly, when searching for pictures of T-Disks (in order to study more barcodes), I stumbled upon this useful post: Hacking the Tassimo - Part 2: Breaking the Code (archive), which also links to this T-Disk-related patent, in which there is a table explaining the controlling bits. While this was quite promising, it resulted in nothing, as the blog author found out himself, too. (Part 3 archive)\n\nOn top of the information from the links above, here's what I found out myself.\nThe barcode uses the Interleaved 2 of 5 symbology and 6 digits. The last digit is the check digit calculated according to the UPC Check Digit rules.\nActual barcodes with the checksum removed:\n\n\n\n\nBarcode\nProduct\nOutput, ml\nBarcode binary\n\n\n\n\n06409\ncoffe créma\n150\n<pre><code>00011001 00001001</code></pre>\n\n\n06178\nespresso\n80\n<pre><code>00011000 00100010</code></pre>\n\n\n63735\nmilk for latte (big disk)\n?\n<pre><code>11111000 11110111</code></pre>\n\n\n06182\nmilk for cappuccino (small disk)\n?\n<pre><code>00011000 00100110</code></pre>\n\n\n06665\nhot chocolate\n?\n<pre><code>00011010 00001001</code></pre>\n\n\n07879\nservice disk\n200\n<pre><code>00011110 11000111</code></pre>\n\n\n\n\nThe service disk is used for cleaning, it makes hot water at 60° C flow straight through without any brewing time.\nUsing a barcode printer, I tried to modify the Coffe Créma barcode to give 300 ml (the max amount from the patent). I did some really extensive testing, printing out and feeding the machine a handful of barcodes, and it would seem there are six bits in the barcode, not four, that control the amount. The data is available here at Google Docs. The 6-bit range in question is in the middle: last 3 bits of the first byte and first 3 bits of the second byte (big-endian). Because Google Docs don't support in-cell colours, there is also a more nicely coloured Excel file uploaded here at Google Drive.\nSo I identified two 6-bit sequences that resulted in 300 ml for Crema.\nFor the sake of interest, I took one of the sequences and put it into the respective place of the original Espresso barcode. And there it is, I got 300 ml of Espresso.\nWhile this was sort of a success (I'm now able to produce barcodes with correct volumes for the drinks I'm interested in), I'm still completely lost as of exactly how this works. As you can see from the experiment table, the pattern is rather fuzzy, and there are entries that give same volume from different combination of bits. I'm also not sure I'm getting the same brewing parameters with the barcodes I made.\nPlease share your ideas on how to understand this further.\n",
+    "votes": "36",
+    "answers": 8,
+    "views": "51k",
+    "tags": [
+        "hardware"
+    ],
+    "user": "GSerg",
+    "time": "Sep 23, 2021 at 16:07",
+    "comments": [
+        {
+            "user": "Ilmari Karonen",
+            "text": "According to the second blog post you linked to, the last digit is a UPC-style check digit, and should be dropped before converting to binary (and recalculated for any modified codes). You just happened to be lucky that you two-bit change resulted in a number that passed the check.\n",
+            "time": null
+        },
+        {
+            "user": "Ilmari Karonen",
+            "text": "Note that the UPC check digit scheme is designed such that, for an even-length code that already ends with a correct check digit, repeating the calculation always gives zero.  That is, for a correctly checksummed (even-length) code, (sum of even digits) + 3 * (sum of odd digits) ≡ 0 (mod 10).\n",
+            "time": null
+        },
+        {
+            "user": "GSerg",
+            "text": "@IlmariKaronen Yes, you are rigth, I overlooked this. When I removed the check digits all went rather well. Please see the edit.\n",
+            "time": null
+        },
+        {
+            "user": "Guntram Blohm",
+            "text": "Looking at your table, i see you never flip the last bit of the first byte in your crema experiments. So this may or may not change anything. Also, the patent mentions different cartridge charges - with soak, without soak - which may affect the volume of water in the cup, as well as steam/no steam, which isn't mentioned in the patent. Last, the blog author mentions that american cartriges seem to have high first digits while europeans have zero; this might mean some bits have no effect on the apparatus, but serve as licensee/vendor identification.\n",
+            "time": null
+        },
+        {
+            "user": "Petter Hofstad",
+            "text": "Just wanted to point out that this thread is still relevant wiki.mbirth.de/know-how/hacking/tassimo-barcodes.html did a great job, but might have noticed that the barcode might be inverse, or that a bit flip makes it inverse maybe? Edit: This might be relevant: patents.google.com/patent/US7231869?oq=coffee+barcode Search for \"table 3\" in the above link\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Consider the code that you were able to modify. The decimal representation of your modified code is 065375.\n<pre><code>The checksum of 064095 =  3*0 + 6 + 3*4 + 0 + 3*9 + 5 = 50 (≡ 0 mod 10).\nThe checksum of 065375 =  3*0 + 6 + 3*5 + 3 + 3*7 + 5 = 50 (≡ 0 mod 10).\n</code></pre>\nSo it seems that this disk was accepted because the checksum matched, while your other disks weren't taken because of the wrong checksum.\nNow, if i remove the checksum digit from the decimal numbers, and convert them to binary:\n<pre><code>06409 = 0001 1001 0000 1001\n06537 = 0001 1001 1000 1001\n</code></pre>\nUnfortunately, that doesn't match anything from the patent volume table, even if i compare the larger volumes (170 / 230 to account for water that stays in the disc), or smaller volumes (130 / 190). - my two numbers have only one bit that's different, and each combination from the table needs more than one different bit. But, there's no guarantee for the volume table in the machine being identical to the one in the patent.\nI'd try to take the above codes, flip one bit after another in each of them, calculate the decimal number, tack on the checksum digit, and print that to barcode, then check what happens:\n<pre><code>$ ./bitflip 0001100100001001\n1001100100001001 391771\n0101100100001001 227933\n0011100100001001 146012\n0000100100001001 023139\n0001000100001001 043618\n0001110100001001 074339\n0001101100001001 069212\n0001100000001001 061537\n0001100110001001 065375\n0001100101001001 064736\n0001100100101001 064415\n0001100100011001 064255\n0001100100000001 064019\n0001100100001101 064132\n0001100100001011 064118\n0001100100001000 064088\n</code></pre>\nIf all these barcodes are accepted, they should produce different results which should give a hint at which bit has which meaning.\nIf you want to play with some other bit combinations, here's the source to my bitflip program (it's not the cleanest code, and it will produce strange results if you throw anything but binary digits at it, but it will do the job):\n<pre><code>#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\nint main(int argc, char **argv) {\n    int pos, pos2, binval, checksum;\n    char oldbit;\n    char buf[10];\n\n    if (argc!=2 || strlen(argv[1]) != 16) {\n            fprintf(stderr, \"Need a 16 bit binary value\n\");\n            exit(1);\n    }\n    for (pos=0; pos<16; pos++) {\n            oldbit=argv[1][pos];\n            argv[1][pos]=(oldbit == '1' ? '0' : '1');\n            binval=0;\n            for (pos2=0; pos2<16; pos2++) {\n                    binval=(binval<<1) | (argv[1][pos2]=='1');\n            }\n            sprintf(buf, \"%05d\", binval);\n            checksum=\n                     3*(buf[0]-'0')\n                    +  (buf[1]-'0')\n                    +3*(buf[2]-'0')\n                    +  (buf[3]-'0')\n                    +3*(buf[4]-'0');\n            checksum=10-(checksum%10);\n            if (checksum==10)\n                    checksum=0;\n            printf(\"%16s %5s%d\n\", argv[1], buf, checksum);\n            argv[1][pos]=oldbit;\n    }\n}\n</code></pre>\n",
+            "votes": "6",
+            "user": "Guntram Blohm",
+            "time": "Mar 20, 2014 at 19:50",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "Costa\n\nCosta Americano (220ml) 297615 (single T Disc)\nCosta Cappuccino (215ml)\n\nCosta Espresso for Cappuccino & Latte 022095\nCreamer (S) for Cappuccino 061827\n\nCosta Caramel Latte (320ml)\n\nCosta Espresso for Cappuccino & Latte 022095\nCreamer (L) for Caramel Latte 637350\n\n\nCadbury\n\nCadbury Hot Chocolate (265ml)\n\nCadbury Hot Chocolate 066655\nCreamer (S) for Cadbury 061827 \n\n\nGevalia\n\nGevalia Kaffe Espresso 849838 (Professional T-Disc apparently not compatible with home brewers)\nGevalia Kaffe Espresso 594912\nGevalia Kaffe Caramel Espresso (60ml) 674270\nGevalia Kaffe Signature Blend 642262\n\nMaxwell House\n\nMaxwell House Morning 648035 (Large 12floz serving 355ml?)\n\nStarbucks\n\nStarbucks Espresso Roast 596831\n\nCarte Noir\n\nCarte Noire Cappuccino (190ml)\n\nCarte Noire Expresso Intense 061780\nCreamer (S) for Cappuccino 061827\n\nCarte Noire Petit Dejeuner Classic (215ml) 297615 (single T Disc) \nCarte Noire Espresso Classic (60ml) 061780 (single T Disc)\n\nSecond Cup\n\nSecond Cup Chocolate Syrup (195ml) 676458\nSecond Cup Espresso Forte (65ml) 594592\n\nNabob\n\nNabob Breakfast Du Matin 683050\n\nMilka\n\nMilka Hot Chocolate (245ml)\n\nMilka Chocolate 066655\nCreamer (S) for Milka, Marabou & Freia 061827\n\n\nTassimo Brand\n\nCreamer for Cappuccino (215ml) 634793\nCreamer for Latte (250ml) 636070 \nCreamer for Sweet Latte (200ml) 634793\n\nOthers\n\n(Twinnings?) (Creamer / Milk) for Chai Latte 674478\nTwinings English Breakfast Tea (195ml) 032872 (single T Disc) \nCorner Coffee House Peppermint Chocolate Syrup 676458\nTea Bar Peach Iced Tea 349130 (Is this unheated water?)\nTazo Awake Black Tea 699556\nSuchard Hot Chocolate (195ml) 047852 (single T Disc) \nKenco Medium Roast (195ml) 297615 (single T Disc) \n\nNotes:\n\nCarte Noire Espresso Classic 60ml + Carte Noire Expresso Intense from Cappuccino 190ml share barcodes that may imply Creamer for Cappuccino = 130ml?\nKenco Medium Roast 195ml + Carte Noire Petit Dejeuner Classic 215ml share same barcode even though 20ml difference?\nCreamer for Capuccino and Creamer for Cadbury has the same barcode although different foil labels.\nCosta Cappuccino and Costa Caramel Latte use the same Costa Espresso for Cappuccino & Latte T Discs\n",
+            "votes": "6",
+            "user": "Ron",
+            "time": "May 19, 2015 at 7:19",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "First a thought regarding the volumes that don't seem to line up.  The first  link in the Q discusses purge and charge sections - these will contribute to the volume and it's possible that the table of volumes assumes some contribution from these processes that may not be the minimum\nSecond - some more data for you:\nWe have a water dispenser disc (it replaces the output spout so it's not very useful; I use a washed-out Suchard chocolate disc for water).  The water disc has 4 selectable barcodes for 4 different volumes (150, 250, 350 and 450 ml).  I can't get anything online or android to actually read the stupid things though.  I can post a scan if anyone's interested, and I'll keep trying, but it doesn't look like it's got the start code according to wikipedia.\nEdit: scanned water dispenser disc\n\nAlso, over summer the UK website was giving away overlays to make the normal drinks with cold water.  I haven't tested them, but they also don't fit the ITF spec according to wikipedia.\n\n╔═════════════╦════════════════════════╦════════════╦══════════════════════════╗\n║ Barcode     ║ Product                ║ Output, ml ║ Binary (excl first/last) ║\n╠═════════════╬════════════════════════╬════════════╬══════════════════════════╣\n║   ??????    ║ Water                  ║ 150        ║                          ║\n║   ??????    ║ Water                  ║ 250        ║                          ║\n║ 0 690872 6  ║ Water                  ║ 350        ║ 1010 1000 1010 1011 1000 ║\n║ 0 191694 6  ║ Water                  ║ 450        ║ 0010 1110 1100 1100 1110 ║\n╚═════════════╩════════════════════════╩════════════╩══════════════════════════╝\n\nThe above barcodes were read with Barcode Scanner for Android.\n",
+            "votes": "6",
+            "user": "Mark Booth",
+            "time": "Dec 6, 2017 at 12:46",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">Thank you for contributing! As the OP is almost a year old, we don't know if anyone is interested in this right now. But as the site is for collecting knowledge as well, someone in the future might be interested in the bar codes. So, please post the scans, even if there probably won't be any immediate reaction.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Chris H",
+                    "text": "<span class=\"comment-copy\">@GuntramBlohm, done - the OP user has been active on SO in the last day so hopefully they'll notice.</span>",
+                    "time": null
+                },
+                {
+                    "user": "GSerg",
+                    "text": "<span class=\"comment-copy\">Yes I did notice! Thanks for the info, although it's not refreshing to learn that barcodes are allowed to be invalid in the first place. As for the status update: I would still really like to know exactly what is going on, but after some time I grew tired of printing and feeding barcodes, so I put it aside, and have been since using a 330ml barcode I came up with during the testing (one of the two that gave this volume). I have no idea how wrong the brewing instructions ended up to be, but it does its job in principle.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Chris H",
+                    "text": "<span class=\"comment-copy\">I'm no expert but I can't figure out what these barcodes are - they're not the same code as the normal discs and seem to have 4 line weights.  I can't even spot a common pattern for start/stop marks.  No wonder none of the online or android readers had much luck.  I was hoping these codes might help by being simpler instructions, but apparently not.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Mark Booth",
+                    "text": "<span class=\"comment-copy\">There are two water dispenser T-Discs, the one in the image is the non Interleaved 2 of 5 version for a different set of machines. The Interleaved 2 of 5 version of the Water Dispenser disc is Green, and it's barcodes do scan normally. I'll see if I can did out my data and add it as an answer to help gather more info.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I've got a lead!!\nI've looked over a lot of the data, and I think that people are getting distracted by the decimal representations of the binaries. We need to just focus on the binaries. I first got that idea from a mysteriously precise comment on the chapman consulting post. Seems like someone with some inside knowledge, possibly.\nGSerg, the OP, posted a great Google spreadsheet of experiments with the binaries.\nMy hypothesis is that there are bit ranges dedicated to certain functions. For instance, I've isolated the liquid volume to a particular three bits (8 settings). However, I think that the liquid volume changes based on a different bit-ranges. \nI think there are modes, and each one has it's own temperature range. \nHere is a copy of the OP's spreadsheet, with spacing on the binaries to isolate where the important volume bits are. \nhttps://docs.google.com/spreadsheets/d/1Qpj4KC9xK5Dr7VY5HoNWr9azHKRl94jKABDwTKTbUfg/edit?usp=sharing\nI think this is the first direct correlation of barcode to function that we have. \nWe are closer than ever to cracking this! With a bit more data, especially temperature data, I think I could figure it out.\n",
+            "votes": "4",
+            "user": "Jordan Davis",
+            "time": "Feb 1, 2015 at 3:42",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Mark Booth",
+                    "text": "<span class=\"comment-copy\">I've bought a temperature probe, I just need to hook it up to a data logger and I should be able to use it to get some metrics of not only temperature, but also pump and purge rates. All I need now is the time to do it.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "First of all, I only wanted to post a comment, but the reputation system wouldn't let me, because I'm new here.\nMy research showed the following: For this project we have do distinguish between two types of coffee machines. The first one reads the barcode on the side of the T-Discs. This code is formatted using Interleaved 2 of 5.\nThe other type of machine (I think it's only the T43xx, and the T55xx) reads the barcode from the front of the T-Disc, as shown in the picture from User perror. We already discovered, that this code is kind of invalid, all scanner apps and online decoder I found couldn't convert it into readable text.\nDuring my research I discovered a german forum post, telling that's an invalid UPC-E. However I wasn't able to photoshop the missing parts on it, namely the start and end sequenz.\nIn the same forum, one comment below my link there is a guy guessing that these codes refer to an internal memory with hardcoded brewing instructions. In my opinion that's wrong, because in this case tassimo couldn't update their disc lineup after the launch of the machines, and in my region they did this with the milk-discs.\n",
+            "votes": "2",
+            "user": "schoeM",
+            "time": "May 26, 2016 at 13:15",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "I check this link http://blog.chapmanconsulting.ca/post/2007/12/02/Hacking-the-Tassimo-Part-2-Breaking-the-Code.aspx I think it a error for Beverage volume.\nI check this two parameter: \n3.Beverage volume (Bits 4,5,6,7)\n4.Flow rate (Bits 8,9,10).\nYou need to combine this two parameter to have the volume of the brevage. The bits 4-7 it like time the water pumpe work and 8-10 the flow rate. So I think you have max 15 sec for water pump Bits 4-7 1111 = 15  and flow rate is increment by 12.5% 111 = 7 7(111)=100% 6(110)=87.5% 5(101)=75% 4(100)=62.5% 3(011)=50% 2(010)=37.5% 1(001)=25% 0(000)=12.5%\nIt only a theory it need to be confirm.\n",
+            "votes": "1",
+            "user": "Marc",
+            "time": "Oct 9, 2015 at 13:45",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "This seems like a complete mapping of the bits:\nhttp://wiki.mbirth.de/know-how/hacking/tassimo-barcodes.html\n",
+            "votes": "0",
+            "user": "FrodeTennebo",
+            "time": "Dec 12, 2015 at 23:52",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "GSerg",
+                    "text": "<span class=\"comment-copy\">The notice before the table says that the mapping was taken from the <a href=\"http://www.google.com/patents/US7231869?printsec=description&amp;amp;dq=coffee+barcode\" rel=\"nofollow noreferrer\">patent description</a>, and it is not entirely clear how it used in the actual barcodes. We have already considered the patent description (see the question text).</span>",
+                    "time": null
+                },
+                {
+                    "user": "mbirth",
+                    "text": "<span class=\"comment-copy\">Someone sent me <a href=\"http://i.imgur.com/ah8ZWm1.png\" rel=\"nofollow noreferrer\">this image</a> a few days ago. I'll add this information to my wiki page soon. However, just from looking at the ICE DISC's codes, I doubt this is the correct encoding as the bits for temperature (according to that image) are <code>10</code> and <code>11</code> for those instead of <code>00</code>.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "The original referenced blog has gone, however there is a lot of useful information available at HeyRick's blog and later again on HeyRick's Blog a lot of this appears to be the patent repeated but there is some further testing included: \n<pre><code>Bit     Parameter           Description\n0 & 1   Water temperature   00 = cold\n                            01 = warm\n                            10 = 83°C.\n                            11 = 93°C.\n2 & 3   Cartridge charge    00 = fast charge with soak\n                            01 = fast charge without soak\n                            10 = slow charge with soak\n                            11 = slow charge without soak\n4, 5, 6 & 7 Beverage volume 0000 = 50 ml\n                            0001 = 60 ml\n                            0010 = 70 ml\n                            0011 = 80 ml\n                            0100 = 90 ml\n                            0101 = 100 ml\n                            0110 = 110 ml\n                            0111 = 130 ml\n                            1000 = 150 ml\n                            1001 = 170 ml\n                            1010 = 190 ml\n                            1011 = 210 ml\n                            1100 = 230 ml\n                            1101 = 250 ml\n                            1110 = 275 ml\n                            1111 = 300 ml\n8, 9 & 10 Flow rate         000 = 30%\n                            001 = 40%\n                            010 = 50%\n                            011 = 60%\n                            100 = 70%\n                            101 = 80%\n                            110 = 90%\n                            111 = 100%\n11 & 12 Purge               00 = slow flow/short period\n                            01 = slow flow/long period\n                            10 = fast flow/short period\n                            11 = fast flow/long period\n</code></pre>\nApparently there is a difference between EU and non-EU models too.\n",
+            "votes": "0",
+            "user": "Matthew1471",
+            "time": "Apr 15, 2020 at 16:42",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

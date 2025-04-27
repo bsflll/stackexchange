@@ -1,0 +1,31 @@
+{
+  "title": "Server-side bind() function, immlib",
+  "link": "https://reverseengineering.stackexchange.com/questions/2507/server-side-bind-function-immlib",
+  "content": "How do I get IP address and port number out of bind function in Server application. Can it be achieved with hooks like bphook in immunity debugger?\n\nMy problem is that I don't know how to unpack struct psockaddr/sockaddr or how sockaddr is saved on the stack.\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "295",
+  "tags": [
+    "python",
+    "immunity-debugger"
+  ],
+  "user": "user2464",
+  "time": "Jul 20, 2013 at 19:02",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I will assume you are talking about Windows Sockets and IPv4, since you have not mentioned otherwise. sockaddr is very well described in MSDN. It is defined as for IPv4 as follows:\n\n```\nstruct sockaddr {\n        ushort  sa_family;\n        char    sa_data[14];\n};\n\nstruct sockaddr_in {\n        short   sin_family;\n        u_short sin_port;\n        struct  in_addr sin_addr;\n        char    sin_zero[8];\n};\n\n```\nI will use simple server application for demonstration purposes. Firstly let's set breakpoint on bind() and see what stack looks like:\n\n\n\nAs you can see, pSockAddr is a pointer to sockaddr structure is pushed on to stack as a second argument to the function. Let's go a little further and examine the sockaddr at 0x0031F840:\n\n\n\nOne very important thing to note is that sin_port and sin_addr are stored using big-endian byte order, meaning the most significant part stored first.\n\nNow let's jump in and get pyCommand created in order to automate it with Immunity Debugger. For this purpose I will use BpHook:\n\n```\n# bindtrace PyCommand by PSS \n\nfrom immlib import *\n\nNAME = \"bindtrace\"\n\nclass BindBpHook(BpHook):\n    def __init__(self):\n        BpHook.__init__(self)\n\n    def run(self, regs):\n        imm = Debugger()\n\n        imm.log(\" \")\n        imm.log(\"Bind() called:\")\n\n        # Read sockaddr structure address\n        sockaddr = imm.readLong(regs[\"ESP\"] + 8)        \n\n        # Read 2 bytes of sin_family member\n        sockaddr_sin_family = imm.readShort(sockaddr)\n\n        # Read 2 bytes of sin_port and calculate port number \n        # since it is stored as big-endian\n        portHiByte = ord(imm.readMemory(sockaddr + 2, 1))\n        portLowByte = ord(imm.readMemory(sockaddr + 3, 1))\n        sockaddr_sin_port = portHiByte * 256 + portLowByte\n\n        # Read 4 bytes of sin_addr since it is stored as big-endian\n        ipFirstByte = ord(imm.readMemory(sockaddr + 4, 1))\n        ipSecondByte = ord(imm.readMemory(sockaddr + 5, 1))\n        ipThirdByte = ord(imm.readMemory(sockaddr + 6, 1))\n        ipForthByte = ord(imm.readMemory(sockaddr + 7, 1))\n\n        # Print results to Log View window\n        imm.log(\"---> Pointer to sockaddr structure: 0x%08x\" % sockaddr)\n        imm.log(\"---> sockaddr.sin_family: %d\" % sockaddr_sin_family)\n        imm.log(\"---> sockaddr.sin_port: %d\" % sockaddr_sin_port)\n        imm.log(\"---> sockaddr.sin_addr: %d.%d.%d.%d\" % \\\n                        (ipFirstByte,ipSecondByte,ipThirdByte,ipForthByte))\n        imm.log(\" \")\n        imm.log(\"Press F9 to resume\")\n\n\ndef main(args):\n\n    imm = Debugger()\n    functionToHook = \"ws2_32.bind\"\n\n    # Find address of the function to hook\n    functionAddress = imm.getAddress(functionToHook)\n\n    # Create and install our hook\n    myHook = BindBpHook()\n    myHook.add(functionToHook, functionAddress)\n\n    imm.log(\"Hook for %s installed at: 0x%08x\" % (functionToHook, functionAddress))\n\n    return \"[*] Hook installed.\"\n\n```\nInstallation of the script is very simple. All pyCommands are stored in ./pyCommands folder of Immunity Debugger installation. I named my file bindtrace.py.\n\nThereafter, we load our executable into Immunity Debugger. Debugger will break automatically at entry point. Right after that we invoke the above pyCommand by typing !bindtrace, and run the executable by pressing F9. As soon as breakpoint hits, we get the result in Log windows, which can be accessed through Alt + L:\n\n\n\n",
+      "votes": "6",
+      "user": "PSS",
+      "time": "Jul 22, 2013 at 14:01",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Cream Cracker",
+          "text": "cool explanation.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

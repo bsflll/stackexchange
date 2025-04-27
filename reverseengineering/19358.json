@@ -1,0 +1,40 @@
+{
+    "title": "Symbolic simplifications in radare2",
+    "link": "https://reverseengineering.stackexchange.com/questions/19358/symbolic-simplifications-in-radare2",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Let's have a look to this assembly code in radare2:</p>\n<pre><code>xxxxxxx  mov rax,rbx\nxxxxxxx  add rax,rax\nxxxxxxx  add rax,rbx\nxxxxxxx  shl rax,2\nyyyyyyy  nop\n</code></pre>\n<p>Is there a way to ask radare2 to evaluate <code>rax</code> value at <code>yyyyyy</code> address ?</p>\n<p>I want radare2 to say: <code>rax=rbx*6</code></p>\n</div>",
+    "votes": "0",
+    "answers": 1,
+    "views": "369",
+    "tags": [
+        "radare2"
+    ],
+    "user": "Bob5421",
+    "time": "Sep 25, 2018 at 20:32",
+    "comments": [
+        {
+            "user": "Twifty",
+            "text": "<span class=\"comment-copy\">Your question is not at all clear. What do you mean by \"evaluate rax at address\"? Just set a breakpoint and look at the register.</span>",
+            "time": null
+        },
+        {
+            "user": "Bob5421",
+            "text": "<span class=\"comment-copy\">I do not want to run the program. I want to select lines and ask radare2 to compute a formula which represents how rax is calculated</span>",
+            "time": null
+        },
+        {
+            "user": "perror",
+            "text": "<span class=\"comment-copy\">Use the decompiler to see such transformation. See <a href=\"https://github.com/radareorg/r2ghidra\" rel=\"nofollow noreferrer\">r2ghidra</a>. And use the <code>pdg</code> command.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This looks a lot like symbolic execution. For concrete values this is already supported.</p>\n<pre><code>[0x006000b0]&gt; e asm.emu=true\n[0x006000b0]&gt; pdf\n            ;-- section..shellcode:\n            ;-- rip:\n┌ (fcn) entry0 23\n│   entry0 ();\n│           0x006000b0      48c7c3444342.  mov rbx, 0x41424344         ; 'DCBA' ; [01] -rwx section size 22 named .shellcode ; rbx=0x41424344\n│           0x006000b7      4889d8         mov rax, rbx                ; rax=0x41424344\n│           0x006000ba      4801c0         add rax, rax                ; '#' ; rax=0x82848688 ; of=0x0 ; sf=0x0 ; zf=0x0 ; cf=0x0 ; pf=0x1\n│           0x006000bd      4801d8         add rax, rbx                ; '%' ; rax=0xc3c6c9cc ; of=0x0 ; sf=0x0 ; zf=0x0 ; cf=0x0 ; pf=0x1\n│           0x006000c0      48c1e002       shl rax, 2                  ; rax=0x30f1b2730 ; zf=0x0 ; pf=0x1 ; sf=0x0\n</code></pre>\n<p>ESIL is not that powerful for static analysis as such. I don't think there exists a plugin which does this. There are r2 plugins like <a href=\"https://github.com/radareorg/rune\" rel=\"nofollow noreferrer\">rune</a> which have some symbolic execution features, you can give them a try. </p>\n<p>A rather simple option for you to do this is to use <a href=\"https://github.com/cea-sec/miasm\" rel=\"nofollow noreferrer\">miasm</a>, which can simplify symbolic execution of a basic block and print expressions/relations. An option is to use <a href=\"https://github.com/guedou/r2m2\" rel=\"nofollow noreferrer\">r2m2</a> for the same (Maijin from r2 told me this).</p>\n<pre><code>from miasm2.analysis.binary import Container\nfrom miasm2.analysis.machine import Machine\nimport sys\n\nwith open(\"/tmp/resenm\", \"rb\") as fdesc:\n    cont = Container.from_stream(fdesc)\n\ndefault_addr = cont.entry_point\nbs = cont.bin_stream\n\nmachine = Machine(cont.arch)\nmn, dis_engine = machine.mn, machine.dis_engine\nira, ir = machine.ira, machine.ir\n\nmdis = dis_engine(bs, loc_db=cont.loc_db)\n\nir_arch = ir(mdis.loc_db)\nir_arch_a = ira(mdis.loc_db)\n\nircfg = ir_arch.new_ircfg()\nircfg_a = ir_arch_a.new_ircfg()\n\nasmcfg = mdis.dis_multiblock(default_addr)\nprint len(asmcfg)\nfor block in asmcfg.blocks:\n    ir_arch.add_asmblock_to_ircfg(block, ircfg)\n    ir_arch_a.add_asmblock_to_ircfg(block, ircfg_a)\n\nfrom miasm2.ir.symbexec import SymbolicExecutionEngine\nfrom miasm2.arch.x86.regs import regs_init\nfrom miasm2.expression.simplifications import expr_simp\nfrom miasm2.expression.expression import ExprId\n\nsb = SymbolicExecutionEngine(ir_arch_a, regs_init)\n\nnxt_ad = sb.run_at(ircfg_a, default_addr)\nprint expr_simp(sb.symbols[ExprId(\"RAX\",64)])\n</code></pre>\n<p>will print something like </p>\n<pre><code>1\n(RBX_init + RBX_init + RBX_init) &lt;&lt; 0x2\n</code></pre>\n<p>Interface this with radare2 hackishly with \"!\". As I am not so good with r2, I have posted this to r2 irc. Lets see if we get better options.</p>\n</div>",
+            "votes": "1",
+            "user": "sudhackar",
+            "time": "Sep 26, 2018 at 4:01",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

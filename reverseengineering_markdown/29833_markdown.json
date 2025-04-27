@@ -1,0 +1,38 @@
+{
+  "title": "Constructors testing for strange in-stack value",
+  "link": "https://reverseengineering.stackexchange.com/questions/29833/constructors-testing-for-strange-in-stack-value",
+  "content": "This is something that I found in a lot of constructors that have to do with classes that inherit from other classes. I have a vague idea as to why it's done, but I'd rather have it confirmed before having to re-visit all of my classes.\n\nSay I have a constructor with a known signature e.g. CPalette(). The compiler turn this into a CPalette * __thiscall CPalette::CPalette(CPalette* this), with this being in ecx. Hence, no values need to be retrieved from the stack. However, when the constructor is called, it looks something like this:\n\n```\n// with allocated memory in eax\nPUSH   0x01\nMOV    ecx, eax\nCALL   CPalette::CPalette\n\n```\nInside the constructor, this value is then used in a test:\n\n```\n// start of constructor\nPUSH   -0x01\nPUSH   label_1\nMOV    eax, fs:[0x00]                  // question for another day\nPUSH   eax\nMOV    dword ptr fs:[0x00], esp        \nSUB    esp ,0x8\nMOV    eax, dword ptr [esp + 18]       // Ghidra: ... [esp + Stack[0x04]]\nPUSH   esi\nMOV    esi, ecx\nPUSH   edi\nTEST   eax, eax\nMOV    dword ptr [esp + 0x08], esi     // Ghidra: ... [esp + local_14]\nMOV    dword ptr [esp + 0x18], 0x00    // Ghidra: ... [esp + local_4]\nJZ     label_2\n\n```\nI'm also a bit confused about Ghidra's auto-analysis, which I've attached to the end of the respective lines. The decompilation uses the name in_stack_00000004 for the TESTed register.\n\nWhy do we push a 1 on the stack and what is the test doing?\nMy best guess is that this is a way to know if the constructor is called directly or by a child class constructor, since I've seen some PUSH 0x00s before constructor calls inside other constructors. If this is the case, why is this done?\n\nThis is from a 32 bit windows DLL.\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "93",
+  "tags": [
+    "disassembly",
+    "x86",
+    "c++"
+  ],
+  "user": "mindoverflow",
+  "time": "Jan 8, 2022 at 13:58",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "Do you have RTTI? Does this class inherit another one?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "At a guess, the class participates in a virtual inheritance tree. When constructing a class with virtual bases, the constructor needs to know whether its virtual bases have been already constructed or not. The extra argument is used for that. If you compile a sample program with virtual inheritance and look at its assembly output, you'll see that it's called 'initVBases' (i.e. \"initialize virtual bases\").\n\n```\n_this$ = -4                                   ; size = 4\n_$initVBases$ = 8                                 ; size = 4\nbutton::button(void) PROC                              ; button::button, COMDAT\n        push    ebp\n        mov     ebp, esp\n        push    ecx\n        mov     DWORD PTR _this$[ebp], ecx\n        cmp     DWORD PTR _$initVBases$[ebp], 0\n        je      SHORT $LN2@button\n        mov     eax, DWORD PTR _this$[ebp]\n        mov     DWORD PTR [eax], OFFSET const button::`vbtable'\n        mov     ecx, DWORD PTR _this$[ebp]\n        add     ecx, 8\n        call    control::control(void)\n$LN2@button:\n        mov     ecx, DWORD PTR _this$[ebp]\n        mov     edx, DWORD PTR [ecx]\n        mov     eax, DWORD PTR [edx+4]\n        mov     ecx, DWORD PTR _this$[ebp]\n        mov     DWORD PTR [ecx+eax], OFFSET const button::`vftable'\n        mov     eax, DWORD PTR _this$[ebp]\n        mov     esp, ebp\n        pop     ebp\n        ret     4\nbutton::button(void) ENDP                              ; button::button\n\n```\nIn case the binary has RTTI (Run-time Type Information), you should be able to confirm it by inspecting the RTTI structures.\n\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Jan 8, 2022 at 16:52",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "mindoverflow",
+          "text": "This confirms what I've been suspecting, thanks! I should have made it more clear that yes, this class is part of an inheritance tree. IIRC the binary has RTTI, I should start looking at that as well.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

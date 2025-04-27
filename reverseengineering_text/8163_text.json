@@ -1,0 +1,61 @@
+{
+    "title": "In a Mach-O executable, how can I find which function a stub targets?",
+    "link": "https://reverseengineering.stackexchange.com/questions/8163/in-a-mach-o-executable-how-can-i-find-which-function-a-stub-targets",
+    "content": "Before exposing my problem, here's my understanding of the whole thing, so that you may correct me if I'm saying something wrong.\nIn a Mach-O file (at least on x86), the <pre><code>__TEXT.__stubs</code></pre> section typically has stubs in it that all consist of a single indirect jump, like this:\n<pre><code>; __TEXT.__stubs\n; symbol stub for unlink:\n0x100000f46:  jmpq   *0xc4(%rip)\n; symbol stub for puts:\n0x100000f4c:  jmpq   *0xc6(%rip)\n</code></pre>\nThese point to a location inside the <pre><code>__DATA.__nl_symbol_ptr</code></pre> section. The pointer initially goes to a stub helper in the <pre><code>__TEXT.__stub_helper</code></pre> section:\n<pre><code>; __TEXT.__stub_helper\n; stub helper for unlink\n0x100000f64:  pushq  $0x0\n0x100000f69:  jmp    0x100000f54\n; stub helper for puts\n0x100000f6e:  pushq  $0xe\n0x100000f73:  jmp    0x100000f54\n</code></pre>\nThe stub helper calls <pre><code>dyld_stub_binder</code></pre>, which uses the pushed argument to figure out which stub it is and which function it needs to look up, then replaces the value in <pre><code>__DATA.__nl_symbol_ptr</code></pre> with the resolved address, and then hand over control to the function that was found (which then returns to the calling code normally).\nTo assist debugging, debuggers find stubs and pretend that they have symbols for them. In this example program, whenever lldb sees <pre><code>call 0x100000f58</code></pre>, it determines that the stub should point to <pre><code>unlink</code></pre>, and says <pre><code>call 0x100000f58 ; symbol stub for: unlink</code></pre> in the disassembly.\nHowever, lldb does not use the pushed value: it appears to rely on the static linker placing undefined symbols and stubs in the same order, or some variant of that. Just like that, it looks more like a heuristic than a precise way to figure out which stub goes where, unless there's something else preventing you from tampering.\nSo how do I reliably find which function is called by a stub? In the stub helpers, what do the constants in <pre><code>pushq $constant</code></pre> mean?\n",
+    "votes": "16",
+    "answers": 2,
+    "views": "6k",
+    "tags": [
+        "osx",
+        "symbols",
+        "mach-o"
+    ],
+    "user": "zneak",
+    "time": "Feb 5, 2015 at 16:25",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I wrote a Python script that parses entry points and imports from a Mach-O executable for one of my projects. The trick is to parse the <pre><code>LC_DYLD</code></pre> or <pre><code>LC_DYLD_ONLY</code></pre> loader commands. These two commands encode three import tables: bound symbols, weak symbols, and lazy symbols.\n<pre><code>struct dyld_info_command {\n  uint32_t cmd;\n  uint32_t cmdsize;\n  uint32_t rebase_off;\n  uint32_t rebase_size;\n  uint32_t bind_off;\n  uint32_t bind_size;\n  uint32_t weak_bind_off;\n  uint32_t weak_bind_size;\n  uint32_t lazy_bind_off;\n  uint32_t lazy_bind_size;\n  uint32_t export_off;\n  uint32_t export_size;\n};\n</code></pre>\nThe interesting fields are <pre><code>bind_off</code></pre>, <pre><code>bind_size</code></pre>, <pre><code>weak_bind_off</code></pre>, <pre><code>weak_bind_size</code></pre>, <pre><code>lazy_bind_off</code></pre> and <pre><code>lazy_bind_size</code></pre>. Each pair encodes the offset and size of a block of data, inside the executable file, that contains the import table opcodes.\nEach of these tables can be seen as having four (useful) columns: the segment, segment offset, library name and symbol name. Together, the segment and segment offset indicate the address where the symbol's actual address will be written to (so for instance, if you have <pre><code>__TEXT</code></pre> and 0x40, this conceptually means that <pre><code>*(__TEXT+0x40) == resolvedSymbolAddress</code></pre>).\nThe table is encoded as a stream of opcodes for compression purposes. The opcodes control a state machine that contains state for a would-be symbol, has operations to manipulate that state, and operations to \"bind\" a symbol (take all that state and make it a part of the symbol table). For instance, you could see:\n\nset segment to __TEXT\nset offset to 0x40\nset library to libSystem.dylib\nset symbol name to \"printf\"\nbind symbol\nset offset to 0x48\nset symbol name to \"scanf\"\nbind symbol\n\nAt the end of this sequence, you get two symbols: printf and scanf, whose addresses are located at __TEXT+0x40 and __TEXT+0x48 respectively, from libSystem.dylib. This means that if you see an instruction like <pre><code>jmp [__TEXT+0x48]</code></pre> (an indirect jump to the address contained at <pre><code>__TEXT+0x48</code></pre>), you know that you're going to <pre><code>scanf</code></pre>. This is how you can tell the destination of stubs.\nEach opcode is at least 1 byte, separated as 0xCI (where C is the command name, and I is an immediate value, both 4 bits). When the command needs a larger operand (or more operands), they are encoded in ULEB-128 format (except for <pre><code>BIND_OPCODE_SET_ADDEND_SLEB</code></pre>, which uses signed LEB, but we don't really care about it for the purpose of finding imports).\n<pre><code>def readUleb(data, offset):\n    byte = ord(data[offset])\n    offset += 1\n\n    result = byte & 0x7f\n    shift = 7\n    while byte & 0x80:\n        byte = ord(data[offset])\n        result |= (byte & 0x7f) << shift\n        shift += 7\n        offset += 1\n    return (result, offset)\n</code></pre>\nLibraries aren't actually identified by their names in the command stream. Rather, libraries are identified by their one-based \"library ordinal\", which is just the index of the library within all the <pre><code>LC_LOAD_DYLIB</code></pre>, <pre><code>LC_LOAD_WEAK_DYLIB</code></pre>, <pre><code>LC_REEXPORT_DYLIB</code></pre> and <pre><code>LC_LOAD_UPWARD_DYLIB</code></pre> loader commands. For instance, if an executable has a <pre><code>LC_LOAD_DYLIB</code></pre> command for libSystem and then one for libFoobar, libSystem has ordinal 1 and libFoobar has ordinal 2.\nThere are three special values: ordinal -2 means that the symbol is looked up in the flat namespace (first library with a symbol with that name wins); ordinal -1 looks for a symbol in the main executable, whatever it is; and ordinal 0 looks for a symbol within this file. As we've said above, ordinal 1 and above refer to libraries.\nSymbol names are encoded within the command blob as null-terminated strings.\nEach opcode is easily described in code, so I'll spare us the description of each.   \n<pre><code>BIND_OPCODE_DONE = 0\nBIND_OPCODE_SET_DYLIB_ORDINAL_IMM = 1\nBIND_OPCODE_SET_DYLIB_ORDINAL_ULEB = 2\nBIND_OPCODE_SET_DYLIB_SPECIAL_IMM = 3\nBIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM = 4\nBIND_OPCODE_SET_TYPE_IMM = 5\nBIND_OPCODE_SET_ADDEND_SLEB = 6\nBIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB = 7\nBIND_OPCODE_ADD_ADDR_ULEB = 8\nBIND_OPCODE_DO_BIND = 9\nBIND_OPCODE_DO_BIND_ADD_ADDR_ULEB = 10\nBIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED = 11\nBIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 12\n\ndef parseImports(self, offset, size):\n    pointerWidth = self.bitness / 8\n    slice = self.data[offset:offset+size]\n    index = 0\n\n    name = \"\"\n    segment = 0\n    segmentOffset = 0\n    libOrdinal = 0\n\n    stubs = []\n    def addStub():\n        stubs.append((segment, segmentOffset, libOrdinal, name))\n\n    while index != len(slice):\n        byte = ord(slice[index])\n        opcode = byte >> 4\n        immediate = byte & 0xf\n        index += 1\n\n        if opcode == BIND_OPCODE_DONE:\n            pass\n        elif opcode == BIND_OPCODE_SET_DYLIB_ORDINAL_IMM:\n            libOrdinal = immediate\n        elif opcode == BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB:\n            libOrdinal, index = self.__readUleb(slice, index)\n        elif opcode == BIND_OPCODE_SET_DYLIB_SPECIAL_IMM:\n            libOrdinal = -immediate\n        elif opcode == BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM:\n            nameEnd = slice.find(\"\\0\", index)\n            name = slice[index:nameEnd]\n            index = nameEnd\n        elif opcode == BIND_OPCODE_SET_TYPE_IMM:\n            pass\n        elif opcode == BIND_OPCODE_SET_ADDEND_SLEB:\n            _, index = self.__readUleb(slice, index)\n        elif opcode == BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB:\n            segment = immediate\n            segmentOffset, index = self.__readUleb(slice, index)\n        elif opcode == BIND_OPCODE_ADD_ADDR_ULEB:\n            addend, index = self.__readUleb(slice, index)\n            segmentOffset += addend\n        elif opcode == BIND_OPCODE_DO_BIND:\n            addStub()\n        elif opcode == BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB:\n            addStub()\n            addend, index = self.__readUleb(slice, index)\n            segmentOffset += addend\n        elif opcode == BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED:\n            addStub()\n            segmentOffset += immediate * pointerWidth\n        elif opcode == BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB:\n            times, index = self.__readUleb(slice, index)\n            skip, index = self.__readUleb(slice, index)\n            for i in range(times):\n                addStub()\n                segmentOffset += pointerWidth + skip\n        else:\n            sys.stderr.write(\"warning: unknown bind opcode %u, immediate %u\n\" % (opcode, immediate))\n</code></pre>\n",
+            "votes": "7",
+            "user": "j04n",
+            "time": "Oct 9, 2017 at 19:26",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">One addition: the list of libraries includes not only <code>LC_LOAD_DYLIB</code> commands but also <code>LC_LOAD_WEAK_DYLIB</code>, <code>LC_REEXPORT_DYLIB</code>, <code>LC_LAZY_LOAD_DYLIB</code> and <code>LC_LOAD_UPWARD_DYLIB</code> (see dyld sources)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Also, just now found this page: <a href=\"http://newosxbook.com/articles/DYLD.html\" rel=\"nofollow noreferrer\">newosxbook.com/articles/DYLD.html</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "zneak",
+                    "text": "<span class=\"comment-copy\">I'll look into it later and update the script/answer. Thanks!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "the numeric argument is is an offset into the \"compressed dyld info\" stream of bytecodes. see https://stackoverflow.com/a/8836580 (iOS/arm but still applies)\n",
+            "votes": "4",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "zneak",
+                    "text": "<span class=\"comment-copy\">As this question has been viewed over 500 times, here's an <a href=\"https://github.com/zneak/fcd/blob/b29b4ac/scripts/macho.py\" rel=\"nofollow noreferrer\">implementation of a bytecode decoder</a> that I wrote not long ago.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">@zneak: nice, maybe you can write up a more detailed explanation as an answer so that other people know the details? I don't mind if you un-accept my answer for that.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,55 @@
+{
+    "title": "Parse Opcodes from Binary Code",
+    "link": "https://reverseengineering.stackexchange.com/questions/18371/parse-opcodes-from-binary-code",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have been using the <a href=\"https://github.com/gdabah/distorm\" rel=\"nofollow noreferrer\">Distorm</a> library, using the <code>distorm_decode()</code> function in x64 to retrieve Opcode and Operands from binary code. For example, <code>44 0F45 C8</code> is decoded to <code>cmovne r9d,eax</code>.</p>\n<p>I would like to have a way to parse the hex binary instruction to extract the opcode part of it, in the example <code>44 *0F45* C8</code>, would like to extract <code>*0F45*</code> which is the <code>cmovne</code> opcode part.</p>\n<p>I was looking at <a href=\"http://ref.x86asm.net/coder64.html\" rel=\"nofollow noreferrer\">here</a> and I was thinking of maybe doing a lookup at a given Hex Opcode, given a mnemonic string.</p>\n<p>Are there any other built in libraries like Distorm that can achieve this? As far as I understand, Distorm has a <a href=\"https://github.com/gdabah/distorm/wiki/DecomposeInterface\" rel=\"nofollow noreferrer\">distorm_decompose</a> function and interface, but I can't reach to the <code>cmovne</code> binary representation <code>*0F45*</code> from the <code>struct _DInst</code> returned from that call.</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "disassembly"
+    ],
+    "user": "fred26",
+    "time": "May 28, 2018 at 12:18",
+    "comments": [
+        {
+            "user": "joxeankoret",
+            "text": "<span class=\"comment-copy\">You should take a look to <a href=\"https://www.capstone-engine.org/\" rel=\"nofollow noreferrer\">capstone-engine.org</a></span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Basically your usual x86_64 Intel CISC instructions have 2 different opcode formats legacy and VEX.</p>\n<hr/>\n<h2>Common opcodes</h2>\n<p>The legacy opcodes which includes the most common ones used consists of:</p>\n<ul>\n<li>1 - 4 bytes legacy prefixes which are optional</li>\n<li>1 byte of a REX prefix which is sometimes required</li>\n<li>1 - 3 bytes of opcode</li>\n<li>1 - 18 bytes of additional operand/mode data</li>\n</ul>\n<p>If I understand correctly, you are only interested in the sequence of the 1 - 3 bytes\nIn order to extract it from a single instruction you need to determine whether the prefixes \"ended\" and how long the opcode is.</p>\n<p>The second point is pretty simple, the opcode pattern is as such:\nLet # denote a single byte\nA sequence of bytes is a legacy x86 opcode can only be in one of the following patterns:</p>\n<ul>\n<li>#</li>\n<li>0x0F # ← This is the pattern in your example</li>\n<li>0x0F 0x3A #</li>\n</ul>\n<p>The second part appears more tricky since there are theoretically many combinations for those 5 prefix bytes (legacy + prefix).</p>\n<p>Legacy prefix bytes were used by certain operations to mark another meaning, for example to make an operation on other memory segment, this is a limited set which consists (according to <a href=\"https://wiki.osdev.org/X86-64_Instruction_Encoding\" rel=\"nofollow noreferrer\">this</a>) of:\n0xF0, 0xF2, 0xF3, 0x2E, 0x36, 0x3E, 0x26, 0x64, 0x65, 0x66 and 0x67</p>\n<p>So, a 1-4 byte sequence of these bytes at the start should be ignored.</p>\n<p>The REX prefix is used to operate in long mode and is usually used when 64 bit register operands are present or when an extended register is used R8 - R15. As this is also a prefix, this also should be ignored\nA REX prefix always starts with the bit sequence <code>0100</code> being the <em>most significant nibble</em> of the byte (0x4X).</p>\n<p>Althogh it does not cover  all instructions this should should suffice for most of the daily x86 instructions you encounter.</p>\n<hr/>\n<h2>Example</h2>\n<p>Let's apply the method above to analyze the instruction:\n0x44 0F 45 C8</p>\n<p>First of all prefixes, 0x44 isn't in the legacy set, but it is obvious from the most significant (left) nibble 4 digit that this is a REX prefix. (0100 0100 here). Which means we're done with prefixes, next is the opcode, 0x0F and a byte, done matching 2-byte opcode, and it's indeed <code>0F45</code> as you can <a href=\"http://www.felixcloutier.com/x86/CMOVcc.html\" rel=\"nofollow noreferrer\">verify</a>. The remaining trailing opcode data is ignored. Done.</p>\n<p>The other type of operations is VEX / XOP which are used mainly for vector / floating point operations but their detection is more complex. You can learn more about them <a href=\"https://en.m.wikipedia.org/wiki/VEX_prefix#Technical_description\" rel=\"nofollow noreferrer\">here</a>.</p>\n</div>",
+            "votes": "4",
+            "user": "Elian Kamal",
+            "time": "May 28, 2018 at 7:25",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "fred26",
+                    "text": "<span class=\"comment-copy\">Thanks so much, this provides a good start on how to approach it.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Elian Kamal",
+                    "text": "<span class=\"comment-copy\">@fred26 Glad to be of assistance :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Elian posted a nice answer that explains the theory </p>\n<p>here is an implementation using capstone and python </p>\n<pre><code>import sys\nimport capstone\n\nprint ( \"dissecting a stram of hex pairs to its components in x86\")\n\nif(len(sys.argv) &lt; 2):\n    sys.exit(\"usage python %s quoted_hex_pairs like %s\" % ( sys.argv[0] ,\n    \"\\\"F0 0D 15 F0 0D BA D0 12 50 0D\\\"\"))\n\nCODE = []\na = sys.argv[1].split(' ')\nfor i in range(0,len(a),1):\n    CODE.append( chr(int(a[i],16)))\nCODESTR = ''.join(CODE)\n\nmd = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)\nmd.detail = True\n\nfor i in md.disasm(CODESTR, 0x1000):\n    print \"TLDR:\"\n    for j in range( 0,len(i.opcode),1):\n        if(i.opcode[j] !=0):\n            print \"%02x\" % i.opcode[j],\n    print \"\\n\"            \n    print ( \"FULL DETAILS\"              )\n    print ( \"i.address\",    i.address   );    print ( \"i.mnemonic\",   i.mnemonic    ) \n    print ( \"i.op_str\" ,    i.op_str    );    print (   \"i.id\" ,        i.id        ) \n    print ( \"i.size\" ,      i.size      );    print (   \"i.bytes\" ,     i.bytes     ) \n    print ( \"i.prefix\" ,    i.prefix    );    print (   \"i.opcode\" ,    i.opcode    )\n    print ( \"i.rex\" ,       i.rex       );    print (   \"i.addr_size\" , i.addr_size ) \n    print ( \"i.modrm\" ,     i.modrm     );    print (   \"i.sib\" ,       i.sib       ) \n    print ( \"i.disp\" ,      i.disp      );    print (   \"i.sib_index\" , i.sib_index ) \n    print ( \"i.sib_scale\" , i.sib_scale );    print (   \"i.sib_base\" ,  i.sib_base  )\n    print ( \"i.sse_cc\" ,    i.sse_cc    );    print (   \"i.avx_cc\" ,    i.avx_cc    ) \n    print ( \"i.avx_sae\" ,   i.avx_sae   );    print (   \"i.avx_rm\" ,    i.avx_rm    ) \n</code></pre>\n<p>output </p>\n<pre><code>python capstest.py \"44 0f 45 c8\"\ndissecting a stram of hex pairs to its components in x86\nTLDR:\n0f 45\n\nFULL DETAILS\n('i.address', 4096L)\n('i.mnemonic', u'cmovne')\n('i.op_str', u'r9d, eax')\n('i.id', 83L)\n('i.size', 4)\n('i.bytes', bytearray(b'D\\x0fE\\xc8'))\n('i.prefix', [0, 0, 0, 0])\n('i.opcode', [15, 69, 0, 0])\n('i.rex', 68)\n('i.addr_size', 8)\n('i.modrm', 200)\n('i.sib', 0)\n('i.disp', 0)\n('i.sib_index', 0L)\n('i.sib_scale', 0)\n('i.sib_base', 0L)\n('i.sse_cc', 0L)\n('i.avx_cc', 0L)\n('i.avx_sae', False)\n('i.avx_rm', 0L)\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "blabb",
+            "time": "May 29, 2018 at 22:24",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "fred26",
+                    "text": "<span class=\"comment-copy\">Thanks, I see how capstone can parse it as well.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

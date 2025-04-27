@@ -1,0 +1,58 @@
+{
+    "title": "Figure out whether a function has return value of not?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12496/figure-out-whether-a-function-has-return-value-of-not",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am doing binary analysis on <code>x86-64bit</code> ELF binaries. All the binaries are compiled from <code>C</code> language. Basically, for a given function, I would like to figure out whether this function has a return value or not. That is, in its corresponding <code>C</code> code, whether a meaningful <code>return</code> exists. </p>\n<p>As I am essentially facing the assembly code, it is not feasible to figure out through some type information. However, as for normal <code>x86-64bit</code> assembly program, the calling convention only allows register <code>rax</code> to hold the return value, <strong>so I am thinking to check the usage of <code>rax</code> after a typical function call and decide whether the target function returns a value.</strong></p>\n<p>Here is an example in <code>AT&amp;T</code> syntax:</p>\n<pre><code>foo:\n   ...\n   call bar\n   mov 0, %rax  &lt;--- bar should not have a return value\n\nbar:\n   ...\n</code></pre>\n<p>In the above example, as <code>rax</code> is immediately reset, it is unlikely for function <code>bar</code> to return a value.</p>\n<p>Another example:</p>\n<pre><code>foo:\n   ...\n   call bar\n   jmp *%rax  &lt;----- It is very likely that bar has a return value\n</code></pre>\n<p>For the above case, I suppose without some aggressive inter-procedure optimization, we can say it for sure that <code>bar</code> returns a value (a pointer).</p>\n<p>I think this is yet another (ad-hoc) reverse engineering task, but I guess there may be a more \"formal\" way to solve it, any idea on that?</p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "560",
+    "tags": [
+        "binary-analysis",
+        "static-analysis",
+        "elf",
+        "functions",
+        "x86-64"
+    ],
+    "user": "lllllllllllll",
+    "time": "Apr 21, 2016 at 15:34",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I see several problems with that approach:</p>\n<ul>\n<li>Functions that return double values don't use <code>eax</code></li>\n<li>Functions that return structs don't neccesarily use <code>eax</code>, see <a href=\"http://blog.aaronballman.com/2012/02/describing-the-msvc-abi-for-structure-return-types/\" rel=\"nofollow\">here</a></li>\n<li>return values from many functions, like <code>free</code>, <code>close</code>, <code>printf</code> are custumarily ignored, so \"caller does not read <code>eax</code>\" does not translate to \"function has no return value\"</li>\n<li>there are edge cases to \"<code>eax</code> is used\". For example, <code>xor [location], eax</code> probably means <code>eax</code> has a value, <code>xor eax, [location]</code> as well, but <code>xor eax, eax</code> means <em>probably</em> not.</li>\n</ul>\n<p>In the generic case, i think there's no foolproof way. For example, in a function ending in</p>\n<pre><code>for (i=0; i&lt;somevar; i++)\n    somearray[i]=0;\nreturn i;\n</code></pre>\n<p>the compiler may just decide to use <code>eax</code> for the loop counter; which means there's no reason to do another <code>mov</code> after the loop. If the caller ignores the value of <code>eax</code>, you have no way to determine, from the assembly alone, if that <code>return</code> statement was present or not. (Of course, in this particular case, any self respecting compiler will generate a variant of <code>rep stosw</code> or <code>sse</code> instructions, but you get the point).</p>\n<p>So when the caller <em>does</em> read <code>eax</code>, you can be quite certain that the function has a return value; but a caller that ignores <code>eax</code> basically means nothing. </p>\n<p>And even if the caller reads <code>eax</code>, you could construct pathological cases of a function written in assembler, that preserves <code>eax</code>, and a caller that knows about this and makes use of <code>eax</code> even over the function call. But you'll probably not encounter this in software that isn't deliberately obfuscated</p>\n</div>",
+            "votes": "3",
+            "user": "Guntram Blohm",
+            "time": "Apr 21, 2016 at 18:32",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">Thank you Guntram. This is a fantastic answer. I learned a lot from it! I guess I will start from checking the usage of <code>eax</code>. Although when considering potential control flow transfer following the <code>call</code> instruction, tracing the usage of <code>eax</code> is by no means as easy as it looks...</span>",
+                    "time": null
+                },
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">As I want to implement it like a dataflow analysis task.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The return value is defined by the calling convention used by your compiler, and it usually just means \"the value of <code>eax</code>/<code>rax</code>\". </p>\n<p>In your first example, <code>rax</code> is not reset, it's just set to the value <code>0</code>, hence the functions most likely ends with a <code>return 0;</code>.</p>\n<p>In your second example, you should check what is the last write on <code>rax</code> in the <code>bar</code> function.</p>\n<p>You could try to check whether the next operation on <code>rax</code> after your function is a write or a read, basically if it's a read the return value is used, if it's a write the return value is discarded.</p>\n</div>",
+            "votes": "0",
+            "user": "frogatto",
+            "time": "Jun 14, 2016 at 17:42",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Guntram Blohm",
+                    "text": "<span class=\"comment-copy\">\"You could try to check whether the next operation on rax after your function is a write or a read\" - that's what he's doing. The first example has a write to <code>rax</code> after the call to <code>bar</code>, the second example reads <code>rax</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">@GuntramBlohm. Hi, thank you for your reply. Yes, that's basically what I am thinking to do right now ;)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

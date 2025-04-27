@@ -1,0 +1,43 @@
+{
+    "title": "(bad) opcodes of objdump",
+    "link": "https://reverseengineering.stackexchange.com/questions/14034/bad-opcodes-of-objdump",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to write my own disassembler for PE,PE+ and ELF executables but I'm stuck with a big problem on PE and PE+ executables.\n </p>\n <p>\n  I'm checking my work by comparing my output with objdump, and I found some (bad) opcodes appear in the disassembled program. I immediately checked the instruction manual to control these values; they are shown as invalid in instruction manual. Some examples:\n </p>\n <p>\n  Example from PE files:\n </p>\n <pre><code>40dad1:       d6                      (bad)\n</code></pre>\n <p>\n  Some other:\n </p>\n <pre><code>402f1c:       ff                      (bad)\n402f1d:       ff                      (bad)\n402f1e:       ff                      (bad)\n402f1f:       ff 01                   incl   (%ecx) #at last a valid instruction\n</code></pre>\n <p>\n  These are valid when I check the manual, but I cannot understand this (it's a PE+ file, architecture is AMD64):\n </p>\n <pre><code>f0 db a5 4e 9c 95 68    lock (bad) [rbp+0x68959c4e]\n\nf0 is lock prefix\ndb means its a x87 instruction\na5 is ModRM byte(10 100 101) and by looking mod and reg fields we can say it's an invalid instruction\n4e 9c 95 68 is used as 4byte disp but why ?\n</code></pre>\n <p>\n  Do we assume that it's an invalid indirect x87 opcode and we continue to read as it's a valid opcode? I suppose objdump chooses this path.\n </p>\n <p>\n  And what are these (bad) instructions for? It's clear that they are not for aligning; or am I doing something wrong?\n </p>\n <p>\n  Btw, I'm trying to disassemble my old projects and FireFox to check if my program works. I'm using\n  <code>\n   objdump -z -d -M intel XXYYZZ.exe\n  </code>\n  to disassemble.\n </p>\n</div>\n</body></html>",
+    "votes": "6",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "disassembly",
+        "pe",
+        "objdump",
+        "float"
+    ],
+    "user": "Efe Can",
+    "time": "Nov 24, 2016 at 11:31",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  You are correct, and\n  <code>\n   objdump\n  </code>\n  is actually wrong to disassemble such instruction, only to mark it as\n  <code>\n   (bad)\n  </code>\n  in a later stage.\n </p>\n <p>\n  Here is how it works:\n </p>\n <pre><code>db a5 4e 9c 95 68    lock (bad) [rbp+0x68959c4e]\n</code></pre>\n <p>\n  <code>\n   db\n  </code>\n  is one of the 87 FPU extensions, and\n  <code>\n   a5\n  </code>\n  indeed is the Mod/rm byte. Now, for the FPU extensions, the rm part is \"as usual\" for all other mod/rm instructions, but the mod part indicates which instruction to use, from this small table:\n </p>\n <pre><code>DB /0     FILD mem4i\nDB /2     FIST mem4i\nDB /3     FISTP mem4i\nDB /5     FLD mem10r\nDB /7     FSTP mem10r\n</code></pre>\n <p>\n  where the\n  <code>\n   /x\n  </code>\n  number indicates what got encoded in the mod part of the mod/rm byte (for completeness:\n  <code>\n   db eX\n  </code>\n  also forms some valid opcodes).\n </p>\n <p>\n  So of all available codes, those with the mod/rm patterns of\n  <code>\n   ..001...\n  </code>\n  ,\n  <code>\n   ..100..\n  </code>\n  and\n  <code>\n   ..110...\n  </code>\n  form 'bad' codes - but you only know this\n  <em>\n   after\n  </em>\n  parsing the mod/rm byte\n  <em>\n   and\n  </em>\n  checking this specific table for the opcode\n  <code>\n   DB\n  </code>\n  .\n </p>\n <p>\n  Now apparently objdump parses the entire instruction - including the 4-byte immediate value -\n  <em>\n   before\n  </em>\n  checking if the base instruction is valid to start with. I suppose it's just a table that says\n </p>\n <pre><code>\"fild\", \"(bad)\", \"fist\", \"fistp\", \"(bad)\", \"fld\", \"(bad)\", \"fstp\"\n</code></pre>\n <p>\n  and the\n  <code>\n   (bad)\n  </code>\n  entries get used as if they are actually valid.\n </p>\n <p>\n  One could argue that it's immaterial, because both ways lead to the conclusion the opcode is 'bad', but with objdump's method, you are not only discarding the first byte as 'bad' but an entire 6 bytes. It is at least\n  <em>\n   theoretically\n  </em>\n  possible the first byte (which causes the entire next sequence to be invalid) is data but followed\n  <em>\n   immediately\n  </em>\n  by correct code, which would then start with the sequence\n  <code>\n   a5 4e 9c 95 68\n  </code>\n  - which is skipped entirely by objdump.\n </p>\n <blockquote>\n  <p>\n   .. what are these (bad) instructions for?\n  </p>\n </blockquote>\n <p>\n  I suppose, looking at the other instructions that you show, that you are disassembling a wrong part of the executable and this is not supposed to be code at all but data instead.\n </p>\n <p>\n  You should check the PE/PE++ headers to find the\n  <em>\n   sections\n  </em>\n  , and then only attempt disassembly on a section marked as \"code\" and/or \"executable\" in its\n  <code>\n   Characteristics\n  </code>\n  field. Even then, it's possible to start at a 'wrong' position (e.g., in the middle of a longer instruction) or inside data (which may also reside inside a\n  <code>\n   .code\n  </code>\n  section).\n </p>\n</div>\n</body></html>",
+            "votes": "4",
+            "user": "Jongware",
+            "time": "Nov 24, 2016 at 15:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Efe Can",
+                    "text": "<span class=\"comment-copy\">I've already parsed headers and just trying to disassemble only \".text\" section as you said and i think you are correct about that it may not be instruction but data. I wonder if there is an another table or something like that for indicating code parts of the .text section.. Since I'm using linear sweep approach to disassemble(like objdump) these datas between instructions keep me busy with them i think..</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">@EfeCan: no, linear sweep leads to nothing but pain. <code>objdump</code> is \"good enough\" for a casual peek at code, but for a more serious disassembler you should take a look at IDA Pro (if I'm not mistaken they still have a free demo which does wonders with a PE). The approach I used for my latest disassembler is <i>function driven</i> – perfectly doable, because the executable I'm investigating was written in an OOP language.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Efe Can",
+                    "text": "<span class=\"comment-copy\">yeah i think i should really consider to swap recursive approach. I'm gonna try IDA to get some more ideas..</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

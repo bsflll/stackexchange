@@ -1,0 +1,66 @@
+{
+    "title": "Automatically decode PUSH+RET call into JMP",
+    "link": "https://reverseengineering.stackexchange.com/questions/10911/automatically-decode-pushret-call-into-jmp",
+    "content": "While reversing a piece of malware I've faced with anti-disasm trick, that actually is well described here.\nSo my question is: would the assembly patching of whole the <pre><code>PUSH+RET</code></pre> stubs to <pre><code>JMP</code></pre>(i.e. <pre><code>C3</code></pre>-> <pre><code>FF25XXXX</code></pre>) or an EA if there is one spare byte immediately after the original <pre><code>RET</code></pre>. Would these instructions resolve be enough for the wrong disassembly elimination?\nIf no, what else should resolve the issue?\nIf yes, has anybody the ready-made IDC/IDAPython sample to automate this  work?\nSeems like solution illustrated here(slide 13) but, unfortunately, no source provided.\nUPD\nAnswer for my own question after a bit of research: patching of original executable not feasible because one command <pre><code>C3</code></pre> can be overwritten with with only one byte command(<pre><code>90</code></pre> a.k.a. nop for instance), but not with the minimum needed <pre><code>FF25</code></pre>. Even unconditional jump will cost more than one byte so the inline possibility isn't  applicable also.\nThe working ways to eliminate this technique are seems to look like:\n\nReassemble binary completely(see DynamoRIO-way in ExtremeCoders' answer).\nFigure out with some sort of IDC script, which will modify only representation in IDA without touching binary. Possible starting points can be found here.\n",
+    "votes": "5",
+    "answers": 3,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "binary-analysis",
+        "idapython"
+    ],
+    "user": "see ya",
+    "time": "May 23, 2017 at 12:37",
+    "comments": [
+        {
+            "user": "peter ferrie",
+            "text": "PUSH+RET is a JMP not a CALL.  You'd need an FF25 sequence instead, and to find another four bytes to store the address, or an EA if there is one spare byte immediately after the original RET.\n",
+            "time": null
+        },
+        {
+            "user": "see ya",
+            "text": "@peterferrie thanks for notice. I'll update the post with your tips, taken into consideration.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "I wrote a similar sort of script, while solving a crackme. \nThe binary in question obfuscated \n<pre><code>call imm32\njmp imm32\n</code></pre>\ninstructions to\n<pre><code>push   imm32\nxor    dword ptr [esp], imm32\nmov    edx, imm32\nxor    edx, imm32\njmp    edx\n</code></pre>\nand \n<pre><code>jmp imm32\n</code></pre>\ninstructions to\n<pre><code>mov    edx, imm32\nxor    edx, imm32\njmp    edx\n</code></pre>\nIn order to deobfuscate, I wrote a instruction tracer using DynamoRIO, which logged all basic blocks executed, in a trace file.\nNow by parsing the trace file, and pattern matching using regex it is possible to deobfuscate the obfuscated instructions.\nSince the jump and call destinations need to be calculated dynamically, I used FASM to assemble instructions on the fly.\nHere is the script. It may not be directly useful, but you will get an idea.\n<pre><code>from capstone import *\nfrom capstone.x86 import *\nimport re\nimport binascii\nimport subprocess\nimport os\nimport mmap\n\n'''\npattern1\n-------------------------------------------------------\n68 ?? ?? ?? ??          push   imm32\n81 34 24 ?? ?? ?? ??    xor    dword ptr [esp], imm32\nba ?? ?? ?? ??          mov    edx, imm32\n81 f2 ?? ?? ?? ??       xor    edx, imm32\nff e2                   jmp    edx\n\nWill be rewritten to\n\ncall imm32\njmp imm32\n\n\npattern2 (only if pattern1 does not match)\n-------------------------------------------------------\nba ?? ?? ?? ??          mov    edx, imm32\n81 f2 ?? ?? ?? ??       xor    edx, imm32\nff e2                   jmp    edx\n\nWill be written to\n\njmp imm32\n\n'''\n\npat1 = re.compile(r'68.{8}813424.{8}ba.{8}81f2.{8}ffe2')\npat2 = re.compile(r'ba.{8}81f2.{8}ffe2')\n\nmd = Cs(CS_ARCH_X86, CS_MODE_32)\nmd.detail = True\n\nhandle = open('code_section_p.bin', 'r+b')\nmm = mmap.mmap(handle.fileno(), 0, access = mmap.ACCESS_WRITE)\n\n\ndef assemble(asm):\n    f = open('temp.asm', 'w')\n    f.write(asm)\n    f.close()\n    devnull = open(os.devnull, 'w')\n    subprocess.call(['fasm.exe', 'temp.asm'], stdout=devnull, stderr=devnull)\n    return open('temp.bin', 'rb').read()    \n\n\ndef pat1_rewrite(buf, off_start, va_start, numBytes): \n    gen = md.disasm(buf[off_start: off_start + numBytes], va_start)\n\n    oper1 = gen.next().operands   # push   imm32\n    oper2 = gen.next().operands   # xor    dword ptr [esp], imm32\n    oper3 = gen.next().operands   # mov    edx, imm32\n    oper4 = gen.next().operands   # xor    edx, imm32\n\n    jmp_target = oper1[0].value.imm ^ oper2[1].value.imm\n    call_target = oper3[1].value.imm ^ oper4[1].value.imm\n\n    return 'use32\n' \\\n           'org {}\n'\\\n           'call {}\n'\\\n           'jmp {}'.format(va_start, call_target, jmp_target)\n\n\n\ndef pat2_rewrite(buf, off_start, va_start, numBytes): \n    gen = md.disasm(buf[off_start: off_start + numBytes], va_start)\n\n    oper1 = gen.next().operands   # mov    edx, imm32\n    oper2 = gen.next().operands   # xor    edx, imm32\n\n    jmp_target = oper1[1].value.imm ^ oper2[1].value.imm\n\n    return 'use32\n' \\\n           'org {}\n'\\\n           'jmp {}'.format(va_start, jmp_target)    \n\n\n\ndef analyze_bb(buf, off_start, va_start, bbsize):\n    hexstr = binascii.hexlify(buf[off_start: off_start + bbsize])\n\n    mtch = pat1.search(hexstr)\n    if mtch is not None:\n        start = off_start + mtch.start() / 2\n        numBytes = bbsize - mtch.start() / 2\n        asm = pat1_rewrite(buf, start, va_start + mtch.start() / 2, numBytes)\n        mm.seek(start)\n        assembled = assemble(asm)\n        mm.write(assembled)\n        mm.write('\\xCC' * (numBytes - len(assembled)))\n\n\n    else:\n        mtch = pat2.search(hexstr)\n        if mtch is not None:\n            start = off_start + mtch.start() / 2\n            numBytes = bbsize - mtch.start() / 2            \n            asm = pat2_rewrite(buf, start, va_start + mtch.start() / 2, numBytes)\n            mm.seek(start)\n            assembled = assemble(asm)\n            mm.write(assembled)\n            mm.write('\\xCC' * (numBytes - len(assembled)))\n\n\ndef main():\n    addrStartEnd_list = open('trace.txt', 'r').readlines()\n    buf = open('code_section.bin', 'rb').read()\n\n    for addrStartEnd in addrStartEnd_list:\n        va_start, bbsize = map(lambda x: int(x, 16), addrStartEnd.split())\n        off_start = va_start - 0x30001000\n\n        analyze_bb(buf, off_start, va_start, bbsize) \n        handle.close()\n\n\n\nif __name__ == '__main__':\n    main()\n</code></pre>\n",
+            "votes": "5",
+            "user": "0xec",
+            "time": "Sep 20, 2015 at 10:10",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "You can easily make an ida script that will add a cross-reference from the ret instruction to the address that is in the push.  You simply need to look for the pattern that has the previous instruction with a mnemonic that is push and the next instruction that is a RET. Adding a cross reference will ensure that the flow for your function is correct.\nIf it would help, I could put together a script that will add this type of cross reference?\nHere is a link to my version of a IDA Pluging using the SDK.\nhttp://milhous.no-ip.com:15980/blog/2015/09/20/ida-call-jump/\n",
+            "votes": "1",
+            "user": "Milhous",
+            "time": "Sep 21, 2015 at 3:24",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "see ya",
+                    "text": "<span class=\"comment-copy\">Can't really run your script for tests because of <code>segment_t not defined</code> error. Tried many header insertions/code modifications with no luck. Can you please update answer with details of how this should work? IDA 6.6</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "Assuming that JMP => PUSH; RET is the only obfuscation technique applied, you could try writing an IDAPython script that does the following :-\n\nFor each function that has been discovered by IDA\nTraverse each instruction. Upon encountering a \"PUSH; RET\" instructions, extract the bytes corresponding to the target. Patch the bytes to change it to a relative JMP(you will need to take the current instruction address into account for that). Reassemble the bytes as instructions.\nIn order to patch the actual binary, use \"Apply patches to binary\" from the EDIT menu.\n",
+            "votes": "1",
+            "user": null,
+            "time": "Sep 21, 2015 at 5:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "see ya",
+                    "text": "<span class=\"comment-copy\">as soon as I'm rather new to IPAPython there is one question: can the wildcards be set for this operation? Assume situation, when there is no direct <code>PUSH</code> and strictly then <code>RET</code>. How about <code>PUSH + wildcard + random basic block + wildcard + RET</code>?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

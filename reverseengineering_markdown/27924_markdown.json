@@ -1,0 +1,60 @@
+{
+  "title": "What does the cs register do here?",
+  "link": "https://reverseengineering.stackexchange.com/questions/27924/what-does-the-cs-register-do-here",
+  "content": "I've come across this sequence of bytes: 2e 88 38.\n\nHopper disassembles this as:\n\n```\nmov    byte [cs:rax], bh\n\n```\nThis online disassembler gives slightly different output:\n\n```\nmov    BYTE PTR cs:[rax],bh \n\n```\nEither way, I can't make heads nor tails of what the intended result of this instruction is.\n\n",
+  "votes": "0",
+  "answers": 2,
+  "views": "321",
+  "tags": [
+    "disassembly",
+    "x86"
+  ],
+  "user": "MTCoster",
+  "time": "Jul 1, 2021 at 11:39",
+  "comments": [
+    {
+      "user": "macro_controller",
+      "text": "I think it's the same meaning with slightly different syntax.",
+      "time": null
+    },
+    {
+      "user": "MTCoster",
+      "text": "@macro_controller That was my assumption, but given I couldn't tell what either meant I didn't want to jump to that conclusion and leave something potentially important out of the question",
+      "time": null
+    },
+    {
+      "user": "Rolf Rolles",
+      "text": "It might not even be a valid instruction -- that is to say, does it make sense in the context of the surrounding instructions, or are they nonsensical?",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "In 16- and 32-bit modes the  memory accesses used the ds or ss registers, but by using segment override, you could force usage of another segment (selector in protected mode). For example, in 16-bit real mode\n\n```\n mov bx, [si]\n\n```\nWould access the address ds*16 + si\n\nWhile\n\n```\n mov bx, cs:[si]\n\n```\nWould access cs*16+si\n\nThe distinction was less useful in most 32-but OSes, which usually set up memory so that cs, ds, es, ss all pointed to the same flat 32-bit memory space although in theory they could be different (and often they did have different permissions). In 64-bit mode the segment registers are even less useful - in it the segment overrides are officially ignored except for fs and gs.\n\nSo in your example the cs prefix (2e) is completely redundant and serves no useful purpose: the instruction has the same effect as\n\n```\nmov  byte [rax], bh\n\n```\nHowever the disassembler still prints cs: to show that the prefix is  present in the instruction.\n\n",
+      "votes": "2",
+      "user": "Igor Skochinsky",
+      "time": "Jul 3, 2021 at 12:02",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "char * rax; = bh\nor byte* rax = bh or\nsimply mov the [8..16] bit component  of rbx register into the address pointed by 64 bit register rax  at [0..7] bit place and zero out the remaining bits\n\nor in other words if address 12345678`9abcdef contains 0x0\n\nand register rbx contains 0x00000000`0000ffff\n\nthen after this operation address  12345678`9abcdef  will contain 0xff\n\nsee below a simulation of operation with windbg\n\n```\n0:000> ? @rip\nEvaluate expression: 140705686294668 = 00007ff8`9873108c\n0:000> dq @rip l1\n00007ff8`9873108c  c338c483`4800ebcc\n0:000> r @rax = @rip\n0:000> r @rbx = 0xffff\n0:000> r @bh\nbh=ff\n0:000> eq @rax\n00007ff8`9873108c c338c483`4800ebcc @bh\n00007ff8`98731094 cccccccc`cccccccc\n0:000> dq @rip l1\n00007ff8`9873108c  00000000`000000ff\n0:000>  \n\n```\nand cs, ds, es , ss segment registers do not matter much in flat memory model.\n\nonly fs and gs segment registers matters\n\na sample code that demonstrates the write using various segment prefixes in x64\nml64 wont encode the instruction so need to emit raw bytes using define byte\n\nc code with inline assembly usage follows\n\ncpp file\n\n```\n:\\>type inline_cpp.cpp\n\n#include <windows.h>\nextern \"C\" void segregtest(ULONG64 *addr ,BYTE value);\nULONG64 myaddr = 0x77;\nint main (void)\n{\n        segregtest(&myaddr,0x88);\n        return 0;\n}\n\n```\nasmfile\n\n```\n:\\>type inline_asm.asm\nPUBLIC segregtest\n.code\nsegregtest PROC\nmov rax,rcx\nmov bh,dl\ndb 2Eh\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 3Eh\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 36h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 26h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 64h\nmov byte ptr [rax] ,    bh\nadd bh,11h\ndb 65h\nmov byte ptr [rax] ,    bh\nret\nsegregtest ENDP\nEND\n\n```\ncompile link with\n\n```\n:\\>type assemble_compile_link.bat\nml64 /c /Zi /nologo %1_asm.asm\n\ncl /Zi /W4 /Od /analyze /nologo /GS- /EHsc %1_cpp.cpp /link /release /subsystem:windows /fixed /entry:main %1_asm.obj\n\n```\nexecution and tracing\n\n```\n:\\>assemble_compile_link.bat inline\n\n:\\>cdb -c \"g inline_cpp!segregtest;t 10;q\" inline_cpp.exe | awk /Reading/,/quit/\n0:000> cdb: Reading initial command 'g inline_cpp!segregtest;t 10;q'\ninline_cpp!segregtest+0x3:\n00000001`40001003 8afa            mov     bh,dl\ninline_cpp!segregtest+0x5:\n00000001`40001005 2e8838          mov     byte ptr cs:[rax],bh cs:00000001`40003000=77\ninline_cpp!segregtest+0x8:\n00000001`40001008 80c711          add     bh,11h\ninline_cpp!segregtest+0xb:\n00000001`4000100b 3e8838          mov     byte ptr ds:[rax],bh ds:00000001`40003000=88\ninline_cpp!segregtest+0xe:\n00000001`4000100e 80c711          add     bh,11h\ninline_cpp!segregtest+0x11:\n00000001`40001011 368838          mov     byte ptr ss:[rax],bh ss:00000001`40003000=99\ninline_cpp!segregtest+0x14:\n00000001`40001014 80c711          add     bh,11h\ninline_cpp!segregtest+0x17:\n00000001`40001017 268838          mov     byte ptr es:[rax],bh es:00000001`40003000=aa\ninline_cpp!segregtest+0x1a:\n00000001`4000101a 80c711          add     bh,11h\ninline_cpp!segregtest+0x1d:\n00000001`4000101d 648838          mov     byte ptr fs:[rax],bh fs:00000001`40003000=bb\ninline_cpp!segregtest+0x20:\n00000001`40001020 80c711          add     bh,11h\ninline_cpp!segregtest+0x23:\n00000001`40001023 658838          mov     byte ptr gs:[rax],bh gs:00000001`40003000=cc\n(1b44.cf8): Access violation - code c0000005 (first chance)\nFirst chance exceptions are reported before any exception handling.\nThis exception may be expected and handled.\nquit:\n\n```\n",
+      "votes": "0",
+      "user": "blabb",
+      "time": "Jul 2, 2021 at 18:53",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "MTCoster",
+          "text": "\"and cs ds es segemtn registers do not matter much in flat memory model\" - This is the part my question was about - I understand the mov instruction works usually, what I can't figure out (or search for apparently) is what [cs:rax] (or cs:[rax]) means",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "added a snippet that shows usage",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

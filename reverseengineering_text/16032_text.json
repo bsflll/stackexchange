@@ -1,0 +1,60 @@
+{
+    "title": "Reverse Packet Encryption with server side checks",
+    "link": "https://reverseengineering.stackexchange.com/questions/16032/reverse-packet-encryption-with-server-side-checks",
+    "content": "I made a DLL that hooks the send function of an MMORPG game. When the <pre><code>send()</code></pre> function is called, it will send the packet in a loop until I stop it instead of just sending the packet one time.\nMy problem is the packets are encrypted. And, the server checks every packet sent from the client. If the packet that the server expect does not match from what the client sent, the server will disconnect you. So, even if you disable the encryption code in the client, it will still get verified on the server side.\nI manage to disable the encryption of the packet by modifying the binary but I still get disconnected because of the above statement. And, I can't send it in an infinite loop because each packet should be different.\nInfo:\n\nOnly the packets sent from client to server are encrypted. The packets from server to client are not encrypted.\nOnly the first 2 bytes of the packet is encrypted. The remaining 8 bytes are not. The size of the packet is 10 bytes.\nI found the function (written in assembly) where it generates the dynamic key used to encrypt the first 2 bytes. I wanted to use that codes but I don't know how to translate them into a higher level language like c++.\n\nDecryption Function\n<pre><code>unsigned short clif_decrypt_cmd( int cmd, struct map_session_data *sd ) {\n  if (sd) {\n    return (cmd ^ ((sd->cryptKey >> 16) & 0x7FFF));\n  }\n  return (cmd ^ ((((clif->cryptKey[0] * clif->cryptKey[1]) + clif->cryptKey[2]) >> 16) & 0x7FFF));\n}\n</code></pre>\nQuestion:\n\nHow can I achieve my goal to send the packet in an infinite loop if each packet is checked by the server?\nShould I use the function that encrypts the first two bytes before sending each time I send it?\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "assembly",
+        "ollydbg",
+        "debugging"
+    ],
+    "user": "Noob Programmer",
+    "time": "May 7, 2020 at 11:15",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "why do you need to send the same packet in a loop? are you trying to DDoS the server?\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "add the disassembly of the function which \"generates the dynamic key used to encrypt the first 2 bytes\"\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "so you want to cheat yourself but not let others cheat? I'm not sure I want to go along with that...\n",
+            "time": null
+        },
+        {
+            "user": "Michael Pittino",
+            "text": "@NoobProgrammer I guess anyone who is able to write game cheats isn't dependent on your asm snippet.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "First of all the statement \n\nIf the packet that the server expect does not match from what the client sent, the server will disconnect you.\n\nmakes no sense.  \nHow would the server know what you are going to send to him?\nMaybe you ment that the server disconnects you if you malform the packet (change the structure of the packet - or, for example, by disabling the packet encryption - in this case the server would try to decrypt it and would get non interpretable results).\nSo to answer your question:\nIMO you have two possible ways to achieve your goal:\n\nFind the function that creates the packet before it is encrypted and use it to send your own data.\nUnderstand how the network protocol and cryptography of your game works and rebuild it in your own program.\n\nI'd suggest you use the first option since it's the simpler one. While the second option provides you more flexibility I don't think it's feasable for you since you said <pre><code>but I don't know how to translate them into a higher level language like c++.</code></pre>.\nI can only provide you with general instructions since you didn't post much information about your target (name, some assembly snippets, if it uses TCP or UDP, ..):\n\nUse a dynamic debugger to find the function mentioned in #1. I prefer x64dbg since it works for both, x86 and x64 bit applications.\nSet a breakpoint on the socket send function. Which send function is used depends on your game but possible candidates are send, sendto, WSASend and WSASendTo.\nFind the used send function by placing a breakpoint on all of them and watch which bp triggers. Now you know which function is used to send the data to the game server. I'll use <pre><code>WSASendTo</code></pre> in this example since it's very common in modern udp applications (I assume your game uses UDP - I could be wrong tho).\nAs you know by the documentation of <pre><code>WSASendTo</code></pre> the function takes a pointer to one or more <pre><code>WSABUF</code></pre> structures as second argument. Usually it's just one <pre><code>WSABUF</code></pre>.\nSince almost every windows api function is a <pre><code>__stdcall</code></pre> the second argument will be at <pre><code>[esp+0x8]</code></pre> when your breakpoint triggers (<pre><code>[esp]</code></pre> is the return address, <pre><code>[esp+0x4]</code></pre> is the first argument <pre><code>_In_ Socket s</code></pre>).\nIf you use x64dbg you can now follow the pointer to the <pre><code>WSABUF</code></pre> structure \"in dump\" to see the contents of it. You can also follow the return address at <pre><code>[esp]</code></pre> to find the function which called <pre><code>WSASendTo</code></pre>.\nYou will probably need to restart the game a few times and set new breakpoints on the function which called the windows send function.\nAt some point you will see that the contents of the buffer change - you said that only the first two bytes are encrypted, so you already know at what to put your eyes at.\nAt this point you should know which function is responsible for encrypting your data. Maybe this is already all you need - maybe you need to go a bit higher in the calling hierarchy to find the function which actually starts the whole <pre><code>packet create-encrypt-send</code></pre> process.\n\nHope that helps!\n",
+            "votes": "3",
+            "user": "Michael Pittino",
+            "time": "Aug 13, 2017 at 11:12",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Michael Pittino",
+                    "text": "<span class=\"comment-copy\">Well, as Mr. Skochinsky already said, it's very hard to help you without any asm snippets. Please consider adding some more information to you question so I can update my answer. BTW if you use x64dbg, why is the question tagged with <code>ollydbg</code>?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Noob Programmer",
+                    "text": "<span class=\"comment-copy\">Sorry, but I can't find the x64dbg tag. So I tagged it with ollydbg and IDA. I edited the question and added the decryption code on the server side. BTW, thank you for the time give an answer to my question.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

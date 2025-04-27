@@ -1,0 +1,71 @@
+{
+    "title": "What is the protocol for x87 floating point emulation in MS-DOS?",
+    "link": "https://reverseengineering.stackexchange.com/questions/12272/what-is-the-protocol-for-x87-floating-point-emulation-in-ms-dos",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm trying to get useful results using the\n  <a href=\"https://github.com/uxmal/reko\">\n   Reko decompiler\n  </a>\n  on a dusty old MS-DOS binary compiled with Borland C++ that appears to be performing a lot of floating point arithmetic. I'm seeing code sequences like\n </p>\n <pre><code>mov ax,0x4D8C    ; segment selector\nmov es,ax\nint 0x3C         ; call x87 emulator??\nfld dword ptr [<some address>]\nsub sp,8\nint 0x39         ; call x87 emulator??\n</code></pre>\n <p>\n  ...etc. A cursory search engine search strongly hints that the\n  <code>\n   int\n  </code>\n  instructions are invoking an x87 emulation library; when the x87 is present, it lets the coprocessor execute the instruction, but when it isn't, the emulator emulates.\n </p>\n <p>\n  I am well familiar with how to\n  <em>\n   implement\n  </em>\n  FPU operations, with shifts and whatnot. What I'd like to find out more about is the protocol of these invocations to the emulator. I have been unable to locate documentation. Perhaps one of the members of the RE community does?\n </p>\n</div>\n</body></html>",
+    "votes": "19",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "x86"
+    ],
+    "user": "John Källén",
+    "time": "Mar 22, 2016 at 11:33",
+    "comments": [
+        {
+            "user": "ratchet freak",
+            "text": "<html><body><span class=\"comment-copy\">\n I'd imaging using shifts and masks to extract the exponent and mantissa and then use fixed point math to get the result\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "John Källén",
+            "text": "<html><body><span class=\"comment-copy\">\n I understand how to perform FP math using integer registers. What I'm wondering about is the binding mechanism used to invoke the FP emulation -- what registers those\n <code>\n  int\n </code>\n instructions are expecting.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "<html><body><span class=\"comment-copy\">\n go to ralf browns home page and download the packages one of the package will contain int.com which you can use to make int calls like int.com 0x3c -ax 0xxx -bx 0xyyyy\n <a href=\"http://www.cs.cmu.edu/~ralf/files.html\" rel=\"nofollow noreferrer\">\n  cs.cmu.edu/~ralf/files.html\n </a>\n todays date  INT.COM 0x21 -ah 0x2a AX=2A00   BX=0000   CX=0000   DX=0000 SI=0000   DI=0000   BP=FFAC   SP=FFA0 CS=0000   DS=0000   ES=0000   SS=0000   CPU Flags: 0n00oditsz0a0p1c  INT: 0x21  AX=2A02   BX=0000   CX=07E0   DX=0316 SI=0000   DI=0000   BP=FFAC   SP=FFA0 CS=0000   DS=0000   ES=0000   SS=0000   CPU Flags: 0N11odItSz0A0P1C DOSERR: 0057 (87)\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Jason Geffner",
+            "text": "<html><body><span class=\"comment-copy\">\n This may be helpful:\n <a href=\"http://www.delphigroups.info/2/d7/740.html\" rel=\"nofollow noreferrer\">\n  delphigroups.info/2/d7/740.html\n </a>\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "John Källén",
+            "text": "<html><body><span class=\"comment-copy\">\n @JasonGeffner: thanks, that's\n <i>\n  exactly\n </i>\n the link I was looking for. Seems my copy of Ralf's interrupt list was stale.\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Nothing like asking a question on stackexchange, only to be humiliated by finding the answer (or at least part of it). After finding the following source file, it started making sense:\n </p>\n <p>\n  <a href=\"https://github.com/alexhenrie/wine/blob/master/dlls/krnl386.exe16/fpu.c\">\n   https://github.com/alexhenrie/wine/blob/master/dlls/krnl386.exe16/fpu.c\n  </a>\n </p>\n <p>\n  On old 8086 machines, where there is no trap for invalid instructions, the Elders of the Past came up with an emulation strategy. All x87 instructions are in the\n  <code>\n   D8\n  </code>\n  -\n  <code>\n   DF\n  </code>\n  range (8 possible values) followed by modrm and other goodness. If you prefix the instruction with a\n  <code>\n   FWAIT\n  </code>\n  (opcode\n  <code>\n   9B\n  </code>\n  ), you guarantee that there always be two bytes of code before the modrm byte, looking something like\n  <code>\n   9B Dx\n  </code>\n  . However, instead of emitting those two bytes, the compiler emits\n  <code>\n   CD xx\n  </code>\n  , where xx ranges\n  <code>\n   34\n  </code>\n  -\n  <code>\n   3B\n  </code>\n  (8 possible values). As we all know, CD is the encoding of the x86\n  <code>\n   int\n  </code>\n  instruction.\n </p>\n <p>\n  When the CPU executes the\n  <code>\n   int\n  </code>\n  instruction and arrives at the handler for\n  <code>\n   34\n  </code>\n  -\n  <code>\n   3B\n  </code>\n  , it vectors off to the interrupt handler.  If there isn't an x87 coprocessor available, the handler will emulate the floating point instruction, maintaining the coprocessor state in memory. If however there\n  <em>\n   is\n  </em>\n  an x87 coprocessor present, the handler will peek at the return stack to see where the\n  <code>\n   int\n  </code>\n  instruction is located, and\n  <em>\n   overwrite it\n  </em>\n  with the appropriate\n  <code>\n   9B Dx\n  </code>\n  byte sequence, corresponding to the\n  <code>\n   CD 3x\n  </code>\n  byte sequence. It then returns control to the patched instruction so that it gets executed. Now that it has been patched, the instruction is an actual FPU instruction, and future executions of the instructions will no longer take the long detour through the emulator.\n </p>\n <p>\n  The documentation for how to deal with interrupt\n  <code>\n   3E\n  </code>\n  is still not forthcoming. However, for the time being, I have enough information to implement x87 emulation support in the Reko decompiler.\n </p>\n</div>\n</body></html>",
+            "votes": "29",
+            "user": "John Källén",
+            "time": "Mar 22, 2016 at 13:42",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "cat",
+                    "text": "<span class=\"comment-copy\">Self-answers aren't (shouldn't be) humiliating -- learning is a good thing :P</span>",
+                    "time": null
+                },
+                {
+                    "user": "jsbueno",
+                    "text": "<span class=\"comment-copy\">Cool -  I remember seeing the interrupt calls in the binaries back in the time - as a teenager I could not gigure out why the coprocessor opcode did not show up ever.</span>",
+                    "time": null
+                },
+                {
+                    "user": "JDługosz",
+                    "text": "<span class=\"comment-copy\">You know, I actually remembered that. Not the details, just that it used an INT to replace the fpu opcode.</span>",
+                    "time": null
+                },
+                {
+                    "user": "John Källén",
+                    "text": "<span class=\"comment-copy\">This has now been implemented in Reko, and appears to work beautifully.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

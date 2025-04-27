@@ -1,0 +1,65 @@
+{
+  "title": "Trying to understand this construct in Dbgv.sys driver for DbgView tool",
+  "link": "https://reverseengineering.stackexchange.com/questions/18544/trying-to-understand-this-construct-in-dbgv-sys-driver-for-dbgview-tool",
+  "content": "I'm trying to reverse the Dbgv.sys (x86 kernel driver) for the DbgView tool. It has this sub_10D4A function that is called almost at the beginning of the driver's DriverEntry function. It goes as such:\n\n\n\nThe relevant piece of disassembly:\n\n```\n.text:00010D64                 mov     eax, ds:KeNumberProcessors\n.text:00010D69                 mov     al, [eax]\n.text:00010D6B                 cmp     al, 40h ; '@'\n.text:00010D6D                 movsx   eax, al\n.text:00010D70                 jl      short loc_10D74\n.text:00010D72                 mov     eax, [eax] ; <-- line pointed out\n\n```\nWhat I don't understand is the construct that is pointed by the red arrow. If KeNumberProcessors global variable is larger than or equal to 64 CPU cores (or 40h) it will execute mov eax, [eax] instruction, which will try to read a DWORD from an address that is a number of CPUs, say 40h, which makes no sense.\n\nWouldn't it result in a BSOD?\nWhat's the intention there?\n\n",
+  "votes": "12",
+  "answers": 3,
+  "views": "1k",
+  "tags": [
+    "windows",
+    "debugging",
+    "kernel-mode",
+    "kernel"
+  ],
+  "user": "MikeF",
+  "time": "Jun 18, 2018 at 20:35",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I still think this will create a BSOD, what's more I think that this is deliberate. It makes perfect sense to assume that this is deliberate once piecing all the puzzle pieces together. The source incompatibility will inevitably force that the developer notices the change of type for KeNumberProcessors from PCCHAR to CCHAR. The likeliest error is: error C2100: illegal indirection.\n\nAccording to the PE header the file was created using WDK 7600.16385.1 (OS version), targeting XP (subsystem version), assuming we can trust best practices having been used to create the driver. However, the driver does run on Windows 2000 Professional (with SP4) as I verified. This is possible whenever the author is careful enough not to use functions unavailable on Windows 2000, but available at compile and link time for the nominal target.\n\nOkay, so say you have an old driver targeting pre-XP Windows versions. You'll write this (some more code was necessary to force this code not to be optimized away):\n\n```\nCCHAR nCpus = *KeNumberProcessors;\nPVOID lpBuf = ExAllocatePool(NonPagedPool, nCpus * 7);\n\n```\nwhen building this for Windows 2000 (free) as target (using WDK 6001.18002), we get for the line assigning nCpus and the subsequent one:\n\n```\n.text:00010519                 mov     eax, ds:__imp__KeNumberProcessors\n; opcodes unrelated to processor number\n.text:0001052E                 movsx   eax, byte ptr [eax]\n.text:00010531                 imul    eax, 7\n.text:00010534                 push    edi\n.text:00010535                 push    eax             ; NumberOfBytes\n.text:00010536                 push    ebx             ; PoolType\n.text:00010537                 call    ds:__imp__ExAllocatePool@8 ; ExAllocatePool(x,x)\n.text:0001053D                 mov     [ebp+lpBuf], eax\n\n```\nand when targeting Windows XP using the WDK 7600.16385.1 we get an error during compilation:\n\n```\nKNPs.cpp(102) : error C2100: illegal indirection\n\n```\n... which we fix by removing the * that dereferences KeNumberProcessors, which then gives us a successful compilation and the following code:\n\n```\n.text:00010519                 mov     eax, ds:__imp__KeNumberProcessors\n; opcodes unrelated to processor number\n.text:0001052E                 movsx   eax, byte ptr [eax]\n.text:00010531                 imul    eax, 7\n.text:00010534                 push    edi\n.text:00010535                 push    eax             ; NumberOfBytes\n.text:00010536                 push    ebx             ; PoolType\n.text:00010537                 call    ds:__imp__ExAllocatePool@8 ; ExAllocatePool(x,x)\n.text:0001053D                 mov     [ebp+lpBuf], eax\n\n```\nthat's identical. And there is no indication of anything like in the .sys for DebugView that would deliberately cause a BSOD.\n\nSo my money is on: this is meant to cause a BSOD, knowing full well that this situation could realistically never occur.\n\nOriginal answer below:\n\nWith the information I could dig up, I concur. This code would seem to lead to an inevitable BSOD.\n\nLet's start by stating that the maximum available number of processors for Windows 2000 Server (Datacenter edition) was 32.\n\nBased on the declaration for KeNumberProcessors, which is by the way deprecated in favor of KeQueryActiveProcessors:\n\n```\n#if (NTDDI_VERSION >= NTDDI_VISTA)\nextern NTSYSAPI volatile CCHAR KeNumberProcessors;\n#elif (NTDDI_VERSION >= NTDDI_WINXP)\nextern NTSYSAPI CCHAR KeNumberProcessors;\n#else\nextern PCCHAR KeNumberProcessors;\n#endif\n\n```\nthat variable used to be a pointer prior to Windows XP. Looking at the above linked documentation you will find (relevant excerpts):\n\n... and:\n\nNow, while I certainly may not have all the answers that the folks from Sysinternals/Microsoft have by glancing at the Windows source code, my guess is the following. This was meant to be a clever trick - relying on circumstantial knowledge - to accommodate both Windows XP and newer (where the variable is a CCHAR) as well as prior Windows versions, where it's a PCCHAR.\n\nOlder MSDN documentation is even more verbose:\n\nProblem seems to be that they seem to have gotten it wrong, if I am not all mistaken. There's, however, also a chance they got it right and I am lacking some vital information they have access to :)\n\nYou can test the scenario with MSVC by using:\n\n```\nDWORD_PTR KeNumberProcessors = 0x80564321;\nDWORD_PTR dsKeNumberProcessors = (DWORD_PTR)&KeNumberProcessors;\n__asm {\n    push eax\n    mov eax, dsKeNumberProcessors\n    mov al, [eax] // only affects AL -> AL := 0x21\n    cmp al, 0x40\n    movsx eax, al // garbles EAX\n    pop eax\n};\n\n```\nStepping through it gives you a clue as to what's going on. I have to admit the movsx throws me off here.\n\nRead the byte at the address specified by KeQueryActiveProcessors. See if it's a value smaller than 0x40 and if so, stick with the interpretation as byte.\n\nIf bigger than 0x40, which happens whenever the least significant byte of the (Little Endian) address contained in KeQueryActiveProcessors (i.e. on Windows prior to XP) is big enough, we may assume that this is in fact a pointer and dereference it.\n\nNB: re-read it: the least significant byte. So it's not the 0x80 in the base address of the kernel (the kernel is loaded at an address higher than 0x80000000) that matters here. For Windows 2000 I have found the following values for the least significant byte:\n\nI didn't check any other kernel version, though. Problem here is that we already have a value smaller than 0x40 among the lot.\n\nBy the way: having an address beyond 0x40 could reasonably be enforced by having the byte be a member of a struct that is page-aligned.\n\nNow the part that would in any case destroy this scenario is the movsx (sign extend). It overwrites what could have been the address of the CCHAR unconditionally, thereby creating a bogus address that should for all practical purposes cause a BSOD.\n\nAnyway, the mechanism behind this may have been meant to be something like with the resources IDs which can be 16-bit unsigned integers or pointers to zero-terminated strings with the resource name.\n\n",
+      "votes": "10",
+      "user": "0xC0000022L",
+      "time": "Jun 18, 2018 at 11:01",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "MikeF",
+          "text": "Thanks. Can't upvote it yet because of the reputation. One question that comes to mind, wouldn't movsx sign extend 0x80 into '0xFFFFFF80`? Which would not be a \"good\" kernel address either.",
+          "time": null
+        },
+        {
+          "user": "0xC0000022L",
+          "text": "That's the point. The movsx seems to be the actual cause why this code looks like it always generates a BSOD. Would be interesting to look at this mechanism in a debugger on Windows 2000 and 2003 and compare.",
+          "time": null
+        },
+        {
+          "user": "MikeF",
+          "text": "Yeah. The oldest OS I can go is WinXP in a VM. Although, this is not an old driver. I'm getting it now from the Sysinternals page when I download DbgView. Link in my OP.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "By definition, 32 bit systems cannot have more than 64 CPU cores (either virtual or physical). This is a hard limit on Microsoft's side for reasons unknown. One can assume those limitations are related to implementation details of the kernel such as the number of CPU core structures, etc.\n\nSince this is a 32bit driver it'll only be allowed to run in a 32 bit windows version. Because of the limitation induced by Microsoft, drivers need not support more than 64 cores themselves, allowing / requiring a driver to handle these error conditions and unexpected situations to be using a BSOD.\n\nAlthough your description is roughly accurate, there's another minor detail that makes this flow impossible you've neglected to note. Without it, this flow could've been functional.\n\nThat is the single assembly instruction just between the comparison and conditional jump: movsx eax, al. A move with sign extend from a al to eax. It makes sure EAX will not be a valid address to read from.\n\n",
+      "votes": "5",
+      "user": "NirIzr",
+      "time": "Jun 18, 2018 at 9:09",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "Yep seems like there'll be BSOD, but everybody is lucky to have KeNumberProcessors <= 0x40, so it never happens.\n\n",
+      "votes": "0",
+      "user": "Anton Kukoba",
+      "time": "Jun 18, 2018 at 8:07",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "MikeF",
+          "text": "Thanks. Can't upvote it yet :( So I guess by definition if a system has more than 64 cores, they will be separated into groups, correct? KeNumberProcessors though seems like an old global variable that was used to determine the number of cores (now KeQueryActiveProcessors() function is recommended instead.) But would KeNumberProcessors cut off counting at 64 or is it a bug in that driver? Also I'm trying to twist my head into a pretzel trying to understand what C construct could've produced such an asm sequence?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

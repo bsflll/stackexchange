@@ -1,0 +1,41 @@
+{
+    "title": "Ghidra interpreting stack pointers wrongly",
+    "link": "https://reverseengineering.stackexchange.com/questions/23540/ghidra-interpreting-stack-pointers-wrongly",
+    "content": "Why is Ghidra interpreting this incorrectly? The example is very simple.\nIn this stack:\n<pre><code>0019FF58  $-8      0019FF58        00000002     LOCAL 2\n0019FF5C  $-4      0019FF5C        00000001     LOCAL 1\n0019FF60  $ ==>    0019FF60        0019FF80     OLD EBP\n0019FF64  $+4      0019FF64      | 00401025     return to layout.00401025 from layout.sub_40102C\n0019FF68  $+8      0019FF68      | 00000041     PARAM 3\n0019FF6C  $+C      0019FF6C      | 0000BABE     PARAM 2\n0019FF70  $+10     0019FF70      | 0000CAFE     PARAM 1\n</code></pre>\nGhidra obtains:\n<pre><code>undefined4        Stack[0x4]:4   param_1                                 XREF[1]:     00401040 (R)   \nundefined4        Stack[0x8]:4   param_2                                 XREF[1]:     00401043 (R)   \nundefined4        Stack[0xc]:4   param_3                                 XREF[1]:     00401046 (R)   \nundefined4        Stack[-0x8]:4  local_8                                 XREF[1]:     00401032 (W)   \nundefined4        Stack[-0xc]:4  local_c                                 XREF[1]:     00401039 (W)  \n00401032 C745FC01000000            MOV        dword ptr [EBP  + local_8 ],0x1\n00401039 C745F802000000            MOV        dword ptr [EBP  + local_c ],0x2\n00401040 8B5D08                    MOV        EBX ,dword ptr [EBP  + param_1 ]\n00401043 8B4D0C                    MOV        ECX ,dword ptr [EBP  + param_2 ]\n00401046 FF7510                    PUSH       dword ptr [EBP  + param_3 ]\n</code></pre>\nWhereas IDA correctly gets:\n<pre><code>.text:0040102C var_8           = dword ptr -8\n.text:0040102C var_4           = dword ptr -4\n.text:0040102C arg_0           = dword ptr  8\n.text:0040102C arg_4           = dword ptr  0Ch\n.text:0040102C arg_8           = dword ptr  10h\n.text:00401032                 mov     [ebp+var_4], 1\n.text:00401039                 mov     [ebp+var_8], 2\n.text:00401040                 mov     ebx, [ebp+arg_0]\n.text:00401043                 mov     ecx, [ebp+arg_4]\n</code></pre>\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "5k",
+    "tags": [
+        "ghidra",
+        "stack-variables"
+    ],
+    "user": "user1156544",
+    "time": "Mar 26, 2020 at 21:10",
+    "comments": [
+        {
+            "user": "mumbel",
+            "text": "what calling conventions are Ghidra and IDA using in your example\n",
+            "time": null
+        },
+        {
+            "user": "user1156544",
+            "text": "Default ones, Ghidra reports \" __stdcall\" and I suppose IDA too. In any case, the call is pretty standard to be identified by the tool, with a <pre><code>RET  0xC</code></pre>\n",
+            "time": null
+        },
+        {
+            "user": "R4444",
+            "text": "see this question - github.com/NationalSecurityAgency/ghidra/issues/998\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "TL;DR:\n\nThis is not an error from Ghidra. The values are just a naming convention, and the real instructions are correctly disassembled.\nGhidra assigns variable names based on the function entry point, and displays offsets based on that.\nIt seems Ghidra behaviour is like this to have a universal way to assign names, independently from the compiler.\n\n\nAs pointed by R4444, Ghidra shows variable offsets relative to the <pre><code>entry stack-pointer</code></pre> and are not <pre><code>frame-based</code></pre> offsets.\nHerein, Ghidra assigns variable names based on <pre><code>ESP</code></pre> (or corresponding stack pointer) at the time the function is entered, without considering the coming <pre><code>PUSH EBP</code></pre>, basically following this:\n<pre><code>0019FF58  $-C      0019FF58        00000002     LOCAL 2\n0019FF5C  $-8      0019FF5C        00000001     LOCAL 1\n0019FF60  $-4      0019FF60        0019FF80     will store the OLD EBP\n0019FF64  $ ==>    0019FF64      | 00401025     return to layout.00401025 from layout.sub_40102C\n0019FF68  $+4      0019FF68      | 00000041     PARAM 1\n0019FF6C  $+8      0019FF6C      | 0000BABE     PARAM 2\n0019FF70  $+C      0019FF70      | 0000CAFE     PARAM 3\n</code></pre>\nThis is how Ghidra obtained the values:\n<pre><code>Stack[0x4]  -> param_1\nStack[0x8]  -> param_2\nStack[0xc]  -> param_3\nStack[-0x8] -> local_8\nStack[-0xc] -> local_c\n</code></pre>\nIt must be considered that this is just a variable naming, the actual instruction is addressing the data with the correct offset. If we navigate to one of the offensive instructions, we can see that Ghidra provides the correct instruction at the bottom right corner, in this case, <pre><code>EBP-4</code></pre> for the named variable <pre><code>local_8</code></pre> (<pre><code>[-0x8]</code></pre>):\n\nThis default Ghidra behavior can be modified permanently via: <pre><code>Edit > Tool Options > Listing Fields > Operands Field > Markup Stack Variable References</code></pre>, and then Ghidra will display:\n<pre><code>     undefined4        Stack[0x4]:4   param_1                                 XREF[1]:     00401040 (R)   \n     undefined4        Stack[0x8]:4   param_2                                 XREF[1]:     00401043 (R)   \n     undefined4        Stack[0xc]:4   param_3                                 XREF[1]:     00401046 (R)   \n     undefined4        Stack[-0x8]:4  local_8                                 XREF[1]:     00401032 (W)   \n     undefined4        Stack[-0xc]:4  local_c                                 XREF[1]:     00401039 (W)   \n\n00401032 C745FC01000000            MOV        dword ptr [EBP  + -0x4 ]=> local_8 ,0x1\n00401039 C745F802000000            MOV        dword ptr [EBP  + -0x8 ]=> local_c ,0x2\n00401040 8B5D08                    MOV        EBX ,dword ptr [EBP  + 0x8 ]=> param_1\n00401043 8B4D0C                    MOV        ECX ,dword ptr [EBP  + 0xc ]=> param_2\n00401046 FF7510                    PUSH       dword ptr [EBP  + 0x10 ]=> param_3\n</code></pre>\nThis is the REASON for the values mismatch and the HOW the values are obtained, but WHY is Ghidra naming variables based on the function entry? @emteere explains that:\n\nThe choice of stack variable offsets based on the frame variable versus stack variables based on the stack pointer can cause some confusion. What it allows is ignoring the stack frame variable and just creating references to the stack wherever they occur however they occur. There are many examples of the stack pointer loaded into alternate registers without a frame, so a universal base of the stack at entry seemed like a good choice and less confusing when there is and isn't a frame pointer in two different functions. When debug information is loaded the conversion to SP at entry needs to be done. In addition, many compilers have gotten rid of the use of a stack frame register all together.\n\nSo, I imagine that the explanation is that one normally would wish to have frame-based variable naming, like seen in IDA, at least for some of the most extended architectures/compilers. However, Ghidra names variables with a general policy, and they decided to harmonise behaviour of different architectures/compilers by offseting variables based on the stack-pointer at the time the function is entered.\n\nSources:\n\nSuspected incorrect FP stack variables in ARM\nlocal variable's ebp offset doesn't match\nGhidra help: \"Function Signature, Attributes and Variables\"\n",
+            "votes": "8",
+            "user": "user1156544",
+            "time": "Mar 27, 2020 at 18:48",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,43 @@
+{
+    "title": "Tracing variable access/usage instructions",
+    "link": "https://reverseengineering.stackexchange.com/questions/9330/tracing-variable-access-usage-instructions",
+    "content": "There is a great little closed-source freeware Windows program (written in Delphi) that I have been using for years. WinBar shows a little bar above the TaskBar which gives some system information and provides access to a few useful functions.\nUnfortunately it has a bug that is pretty annoying. The Memory Usage component only shows half of the installed memory and displays 0MB used until at least half of the memory has been used, then it starts counting up from there (for example, if 4GB are installed, and 1GB is in use, it says 0MB/2047MB; if 3GB are in use, it says 1024MB/2047MB).\nIt looks like this is due to it using a signed 32-bit value for the installed and used memory count. That should be a pretty easy fix, but alas, development of it has long since been discontinued (there is a 2.x version on SourceForge—also discontinued—which does not suffer from this bug, but it is too different and I do not like it).\nI want to dig in and fix this by finding the bits of code that handle the relevant values and change them to treat it as unsigned. This might be very easy (change a <pre><code>printf</code></pre> format specifier) or it might be difficult, depending on the nature of the code (no way to tell without seeing the exact assembler instructions).\nI tried running it through WDasm32 a while back but couldn’t find any good leads. It shows the value in a ThunderRT6PictureBoxDC control in the bar.\nDoes anybody have any advice on how to accomplish this?\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "windows",
+        "binary-analysis",
+        "debugging",
+        "local-variables"
+    ],
+    "user": "Synetech",
+    "time": "Jul 11, 2015 at 21:21",
+    "comments": [
+        {
+            "user": "Synetech",
+            "text": "(WinBar 1.2.95 is available on their old site.)\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<pre><code>ThunderRT6</code></pre> sounds like VB6, not Delphi.\n",
+            "time": null
+        },
+        {
+            "user": "JimmyB",
+            "text": "How about looking at the 2.x sources to find out how & where the output is generated? This should give you a clue as to what to look for, assuming that not everything changed from a previous version. (Oldest on SF seems to be from 2008, but already V2.0) - Or, go the straight way and contact the author for an old version of the source.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "As @Igor Skochinsky has already commented, the software is indeed written in Visual Basic 6 compiled in native mode (VB6 also supports P-mode). You can verify this with a PE Info tool like Detect It Easy (but before that  you need to unpack the ASPack wrapper).\nThe cause of the bug is due to multiple reasons.\nThe software uses an WinApi Function <pre><code>GlobalMemoryStatus</code></pre> to retrieve the  System Memory currently in use. Now there are a couple of quirks of this function:\nFirst\n\nOn computers with more than 4 GB of memory, the GlobalMemoryStatus\n  function can return incorrect information, reporting a value of –1 to\n  indicate an overflow. For this reason, applications should use the\n  GlobalMemoryStatusEx function instead.\n\nHence if your system has more than 4 GB of memory, the output from this function is not reliable, and hence may display erroneous values. Fixing this is difficult.\nSecond\n\nOn Intel x86 computers with more than 2 GB and less than 4 GB of\n  memory, the GlobalMemoryStatus function will always return 2 GB in the\n  dwTotalPhys member of the MEMORYSTATUS structure. Similarly, if the\n  total available memory is between 2 and 4 GB, the dwAvailPhys member\n  of the MEMORYSTATUS structure will be rounded down to 2 GB. If the\n  executable is linked using the /LARGEADDRESSAWARE linker option, then\n  the GlobalMemoryStatus function will return the correct amount of\n  physical memory in both members\n\nTo fix this bug, you need to make the application Large Address Aware.  This can be done by loading it in CFF Explorer and check the flag App can handle > 2GB address space under  Nt Headers -> File headers -> Characteristics.\n\nNow, to convert the integer memory value obtained from <pre><code>GlobalMemoryStatus</code></pre> to a string the app uses the <pre><code>CStr</code></pre> function. \nVB6 has no unsigned 32 bit integer data type. The only unsigned data type is an 8 bit <pre><code>Byte</code></pre>. \nSuppose your system has more than 2GB but less than 4GB memory and that you have already fixed the second bug as mentioned above.\nLet's assume your system has 3GB memory. This is equivalent to <pre><code>3,22,12,25,472</code></pre> bytes in decimal or <pre><code>1100 0000 0000 0000 0000 0000 0000 0000</code></pre> bytes in binary. \nSince the MSB of this value is 1, it will be treated as negative when passed to <pre><code>CStr</code></pre>. Thus the resultant string would be <pre><code>- 1GB</code></pre> instead of <pre><code>3GB</code></pre>. There is also no easy fix for this.\nSo all-in-all the software is only usable when your system has less than 2GB memory.\nUPDATE (Signed Integer Bug Fix)\nThe signed integer bug can be patched to make the application usable to 4GB.\nPatch the binary so as to convert the<pre><code>SAR</code></pre> (signed shift) to <pre><code>SHR</code></pre> (unsigned shift) instruction.\nOriginal Code\n<pre><code>00092DCD  and edx,000FFFFF\n00092DD3  add eax,edx\n00092DD5  sar eax,14        ; <<<<<<<<<<<\n00092DD8  mov dword ptr [ebp-28],eax\n00092DDB  mov eax,dword ptr [ebp-54]\n00092DDE  cdq\n00092DDF  and edx,000FFFFF\n00092DE5  add eax,edx\n00092DE7  sar eax,14        ; <<<<<<<<<<<\n00092DEA  mov dword ptr [ebp-30],eax\n</code></pre>\nPatched Code\n<pre><code>00092DCD  and edx,000FFFFF\n00092DD3  add eax,edx\n00092DD5  shr eax,14        ; <<<<<<<<<<<\n00092DD8  mov dword ptr [ebp-28],eax\n00092DDB  mov eax,dword ptr [ebp-54]\n00092DDE  cdq\n00092DDF  and edx,000FFFFF\n00092DE5  add eax,edx\n00092DE7  shr eax,14        ; <<<<<<<<<<<\n00092DEA  mov dword ptr [ebp-30],eax\n</code></pre>\nIncorporating the large address aware and signed integer patch, the application can be made usable to 4 GB of memory.\n",
+            "votes": "4",
+            "user": "0xec",
+            "time": "Jul 14, 2015 at 3:46",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

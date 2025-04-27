@@ -1,0 +1,60 @@
+{
+    "title": "Finding hidden string location using radare2 on ELF binaries",
+    "link": "https://reverseengineering.stackexchange.com/questions/14718/finding-hidden-string-location-using-radare2-on-elf-binaries",
+    "content": "I'm working through some reverse engineering sample programs (IOLI crackmes) crackme0x00 - crackme0x09 which are gcc compiled ELF format binaries.  I was provided these by a colleague and can be downloaded from radare's github site (I can't add the link as I do not have the reputation points).  I think I can provide enough information to ask a properly formatted question.\nI'm currently working on crackme0x09 and have run across a hurdle.  I disassemble the main:\n \nI notice that the first call to <pre><code>sym.imp.printf</code></pre> is taking it's input from the <pre><code>ebx</code></pre> register which is referenced by an offset <pre><code>[ebx - 0x178b]</code></pre>.\nThe <pre><code>ebx</code></pre> register is set, first, in <pre><code>fcn.08048766</code></pre> which I disassemble:\n\nSo, in order:\n1)  <pre><code>0x84</code></pre> is subtracted from the <pre><code>esp</code></pre>\n2)  <pre><code>ebx</code></pre> is set equal to the location <pre><code>esp</code></pre> contains in <pre><code>fcn.08048766</code></pre> with:\n        <pre><code>mov ebx, dword[esp]</code></pre>\n3)  <pre><code>0x18f7</code></pre> is added to the new value of the <pre><code>ebx</code></pre>\n4)  <pre><code>eax</code></pre> is loaded with this new address minus and offset <pre><code>lea eax, [ebx - 0x178b]</code></pre>\n5)  This is then pushed onto the stack for <pre><code>sym.imp.printf</code></pre> to print\nIf I print all the strings in the data section of the program (using <pre><code>iz</code></pre> command) I can see them there, but I'm having a hard time understanding how to interpret the results:\n<pre><code>vaddr=0x08048838 paddr=0x00000838 ordinal=000 sz=5 len=4 section=.rodata type=ascii string=LOLO\nvaddr=0x0804883d paddr=0x0000083d ordinal=001 sz=21 len=20 section=.rodata type=ascii string=Password Incorrect!\n\nvaddr=0x08048855 paddr=0x00000855 ordinal=002 sz=14 len=13 section=.rodata type=ascii string=Password OK!\n\nvaddr=0x08048863 paddr=0x00000863 ordinal=003 sz=6 len=5 section=.rodata type=ascii string=wtf?\n\nvaddr=0x08048869 paddr=0x00000869 ordinal=004 sz=25 len=24 section=.rodata type=ascii string=IOLI Crackme Level 0x09\n\nvaddr=0x08048882 paddr=0x00000882 ordinal=005 sz=11 len=10 section=.rodata type=ascii string=Password:\n</code></pre>\nMy question:  How can I tell what string is referenced by <pre><code>[ebx - 0x178b]</code></pre> and subsequent <pre><code>ebx</code></pre> offsets?\nThanks.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "c",
+        "elf",
+        "radare2"
+    ],
+    "user": "corporateWhore",
+    "time": "Feb 23, 2017 at 0:46",
+    "comments": [
+        {
+            "user": "julian",
+            "text": "This is a crackme from the IOLI series. They can be downloaded from radare's Github repo radare2-regressions. One of the users of this site, jvoisin, has written up how to solve all of them except crackme0x09, the one in the question, using r2.\n",
+            "time": null
+        },
+        {
+            "user": "corporateWhore",
+            "text": "Yes, thanks.  I know the solution, but I'd like to figure out how to read these strings as they appear in the assembly.\n",
+            "time": null
+        },
+        {
+            "user": "corporateWhore",
+            "text": "Would the solution be to check the GOT (I read this)?  Rather than referring to the absolute memory address, it refers to the GOT, who's address is know, as an offset.  But then how do I know where the GOT is in memory?\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "I do not know how to use r2, but if you are able to dynamically analyze the program then all you have to do to read the strings being printed is look at the memory addresses in either <pre><code>eax</code></pre> or <pre><code>esp</code></pre> when a call to <pre><code>printf</code></pre> is made. These addresses are of strings in the <pre><code>.rodata</code></pre> section, not the GOT.\n",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "The file is stripped. The only symbols in the binary will be those corresponding to functions called from dynamically linked libraries. These symbols will be in the <pre><code>.dynsym</code></pre> section. This is why calls to <pre><code>printf</code></pre> and <pre><code>scanf</code></pre> are labelled but other function calls are not.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "You are looking at so-called position-independent code (PIC). The program uses a helper function to get its current execution address into <pre><code>ebx</code></pre> and then adds a delta to it to calculate the address of the GOT (this works because even after the file has been moved in memory, the data segment including the GOT is still at the same offset from the function). To calculate <pre><code>ebx</code></pre>, you just need to remember that the <pre><code>call</code></pre> instruction pushes the return address onto the stack, so inside <pre><code>fcn.08048766</code></pre> <pre><code>[esp]</code></pre> will contain <pre><code>0x80486fd</code></pre>.  Adding <pre><code>0x18f7</code></pre>, we get <pre><code>0x8049FF4</code></pre> which should be the GOT address, and then you can subtract <pre><code>0x178b</code></pre> to get <pre><code>0x8048869</code></pre> which should be the string.\n",
+            "votes": "2",
+            "user": "Igor Skochinsky",
+            "time": "Feb 23, 2017 at 7:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "corporateWhore",
+                    "text": "<span class=\"comment-copy\">I was confusing the address inside <code>esp</code> when inside <code>fcn.08048766</code> with the current execution address when <code>call</code> is..called.  So I thought it would be <code>0x80486f2 - 0x84</code> going into <code>fcn.08048766</code>.  Thank you for the clarification.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

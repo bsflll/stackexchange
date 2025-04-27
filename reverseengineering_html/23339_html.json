@@ -1,0 +1,53 @@
+{
+    "title": "Estimate depth of call stack without symbols",
+    "link": "https://reverseengineering.stackexchange.com/questions/23339/estimate-depth-of-call-stack-without-symbols",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Assume we’re on an x86-64 machine and that we have read-access to the state of a program at a given instant, but we don’t have debugging symbols; in particular, we can read the program’s address space and the registers.\n </p>\n <p>\n  Is it possible to reliably determine the depth of the call stack? Under which assumptions (e.g., calling conventions)?\n </p>\n <p>\n  By the\n  <em>\n   depth of the call stack\n  </em>\n  I mean the\n  <em>\n   number of call instructions\n  </em>\n  minus the\n  <em>\n   number of ret instructions\n  </em>\n  that have happened in total in the course of the execution of the program. In the following pseudo trace, the number in the bracket is the depth of the call stack after the instruction in the respective line:\n </p>\n <pre><code>add eax ebx [0]\n...\ncall 0x1234 [1]\ncall 0x2345 [2]\ncall 0x3456 [3]\nadd eax ebx [3]\njmp 0x4567  [3]\n...\nret         [2]\n...\nret         [1]\ncall 0x1234 [2]\n...\nret         [1]\nret         [0]\n</code></pre>\n <p>\n  I’m not yet an expert in x86, calling convention and the stack layout. However, I vaguely suppose that one can “walk” the stack with the help of the\n  <code>\n   ebp\n  </code>\n  and\n  <code>\n   esp\n  </code>\n  registers.\n </p>\n</div>\n</body></html>",
+    "votes": "2",
+    "answers": 2,
+    "views": "151",
+    "tags": [
+        "callstack"
+    ],
+    "user": "Lumen",
+    "time": "Feb 25, 2020 at 14:33",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  <code>\n   ret\n  </code>\n  instructions are not going to the call stack. When a function executes\n  <code>\n   call\n  </code>\n  , the next instruction address is pushed to the stack and when\n  <code>\n   ret\n  </code>\n  instruction is executed,\n  <code>\n   eip\n  </code>\n  is updated with the next instruction from the stack.\n </p>\n <p>\n  After the next instruction address is popped from the stack by\n  <code>\n   ret\n  </code>\n  , the address at the stack will most likely be overwritten by a stack frame of a function. Therefore it's impossible to know at a given time, how many calls were made until this point from the beginning - what you call\n  <code>\n   depth of the call stack\n  </code>\n  .\n </p>\n <p>\n  A possible implementation of the current depth will be parsing the values from\n  <code>\n   esp\n  </code>\n  to the bottom of the stack, looking for pointers - values that point to the\n  <code>\n   .text\n  </code>\n  or any executable page of your memory.\n </p>\n</div>\n</body></html>",
+            "votes": "2",
+            "user": "macro_controller",
+            "time": "Feb 25, 2020 at 15:23",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Lumen",
+                    "text": "<span class=\"comment-copy\">Can I start at the current stack base <code>ebp</code>, then load the previous stack base (which is stored somewhere in the current stack frame), then load the stack base before that (which is stored somwhere in the previous stack frame), and so on, until I hit the stack base? Or does something obscure the stack layout and prevent me from doing so? As far as I understand, if it works, the number of iterations should be the <i>“depth of the call stack”</i> that I’m looking for.</span>",
+                    "time": null
+                },
+                {
+                    "user": "macro_controller",
+                    "text": "<span class=\"comment-copy\">It will work, but you were talking about <code>that have happened in total in the course of the execution of the program</code> - What you are describing now is the total calls in the current time - not from the beginning of the program. In addition, you should note that some of the functions use <code>ebp</code> as a general-purpose register.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Lumen",
+                    "text": "<span class=\"comment-copy\">I see, my wording was unclear. What I meant is the <i>difference</i> between total calls ever and total rets ever, which – I think – should net the number of calls “right now”. Also, thanks for the warning about <code>ebp</code>. I will accept the answer soon.</span>",
+                    "time": null
+                },
+                {
+                    "user": "macro_controller",
+                    "text": "<span class=\"comment-copy\">So yes, if that what you meant, it should give you what you asked.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  For Windows x64 systems, there is Microsoft’s\n  <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64\" rel=\"nofollow noreferrer\">\n   StackWalk64\n  </a>\n  function from\n  <code>\n   dbghelp.h\n  </code>\n  . From my experience, it reliably recognizes stack frames on the stack and can thus be used to determine the depth of the call stack.\n </p>\n <p>\n  The only problem is obtaining a valid\n  <code>\n   CONTEXT\n  </code>\n  for the current thread because,\n  <a href=\"https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadcontext#remarks\" rel=\"nofollow noreferrer\">\n   according to the docs,\n  </a>\n  <code>\n   GetThreadContext\n  </code>\n  cannot be used for the current thread. You might have to suspend the thread first; in my case, a library is doing that for me so I’m not including the code here.\n </p>\n <p>\n  Given a valid\n  <code>\n   CONTEXT Context\n  </code>\n  , setup the necessary data:\n </p>\n <pre><code>STACKFRAME64 StackFrame;\nStackFrame.AddrPC.Offset = Context.Rip;\nStackFrame.AddrPC.Mode = AddrModeFlat;\nStackFrame.AddrFrame.Offset = Context.Rbp; // maybe .Rsp\nStackFrame.AddrFrame.Mode = AddrModeFlat;\nStackFrame.AddrStack.Offset = Context.Rsp;\nStackFrame.AddrStack.Mode = AddrModeFlat;\n\n// Arguments for StackWalk64\nDWORD MachineType = IMAGE_FILE_MACHINE_AMD64;\nHANDLE hProcess = GetCurrentProcess();\nHANDLE hThread = GetCurrentThread();\nLPSTACKFRAME64 pStackFrame = &StackFrame;\nPVOID ContextRecord = &Context;\nPREAD_PROCESS_MEMORY_ROUTINE64 ReadMemoryRoutine = NULL;\nPFUNCTION_TABLE_ACCESS_ROUTINE64 FunctionTableAccessRoutine = SymFunctionTableAccess64;\nPGET_MODULE_BASE_ROUTINE64 GetModuleBaseRoutine = SymGetModuleBase64;\nPTRANSLATE_ADDRESS_ROUTINE64 TranslateAddress = NULL;\n</code></pre>\n <p>\n  Then walk the stalk:\n </p>\n <pre><code>int depth = 0;\n\nwhile (StackWalk64(\n        MachineType,\n        hProcess,\n        hThread,\n        &StackFrame,\n        ContextRecord,\n        ReadMemoryRoutine,\n        FunctionTableAccessRoutine,\n        GetModuleBaseRoutine,\n        TranslateAddress)\n    )\n{\n    ++depth;\n}\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "Lumen",
+            "time": "Mar 26, 2020 at 8:42",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

@@ -1,0 +1,47 @@
+{
+    "title": "Optimized vs Unoptimized code comparison",
+    "link": "https://reverseengineering.stackexchange.com/questions/16059/optimized-vs-unoptimized-code-comparison",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>After reading a number of blog posts, forums, and watching tutorials I figured I would start learning to reverse software the old fashion way.  Creating simple C files and looking at their disassembly.  In my quest to truly understand reversing, I thought also comparing optimized and unoptimized code would be beneficial.  While looking through I came across a couple lines of code that appear to do nothing.</p>\n<p>I would love if someone can explain what the \"mov\"[es] in the unoptimized code is doing.  All of these were disassembled using Hopper v4.</p>\n<p><strong>C Code:</strong></p>\n<pre><code> #include &lt;stdio.h&gt;\n\n int main(int arg, char** arg) {\n    printf(\"Hello World!\\n\");\n    return 0;\n }\n</code></pre>\n<p><strong>Unoptimized Code (gcc -m32) :</strong></p>\n<pre><code>; Variables:\n        ;    arg_4: 12\n        ;    arg_0: 8\n        ;    var_4: -4\n        ;    var_8: -8\n        ;    var_C: -12\n        ;    var_10: -16\n        ;    var_18: -24\npush       ebp\nmov        ebp, esp\nsub        esp, 0x18\ncall       _main+11\npop        eax                            ; CODE XREF=_main+6\n\n-- What purpose do these moves serve? --\nmov        ecx, dword [ebp+arg_4]\nmov        edx, dword [ebp+arg_0]\n--                                    --\nlea        eax, dword [eax-0x1f5b+0x1fa6] ; \"Hello World!\\\\n\"\n-- And what do these moves also serve? --\nmov        dword [ebp+var_4], 0x0\nmov        dword [ebp+var_8], edx\nmov        dword [ebp+var_C], ecx\n--                                    --\nmov        dword [esp+0x18+var_18], eax  ; method imp___symbol_stub__printf\ncall       imp___symbol_stub__printf\nxor        ecx, ecx                           \nmov        dword [ebp+var_10], eax\nmov        eax, ecx                                    \nadd        esp, 0x18                           \npop        ebp\nret\n</code></pre>\n<p><strong>Optimized Code (gcc -m32 -O3):</strong></p>\n<pre><code>push       ebp\nmov        ebp, esp\nsub        esp, 0x8\ncall       _main+11\npop        eax                             ; CODE XREF=_main+6\nlea        eax, dword [eax-0x1f6b+0x1f9e]  ; \"Hello World!\"\nmov        dword [esp+0x8+var_8], eax      ; \"%s\" for imp___symbol_stub__puts\ncall       imp___symbol_stub__puts\nxor        eax, eax\nadd        esp, 0x8\npop        eep\nret\n</code></pre>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "2k",
+    "tags": [
+        "x86",
+        "intel"
+    ],
+    "user": "ButtahNBred",
+    "time": "Aug 11, 2017 at 1:18",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<span class=\"comment-copy\">most often the seemungly junk instructions correspond to src line information. and unused argumentd  main tajes two args and you are not using them but you askex that the code be as is so comipler lets you to be the boss and provides you the args as is in unoptimsef builds on optimising it simply discards those unused args and comes straight to the point</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\"><code>int main(int arg, char** arg)</code> should be <code>int main(int argc, char **argv)</code></span>",
+            "time": null
+        },
+        {
+            "user": "ButtahNBred",
+            "text": "<span class=\"comment-copy\">Thanks.  The \"arg\" parameters were simple typos as I was unable to copy and paste from the terminal to the post's text box.  But good to clear it up for anyone who may peruse this post.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>First of all, I would advise you to read about the SystemV ABI for i386 and amd64. You can find the documents here:</p>\n<ul>\n<li><a href=\"http://www.sco.com/developers/devspecs/abi386-4.pdf\" rel=\"nofollow noreferrer\">System V i386 ABI</a></li>\n<li><a href=\"https://software.intel.com/sites/default/files/article/402129/mpx-linux64-abi.pdf\" rel=\"nofollow noreferrer\">System V amd64 ABI</a></li>\n</ul>\n<p>These documents define as precisely as possible how a compiler coder should translate some C/C++ code into i386/amd64 assembly code for a Unix-like system. </p>\n<p>They are extremely important documents and you should refer to it as often as possible because they contain a lot of answers for most of your questions.</p>\n<p>Now, back to your original question, in your case the main differences between the two codes is that <code>gcc</code> has optimized data movements in the memory as we will see.</p>\n<h1>First code snippet</h1>\n<pre><code>-- What purpose do these moves serve? --\nmov        ecx, dword [ebp+arg_4]\nmov        edx, dword [ebp+arg_0]\n--                                    --\n</code></pre>\n<p>Here, <code>ecx</code> and <code>edx</code> are loaded with the arguments of <code>main</code> (very likely <code>argc</code> and <code>argv</code>).</p>\n<p>Note that, none of <code>argc</code> and <code>argv</code> are of any use in the <code>main()</code> function. But, the compiler does not know about it because it did not performed dead-code/dead-variables analysis at this level of optimization. Of course, this code will be removed when the appropriate analysis will be performed.</p>\n<h1>Second code snippet</h1>\n<pre><code>-- And what do these moves also serve? --\nmov        dword [ebp+var_4], 0x0\nmov        dword [ebp+var_8], edx\nmov        dword [ebp+var_C], ecx\n--                                    --\n</code></pre>\n<p>Here, the program seems to store the arguments in the local memory frame (below <code>ebp</code>). Note that the arguments are above <code>ebp</code> and the automatic variables below (we say automatic variable for the variable which are within the function's scope).</p>\n<p>Of course, these data movements are totally unnecessary, but the compiler just apply a default template for starting a function which transfer a copy of the arguments in the local memory stack-frame. And, once again, when the compiler realize that these variables are of no use, then these moves will disappear.</p>\n</div>",
+            "votes": "2",
+            "user": "perror",
+            "time": "Aug 11, 2017 at 17:31",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "ButtahNBred",
+                    "text": "<span class=\"comment-copy\">Thank you for the reference material as well as the good explanation.  I will definitely give it a look and have it be my first point of reference.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,25 @@
+{
+  "title": "Floating point number mangled in a proprietary file",
+  "link": "https://reverseengineering.stackexchange.com/questions/30363/floating-point-number-mangled-in-a-proprietary-file",
+  "content": "I'm reverse engineering a proprietary file format that contains a set of points to construct a curve (FL Studio's .fnv format). What i have trouble with in particular is how the Y-coordinates are saved in the file. The Y-coordinate of a point is represented between 0 and 1, inclusively, although i doubt it's a fixed-point encoding. HxD didn't recognize it and the float values were seemingly garbage.\nHere's what I've found currently:\n\nLet's say the point we have has the coordinate of 0.0124069480225444. If we look into it's .fnv file we would observe in that place these bits:\n\n01100000 11010000 01101000 10001001\n\nWhat I've tried doing was to take the binary representation of that float using this handy tool and seeing what was similar:\n\n00111100 01001011 01000110 10000011\n\nThen, bitshift three to the right\n\n00000111 10001001 01101000 11010000\n\nAnd reverse the order of the last three bytes:\n\n00000111 110100000 1101000 10001001\n\nThe last tree bytes do match up with the original value found on all of the files that I've tested, but the first byte always seems to be 00000111, which hasn't showed up in any of the files I've seen. It must be something related to the exponent part of IEEE-754 but I'm unsure.\n\nSo my question is - am i missing something obvious? I'm a bit new to the world of reverse engineering so i'd appreciate your help\n\nFile examples - see 4 bytes at 0x17-0x1B\n\n",
+  "votes": "0",
+  "answers": 1,
+  "views": "95",
+  "tags": [
+    "file-format",
+    "float"
+  ],
+  "user": "artemetra",
+  "time": "May 4, 2022 at 22:23",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "I took a look at a few of them out of curiosity. My primary observation was that, if instead of shifting to the right by 3, you rotate to the right by 3 -- i.e. don't throw the bottom 3 bits at the bottom away, but rather, move them back to the top 3 bits -- then you almost get the result in the file -- except a few bits were different. I set out to try to figure out what the difference was, and it quickly became obvious that the value in the file was always XORed by 0x7000000 when compared to the output of the mangling procedure developed until that point. So it seemed like the last step was to XOR by that constant. I wrote a little Python program to test this:\n\n```\nimport sys\n\ndef ror32(x,n):\n    n &= 31\n    low  = (x >> n)\n    high = (x << (32-n)) & 0xFFFFFFFF\n    return high|low\n\ndef swaplow3(x):\n    x0 = x & 0xFF\n    x1 = (x>>8) & 0xFF\n    x2 = (x>>16) & 0xFF\n    x3 = (x>>24) & 0xFF\n    return (x3<<24) | (x0<<16) | (x1<<8) | x2\n\ndef MangleFloat(f):\n    f = ror32(f,3)\n    f = swaplow3(f)\n    f = f ^ 0x7000000\n    return f\n\nprint(\"%#x\" % (MangleFloat(int(sys.argv[1],16))))\n\n```\nThen I took the float values from the names of some of the files from your Google Drive link above, tested them, and compared it to the value in the file. It correctly predicted everything I tested (though I only tested a random sampling of them).\n\nYou were close; if you'd gone with rotate right instead of shift right, you might've then noticed that the difference was always a fixed bit pattern, which would have lead you to the fixed XOR constant.\n\n",
+      "votes": "1",
+      "user": "Rolf Rolles",
+      "time": "May 5, 2022 at 6:15",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

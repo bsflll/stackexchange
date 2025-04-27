@@ -1,0 +1,89 @@
+{
+    "title": "What is the purpose of 'mov edi, edi'?",
+    "link": "https://reverseengineering.stackexchange.com/questions/250/what-is-the-purpose-of-mov-edi-edi",
+    "content": "I see this instruction in the beginning of several Windows programs.\nIt's copying a register to itself, so basically, this acts as a <pre><code>nop</code></pre>.\nWhat's the purpose of this instruction?\n",
+    "votes": "74",
+    "answers": 3,
+    "views": "15k",
+    "tags": [
+        "disassembly",
+        "windows"
+    ],
+    "user": "Mellowcandle",
+    "time": "Mar 31, 2013 at 12:40",
+    "comments": [
+        {
+            "user": "Michael Anderson",
+            "text": "The Essence: It is a two-byte NOP. So you can patch two bytes atomically without having the processor load an incomplete/incorrect instruction when he tries to execute this part of the code while you are changing it.\n",
+            "time": null
+        },
+        {
+            "user": "nrz",
+            "text": "In x86-64 <pre><code>mov edi,edi</code></pre> is not a NOP. In x86-64 it zeroes the top 32 bits of <pre><code>rdi</code></pre>. In 32-bit code <pre><code>mov edi,edi</code></pre> can used as a NOP.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Raymond Chen (Microsoft) has a blog post discussing this in detail:\nhttps://devblogs.microsoft.com/oldnewthing/20110921-00/?p=9583\nIn short, it's a compile time addition applied in order to support run time hot patching, so the function can have the first two bytes overwritten with a JMP instruction to redirect execution to another piece of code.\n",
+            "votes": "82",
+            "user": "Ben Schwehn",
+            "time": "Aug 27, 2020 at 17:34",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "tmr232",
+                    "text": "<span class=\"comment-copy\">You should probably add a note about the 5 empty bytes preceding the <code>mov edi, edi</code> instruction.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">Why not a real 2-byte NOP like <code>66 90</code>?  That would be more efficient: no back-end uop needed, no extra latency for EDI (in case that matters), no physical register needed to rename the output.  Perhaps it's supposed to be a \"signature\" that tools can recognize as not naturally occurring except in hotpatch code?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ben Schwehn",
+                    "text": "<span class=\"comment-copy\">@PeterCordes: Raymond Chen discusses that also <a href=\"https://devblogs.microsoft.com/oldnewthing/20130102-00/?p=5663\" rel=\"nofollow noreferrer\">devblogs.microsoft.com/oldnewthing/20130102-00/?p=5663</a> \"the decision to use MOV EDI, EDI as the two-byte NOP instruction came after consulting with CPU manufacturers for their recommendations for the best two-byte NOP\"</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">@BenSchwehn: Huh, probably that decision dates back to P5 Pentium days, where a <code>66</code> prefix made the instruction take an extra cycle to decode.  It's unfortunate for later CPUs from P6 and onward.  It's also unfortunate that it has to be a NOP, rather than optionally being a useful instruction like a 2-byte encoding of <code>push ebp</code> for functions that use a frame pointer.  (Using the <code>push r/m32</code> form with a modrm byte, not the 1-byte short form.)  But that's somewhat less simple to handle, and need an alternative to not pessimize functions that don't want to push anything.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "It's intended to jump to a specific location, 5 bytes before the mov instruction.  From there, you have 5 bytes which are intended to be modified to a long jump to somewhere else in 32-bit memory space.  Note that when hot-patching, that 5 bytes jump should be placed first, and then the mov can be replaced.  Going the other way, you risk the replaced mov-jmp running first, and jumping to the 5 bytes of whatever happens to be there (it's all nops by default, but you never know).\n[addition follows]\nRegarding writing the 5 bytes jump - there's also the problem of there is only one instruction that will let you write more than 4 bytes atomically - cmpxchg8b, and that's not an ideal instruction for the purpose.  If you write the 0xe9 first and then a dword, then you have a race condition if the 0xe9 is executed before you place the dword.  Yet another reason to write the long jump first.\n",
+            "votes": "19",
+            "user": "peter ferrie",
+            "time": "Apr 5, 2013 at 20:44",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "mrduclaw",
+                    "text": "<span class=\"comment-copy\">It's NOPs or INT3's, generally.</span>",
+                    "time": null
+                },
+                {
+                    "user": "peter ferrie",
+                    "text": "<span class=\"comment-copy\">Right, but in the case of INT3s, you definitely don't want to be running that by accident.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Peter Cordes",
+                    "text": "<span class=\"comment-copy\">And in case the function is <i>already</i> detoured, writing the 4-byte jump target address first will atomically replace whatever <code>rel32</code> the previous <code>jmp</code> had.  (Assuming that the dword is 4-byte aligned, which it will be if functions are 8 or 16-byte aligned.  It ends at the start of a function.)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "courtsey Hotpatching and the Rise of\nThird-Party Patches presentation at BlackHat USA 2006 by\nAlexander \nSotirov\nWhat Is Hotpatching?\nHotpatching is a method for modifying the behavior of an\napplication by modifying its binary code at runtime. It is a\ncommon technique with many uses:\n•\ndebugging (software breakpoints)\n•\nruntime instrumentation\n•\nhooking Windows API functions\n•\nmodifying the execution or adding new functionality to\nclosed-source applications\n•\ndeploying software updates without rebooting\n•\nfixing security vulnerabilities\nHotpatches are generated by an automated tool that\ncompares the original and patched binaries. The functions that\nhave changed are included in a file with a .hp.dll extension.\nWhen the hotpatch DLL is loaded in a running process, the first\ninstruction of the vulnerable function is replaced with a jump to\nthe hotpatch.\nThe /hotpatch compiler option ensures that the first instruction of\nevery function is a \nmov \nedi, \nedi \ninstruction that can be safely\noverwritten by the hotpatch. Older versions of Windows are not\ncompiled with this option and cannot be hotpatched.\n",
+            "votes": "8",
+            "user": "rebel87",
+            "time": "Oct 3, 2015 at 7:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

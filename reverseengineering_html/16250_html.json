@@ -1,0 +1,81 @@
+{
+    "title": "Added instruction to shellcode",
+    "link": "https://reverseengineering.stackexchange.com/questions/16250/added-instruction-to-shellcode",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have the following shellcode:\n </p>\n <pre><code>xor  eax, eax   ; eax = 0\npush eax        ; 0 (end of the string)\npush 0x68732f2f ; //sh\npush 0x6e69622f ; /bin\nmov  ebx, esp   ; ebx = &(/bin//sh)\nxor  ecx, ecx   ; ecx = 0\nmov  al, 0xb    ; execve\nint  0x80\n</code></pre>\n <p>\n  Which, converted into hex is used in the following C program:\n </p>\n <pre><code>const char shellcode[] =\n     \"\\x31\\xc0\\x50\\x68\\x2f\\x2f\\x73\\x68\\x68\\x2f\\x62\\x69\\x6e\\x89\\xe3\\x31\\xc9\\xb0\\x0b\\xcd\\x80\";\n\nint main(){\n    (*(void(*)()) shellcode)();\n    return 0;\n}\n</code></pre>\n <p>\n  This works just fine, but when I step through the payload with\n  <code>\n   gdb\n  </code>\n  I see an extra instruction added to the shellcode:\n </p>\n <pre><code>$ gdb shellcode\n(gdb) disass main\nDump of assembler code for function main:\n   0x080483ed <+0>:     push   %ebp\n   0x080483ee <+1>:     mov    %esp,%ebp\n   0x080483f0 <+3>:     and    $0xfffffff0,%esp\n   0x080483f3 <+6>:     mov    $0x80484a0,%eax\n   0x080483f8 <+11>:    call   *%eax\n   0x080483fa <+13>:    mov    $0x0,%eax\n   0x080483ff <+18>:    leave\n   0x08048400 <+19>:    ret\nEnd of assembler dump.\n(gdb)  x/14i 0x80484a0\n   0x80484a0 <shellcode>:       xor    %eax,%eax\n   0x80484a2 <shellcode+2>:     push   %eax\n   0x80484a3 <shellcode+3>:     push   $0x68732f2f\n   0x80484a8 <shellcode+8>:     push   $0x6e69622f\n   0x80484ad <shellcode+13>:    mov    %esp,%ebx\n   0x80484af <shellcode+15>:    xor    %ecx,%ecx\n   0x80484b1 <shellcode+17>:    mov    $0xb,%al\n   0x80484b3 <shellcode+19>:    int    $0x80\n   0x80484b7 <shellcode+21>:    add    %al,(%ecx)\n   ... (gibberish)\n</code></pre>\n <p>\n  You can see the\n  <code>\n   shellcode+23\n  </code>\n  is an extra line, added to the shellcode.\nWhile searching for an answer\n  <a href=\"https://reverseengineering.stackexchange.com/questions/16244\">\n   here\n  </a>\n  I discovered that it was making the shellcode to crash, and I had to clear the\n  <code>\n   ecx\n  </code>\n  register before calling the interrupt.\n </p>\n <p>\n  Do you know what is this extra command?\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 2,
+    "views": "470",
+    "tags": [
+        "gdb",
+        "register"
+    ],
+    "user": "nobe4",
+    "time": "Sep 4, 2017 at 9:45",
+    "comments": [
+        {
+            "user": "Michael Pittino",
+            "text": "<html><body><span class=\"comment-copy\">\n <code>\n  gibberish\n </code>\n isn't very helpful..\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The original shellcode contains only eight instructions, but because you asked gdb to disassemble 14 instructions, it went ahead and did just what you asked. Since you asked to disassemble more than there actually are, it disassembled whatever bytes happened to be present after the variable (likely zero padding but maybe also other parts of the executable).\n </p>\n <p>\n  So no instructions were \"added\", you're just disassembling some junk that happens to be in the memory after it.\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Sep 4, 2017 at 9:13",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">I see, but the instruction <code>+21</code> is considere part of the shellcode, whereas the next one (which I should have provided, my bad) doesn't have the <code>&lt;shellcode+XX&gt;</code>.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">how did you compile it? normally there should be <code>ret</code> after <code>int 0x80</code></span>",
+                    "time": null
+                },
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\"><code>gcc -o shellcode shellcode.c</code>, is there anywhere I can look for more settings?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">are you sure you compiled the same source you mention in this question and not the previous version? (without \\xc3)</span>",
+                    "time": null
+                },
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">yeah, sorry it was a bad copy/paste. There is no <code>\\xc3</code> at the end of the shellcode</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Igor is right... The original shellcode does not include any\n  <code>\n   ret\n  </code>\n  (\n  <code>\n   0xc3\n  </code>\n  ), so there are none in the decompiled asm. The thing is that when you ask\n  <code>\n   gdb\n  </code>\n  to disassemble 14 instructions, it disassembles 14 instructions interpreting the content of the memory as if it was instructions.\n </p>\n <p>\n  As a proof of what I say, here is a disassembly of the instruction\n  <code>\n   add %al,(%ecx)\n  </code>\n  :\n </p>\n <pre><code>$ rasm2 -a x86 -C 'add %al,(%ecx)'\n\"\\xc0\\x00\"\n</code></pre>\n <p>\n  Which is, in fact,\n  <code>\n   \"\\x00\\xc0\"\n  </code>\n  (because of the endianness) and where the first\n  <code>\n   \"\\x00\"\n  </code>\n  is, in fact, the final character of the shellcode string.\n </p>\n <p>\n  The following characters are very likely the code of the\n  <code>\n   main\n  </code>\n  function or whatever is in the memory at this place.\n </p>\n <p>\n  Anyway, reread more carefully the answer of Igor (he's right!).\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "perror",
+            "time": "Sep 4, 2017 at 17:43",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">Got it now, thanks for insisting on Igor's answer. Should I also not believe <code>gdb</code> when he tells me that an instruction is part of the shellcode?</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\"><code>gdb</code> never told you that it was part of the shellcode. You asked for 14 instructions after the address you set, and <i>voilà</i>, you have 14 instructions... But, there is absolutely nothing that tells you if you are within or outside the bounds of the shellcode. You have to understand that the securing frontiers that you have at a high-level totally disappear when you are at the asm level. :-)</span>",
+                    "time": null
+                },
+                {
+                    "user": "nobe4",
+                    "text": "<span class=\"comment-copy\">Hehe thanks, I feel like going down the rabbit hole makes you more responsible for your actions!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

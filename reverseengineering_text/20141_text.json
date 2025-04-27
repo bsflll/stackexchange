@@ -1,0 +1,57 @@
+{
+    "title": "Can't find SetCooperativeLevel call in disassembled program",
+    "link": "https://reverseengineering.stackexchange.com/questions/20141/cant-find-setcooperativelevel-call-in-disassembled-program",
+    "content": "I am trying to make some changes to the setup program that installs the game \"Emperor: Battle for Dune\". If you want to look at the EXE I am working on, you can download a copy of this setup program from the official Install Fix patch here: http://dune2k.com/Duniverse/Games/Emperor/Downloads/Patches (download the \"Install Fix:\" entry and it is Setup.exe).\nFor some reason, the developers decided to make the installer a fullscreen application and so I am trying to modify it to instead run in a window. It uses the DirectDraw API (not entirely sure what version but I think it is 7 or 8). Thus, I know that the function \"SetCooperativeLevel\" (https://docs.microsoft.com/en-us/windows/desktop/api/ddraw/nf-ddraw-idirectdraw7-setcooperativelevel) is used to initialize the DDraw application in fullscreen or windowed mode. \nMy problem is that I tried to disassemble the EXE using both IDA Pro 7.0 and OllyDbg 2.01 but neither of them have been able to find any calls to that function. Can anyone tell me if there is anything I can do to help one of these programs find this call? Alternatively, is it possible for a DDraw program to go into fullscreen mode without the SetCooperativeLevel function?\nEdit: I attempted to use Defragger's suggestion below. Unfortunately, it didn't work. I modified the code he pointed out as per below to simply change the dimensions to 800x600 but it did not change anything. The window is still in fullscreen and doesn't appear different at all:\n<pre><code>.text:004619BF                 mov     esi, ds:GetSystemMetrics\n.text:004619C5                 push    258h            ; yBottom\n.text:004619CA                 push    320h            ; xRight\n.text:004619CF                 push    0               ; yTop\n.text:004619D1                 push    0               ; xLeft\n.text:004619D3                 push    offset Rect     ; lprc\n.text:004619D8                 call    ds:SetRect\n</code></pre>\nI found that I could only modify the \"yBottom\" and \"xRight\" parameters safely. If I modified \"yTop\" or \"xLeft\", the program crashed.\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "274",
+    "tags": [
+        "ida",
+        "disassembly",
+        "ollydbg"
+    ],
+    "user": "XJDHDR",
+    "time": "Dec 22, 2018 at 22:53",
+    "comments": [
+        {
+            "user": "defragger",
+            "text": "updated my answer hopefully that works\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "There's also the possibility to set a screen to full screen with the function <pre><code>SetRect</code></pre>\nI found this spot on the mentioned executable:\n<pre><code>0x004619bf mov esi, dword [sym.imp.USER32.dll_GetSystemMetrics]\n0x004619c5 push 1\n0x004619c7 call esi\n0x004619c9 push eax\n0x004619ca push 0\n0x004619cc call esi\n0x004619ce push eax\n0x004619cf push 0\n0x004619d1 push 0\n0x004619d3 push 0x48e2f8\n0x004619d8 call dword [sym.imp.USER32.dll_SetRect]\n</code></pre>\nThe flag 0 and 1 for GetSystemMetrics are called <pre><code>SM_CYSCREEN</code></pre> and <pre><code>SM_CXSCREEN</code></pre> and will make <pre><code>GetSystemMetrics</code></pre> return the max x and y pixels that are finally used for <pre><code>SetRect</code></pre>\nEDIT:\nI used radare2 to find this spot: <pre><code>/c call~SetRect</code></pre>\nIn ollydbg or any other dynamic tool you can simply add a breakpoint at the top of <pre><code>SetRect</code></pre> and wait until it gets fired to change it's arguments.\nEDIT2:\nI think i missed some spots with my search /c. Idapro counts four xrefs to\nSetRect. You could try to set a breakpoint directly at the top of SetRect to see who's calling it. If you would like to change the behavior of a function completely you can use something like https://frida.re i think something like this would work:\n<pre><code>Interceptor.attach (Module.findExportByName(\"user32.dll\", \"SetRect\"), {\nonEnter: function (args) {\n    args[2]= args[2].shr(1);\n    args[3] = args[3].shr(1);\n},\nonLeave: function (retval) {});\n</code></pre>\nSave this into some js file and spawn your process with this line after installing frida on your system: <pre><code>frida -f SETUP.EXE -l yourscript.js</code></pre>\nI hope that will work for you.\n",
+            "votes": "1",
+            "user": "defragger",
+            "time": "Dec 23, 2018 at 10:28",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "XJDHDR",
+                    "text": "<span class=\"comment-copy\">Thanks for the help but it didn't work. I've put the details in the question.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "My problem is that I tried to disassemble the EXE using both IDA Pro 7.0 and OllyDbg 2.01 but neither of them have been able to find any calls to that function.\n\nIt won't be called directly because this is a method and not a function.\nIn other word, IDirectDraw instance contains an array of pointers to code (it's called a virtual table), when a call is made, the generated code is an indirect call using the instance.\nTo figure out where this method is called, you have several methods:\n\nDynamically: Identify to address to the method and set a breakpoint to it, then you can get the caller when the breakpoint is triggered.\nStatically, find the call to <pre><code>DirectDrawCreateEx</code></pre> and track <pre><code>lplpDD</code></pre> parameter, when the vtable is dereferenced and it's followed by an indirect call with offset (method number * sizeof(void*)), see if the destination is the method you're looking for.\nLazily, simply use DxWnd :)\n\nI hope it can help you.\n",
+            "votes": "0",
+            "user": "wisk",
+            "time": "Dec 23, 2018 at 14:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "XJDHDR",
+                    "text": "<span class=\"comment-copy\">Thanks for the help. I'm currently trying to analyse the EXE statically because I'm trying to find a debugger that works for me. The only call to <code>DirectDrawCreate</code> is at <code>0xD331</code> with it's <code>lplpDD</code> parameter saying <code>E8 EC B6 05 00 (call loc_0005b6f1)</code> which IDA translates as <code>push    offset lpDD</code>. Do you have any tips on how I can find the offset / address for the <code>SetCooperativeLevel</code> method? Sorry if the answer should be obvious, I am still a beginner at this sort of thing.</span>",
+                    "time": null
+                },
+                {
+                    "user": "wisk",
+                    "text": "<span class=\"comment-copy\">You're lucky because it seems the lpDD is a global value. That makes it easier to track. To find offset of <code>SetCooperativeLevel</code> you need to identify the exact version of the IDirectDraw instance (<code>iid</code> parameter) and then find the structure. For instance, if this is <code>IID_IDirectDraw7</code>, look for <a href=\"https://github.com/apitrace/dxsdk/blob/master/Include/ddraw.h#L1273\" rel=\"nofollow noreferrer\">github.com/apitrace/dxsdk/blob/master/Include/ddraw.h#L1273</a> <code>SetCooperativeLevel</code> is the 20th method, multiply it by 4 (size of a pointer) and the offset should be 0x50.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

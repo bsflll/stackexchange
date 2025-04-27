@@ -1,0 +1,46 @@
+{
+    "title": "Reversing a Java digest function, with known public key and source code",
+    "link": "https://reverseengineering.stackexchange.com/questions/19803/reversing-a-java-digest-function-with-known-public-key-and-source-code",
+    "content": "A Java application verifies that an XML string that came from a clearnet server (no  SSL) has not been tampered, using a message digest. It does so with a public key stored locally, accessed with the variable <pre><code>pk_enc</code></pre> \nThe application asks an external server for 2 strings: the XML and a hash (both encoded base64):\n<pre><code>String xml_enc = // ...\nString hashStr_enc = // ...\n</code></pre>\nThe application then decodes from base64:\n<pre><code>String xml = new String(Base64.decode(xml_enc));\nbyte[] hashStr = Base64.decode(hashStr_enc);\n</code></pre>\nIn <pre><code>xml</code></pre> we now have a readable XML string and in <pre><code>hashStr_dec</code></pre> a bunch of unreadable characters.\nIt then verifies that the result of these 2 functions are equal:\n<pre><code>public String createMD5hashForResponseXMLDocument(String xml) {\n    try {\n        byte[] e = xml.getBytes();\n        MessageDigest algorithm = MessageDigest.getInstance(\"MD5\");\n        algorithm.reset();\n        algorithm.update(e);\n        byte[] messageDigest = algorithm.digest();\n        StringBuffer hexString = new StringBuffer();\n\n        for (int i = 0; i < messageDigest.length; ++i) {\n            hexString.append(Integer.toString((messageDigest[i] & 255) + 256, 16).substring(1));\n        }\n\n        return hexString.toString();\n    } catch (Exception e) {\n        e.printStackTrace();\n        return \"\";\n    }\n}\n</code></pre>\nand\n<pre><code>public String decryptRSAcipherUsedForSigning(String pk_enc, byte[] hashStr) {\n    try {\n\n        X509EncodedKeySpec e = new X509EncodedKeySpec(decodeBASE64(pk_enc));\n        KeyFactory keyFactory = KeyFactory.getInstance(\"RSA\");\n        RSAPublicKey RSApublicKey = (RSAPublicKey) keyFactory.generatePublic(e);\n        Cipher cipher = Cipher.getInstance(\"RSA/ECB/PKCS1PADDING\");\n        cipher.init(2, RSApublicKey);\n        byte[] MD5hash = cipher.doFinal(hashStr);\n        return new String(MD5hash);\n\n    } catch (Exception e) {\n        e.printStackTrace();\n        return \"\";\n    }\n}\n</code></pre>\nEverything works as long as you don't touch the XML, and the result of the 2 functions computes as equal.\n\nI would now like to modify the XML and compute the hash correctly (the reverse of what happens above). Given that I have <pre><code>pk_enc</code></pre> it shouldn't be impossible.\nHow can I do that? Here's what I've tried. For simplicity sake, I used the same XML as the original.\nFirst, I fed the unencoded XML to <pre><code>createMD5hashForResponseXMLDocument</code></pre>:\n<pre><code>String xml_md5 = createMD5hashForResponseXMLDocument(my_xml_string);\n</code></pre>\nThen I run this function. It's the same as <pre><code>decryptRSAcipherUsedForSigning</code></pre> but I changed <pre><code>cipher.init(2, RSApublicKey);</code></pre> to <pre><code>cipher.init(1, RSApublicKey);</code></pre>\n<pre><code>public byte[] encryptHash(String pk_enc, String xml_m5d) {\n        try {\n            X509EncodedKeySpec e = new X509EncodedKeySpec(decodeBASE64(pk_enc));\n            KeyFactory keyFactory = KeyFactory.getInstance(\"RSA\");\n            RSAPublicKey RSApublicKey = (RSAPublicKey) keyFactory.generatePublic(e);\n            Cipher cipher = Cipher.getInstance(\"RSA/ECB/PKCS1PADDING\");\n            cipher.init(1, RSApublicKey);\n            byte[] result = cipher.doFinal(xml_m5d.getBytes());\n            return result;\n\n        } catch (Exception e) {\n            e.printStackTrace();\n            return \"\".getBytes();\n        }\n    }\n</code></pre>\nThis is not working: provided with the same XML I've started with, it does not produce the same result. Furthermore, if I try to to feed it back to <pre><code>decryptRSAcipherUsedForSigning</code></pre> I get this error:\n<pre><code>javax.crypto.BadPaddingException: Decryption error\n    at sun.security.rsa.RSAPadding.unpadV15(Unknown Source)\n    at sun.security.rsa.RSAPadding.unpad(Unknown Source)\n    at com.sun.crypto.provider.RSACipher.doFinal(RSACipher.java:356)\n    at com.sun.crypto.provider.RSACipher.engineDoFinal(RSACipher.java:389)\n    at javax.crypto.Cipher.doFinal(Cipher.java:2164)\n    at com.test.test.MainTest.decryptRSAcipherUsedForSigning(MainTest.java:112)\n    at com.test.test.MainTest.Execute(MainTest.java:59)\n    at com.test.test.test.main(test.java:13)\n</code></pre>\nPlease note I'm aware of the difference between String and byte[] and I've been careful to not switch inappropriately between the twos. Although I do not exclude that might be the problem, it should be ok.\n",
+    "votes": "1",
+    "answers": 1,
+    "views": "989",
+    "tags": [
+        "encryption",
+        "java"
+    ],
+    "user": "Saturnix",
+    "time": "Nov 3, 2018 at 2:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This is impossible to do as long as I don't have the corresponding private key of <pre><code>pk_enc</code></pre>.\nDecrypting with a public key means verifying: I didn't know that, saw a public key used for decryption and jumped to the wrong conclusion that it was sufficient to encrypt back the data.\nIt is not.\n",
+            "votes": "1",
+            "user": "Saturnix",
+            "time": "Nov 3, 2018 at 2:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">You can patch the application to include your RSA key instead of the server and MiTM everything.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Saturnix",
+                    "text": "<span class=\"comment-copy\">If I could patch the application then I wouldn't even need to meddle with encryption: I could just bypass everything. This problem stems from the fact that I can't.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Saturnix",
+                    "text": "<span class=\"comment-copy\">I'm reversing Java classes from an old version of the application but the new one is 64-bit wrapped with Jar2Exe. So far, I've found no way to extract Java code from an exe wrapped with Jar2Exe... plenty of tutorials for 32 bit and older versions.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@Saturnix You can replace the RSA key in memory.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

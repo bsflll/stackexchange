@@ -1,0 +1,39 @@
+{
+    "title": "Radare2 Find command line arguments and location in stack",
+    "link": "https://reverseengineering.stackexchange.com/questions/18085/radare2-find-command-line-arguments-and-location-in-stack",
+    "content": "This might have a simple solution but I can't find it anywhere.\n<pre><code>$> ./be1 11 AAAAA\n</code></pre>\nWith <pre><code>gdb</code></pre>, finding <pre><code>argv[]</code></pre> and <pre><code>argc</code></pre> is simple:\n<pre><code>(gdb) print argv[0]@argc\n$7 = {0xbffff872 \"be1\", 0xbffff89a \"11\", 0xbffff89d \"AAAAA\"}\n</code></pre>\nBut, how can we do this with radare2 ?\n",
+    "votes": "7",
+    "answers": 2,
+    "views": "2k",
+    "tags": [
+        "binary-analysis",
+        "radare2"
+    ],
+    "user": "Corey",
+    "time": "Apr 25, 2018 at 15:51",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "radare2 currently doesn't flags <pre><code>argv</code></pre> and <pre><code>argc</code></pre>. Yet, it shouldn't be something complicated to implement.\nAlthough these arguments are not flagged by radare2, they can be easily be visible to us by inspecting the registers. Let's do it step by step.\nAssume we have the following program:\n<pre><code>$ cat example.c\n\n#include <stdio.h>\n\nint main(int argc, char *argv[]) {\n\n   printf( \"argv[1]: %s\n\", argv[1]);\n\n   return 0;\n}\n</code></pre>\nAll the program is doing is to print the first argument given to it. Simple as that.\nLet's compile it in <pre><code>gcc</code></pre> and open it in debug-mode with <pre><code>radare2</code></pre> using the <pre><code>-d</code></pre> flag, and pass an argument to it:\n<pre><code>$ gcc example.c -o example.elf\n$ r2 -d example.elf ABCDEFGH\nProcess with PID 104 started...\n= attach 104 104\nbin.baddr 0x00400000\nUsing 0x400000\nasm.bits 64\n -- Nothing to see here. Move along.\n[0x7f3c8f000c30]> \n</code></pre>\nLet's quickly analyze the program using <pre><code>aa</code></pre>:\n<pre><code>[0x7f3c8f000c30]> aa\n[x] Analyze all flags starting with sym. and entry0 (aa)\n</code></pre>\nNow, let's execute the program until we reach <pre><code>main()</code></pre>. We can do this by setting a breakpoint at <pre><code>main</code></pre> using <pre><code>db main</code></pre> and continue the execution until the program reaches the breakpoint using <pre><code>dc</code></pre>. Or, we can simply use <pre><code>dcu [addr]</code></pre> -- a very nice command that will continue the execution until a specific address.\n<pre><code>[0x7f3c8f000c30]> dcu main\nContinue until 0x00400526 using 1 bpsize\nhit breakpoint at: 400526\n</code></pre>\nradare2 stopped the execution of the program at <pre><code>main</code></pre>. Great! Let's move on and print the function:\n<pre><code>[0x00400526]> pdf\n            ;-- main:\n            ;-- rax:\n            ;-- rip:\n╭ (fcn) sym.main 51\n│   sym.main ();\n│           ; var int local_10h @ rbp-0x10\n│           ; var int local_4h @ rbp-0x4\n│           ; DATA XREF from 0x0040044d (entry0)\n│           0x00400526      55             push rbp\n│           0x00400527      4889e5         mov rbp, rsp\n│           0x0040052a      4883ec10       sub rsp, 0x10\n│           0x0040052e      897dfc         mov dword [local_4h], edi\n│           0x00400531      488975f0       mov qword [local_10h], rsi\n│           0x00400535      488b45f0       mov rax, qword [local_10h]\n│           0x00400539      4883c008       add rax, 8\n│           0x0040053d      488b00         mov rax, qword [rax]\n│           0x00400540      4889c6         mov rsi, rax\n│           0x00400543      bfe4054000     mov edi, str.argv_1_:__s    ; 0x4005e4 ; \"argv[1]: %s\n\"\n│           0x00400548      b800000000     mov eax, 0\n│           0x0040054d      e8aefeffff     call sym.imp.printf         ; int printf(const char *format)\n│           0x00400552      b800000000     mov eax, 0\n│           0x00400557      c9             leave\n╰           0x00400558      c3             ret\n</code></pre>\nAs you may know, in a GCC compiled program, at <pre><code>main</code></pre>'s entry, <pre><code>edi</code></pre> will hold <pre><code>argc</code></pre> and <pre><code>rsi</code></pre> (a pointer on the stack) will hold <pre><code>argv</code></pre>.\nWe can print their addresses like this:\n<pre><code>[0x00400526]> dr rsi\n0x7ffff02302b8\n[0x00400526]> dr edi\n0x00000002\n</code></pre>\nSo the value of <pre><code>argc</code></pre> (<pre><code>edi</code></pre>) is <pre><code>0x2</code></pre> which is expected since the arguments are the file name and \"ABCDEFGH\". The address of the pointer <pre><code>argv</code></pre> (<pre><code>rsi</code></pre>) is <pre><code>0x7ffff02302b8</code></pre>. In order to print the content of <pre><code>* argv</code></pre> (<pre><code>rsi</code></pre>) we can simply use the following command:\n<pre><code>[0x00400526]> psb @ [rsi]\n0x7ffff02304b7 ./example.elf\n0x7ffff02304c4 ABCDEFGH\n0x7ffff02304cd SHELL=/bin/bash\n0x7ffff02304dd TERM=xterm-256color\n0x7ffff02304f1 OLDPWD=<truncated>\n0x7ffff023050e USER=beet\n0x7ffff0230518 NAME=<truncated>\n</code></pre>\n<pre><code>psb</code></pre> is used to print strings in the current block. Since at this point we know that <pre><code>argc</code></pre> equals 2, we can ignore anything that is beneath the second line of the output.\nradare2 also offers you a register telescoping using <pre><code>drr</code></pre>. This way you can easily see where <pre><code>rsi</code></pre> is pointing to:\n<pre><code>[0x00400526]> drr~rsi\n   rsi 0x00007ffff1a56ab8  rsi stack R W 0x7ffff1a56cb7 -->  stack R W 0x6c706d6178652f2e (./example.elf) -->  ascii\n</code></pre>\nAs you can see, <pre><code>rsi</code></pre> value is <pre><code>0x7ffff1a56ab8</code></pre> which is pointing to an address on the stack (<pre><code>0x7ffff1a56cb7</code></pre>) that contains an ascii string \"./example.elf\".\n<pre><code>~</code></pre> is radare's internal grep.\nPlease consider open an issue to ask for this feature, or even better, implement it and send a pull-request.\n",
+            "votes": "7",
+            "user": "Megabeets",
+            "time": "Apr 25, 2018 at 7:32",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Corey",
+                    "text": "<span class=\"comment-copy\">Wow, thanks this is everything I wanted and much much more. Thanks again!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "the info command holds all the args passed to radare2  and you can use the internal grep too to find it \n<pre><code>:\\>radare2 -Q -c \"i~ref\" -d cmdlnargs.exe firstarg secarg thirdarg\nSpawned new process with pid 6032, tid = 3196\nr_sys_pid_to_path: Cannot get module filename.= attach 6032 3196\nbin.baddr 0x01330000\nUsing 0x1330000\nSpawned new process with pid 872, tid = 2512\nr_sys_pid_to_path: Cannot get module filename.asm.bits 32\nreferer  dbg://cmdlnargs.exe firstarg secarg thirdarg\n</code></pre>\nthe same command performed inside radare instead of shell \n<pre><code>:\\>radare2 -d cmdlnargs.exe firstarg secarg thirdarg\nSpawned new process with pid 5356, tid = 2704\nr_sys_pid_to_path: Cannot get module filename.= attach 5356 2704\nbin.baddr 0x01330000\nUsing 0x1330000\nSpawned new process with pid 5296, tid = 6036\nr_sys_pid_to_path: Cannot get module filename.asm.bits 32\n -- Are you still there?\n[0x779d70d8]> i~ref\nreferer  dbg://cmdlnargs.exe firstarg secarg thirdarg\n[0x779d70d8]> q\nDo you want to quit? (Y/n) y\nDo you want to kill the process? (Y/n) y\n\n:\\>\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Apr 25, 2018 at 21:33",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

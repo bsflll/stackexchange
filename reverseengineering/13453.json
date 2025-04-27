@@ -1,0 +1,59 @@
+{
+    "title": "Is it possible to rebuild an nexe file if I can read at arbitrary untrusted memory addresses?",
+    "link": "https://reverseengineering.stackexchange.com/questions/13453/is-it-possible-to-rebuild-an-nexe-file-if-i-can-read-at-arbitrary-untrusted-memo",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Ok, I’m in a remote situation where I don’t have access to the remote filesystem but where I can run arbitrary python code <em>(except I can’t fork processes and I don’t have access to ulimit and uname)</em>.</p>\n<p>However, it means I can read and write at arbitrary virtual memory addresses. <strong>I know the python interpreter is statically linked so it has no external shared object dependencies.</strong><br/>\nWhile <a href=\"https://en.wikipedia.org/wiki/Executable_space_protection\" rel=\"nofollow noreferrer\">nx</a> is enabled, strangely <a href=\"https://en.wikipedia.org/wiki/Address_space_layout_randomization\" rel=\"nofollow noreferrer\">aslr</a> seems to be disabled.<br/>\nI already identified and dumped the following region whose contents and places never change :</p>\n<pre><code>0x00010000:0x00050000 # read only and executable\n0x01000000:0x01b80000 # read only and executable\n0x11000000:0x1158c000 # writable\n# The heap is located between those 2 places and it’s location is chose at random\n0xfe500000:0xffffffff # writable\n</code></pre>\n<p>In that case, is it possible to rebuild the ᴇʟꜰ binary ? <em>(it was compiled for native client)</em>. <em><strong>It doesn’t have to be the original binary with the original header, but just an executable that can be launched from the various parsed ᴇʟꜰ segments.</strong></em></p>\n<h1>Update :</h1>\n<p>Unlike normal nexe, the python.nexe is compiled <code>nacl_interp</code> can only be ran on Linux. This mean the target ᴏꜱ in the ᴇʟꜰ header is set to 0x7B <em>(whereas normal nexe are ᴏꜱ independent)</em>.</p>\n<p>The libc is glibc. See also <a href=\"https://groups.google.com/forum/#!topic/native-client-discuss/t54RajuGnPc\" rel=\"nofollow noreferrer\">https://groups.google.com/forum/#!topic/native-client-discuss/t54RajuGnPc</a></p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "415",
+    "tags": [
+        "linux",
+        "elf",
+        "x86-64",
+        "amd64"
+    ],
+    "user": "user2284570",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "user2284570",
+            "text": "<span class=\"comment-copy\">As this is on a remote <b>ʜᴛᴛᴘ</b> server, the only process I can use is <code>python 2.7.5</code>.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It is possible to rebuild the whole binary if you can leak any address in the process address space. As an example here is a memory map of a process</p>\n<pre><code>$cat /proc/self/maps\n00400000-0040c000 r-xp 00000000 08:01 10223630                           /bin/cat\n0060b000-0060c000 r--p 0000b000 08:01 10223630                           /bin/cat\n0060c000-0060d000 rw-p 0000c000 08:01 10223630                           /bin/cat\n0232c000-0234d000 rw-p 00000000 00:00 0                                  [heap]\n.\n.\n.\n.\n7ffef94f3000-7ffef9514000 rw-p 00000000 00:00 0                          [stack]\n7ffef95cd000-7ffef95cf000 r--p 00000000 00:00 0                          [vvar]\n7ffef95cf000-7ffef95d1000 r-xp 00000000 00:00 0                          [vdso]\nffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]\n</code></pre>\n<p>The first three sections in the map contain the executable itself. You just have to leak that section and then can reassemble to form an executable.</p>\n<p>If the binary is not <a href=\"https://en.wikipedia.org/wiki/Position-independent_code\" rel=\"nofollow\">PIE</a> enabled, the location of the executable code will be static every time the binary is ran, as in the above example. By default, you get 0x8048000 load address in 32-bits and 0x400000 64-bit. However this can be changed during the linking process. \nYou can search in the process space for \"ELF\" and probably your executable would start from there.</p>\n</div>",
+            "votes": "2",
+            "user": "sudhackar",
+            "time": "Sep 7, 2016 at 21:09",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "user2284570",
+                    "text": "<span class=\"comment-copy\">Any attempt to read the filesystem return no such file or directory error, even for listing or chdir to<code>/</code>. So I can’t access <code>/proc</code>. The only way to find mapping is through trial. <code>You can search in the process space for \"ELF\" and probably your executable would start from there.</code> But where search ? It’s definitely not in .text since I dumped the whole region with execute permissions. I found the .text section because some function pointers where directed at it from a section which was read only <i>(and in both cases they don’t change)</i>. I can’t know if a particular address is allocated or not.</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\"><code>However, it means I can read and write at arbitrary virtual memory addresses</code> I meant to look for \"ELF\" in the address space of the process. Though I don't know if python allows that or not!</span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">Have a look at : <a href=\"https://asciinema.org/a/85104\" rel=\"nofollow noreferrer\">asciinema.org/a/85104</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "user2284570",
+                    "text": "<span class=\"comment-copy\">If I read an address that isn’t allocated the program segfault. So I can’t create a single dump of the whole virtual memory. In the same time I don’t have any access to the ᴄᴘᴜ registers <i>(both in reading or writing)</i>. <b>I told I was in a remote situation. The only program I can use is python.</b></span>",
+                    "time": null
+                },
+                {
+                    "user": "sudhackar",
+                    "text": "<span class=\"comment-copy\">If the program segfaults you can iterate multiple times looking for the \"ELF\" string in the memory. Here's a script I wrote for leaking the binary when I could leak arbitrary strings with the SSP(Stack Smashing Protector) : <a href=\"http://pastebin.com/EiGj38ka\" rel=\"nofollow noreferrer\">pastebin.com/EiGj38ka</a>. I just assumed the binary is at 0x8048000 as it was x86.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

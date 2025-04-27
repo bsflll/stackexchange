@@ -1,0 +1,63 @@
+{
+    "title": "Decrypting firmware: Is there a true \"format\" to it, and how does it differ from decryping other files?",
+    "link": "https://reverseengineering.stackexchange.com/questions/6795/decrypting-firmware-is-there-a-true-format-to-it-and-how-does-it-differ-from",
+    "content": "I have firmware for a system and I'm trying to decrypt some of it just for the sake of seeing what it all does; nothing illegal or anything like that, such as reproducing copies of it decrypted and such.\nBut it can seem tough for several reasons:\n1.May have no specific format or way to distinguish it from other binary files;\n2.May not know how it is encrypted;\n3.May not be \"normally\" encrypted and may be specially so.\nThe thing is, the file has some unencrypted code, but I'm not 100% sure what kind of opcode bytes it could represent since it\nThis is firmware for an all-ARM-powered device, but I'm not publicly saying it's name. Should that mean that the firmware for it will be some variant of ARM ISA/opcodes (because it's machine code for the ARM processor)? If so, where should I begin decrypting and should I continue to determine, if possible for me, what version of ARM, ISA (instruction-set=architecture), etc.?\nThe firmware has a magic number right at the beginning of the file (which just says the company's name), but afterwards it has unencrypted bytes, then more magic numbers, then encrypted bytes, then more magic numbers, then more unencrypted bytes, etc., etc. You can tell the encrypted parts apart because each byte has a completely inane ASCII character that no other part of the file has, and they're in followed segments. This says clearly that these are irregular, encrypted ranges of bytes.\n",
+    "votes": "5",
+    "answers": 1,
+    "views": "11k",
+    "tags": [
+        "binary-analysis",
+        "firmware",
+        "decryption"
+    ],
+    "user": "stack full of heaps",
+    "time": "Dec 9, 2014 at 19:11",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "In general, people post the hardware they're working with, here, this might attract good answers from people who have done a similar thing. Look around, you'll see that many questions even provide links to the downloadable firmware. As it is right now, the only answer you can get is probably \"run binwalk and signsrch on it and see what happens\". If it's ARM, it's likely it runs some kind of linux, which in turn makes it likely that you're dealing with some kind of squashfs.\n",
+            "time": null
+        },
+        {
+            "user": "stack full of heaps",
+            "text": "\"If it's ARM, it's likely it runs some kind of linux\" What runs some kind of Linux? The firmware here is firmware to start the rest of the computer up. SquashFS is a filesystem, and how is that supposed to help decrypt the firmware? If anything, decrypting the firmware is what'll allow the rest of the hardware to be reverse-engineered, so it's kind of like a gateway-hack in some ways.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "Wow to identify firmware format\n\nIn old days the Intel HEX and bin Flash memory dump was used\nthe firmware was usually copied to device by HW programer for specific IC or by ISP. HEX is very specific Intel_HEX (*.hex) text file easy to identify. Ont he other hand BIN dumps are hard to identify. If you can see any tokens inside or can disassemble it and the code makes sense then it is probably a binary memory dump. If it is encrypted you are out of luck.\nelf or obj format\nthese are newer object formats similar to PE. ELF in hex view looks like this:\n<pre><code>7f 45 4c 46 01 02 01 00 | 00 00 00 00 00 00 00 00 | .ELF...\n</code></pre>\nOBJ is very dependent on target platform and if it is from Intel,MS or for Linux,...\nfile system dump\nsome devices have own programing interface implemented and use firmware as disc image so the file is dump of some FileSystem in which is the firmware written as some file(s). You have to identify the FileFormat type (usually by boot sector first <pre><code>512</code></pre> Bytes). Then extract the files inside and start over again from scratch. Sometimes helps if you take an USB key and write the file system dump to it 1:1 and then try to access it from OS that supports various fileformats. You can also use some HDD utility like PQ-magic or whatever capable of identify FS types.\ndecryption\nyou need disassembler for used IC or even better simulator/emulator some device SDK's contains also the simulation so try to load the firmware to its memory and try to run it to test if it does something meaningful. For disassembly you need to analyze the code to see that too ...\n\n[Notes]\nyou should post at least file extension and hex view of the start of the file\n[edit 1] response to commend + some additional info\nstarts the text exactly from start or not?\nSo it still can be:\n - bin memory dump\n - anything packed/encoded (even specific file system)\n\nIdentify packed/encoded structures\ntry to find chunks inside like the RIFF (*.avi) format. Beware there could be no ID string present. You are basically looking for hex encoded length or offset in file that would add up to file size or next chunk structure that have the length at specific chunk offset or in separated table. Do not forget it can be booth LSB or MSB first do not assume anything. Length/offsets are usually encoded <pre><code>16/32/64</code></pre> bit (<pre><code>2/4/8</code></pre> BYTE) Also try to find repeating patterns (if some kind of header of chunk is present)\nIdentify file system\nsome FS have specific ID at some offset so look for that (like <pre><code>FAT32</code></pre>,...). Most FS use FAT+DIR tables so look for something like this:\n\nthis is how DIR table looks like in MDOS file system. It is a structure holding all files/directories of the disc. Each file should have encoded name,type(extension),start sector,length.\n\n<pre><code>E5 hex = 229 dec</code></pre> usually marks free directory space (in many FS systems)\n\nso if you know any filename that should be present in the target system you could look for it to locate DIR table ...\n\nthis is how FAT table looks like in MDOS. The FAT holds information about each sector/cluster of the disc. In this case it is 12 bit so each value is 1.5 Byte long !!! Some values mark sectors as system/reserved (non usable),bad,free or if any other value present then it is an index of next sector that is connected to this like in linked list. While decoding take in mind that endianess could be both little or big\nTo identify bin memory dump\nIn this case the file is memory dump of your arm OS. That mean you should look for specific parts of program like:\n\ninterrupt table\nspecific program tokens (what it prints out... )\ngraphics\n\nThe last two are pretty straightforward so I will add info only for the interrupts. Interrupts on most processors have fixed location in memory so for each interrupt there is few bytes reserved. In this place is usually some jump instruction present that jump should lead to interrupt handler routine which should end with specific end of interrupt instructions like: <pre><code>reti</code></pre>,<pre><code>retn</code></pre> or by setting/reseting specific register to mark interrupt was handled ...\nSo look for tightly packed jump instructions inside bin and if found check if their count and distance match the CPU datasheet. Also you can check if somewhere near the jump address is return from interrupt present. If yes then you have all you need. Offset of the interrupt table is usually fixed ... so you should easily find out where from the bin dump starts in the target device memory map.\nBeware your bin can have offset encoding like the Intel hex files\n",
+            "votes": "5",
+            "user": "Spektre",
+            "time": "Aug 9, 2016 at 7:31",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "stack full of heaps",
+                    "text": "<span class=\"comment-copy\">The extension is just .bin. Hex view at the start is the company's name, which occupies 50+ bytes and is identifiable by ASCII, Unicode text.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Spektre",
+                    "text": "<span class=\"comment-copy\">@stackfullofheaps added [edit1] to answer as response would be too much for comment</span>",
+                    "time": null
+                },
+                {
+                    "user": "stack full of heaps",
+                    "text": "<span class=\"comment-copy\">I never really bothered to think that firmware could be used as a filesystem/disk for that purpose.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Spektre",
+                    "text": "<span class=\"comment-copy\">@stackfullofheaps some devices have no connections capabilities so an upgrade SD card is the only usable option. also some fileformats include FATs directly like Garmins map files ... so you should always consider that option too</span>",
+                    "time": null
+                },
+                {
+                    "user": "stack full of heaps",
+                    "text": "<span class=\"comment-copy\">The device I am trying to reverse engineer has a hard disk and full operating system, so I am going to rule-out a filesystem flash bridge, but maybe not entirely yet.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

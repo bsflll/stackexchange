@@ -1,0 +1,68 @@
+{
+  "title": "How can I reverse optimized integer division/modulo by constant operations?",
+  "link": "https://reverseengineering.stackexchange.com/questions/1397/how-can-i-reverse-optimized-integer-division-modulo-by-constant-operations",
+  "content": "When compiling a division or modulo by a constant, my compiler (LLVM GCC) generates a series of instructions that I don't understand.\n\nWhen I compile the following minimal examples:\n\n```\nint mod7(int x) {\n    return x % 7;\n}\n\nint div7(int x) {\n    return x / 7;\n}\n\n```\nThe following code is generated:\n\n```\n_mod7:\n    push   rbp\n    mov    rbp,rsp\n\n    mov    ecx,0x92492493\n    mov    eax,edi\n    imul   ecx\n    add    edx,edi\n    mov    eax,edx\n    shr    eax,0x1f\n    sar    edx,0x2\n    add    edx,eax\n    imul   ecx,edx,0x7\n    mov    eax,edi\n    sub    eax,ecx\n\n    pop    rbp\n    ret    \n\n\n_div7:\n    push   rbp\n    mov    rbp,rsp\n\n    mov    ecx,0x92492493\n    mov    eax,edi\n    imul   ecx\n    add    edx,edi\n    mov    ecx,edx\n    shr    ecx,0x1f\n    sar    edx,0x2\n    mov    eax,edx\n    add    eax,ecx\n\n    pop    rbp\n    ret\n\n```\n",
+  "votes": "37",
+  "answers": 3,
+  "views": "12k",
+  "tags": [
+    "disassembly",
+    "static-analysis"
+  ],
+  "user": "Dougall",
+  "time": "Mar 30, 2013 at 7:14",
+  "comments": [
+    {
+      "user": "DCoder",
+      "text": "This is sometimes called reciprocal multiplication. Here is a short explanation with links to more detailed resources. I've seen Hex-Rays digest this with no problems.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "Unfortunately we don't seem to have MathJax turned on in this stackexchange so the math parts below are pretty horribly formatted. I'm also far from a mathematician so the notation may be off in some places.\n\nThe goal of the code above is to rewrite a division into a multiplication because division takes more clock cycles than a multiplication. It's in the area of about twice as many cycles, depending very much on CPU. So we need to find a nice branchless way of doing that. If we branch we're very likely to lose to simply doing division.\n\nOne way is to simply realize that division is the same as multiplication with the inverse of the number, i.e . The problem is that  is a pretty poor number to store as an integer. So we need to multiply both the divisor and dividend by some number. Since we're operating on 32-bit numbers and we get multiplication results in 64-bit numbers we get the best precision with  and we also avoid overflow issues. So we basically get . Now that fractional part is what causes us issues because it will cause rounding errors.\n\nSo let's try to formalize this:\n\n\n\nWhere  is our multiplicand, e.g , or really any number  but  works very well with our register sizes as we can simply discard the lower 32-bit register.  is the number you must add to make  evenly divisible by .  is the number we wish to divide.\n\nWe can rewrite the equation above, as\n\n\n\nWhich illustrates the point that we have our dividend  divided by our divisor  and then an error factor of .\n\nStudying our original equation of  it's clear that we can affect very little.  needs to be a power of 2, can't be too large or we risk an overflow and can't be too small as it has a direct negative effect on our error factor .  directly depends on  and .\n\nSo let's try  which gives a maximum error fraction of  with the maximum value of  being , so , unfortunately this is not less than  so we can get rounding errors. \n\nWe'll increase the exponent of  to , which gives , maximum error fraction  which is less than . This means that our multiplicand is  which is not less than or equal to the maximum signed value we can store in a 32-bit register (). So we instead make the multiplicand . As a side note, thanks to the magic of two's complement when we subtract  the number  is  which is  when interpreted as an unsigned number. But we're doing signed arithmetic here. So we need to fix the final expression by adding . This also only solves the problem for , for negative numbers we will be off by 1 so we need to add 1 if we have a negative number.\n\nThat's the explanation for the constant in the multiplication and how to arrive at it. Now let's look at the code:\n\n```\n; Load -1840700269\nmov    ecx,0x92492493\n\n; Load n\nmov    eax,edi\n\n; n * -1840700269\nimul   ecx\n\n; add n to compensate for 2^32 subtraction\nadd    edx,edi\n\n; check the sign bit of our result\nmov    ecx,edx\nshr    ecx,0x1f\n\n; divide by 2^2 to compensate for us using y=2^34 instead of 2^32\nsar    edx,0x2\n\nmov    eax,edx\n; add the value of the sign bit to the final result\nadd    eax,ecx\n\n```\nI have not proven this mathematically, however if you want to recover the divisor from an assembly dump such as the one you showed we can do some simple mental excercises. First we need to realize that the following holds\n\n\n\nWhere  is the adjustment we made in order to bring the value into the range of a 32-bit value. From the code we can devise the following, the right shift by two means that we have , , ,  is unknown. This means that we're missing one variable in order to perform a perfect solution. However the effect of  if negligible as its purpose is to bring the divisor as close to its integer value as possible. This means that the solution can be found by solving\n\n\n\n\n\nAnother example with divisor 31337 which has the multiplicand magic number 140346763 and right shifts 10 bits.\n\n\n\nFor a complete mathematical breakdown of how this works, including all the appropriate proofs and algorithms for calculating the magic numbers, shifts and adds, see Hacker's Delight, chapter 10-3.\n\n",
+      "votes": "41",
+      "user": "13 revs, 2 users 100%Peter Andersson",
+      "time": "Jan 2, 2014 at 22:11",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "The question was not just how to calculate the magic constants, but also how to get back the divisor.",
+          "time": null
+        },
+        {
+          "user": "Peter Andersson",
+          "text": "I tried to answer it. Didn't really have time to formulate a proof so I'm not 100% sure it's correct.",
+          "time": null
+        },
+        {
+          "user": "rwong",
+          "text": "Under the assumptions of reverse engineering (if the const division/modulo by multiplication is mixed up with other operations), one can convert the integer multiplication constant into a binary fraction, whose reciprocal is related to the division/modulo constant operand up to an unknown power of 2 multiplicative factor. Deducing the unknown power of 2 factor is sometimes impossible due to intermixing and optimization with other operations.",
+          "time": null
+        },
+        {
+          "user": "Ferrybig",
+          "text": "FYI: the answer looks good with the stack exchange app, as it has mathjax turned on for every site",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Here's a late response. The Reko decompiler recovers the integer divisors by performing a divide and conquer search using mediants.\n\nReko starts by recognizing the pattern where the high word of a 64-bit product (r * c) is used. The constant multiplier c is divided by 2^32 to yield a double precision floating point number between 0.0 and 1.0. Starting with the rational numbers 0 / 0 and 1 / 1, Reko computes a sequence of mediants that brackets the floating point number. From this sequence of mediants it chooses the rational number that comes closest to the floating point number and returns it.\n\nThe code is not fully tested yet -- I haven't had a chance to work with negative numbers yet, for one, but seems to give reasonable results. The code is here if you're curious: https://github.com/uxmal/reko/blob/master/src/Decompiler/Analysis/ConstDivisionImplementedByMultiplication.cs\n\n",
+      "votes": "7",
+      "user": "John Källén",
+      "time": "Mar 30, 2016 at 18:32",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "This paper might be of interest: Division by invariant multiplication.\n\nBumped into this here.\n\n",
+      "votes": "2",
+      "user": "Community",
+      "time": "May 23, 2017 at 12:37",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

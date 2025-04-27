@@ -1,0 +1,40 @@
+{
+    "title": "Calculation with not defined variables?",
+    "link": "https://reverseengineering.stackexchange.com/questions/20593/calculation-with-not-defined-variables",
+    "content": "I am new to reverse engineering and try to solve a crackme with radare2.\nMy problem is understanding of the following lines: \n<pre><code>|           0x000007a9      c745b8000000.  mov dword [var_48h], 0\n|           0x000007b0      c745bc000000.  mov dword [var_44h], 0\n|           0x000007cd      8b45b8         mov eax, dword [var_48h]\n|           0x000007d0      4898           cdqe\n|           0x000007d2      0fb64405c0     movzx eax, byte [rbp + rax - 0x40]\n</code></pre>\nFrom the bottom part of this code surrounding them:\n<pre><code>|           0x0000076a      55             push rbp\n|           0x0000076b      4889e5         mov rbp, rsp\n|           0x0000076e      4883ec50       sub rsp, 0x50               \n|           0x00000772      64488b042528.  mov rax, qword fs:[0x28]    ; [0x28:8]=0x19c0 ; '('\n|           0x0000077b      488945f8       mov qword [canary], rax\n|           0x0000077f      31c0           xor eax, eax\n|           0x00000781      c645b700       mov byte [var_49h], 0\n|           0x00000785      488d3d580100.  lea rdi, qword str.Enter_password: ; 0x8e4 ; \"Enter password:\" ; const char *s\n|           0x0000078c      e87ffeffff     call sym.imp.puts           ; int puts(const char *s)\n|           0x00000791      488d45c0       lea rax, qword [var_40h]\n|           0x00000795      4889c6         mov rsi, rax\n|           0x00000798      488d3d550100.  lea rdi, qword [0x000008f4] ; \"%s\" ; const char *format\n|           0x0000079f      b800000000     mov eax, 0\n|           0x000007a4      e897feffff     call sym.imp.__isoc99_scanf ; String! ; int scanf(const char *format)\n|           0x000007a9      c745b8000000.  mov dword [var_48h], 0\n|           0x000007b0      c745bc000000.  mov dword [var_44h], 0\n|           0x000007cd      8b45b8         mov eax, dword [var_48h]\n|           0x000007d0      4898           cdqe\n|           0x000007d2      0fb64405c0     movzx eax, byte [rbp + rax - 0x40]\n|           0x000007d7      84c0           test al, al\n</code></pre>\nI understand the output and that there is the input wanted (<pre><code>scanf</code></pre>). After that <pre><code>var_48h</code></pre>, <pre><code>var_44h</code></pre> and <pre><code>eax</code></pre> are set to 0. The next lines i don't understand at all. Beside the <pre><code>cdqe</code></pre> instruction there is some calculation(?) with the variables <pre><code>rbp</code></pre> and <pre><code>rax</code></pre> (=<pre><code>var_49h</code></pre>?).\nMaybe you can help me to understand that?\nThank you in advance!\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "214",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "binary-analysis"
+    ],
+    "user": "Mofro",
+    "time": "Feb 11, 2019 at 13:12",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Lets take a look at the specific piece of code you can't understand:\n<pre><code>mov dword [var_48h], 0\nmov dword [var_44h], 0\nmov eax, dword [var_48h]\ncdqe\nmovzx eax, byte [rbp + rax - 0x40]\n</code></pre>\nAnd go over it a few lines at a time.\nThe first couple of lines are either initializing a local variable of size qword (8 bytes) to 0 by assigning one dword at a time, or two dword-sized variables, each of which to zero:\n<pre><code>mov dword [var_48h], 0\nmov dword [var_44h], 0\n</code></pre>\nConverting this to C, this may look similar to:\n<pre><code>long var_ab = 0;\n</code></pre>\nor\n<pre><code>int var_a, var_b = 0;\n</code></pre>\nThe third line is a little puzzling assuming the above assignment is to a single qword variable:\n<pre><code>mov eax, dword [var_48h]\n</code></pre>\nRegardless, this does not translate to an actual C statement, but suggests the  variable (either as <pre><code>var_ab</code></pre> or <pre><code>var_b</code></pre> will be used in following statements. \nTaking a look at the following two lines makes it all clearer:\n<pre><code>cdqe\nmovzx eax, byte [rbp + rax - 0x40]\n</code></pre>\nThe first of the two, <pre><code>cdqe</code></pre> simply sign-extends <pre><code>eax</code></pre> into <pre><code>rax</code></pre>, effectively setting the higher half of <pre><code>rdx</code></pre> to zero too. the second line of the last snippet makes doing so clear, after we consider the limitations of the x86 assembly language.\nSince <pre><code>eax</code></pre> is used as an index for a stack variable, it is required to be sign-extended to <pre><code>rax</code></pre> because of assembly limitations. executing <pre><code>byte [</code></pre><pre><code>r</code></pre><pre><code>bp +</code></pre><pre><code>e</code></pre><pre><code>ax - 0x40]</code></pre> is impossible in x86 64bit assembly, as all registers in offset calculations are required to be of the same length.\nThis makes it clear that the variables are indeed two dword variables, and <pre><code>eax</code></pre> is sign extended solely to be used in the following <pre><code>mov</code></pre> instruction.\nThe assembly code above, then, is probably the result of the following C code:\n<pre><code>char buf[...];\ndword idx = 0;\nif (buf[idx] == 0) {\n    ...\n}\n</code></pre>\n",
+            "votes": "2",
+            "user": "NirIzr",
+            "time": "Feb 11, 2019 at 13:06",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Sure, my pleasure :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "CDQE Convert DoubleWord To QuadWord \nit takes whatever is in eax sign extends it and puts it in Rax   \nso as long as eax holds anything less than 7fffffff and greater than 0\nRax will be 00000000<pre><code>whateverwashereineax\nwhen eax holds anything from 0x80000000 to 0xffffffff\nrax will become ffffffff</code></pre>whateverwashereineax  \nin your case eax is 0 (see var_48) so Rax will be 0 after execution of cdqe   \nand then it accesses a single byte (first letter of your password)  and checks if it is 0 (test al,al)\n",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Feb 10, 2019 at 22:22",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

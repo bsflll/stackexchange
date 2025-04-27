@@ -1,0 +1,76 @@
+{
+    "title": "Register Calling Convention: written in stone, or in mud?",
+    "link": "https://reverseengineering.stackexchange.com/questions/14266/register-calling-convention-written-in-stone-or-in-mud",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When disassembling an old Delphi 3 executable, I find some routines that pass arguments in registers EAX, EDX, and on the stack – but not in ECX!</p>\n<p>For those routines, ECX never gets set to a 'reasonable' value. This can be seen inside the code of small functions which <em>do</em> use EAX, EDX, and the stack, and also when such a routine is called inside a 'tight' inner block, which ought to be self-containing as far as function arguments go. (This version of Delphi clearly predates call stack optimization.)</p>\n<p>This is quite surprising because according to <a href=\"http://docwiki.embarcadero.com/RADStudio/Berlin/en/Program_Control\" rel=\"nofollow noreferrer\">Delphi's current owners</a> (and, thus far, in my own experience), Delphi has always used <code>register</code>:</p>\n<blockquote>\n<p><strong>Register Convention</strong><br/>\n  Under the register convention, up to three parameters are passed in CPU registers, and the rest (if any) are passed on the stack. The parameters are passed in order of declaration (as with the pascal convention), and the first three parameters that qualify are passed in the EAX, EDX, and ECX registers, in that order.</p>\n</blockquote>\n<p>Initially, I found this in some routines that reside in <code>vcl30.dpl</code>, the standard library, and so I assumed it was a peculiarity of that particular build (perhaps the library was created with an even older version of Delphi which did not use ECX). But now I also find <em>user</em> routines that are missing ECX! (In both the called function and in calling it, and the function <em>has</em> a number of stack arguments.) Inside a called function an argument may be unused, but the compiler would not know that, and it'd still provide that argument.</p>\n<p>This messes up my disassembly; not only I have to provide a dummy argument in the original function's prototype, but also the back-tracking fails because my code cannot find an assignment to ECX, and so it presumes the called function only uses the first 2 arguments.</p>\n<p>It seems to violate the strict <code>register</code> calling convention. Is there a calling convention that uses the other 2 registers but <em>not</em> ECX?</p>\n<hr/>\n<p>Example – a fragment where ECX gets used and thrashed, prior to calling a library function:</p>\n<pre><code>8D4DFC          lea    ecx, [ebp+local_4]\n33D2            xor    edx, edx\n8BC6            mov    eax, esi\n8B18            mov    ebx, [eax]\nFF5350          call   [ebx+50h]  &lt;- GetSaveFileName; this uses ECX as a proper argument\nA144831041      mov    eax, [lpEnginePtr]\nFF702C          push   [eax+2Ch]   &lt;- probably a local path\n6870277355      push   (address)\"/Saved Games/\"\nFF75FC          push   [ebp+local_4]\n8D45F8          lea    eax, [ebp+local_8]\nBA03000000      mov    edx, 3\nE869EAFCFF      call   System.@LStrCatN   &lt;- wot no ECX?\n8B55F8          mov    edx, [ebp+local_8]\nA144831041      mov    eax, [lpEnginePtr]\nE860630600      call   Engine.SaveFile\n...\n</code></pre>\n<p>which I decompile into</p>\n<pre><code>call GetSaveFileName (esi, 0, addressof (local_4))\neax = lpEnginePtr\npush (eax.field_2C)\npush (\"/Saved Games/\")\npush (local_4)\ncall System.@LStrCatN (addressof (local_8), 3)\ncall Engine.SaveFile (lpEnginePtr, local_8)\n</code></pre>\n<p>The routine <code>GetSaveFileName</code> uses, and clobbers, ECX, without saving it:</p>\n<pre><code>                GetSaveFileName:\n53              | push   ebx\n8BD9            mov    ebx, ecx     \nA140A08F55      mov    eax, lpGameSettings\n8B90E4000000    mov    edx, [eax+0E4h]\n8BC3            mov    eax, ebx     \nB944267355      mov    ecx, (address)\".sav\"\nE856EBFCFF      call   System.@LStrCat3 \n\n                5573263Ah:\n5B              | pop    ebx\nC3              | retn\n</code></pre>\n<p>The library function <code>System.@LStrCatN</code> indeed does not read ECX at all:</p>\n<pre><code>System.@LStrCatN:\n    push   ebx\n    push   esi\n    push   edx\n    push   eax         &lt;-- not in the Save List\n    mov    ebx, edx\n    xor    eax, eax\n    mov    ecx, [esp+4*edx+10h]  &lt;-- overwrite ECX!\n    test   ecx, ecx\n    jz     41304AA7h\n\n41304AA4h:\n    add    eax, [ecx-4]\n\n41304AA7h:\n    dec    edx\n    jnz    41304A9Ch\n\n41304AAAh:\n    call   System.@NewAnsiString\n    ...\n</code></pre>\n<p>Other routines that overwrite ECX (write without read) <em>do</em> save ECX in the prolog.</p>\n<hr/>\n<p>This has been mentioned earlier in <a href=\"https://reverseengineering.stackexchange.com/q/2964/2959\">Which calling convention to use for EAX/EDX in IDA</a>, but according to the comments that one was a misunderstanding and ECX was used after all.</p>\n</div>",
+    "votes": "8",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "calling-conventions",
+        "delphi",
+        "register"
+    ],
+    "user": "Jongware",
+    "time": "Apr 13, 2017 at 12:49",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If the compiler can prove that it has all call sites for a given function under its control then it can discard conventions and arrange things around to its liking. Microsoft's C/C++ compiler has been doing this for decades in connection with link-time code generation and profile-guided optimisation, especially internal copies of the compiler like the one used to compile the Visual FoxPro executables. This causes no end of additional fun when analysing such executables with IDA, since all pre-programmed conventions basically go out of the window.</p>\n<p>That applies only in 32-bit mode, though. In 64-bit mode Windows mandates adherence to its ABI for all non-leaf functions (including the registering of the call frame layout in meta data) to ensure full stack frame traceability. This means that the compiler doesn't have a lot of leeway here...</p>\n<p>Given the way Delphi works it is conceivable that the compiler might make similar adjustments with regard to parameter passing for functions that are local to the implementation section of a unit or nested functions, provided that the address of the function is never taken and passed outside.</p>\n<p>The comment conversation with Rad Lexus elicited another important aspect: system functions do not necessarily play by the same rules as 'ordinary' functions, especially those functions that are intended to be called implicitly by compiler-generated code instead of being invoked explicitly by user code. The compiler may have extended information on these system functions, like clobbered registers, unusual parameter locations, 'nothrow', 'noreturn' and so on. This extended information could be in System unit meta data or hardcoded directly into the compiler.</p>\n<p><code>@LStrCatN</code> is a special since it is a vararg function with callee cleanup (which is very unusual). It needs special treatment by the compiler in any case because the compiler must pass the actual number of pointers on the stack as a parameter to the function.</p>\n</div>",
+            "votes": "7",
+            "user": "DarthGizka",
+            "time": "Dec 30, 2016 at 11:09",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">Reasonable, but I found a good counterexample to your \"... local to the implementation section of a unit ...\" User code calls a system function, and it's aware ECX is not used as an argument.</span>",
+                    "time": null
+                },
+                {
+                    "user": "DarthGizka",
+                    "text": "<span class=\"comment-copy\">@Rad: <code>@LStrCatN</code> is special since it is a vararg function with callee cleanup (!) that needs special handling by the compiler in any case (seeing that the compiler must emit the pointer count as a hidden parameter). It is easy to see why they would want all of the pointers to be on the stack instead of pulling the first one from ECX, although it wouldn't be difficult, with a tiny adjustment to the loop logic. In any case, system functions in Turbo Pascal and Delphi do not necessarily play by the same rules as ordinary functions and the compiler may have extended (hardcoded?) info about some.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">You're right about those varargs, the stack manipulation at the end of @LStrCatN breaks my decompiler 😜 (and I already considered it not worth my time trying to fix that). Should I try and find a pure user code example? If I can't find any, you'll get a Green Tick of Approval.</span>",
+                    "time": null
+                },
+                {
+                    "user": "DarthGizka",
+                    "text": "<span class=\"comment-copy\">@Rad: dcc32 being what it is, my guess is that you'll find anomalies only with system functions/intrinsics - which is good for your project, since the System unit is finite. :-)  However, it can't hurt to scan a few gigabytes of Delphi-produced executables... Or, more precisely, to refine your automated 'hypothesis verifier' tests to include a full check of argument usage (definedness of register values at the call sites versus 'uninitialised' usage in the callee). If your own disasm engine would need too much work for this have a look at the amazing <a href=\"http://www.capstone-engine.org/\" rel=\"nofollow noreferrer\">Capstone</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">I found a couple of occurrences, but <i>all</i> of those are either in base classes (which get overridden later on), or the reverse, in a derived class (and at least one of its parents <i>does</i> clearly use the register). I guess I have to hard-code the exceptions into my decompiler, then. Thanks!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>From your link:</p>\n<blockquote>\n<p>the <strong>first three</strong> parameters that qualify are passed in the EAX, EDX,\n  and ECX registers, in that order</p>\n</blockquote>\n<p>(emphasis mine).</p>\n<p>If the function has two parameters, it has no third parameter to pass in <code>ECX</code>, so only <code>EAX</code> and <code>EDX</code> are set before calling it. Accordingly, a single-argument function uses only <code>EAX</code> and not <code>EDX</code> or <code>ECX</code>.</p>\n</div>",
+            "votes": "0",
+            "user": "Igor Skochinsky",
+            "time": "Dec 28, 2016 at 19:12",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">But for these mysterious functions the <code>retn XXX</code> at the end and the code itself clearly indicate there are more arguments, supplied on the stack. Hence my confusion.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">In that case more info is needed; maybe try to find this function in the Delphi RTL sources.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Jongware",
+                    "text": "<span class=\"comment-copy\">My examples came from user code, but yeah, I'm sure I can find a few in the standard libs as well. I don't think the full sources are publically available; I've only found a few scattered fragments so far.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

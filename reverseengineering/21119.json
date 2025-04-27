@@ -1,0 +1,51 @@
+{
+    "title": "How do tools like objdump find names of functions and their start address in ELF binaries?",
+    "link": "https://reverseengineering.stackexchange.com/questions/21119/how-do-tools-like-objdump-find-names-of-functions-and-their-start-address-in-elf",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have written a ELF parser that disassmbles the .text section using capstone</p>\n<p>my problem is that i dont know how can i segment the text section based on functions and print the name of the function just like the output of objdump -d</p>\n<p>because objdump outputs like this :</p>\n<p>0x01000 func1:</p>\n<p>0x01000 .. </p>\n<p>0x01001 ..</p>\n<p>how can i find out the name and start address of every function in .text so i can output something like objdump? </p>\n<p>i tried using string to see if the names store somewhere in the binary for example in symbol table,  but couldn't find them anywhere in it!</p>\n<p>(note that I'm not talking about import functions and such, just the functions inside the actual main code in the .text section) </p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "11k",
+    "tags": [
+        "elf",
+        "objdump"
+    ],
+    "user": "John P",
+    "time": "Apr 11, 2019 at 18:53",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">You realize there is the BFD library which really makes it easy to write an ELF parser yourself? All part of the binutils project ...</span>",
+            "time": null
+        },
+        {
+            "user": "John P",
+            "text": "<span class=\"comment-copy\">@0xC0000022L  this was for our homework and we had to write the entire parser ourselves and only use capstone to disassemble, so how can i get the function names and their addresses during parsing?</span>",
+            "time": null
+        },
+        {
+            "user": "julian",
+            "text": "<span class=\"comment-copy\">Is the symbol table present in the binary?</span>",
+            "time": null
+        },
+        {
+            "user": "John P",
+            "text": "<span class=\"comment-copy\">@julian yes there is, but still doesnt contain name of functions otherwise string wouldve find them</span>",
+            "time": null
+        },
+        {
+            "user": "Chris Stratton",
+            "text": "<span class=\"comment-copy\">It sounds very unlikely that would be true if objdump is finding them.  This is likely at a point where you need to post a brief sample exhibiting the problem somewhere.  You can also rebuild objdump from source with custom logging to figure out how it is working.   Make sure you are running the exact same elf through objdump - a stripped elf would not have internal names, so even objdump wouldn't find them, and it would be too bad if you were wasting time chasing a mixup resulting from having run a different version of the file through the objdump test.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In order to accomplish that you need some knowledge about ELF files. I'm not going explain every detail about ELF files since is a lot to cover so I'll try to be as precise as I can.</p>\n<p><em>NOTE #01: I will use radare2 to dissect the file but you can do it with any hex editor out there.</em></p>\n<p><em>NOTE #02: Here is the <a href=\"https://github.com/Ricx8/rmStack/tree/master/reverseEngineering/ans0001\" rel=\"nofollow noreferrer\">link</a> to the cpp file that I compile to explain you ELF files. Feel free to take it or make your own.</em></p>\n<p>First, you need to know the structure of headers in ELF files. <a href=\"https://en.wikipedia.org/wiki/Executable_and_Linkable_Format\" rel=\"nofollow noreferrer\">Here</a> you can see the structures of the headers.</p>\n<p>The first thing we want to look for is <code>e_ident</code> that represent the format of the file (32bit or 64bit) since the file header will be different depending of the file format.</p>\n<blockquote>\n<p><strong>e_ident</strong> offset=0x04, size=1byte</p>\n</blockquote>\n<p>Go to the 0x04 offset of the file and check one byte. (<code>s</code> means seek)</p>\n<pre><code>:&gt; s 0x04\n0x00000004  02\n</code></pre>\n<p>e_ident = 0x02 means 64bit format.</p>\n<p>Now that we now the file format we need to know the offset of the section header(<code>e_shoff</code>), the size of each entry(<code>e_shentsize</code>), and the number of entries in the section header(<code>e_shnum</code>).</p>\n<blockquote>\n<p><strong>e_shoff</strong> offset=0x28   size=8bytes<br/>\n<strong>e_shentsize</strong> offset=0x3A   size=2bytes<br/>\n<strong>e_shnum</strong> offset=0x3C   size=2bytes</p>\n</blockquote>\n<pre><code>:&gt; s 0x28\n0x00000028  e03b 0000 0000 0000\n\n:&gt; s 0x3A\n0x0000003a  4000\n\n:&gt; s 0x3C\n0x0000003c  1d00\n</code></pre>\n<p>e_shoff = 0x3be0 This is the offset of the section header.<br/>\ne_shentsize = 0x40 (64 bytes)<br/>\ne_shnum = 0x1d (29 entries)<br/></p>\n<p>We also going to need the index of the section header that contains the names of each section header. This is store in <code>e_shstrndx</code></p>\n<blockquote>\n<p><strong>e_shstrndx</strong> offset=0x3E    size=2bytes</p>\n</blockquote>\n<pre><code>:&gt; s 0x3e\n0x0000003e  1c00\n</code></pre>\n<p>e_shstrndx = 0x1c (entry 28)</p>\n<p>With the entry number you can get the address of shstrtab:</p>\n<pre><code>// e_shoff+(e_shentsize*e_shstrndx)+sh_offset\n:&gt; s 0x3be0+(0x40*0x1c)+0x18\n0x000042f8  df3a 0000 0000 0000\n</code></pre>\n<p>shstrtab = 0x3adf</p>\n<p>Now that you have that information you can run a loop that checks all the section entries:</p>\n<pre><code>//pseudocode\nfor (i=0; i&lt;e_shnum; i++)\n    entryN = e_shoff+(e_shentsize*i);\n</code></pre>\n<p><em>NOTE #03:I'll not print those values here because I have to explain more but that will give you something similar to the command <code>readelf -W -l [program]</code></em></p>\n<p>Each entry has a structure like the section header. To get the name of each entry add <code>sh_name</code> to <code>shstrtab</code> </p>\n<p>I'm only going to show you how I got <code>.text</code> but the idea will be the same for any section entry. In my case <code>.text</code> was the entry 0x0e(14). I'm going to need <code>sh_name</code>, the offset in the file <code>sh_offset</code>, and the size <code>sh_size</code></p>\n<blockquote>\n<p><strong>sh_name</strong> offset=0x00   size=4bytes<br/>\n<strong>sh_offset</strong> offset=0x18     size=8bytes<br/>\n<strong>sh_size</strong> offset=0x20   size=8bytes</p>\n</blockquote>\n<pre><code>//e_shoff+(e_shentsize*e_shstrndx)+sh_name\n:&gt; s 0x3be0+(0x40*0x0e)+0x00\n0x00003f60  9d00 0000\n\n// Get the name\n:&gt; s 0x3adf+0x9d\n0x00003b7c  2e74 6578 7400 2e66 696e 6900 2e72 6f64  .text..fini..rod\n\n//e_shoff+(e_shentsize*e_shstrndx)+sh_offset\n:&gt; s 0x3be0+(0x40*0x0e)+0x18\n0x00003f78  9010 0000 0000 0000\n\n//e_shoff+(e_shentsize*e_shstrndx)+sh_size\n:&gt; s 0x3be0+(0x40*0x0e)+0x20\n0x00003f80  3102 0000 0000 0000\n</code></pre>\n<p>entryName = 0x3be0 // .text<br/>\nsh_offset = 0x1090<br/>\nsh_size = 0x0231 (561bytes)<br/></p>\n<p>If you can't found it this way then your ELF file must be corrupted. You can take the one I <a href=\"https://github.com/Ricx8/rmStack/tree/master/reverseEngineering/ans0001/exec\" rel=\"nofollow noreferrer\">compile</a> to follow this explanation. Good luck. </p>\n</div>",
+            "votes": "2",
+            "user": "Ricardo",
+            "time": "Apr 14, 2019 at 20:34",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

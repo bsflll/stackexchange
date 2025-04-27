@@ -1,0 +1,33 @@
+{
+    "title": "What is the difference between these two function prologue instruction sequences?",
+    "link": "https://reverseengineering.stackexchange.com/questions/10949/what-is-the-difference-between-these-two-function-prologue-instruction-sequences",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>the test is on <code>32-bit x86</code>. I compiled the code with <code>gcc 4.2</code>, optimization level <code>o2</code>. I compiled the C code into binary, and then use <code>objdump</code> to disassemble it.</p>\n<p>Here are two sequences of instructions used for the function prologue:</p>\n<pre><code>0804a6f0 &lt;quotearg_n&gt;:\n804a6f0:       8b 44 24 04             mov    0x4(%esp),%eax\n804a6f4:       b9 ff ff ff ff          mov    $0xffffffff,%ecx\n804a6f9:       8b 54 24 08             mov    0x8(%esp),%edx\n804a6fd:       c7 44 24 04 40 e1 04    movl   $0x804e140,0x4(%esp)\n804a704:       08 \n804a705:       e9 c6 fa ff ff          jmp    804a1d0 &lt;quotearg_n_options&gt;\n804a70a:       8d b6 00 00 00 00       lea    0x0(%esi),%esi\n\n\n0804a730 &lt;quotearg&gt;:\n804a730:       83 ec 1c                sub    $0x1c,%esp\n804a733:       8b 44 24 20             mov    0x20(%esp),%eax\n804a737:       c7 04 24 00 00 00 00    movl   $0x0,(%esp)\n804a73e:       89 44 24 04             mov    %eax,0x4(%esp)\n804a742:       e8 a9 ff ff ff          call   804a6f0 &lt;quotearg_n&gt;\n804a747:       83 c4 1c                add    $0x1c,%esp\n804a74a:       c3                      ret\n804a74b:       90                      nop\n804a74c:       8d 74 26 00             lea    0x0(%esi,%eiz,1),%esi\n</code></pre>\n<p>Note that in function <code>quotearg</code>, register <code>esp</code> is decreased with <code>0x1c</code> before it is used to access the stack and get some arguments. Accutually according to my experience, I think the <code>sub</code> then <code>access</code> pattern is quite common for instructions compiled with <code>O2</code>.</p>\n<p>However, note that in function <code>quotearg_n</code>, register <code>esp</code> is directly added with <code>0x4</code> to access the stack. (I think the meaning of instruction at address <code>0x804a6f0</code> is to put the return address of call site to register <code>eax</code>, am I right..?) According to my observation, the pattern used by the first function is rare, around 5% for <code>gcc</code> compiled middle size C program with <code>O2</code>.</p>\n<p>So here is my question:</p>\n<p>Why does compiler generate function prologue instructions in a way similar to <code>quoterag_n</code>? What is the exact meaning of the first three instructions start from address <code>0x804a6f0</code>? </p>\n<p>Why doesn't compiler always generate function prologue instructions following the <code>sub</code> then <code>access</code> pattern? (such as <code>quoterag</code>)</p>\n<p>Am I clear? thanks a lot</p>\n</div>",
+    "votes": "1",
+    "answers": 1,
+    "views": "692",
+    "tags": [
+        "assembly",
+        "x86",
+        "c",
+        "gcc"
+    ],
+    "user": "lllllllllllll",
+    "time": "Sep 25, 2015 at 1:55",
+    "comments": [
+        {
+            "user": "phuclv",
+            "text": "<span class=\"comment-copy\">Is there a reason for you to use an 8-year-old compiler?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>It seems like the functions are defined like this:</p>\n<pre><code>int quotearg_n(int a, int b) {\n    return quotearg_n_options(a, b, -1, \"some_string\");\n}\n\nint quotearg(int a) {\n    return quotearg_n(0, a);\n}\n</code></pre>\n<p>(the <code>int</code>s might as well be pointers, can't tell this from your snippets, and the \"some string\" might be a pointer to a pre-initialized structure)</p>\n<p>These functions have the normal <code>ABI</code>, which means they pass all arguments on the stack, while <code>quotearg_n_options</code> receives the first three of its arguments in registers, and only the last one on the stack. This might be due to a modifier in the function's prototype, and it might also be due to the function being declared <code>static</code>, so the compiler knows it can't be called from outside the current source file so it's safe to change it's <code>ABI</code>.</p>\n<p>Now, from <code>quotearg</code> to <code>quotearg_n</code>, the number of parameters on the stack increases, so the compiler <strong>needs to make room for them</strong>, initializes them, calls the subroutine, and returns.</p>\n<p>From <code>quotearg_n</code> to <code>quotearg_n_options</code>, the number of parameters increases again (from 2 to 4), but since three parameters are passed in registers <code>eax</code>, <code>edx</code> and <code>ecx</code>, only the string has to be on the stack. Which means the number of parameter on the stack <em>decreases</em>, so <strong>the call needs <em>less</em> stack space</strong>, which allows the compiler to recycle the current stack. So what the compiler does is something called <em>tail call elimination</em>: instead of calling the function, then returning, it sets up the stack in the way the callee expects it, then jumps to it instead of using a call. That function (<code>quotearg_n_options</code>) will execute, and when it returns, it will directly return to the function that called <code>quotearg_n</code>, the original one.</p>\n<p>So to answer your question: The compiler uses the <a href=\"https://stackoverflow.com/questions/310974/what-is-tail-call-optimization\">tail call elimination</a> optimization, which it can do only if the number of parameters <em>on the stack</em> of the called function is lower than the number of parameters <em>on the stack</em> of the caller.</p>\n</div>",
+            "votes": "4",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

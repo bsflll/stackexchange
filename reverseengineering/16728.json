@@ -1,0 +1,72 @@
+{
+    "title": "Returning value from faux DLL",
+    "link": "https://reverseengineering.stackexchange.com/questions/16728/returning-value-from-faux-dll",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A bit of background; I'm trying to inject my own code into the old game SimTower with the ultimate goal of reverse engineering it in the same way that OpenRCT2 was created.</p>\n<p>Since SimTower is distributed as a 16-bit NE executable I'm having a bit of trouble with injecting my own DLL and changing the main method to my own (as in this article <a href=\"https://bwrsandman.wordpress.com/2014/12/27/first-steps-to-reverse-engineering-an-executable/\" rel=\"noreferrer\">https://bwrsandman.wordpress.com/2014/12/27/first-steps-to-reverse-engineering-an-executable/</a>), but I think I've found another way.</p>\n<p>One of the first things that SimTower does is to run <code>WAVEMIXINIT</code> from <code>WAVMIX16.DLL</code>. As far as I can tell, if the return value is <code>0</code> it shows a dialog box and disables the sound.</p>\n<p><img height=\"227\" src=\"https://user-images.githubusercontent.com/189580/32468638-0a936be4-c347-11e7-8989-580a8a0c6b44.png\"/></p>\n<p>My plan now is to simply create a faux wavmix16 dll that will (for now) always return 0 from that function. That should allow me to get an entry point to run my own code, and get the game started.</p>\n<pre><code>typedef void *HANDLE;\n\nHANDLE __far __pascal WAVEMIXINIT() {\n  // while (1) {;};\n  return 0;\n}\n\nvoid __far __pascal STUB4() {}\nvoid __far __pascal STUB5() {}\nvoid __far __pascal STUB6() {}\nvoid __far __pascal STUB7() {}\nvoid __far __pascal STUB9() {}\nvoid __far __pascal STUB10() {}\nvoid __far __pascal STUB11() {}\nvoid __far __pascal STUB12() {}\n</code></pre>\n<p>Compiling this into a dll and naming it <code>wavmix16.dll</code> seems to work, and I can see that the call is coming in to my function, since if I uncomment the while loop the program will be stuck inside it.</p>\n<p>For some reason though, the program crashes as soon as I get to my return statement.</p>\n<p>(wine)</p>\n<blockquote>\n<p>Unhandled page fault on read access to 0x0000fa30 at address 0x148f:0x0000000c (thread 002b)</p>\n</blockquote>\n<p>(Windows XP)</p>\n<p><img height=\"146\" src=\"https://user-images.githubusercontent.com/189580/32468826-d353bb42-c347-11e7-8da3-78fa0329333f.png\"/></p>\n<p>This is the assembly of my DDL function that gets called. I'm a little bit unsure of why there is more stuff than just a <code>mov</code> and <code>retf</code> (like the <code>nop</code>?), but I'm new to all this so maybe that's normal.</p>\n<p><img height=\"225\" src=\"https://user-images.githubusercontent.com/189580/32468875-020fbe18-c348-11e7-90a5-80cab00910da.png\"/></p>\n<p>This is the assembly of the original DLL function:</p>\n<p><img height=\"506\" src=\"https://user-images.githubusercontent.com/189580/32481676-5587abde-c38c-11e7-8690-457b13517490.png\"/></p>\n<p>Really appreciate any help, thank you!</p>\n</div>",
+    "votes": "6",
+    "answers": 1,
+    "views": "313",
+    "tags": [
+        "dll",
+        "calling-conventions"
+    ],
+    "user": "Linus Unnebäck",
+    "time": "Nov 7, 2017 at 7:32",
+    "comments": [
+        {
+            "user": "Nordwald",
+            "text": "<span class=\"comment-copy\">Did you check if you are using the correct parameters and calling convention? This seems like a clean-up error.</span>",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "<span class=\"comment-copy\">As far as I can tell I am. Looking at the header file for the wavemix library I can see that the function is defined as <code>HANDLE WINAPI WaveMixInit(void);</code>. <code>HANDLE</code> is defined as a void pointer which I define in the same way in my code. <code>WINAPI</code>, if I understand <a href=\"https://msdn.microsoft.com/en-us/library/wda6h6df.aspx\" rel=\"nofollow noreferrer\">this article</a> correct is the same as my <code>__far __pascal</code>... I'll add the decompiled function from the original DLL and see if I can spot any differences...</span>",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "<span class=\"comment-copy\">To me it seems like my function is pushing 2 values to the stack before returning, and that the original DLL is pushing 6 and popping 4 values (leaving 2 again) before returning, which to me indicates that the calling conventions should be the same...</span>",
+            "time": null
+        },
+        {
+            "user": "Nordwald",
+            "text": "<span class=\"comment-copy\">WINAPI should resolve to __stdcall (on modern systems). On another node, your function does not restore the orginal bp and sp. Really strange convention</span>",
+            "time": null
+        },
+        {
+            "user": "Linus Unnebäck",
+            "text": "<span class=\"comment-copy\">So, I'm compiling a 16-bit DLL with an ancient compiler since I haven't found any modern system that outputs 16-bit code :) I'm following <a href=\"http://www.digitalmars.com/ctg/win16-dll-programming.html\" rel=\"nofollow noreferrer\">this guide from DigitalMars</a> and are using their compiler</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Your faux function is not fixing up the stack on the epilog of the function. It should have </p>\n<pre><code>pop ds\npop bp\ndec bp\n</code></pre>\n<p>at the end by the calling convention.</p>\n<p>If you look at the original function it fixes up the stack correctly. </p>\n<p>Let's say the stack pointer had the value of 1000h coming into the function (after <code>CS:IP</code> is already pushed on the stack for the far call). You would then have in the original function</p>\n<pre><code>; sp = 1000h\nmox ax, ds     \n...\npush bp        ; sp = 0ffeh\nmov bp, sp     ; bp = 0ffeh\n...\nlea sp, [bp-2] ; sp = 0ffch\npop ds         ; sp = 0ffeh\npop bp         ; sp = 1000h\nretf\n</code></pre>\n<hr/>\n<p>To make the compiler used in the question, <a href=\"http://www.digitalmars.com/ctg/sc.html\" rel=\"nofollow noreferrer\">the Digital Mars compiler dmc.exe</a>, generate these instructions when returning from a far function, pass the flag <code>-Wm</code> which will \"Generate INC BP / DEC BP to mark far stack frames\".</p>\n</div>",
+            "votes": "6",
+            "user": "Linus Unnebäck",
+            "time": "Nov 9, 2017 at 0:57",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">about <code>inc bp</code>/<code>dec bp</code>: <a href=\"https://blogs.msdn.microsoft.com/oldnewthing/20110316-00/?p=11203\" rel=\"nofollow noreferrer\">blogs.msdn.microsoft.com/oldnewthing/20110316-00/?p=11203</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">Thank you! I added <code>xor ax,ax</code>, <code>pop ds</code>, <code>pop bp</code>, <code>dec bp</code>, <code>retf</code> as inline assembly in the function and it solved it!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">That being said, if someone could point me in the right direction to get <a href=\"http://www.digitalmars.com/ctg/win16-dll-programming.html\" rel=\"nofollow noreferrer\">the DigitalMars compiler dmc.exe</a> to output the correct instructions I would be super happy :)</span>",
+                    "time": null
+                },
+                {
+                    "user": "Linus Unnebäck",
+                    "text": "<span class=\"comment-copy\">I found it! The flag <code>-Wm</code> will make dmc \"Generate INC BP / DEC BP to mark far stack frames\". Adding this to the answer for completeness. It could potentially be good to add how to do it in other compilers as well :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,48 @@
+{
+    "title": "Python: Adding a asection to a PE file",
+    "link": "https://reverseengineering.stackexchange.com/questions/8390/python-adding-a-asection-to-a-pe-file",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I am working with PE binaries using Python and the pefile library. Its good for reading information out of a binary and rewriting certain bytes. If I wanted to add a section to the file then i am clueless on how to do it. I would be thankful if someone can provide me any previous works in this topic or help regarding this.\n </p>\n</div>\n</body></html>",
+    "votes": "1",
+    "answers": 3,
+    "views": "5k",
+    "tags": [
+        "pe",
+        "python",
+        "packers"
+    ],
+    "user": "LifeinVoid",
+    "time": "Mar 5, 2015 at 17:26",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This isn't a language specific concept. The values you'll need to modify as they are (or are meant to be) referenced:\n </p>\n <p>\n  !IMAGE_FILE_HEADER:\n    - NumberOfSections\n </p>\n <p>\n  !IMAGE_OPTIONAL_HEADER:\n    - SizeOfImage\n    - SizeOfHeaders\n(optional depending on which sections you're modifying. Relevant for .text, .data, and .idata but afaik are unused)\n    - SizeOfCode, SizeOfInitializedData, or SizeOfUninitializedData\n    - BaseOfCode, BaseOfData\n </p>\n <p>\n  Then you'll have to construct a new IMAGE_SECTION_HEADER, some values are dependant on the image.\n    - VirtualAddress and VirtualSize must be aligned to !IMAGE_OPTIONAL_HEADER.SectionAlignment\n    - PointerToRawData and SizeOfRawData must be aligned to !IMAGE_OPTIONAL_HEADER.FileAlignment\n    - PointerToRelocations is a little tricky. If there is not enough space at the end of !IMAGE_OPTIONAL_HEADER.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC], which can be calculated by finding the size of the section it is contained in, subtracting the ::.Size and (::.VirtualAddress - Reloc Section Virtual Address), you must relocate the table. After that, you'll just need to adjust the size and append.\n </p>\n <h2>\n  Example\n </h2>\n <p>\n  Appending an data section:\n    - Check if enough room in headers for another section\n    - Add\n </p>\n <pre><code>(IMAGE_SECTION_HEADER){ \n.VirtualSize = align_up(%SIZE%, !IMAGE_OPTIONAL_HEADER.SectionAlignment,\n.SizeOfRawData = align_up(%SIZE%, !IMAGE_OPTIONAL_HEADER.FileAlignment),\n.VirtualAddress = find_max(!IMAGE_SECTION_HEADER[].VirtualAddress + !IMAGE_SECTION_HEADER[].VirtualSize),\n.PointerToRawData = find_max(!IMAGE_SECTION_HEADER[].PointerToRawData + !IMAGE_SECTION_HEADER[].SizeOfRawData),\n.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_CNT_INITIALIZED_DATA\n}\n</code></pre>\n <p>\n  Then resize the file, copy your data into the .PointeToRawData\n </p>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "adversarial",
+            "time": "Mar 12, 2015 at 20:32",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Adding a new PE section is the main approach I take when I significantly modify a PE file.  There are position and RVA and VA-specific dependencies in existing binaries.  Changing those things is challenging, especially if the base relocation table is missing or corrupted for whatever reason.\n </p>\n <p>\n  Let's take a look at the general approach I take in\n  <a href=\"https://github.com/cubiclesoft/php-winpefile\" rel=\"nofollow noreferrer\">\n   Windows PE Tools for PHP\n  </a>\n  (it's PHP but a similar implementation/approach for Python should be possible):\n </p>\n <p>\n  <a href=\"https://github.com/cubiclesoft/php-winpefile/blob/master/support/win_pe_file.php#L2222\" rel=\"nofollow noreferrer\">\n   https://github.com/cubiclesoft/php-winpefile/blob/master/support/win_pe_file.php#L2222\n  </a>\n </p>\n <p>\n  The\n  <code>\n   CreateNewPESection()\n  </code>\n  function first calls\n  <code>\n   PrepareForNewPESection()\n  </code>\n  .\n  <code>\n   PrepareForNewPESection()\n  </code>\n  checks to see if there is enough space in the header as-is for a new section.  If there is enough space, then it just returns.  Note that there can be all kinds of weird stuff in the header though such as Bound Imports, Debug Directory data, Relocations, etc.\n  <code>\n   PrepareForNewPESection()\n  </code>\n  calculates the actual amount of available space by reducing the value if it encounters such data in the header space.\n </p>\n <p>\n  If there isn't enough space,\n  <code>\n   PrepareForNewPESection()\n  </code>\n  will resize the headers and shift data around up to the PE Section Alignment by minimizing the DOS stub and wiping unneeded information from the headers to attempt to make space.  A new section only needs 40 bytes.  Resizing the headers is an optional and complex exercise just to gain a few bytes of storage.\n </p>\n <p>\n  Assuming there is enough space,\n  <code>\n   CreateNewPESection()\n  </code>\n  then calculates the next available RVA by walking the sections and calculating the section's maximum RVA value.  Note that the RVA size in a section can actually be smaller than the raw data size.  The Windows loader in those cases appears to assume that the RVA size is equal to the section-aligned raw data size.  I consider those to be broken PE files that just happen to work.  The new section is then file aligned (usually a no-op) and the new data for the section (also file aligned) is placed at the end of the file.\n </p>\n <p>\n  After adding the PE section, don't forget to update various values:  The number of sections in the PE header as well as the code size, initialized data size, uninitialized data size, and, most importantly, the image size in the PE optional header (and, of course, the PE checksum when all is said and done).\n </p>\n <p>\n  Instead of adding another section, appending to the last section may also be an option worth considering.  First, look at the flags of the section.  If the flags match what you are looking for and the last section is also the last RVA and located at the end of the physical file, then that section may be a candidate for reuse by just resizing the existing section instead of adding a new section.  Doing this helps reduce the possibility of running out of space in the header for new sections.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "CubicleSoft",
+            "time": "Nov 20, 2019 at 14:13",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  See this: Adding/removing sections with Python\n  <a href=\"http://www.reddit.com/r/ReverseEngineering/comments/1jpghd/addingremoving_sections_with_python/\" rel=\"nofollow\">\n   http://www.reddit.com/r/ReverseEngineering/comments/1jpghd/addingremoving_sections_with_python/\n  </a>\n </p>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "joxeankoret",
+            "time": "Mar 6, 2015 at 9:11",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "0xC0000022L",
+                    "text": "<span class=\"comment-copy\">I can tell you why I downvoted. The reason is that this amounts to a link-only answer. The link may go stale and the other link in the comment has gone stale, unless you <a href=\"https://git.n0p.cc/SectionDoubleP.git\" rel=\"nofollow noreferrer\">edit it</a>. At a minimum you should include the steps and tools in <i>this</i> answer. Not a mere link ...</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

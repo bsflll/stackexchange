@@ -1,0 +1,63 @@
+{
+    "title": "Extracting classes from running JVM",
+    "link": "https://reverseengineering.stackexchange.com/questions/14675/extracting-classes-from-running-jvm",
+    "content": "I'm trying to RE a Java application that uses an obfuscated loader program to load classes from a second, obfuscated archive-like file. I'm trying to get at these loaded classes for further analysis, but thus far I haven't had any success in figuring out the format of the archive file. Since the classes are loaded into memory anyway, and I used a Java profiler to get a short list of the specific classes and objects that most likely contain what I'm looking for, is there a way to intercept these classes from memory, a core dump, as they're loaded, or through any other means, and inspect/save them? Assume I have full control of the system, and I can stop or modify the program in any way.\n",
+    "votes": "4",
+    "answers": 3,
+    "views": "9k",
+    "tags": [
+        "java",
+        "deobfuscation"
+    ],
+    "user": "nickanallen",
+    "time": "Feb 17, 2017 at 15:58",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "I would recommend using a Java Agent to extract classes from the running JVM instance. An agent is a tool that provides instrumentation capability for an application. Speaking of agents, there are two broad ways they can be developed:\n\nIn pure java \nIn C/C++ in the form of native agents.\n\nA native agent has more capability than a pure Java agent, but for your purpose it is sufficient. At some point in the execution flow, the class loader has to load and decrypt the encrypted classes. \nSample code is provided below. The agent registers a callback (the <pre><code>transform</code></pre> method) to be notified whenever a new class is being loaded. Within the callback we simply dump the contents of the class to disk.\n<pre><code>import java.io.*;\nimport java.lang.instrument.*;\nimport java.security.*;\n\npublic class dumper\n{\n  //A java agent must have a premain method which acts as the entry-point\n  public static void premain(String agentArgs, Instrumentation inst)\n  {\n    System.out.println(\"agent loaded\");\n\n    // Register our transformer\n    inst.addTransformer(new transformer());    \n  }\n}\n\nclass transformer implements ClassFileTransformer\n{\n   // The transform method is called for each non-system class as they are being loaded  \n   public byte[] transform(ClassLoader loader, String className, \n                           Class<?> classBeingRedefined, ProtectionDomain protectionDomain, \n                           byte[] classfileBuffer) throws IllegalClassFormatException\n   {\n     if (className != null)\n     {\n       // Skip all system classes\n       if (!className.startsWith(\"java\") && \n           !className.startsWith(\"sun\") && \n           !className.startsWith(\"javax\") && \n           !className.startsWith (\"com\") && \n           !className.startsWith(\"jdk\") && \n           !className.startsWith(\"org\"))\n       {\n         System.out.println(\"Dumping: \" + className);\n\n         // Replace all separator charactors\n         String newName = className.replaceAll(\"/\", \"#\") + \".class\";\n\n         try\n         {\n           FileOutputStream fos = new FileOutputStream(newName);\n           fos.write(classfileBuffer);\n           fos.close();\n         }\n         catch (Exception ex)\n         {\n           System.out.println(\"Exception while writing: \" + newName);\n         } \n       }\n     }\n     // We are not modifying the bytecode in anyway, so return it as-is\n     return classfileBuffer;\n   }\n }\n</code></pre>\nI have a writeup on this process here: Reversing An Obfuscated Java Malware\n",
+            "votes": "8",
+            "user": "julian",
+            "time": "Feb 17, 2017 at 18:33",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "nickanallen",
+                    "text": "<span class=\"comment-copy\">This was exactly what I was looking for, and Agents in general were a tremendous help for the rest of what I wanted to do. Thanks!</span>",
+                    "time": null
+                },
+                {
+                    "user": "Sajuuk",
+                    "text": "<span class=\"comment-copy\">What if you can't stop the JVM and hook the java agent?</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "You can dump bytecode at runtime using HotSpot tools, and use a decompiler to reverse the bytecode. I made a proof of concept, available here\nIt requires 3 dependencies:\n\nJDK libraries (sa-jdi.jar, tools.jar) to dump bytecode\nFernflower to decompile bytecode into java code\nRSyntaxTextArea to display java source code\n\nYou could also have a look at the HSDB utility\n",
+            "votes": "5",
+            "user": "georges abitbol",
+            "time": "Jan 21, 2018 at 17:35",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Richard Tingle",
+                    "text": "<span class=\"comment-copy\">Does this work in modern versions of java. I don't think sa-jdi.jar and tools.jar exist anymore</span>",
+                    "time": null
+                },
+                {
+                    "user": "georges abitbol",
+                    "text": "<span class=\"comment-copy\">@RichardTingle no this was a POC targeting Java 8</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "I think the easiest way would be to dump the classes as they are loaded, assuming that you know where the obfuscated classloader is and can edit it.\nThe obfuscated class loader will ultimately have to call ClassLoader.defineClass at some point. If you have the classfile, you can just diassemble it, find all calls to defineClass (or reflection methods that might potentially call defineClass), and insert a logging function before the call to dump the result. You could use the Krakatau disassembler/assembler for this.\nThe biggest risk is if the obfuscated code is using introspection, it could mess things up. For example, the code might compute a checksum of itself, in which case modifying it at all will cause problems.\nIf that is the case you have two options: 1) find all the introspection checks and remove/modify/mock them out, or 2) modify the JVM itself. The later approach would be completely invisible to the obfuscated code, but is harder to do.\nOne other thing to try is to look into the Java Agent interface. I haven't used it myself, so I can't say much about it, but this will potentially let you access all loaded classes at runtime with no code modifications.\n",
+            "votes": "0",
+            "user": "Antimony",
+            "time": "Feb 17, 2017 at 17:23",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

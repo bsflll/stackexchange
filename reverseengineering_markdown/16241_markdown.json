@@ -1,0 +1,47 @@
+{
+  "title": "What could be the purpose of XORing esp with a global variable? (stack canary protection)",
+  "link": "https://reverseengineering.stackexchange.com/questions/16241/what-could-be-the-purpose-of-xoring-esp-with-a-global-variable-stack-canary-pr",
+  "content": "I am currently looking at a function inside a Win32 executable's main module. After allocating memory on the stack (sub esp) and saving some registers on the stack, the value of esp is XORed with a global variable.\n\n```\nmov eax, esp\nxor eax, DWORD PTR ds:[<some address>]\npush eax\n\n```\nI wonder whether this is some kind of stack protection technique?\n\nEdit: I wrote the question from memory. The actual instruction sequence is:\n\n```\nsub esp, 0xf0\nmov eax, DWORD PTR ds:[<some address>]\nxor eax, esp\nmov DWORD PTR ss:[esp+0xec], eax\n\n```\n",
+  "votes": "4",
+  "answers": 2,
+  "views": "3k",
+  "tags": [
+    "disassembly",
+    "windows",
+    "x86",
+    "buffer-overflow",
+    "stack"
+  ],
+  "user": "InkassoHeinzi",
+  "time": "Sep 2, 2017 at 18:21",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "Yes, this is an implementation of what's often called \"Stack Canaries\", a method of stack Buffer Overflow Protection. That example you're describing is specifically the method used by Visual Studio, enabled by default since Visual Studio 2005, implemented since Visual Studio 2003. It is also called GS protection due to the fact Visual Studio provided the flags, /GS to enable and /GS- to disable, that protection and override the default behavior.  \n\nThere are multiple stack buffer overflow protection techniques implemented by different compilers and 3rd party protection tools, but they all revolve around the same fundamental idea: When a stack buffer overflow is exploited, the attacker often overwrites the return address located on the stack to redirect code execution to a controlled address. Stack canaries work by prefixing the ret instruction with some sort of validation that the stack, and specifically the return address, was not altered by an attacker prior to the ret instruction being executed (which will result in a pop from the stack and placing the popped value in the instruction pointer).\n\nTo answer that, we'll need to provide the full implementation details of which you just provided the first half. Most stack overflow canary protections usually include inserting function prolog and epilog, and you only provided the former.\n\nHere's a commented example prolog:\n\n```\nsub         esp,    8           //  allocate 8 bytes for cookie\nmov eax,    DWORD   PTR ___security_cookie\nxor eax,    esp                 //  xor cookie with current esp\nmov DWORD   PTR [esp+8],    eax //  save in stack\n\n```\nThis prolog starts with allocating the stack variable's space just as any \"regular\" function would. It then continues to fetch a value randomly generated at the process start, and stored in a specific memory address, \n into register EAX and then xor-ing it with the current stack pointer. The resulting value is then stored on the stack.\n\nAnd a commented example epilog:\n\n```\nmov ecx,    DWORD   PTR     [esp+8]  // Read saved cookie\nxor ecx,    esp                      // Xor saved cookie, should result in the same value\ncall        @__security_check_cookie@4  // Call a short function to validate resulting value is legit, and terminate safely otherwise\nadd         esp,    8\n\n```\nThen, just before the function's ret instruction is executed, which under normal buffer overflow attack circumstances will fetch the overwritten return address and will execute attacker controlled code, a validation that the original stack cookie value was kept is made, triggering a safe failure in case the value differs from the expected stack cookie.\n\nThe logic in most of the cookie/canary based protections is the following:\n\nNo, for several reasons the battle over stack overflow exploitation and protection carried on (and is still ongoing, in certain circumstances):\n\n",
+      "votes": "7",
+      "user": "Igor Skochinsky",
+      "time": "Sep 2, 2017 at 17:58",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "InkassoHeinzi",
+          "text": "So, in contrast to Igor's answer, the return address is not immediately protected by xoring it with the cookie, but by checking whether the canary has been overwritten (assuming, as you stated, that a stack overflow will overwrite it)?",
+          "time": null
+        },
+        {
+          "user": "NirIzr",
+          "text": "In the code snippet you provided (which is more similar to the one I provided) the randomly generated cookie is XORed with the the ESP register (which points to the current location of the stack). In the code snippet Igor quoted, the cookie is XORed with where the return address is placed (on the stack). Both approaches work, and I can see slight advantages to either. However I think the main point to take from this answer is the overall reasoning and logic behind the stack cookie, and not the specific implementation used. The change might come from different protection versions.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Yes, this is Microsoft's stack overflow protection, commonly known as \"GS cookie\". From Compiler Security Checks In Depth:\n\n",
+      "votes": "5",
+      "user": "Igor Skochinsky",
+      "time": "Sep 2, 2017 at 16:31",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+    "title": "Locating Memory Allocation Functions from Static Analysis",
+    "link": "https://reverseengineering.stackexchange.com/questions/11149/locating-memory-allocation-functions-from-static-analysis",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm currently working on reversing a firmware binary for an embedded device. This device is using an uncommon architecture: it is a modified <a href=\"https://en.wikipedia.org/wiki/Harvard_architecture\" rel=\"nofollow noreferrer\">Harvard architecture</a>, running on a <a href=\"http://www.ti.com/tool/sprc100#Technical%20Documents\" rel=\"nofollow noreferrer\">TMS320C55x</a> chipset with an old Real-time Operating System (RTOS) which does not exists anymore (Byte-BOS) and for which I cannot find any manual (if you have, please let me know). No standard library is used within the firmware.</p>\n<p>Based on some rare documentation found from the Internet Archive, the RTOS is actually a micro-kernel which manages tasks, memory allocation and inter-process messaging. Within the kernel, there are two functions that appears to manage memory: <code>fmem_alloc</code> and <code>fmem_free</code>.</p>\n<p>I'm trying to locate these functions within the firmware file. I can approximate the location of the code of the RTOS, as well as find functions within that section of code. My goal is to locate the <code>fmem_alloc</code> and <code>fmem_free</code> functions and functions calling them using IDA.</p>\n<p>Since my target is a TMS320C55x architecture and I have a raw firmware file versus a neat <a href=\"https://en.wikipedia.org/wiki/COFF\" rel=\"nofollow noreferrer\">COFF</a> binary, debugging it is quite difficult without an actual emulator, which from what I understood, is only hardware-based for this microprocessor. As such, it seems I'm doomed to rely only on static analysis. However if anyone knows of a software solution to debug the raw firmware, I would be extremely interested. The <a href=\"http://www.ti.com/tool/ccstudio\" rel=\"nofollow noreferrer\">Code Composer Studio</a> IDE only debugs COFF binaries.</p>\n<p>Is there any techniques, or set of C55x instructions within a certain distance I could search that could identify this function? Or at least reduce the number of potential functions to search? I know the RTOS uses a double linked-list to manage the heap. I first thought of using the <code>malloc</code> function as a potential template, but found it too far from what I'm looking at, i.e. Intel assembly to the C55x, especially given the differences between the Von Neumann and Harvard architectures.</p>\n<p>Any help appreciated. Thanks.</p>\n<p>P.S. I cannot post product details, firmware files or disassembled code due to non-disclosure conditions. I understand it may be difficult to provide a reliable answer because of this.</p>\n<h3>Updates</h3>\n<p>Since my last post, I've identify old Seagate firmware binairies using the same RTOS, but for the Intel 8096. BTW, the target RTOS is an old microkernel called Byte-BOS RTOS, which I wrote about in this <a href=\"http://thecyberrecce.net/2015/11/02/the-byte-bos-real-time-multitasking-operating-system/\" rel=\"nofollow noreferrer\">post</a>. The only string available in this OS is the copyright notice. However using the Seagate firmware, I can see heap-related error messages. I could potentially try to work these 8096 code segment into C and then recompile them on the TMS320C55x.</p>\n<h3>Updates 2</h3>\n<p>So I found out that the compiler/IDE for the platform included somesort of C library which contained a simple <strong>malloc()</strong> function. I wrote a small C program that allocated some memory with it, ran it in the included debugger and dump the machine code. I made a quick <a href=\"https://github.com/InfectedPacket/Idacraft/blob/master/IDAEngine.py\" rel=\"nofollow noreferrer\">byte string search function</a> in IDAPython and replacing non-instruction values with \"????\" for IDA to look only for the instructions. Unfortunately, it found no <strong>malloc()</strong> function. I suspect the code relies exclusively on the memory allocation functions provided by the RTOS rather than the ones from the library. I can hardly believe they would be very different, since both rely on linked list. Anyway, that's where I am with this. I may try to fuzzy the byte string to find code sections that resemble the <strong>malloc()</strong> function from the library.</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "binary-analysis",
+        "memory",
+        "static-analysis",
+        "embedded"
+    ],
+    "user": "InfectedPacket",
+    "time": "Jun 17, 2020 at 9:54",
+    "comments": [
+        {
+            "user": "Guntram Blohm",
+            "text": "<span class=\"comment-copy\">Can't you add a COFF header to the firmware? From reading the <a href=\"http://www.delorie.com/djgpp/doc/coff/\" rel=\"nofollow noreferrer\">spec</a>, it seems that a COFF header that has only one section starting at address 0, no optional header, no relocs, no line numbers, no symbol table, no string table should be easy to produce and prepend to your raw binary.</span>",
+            "time": null
+        },
+        {
+            "user": "MrSynAckSter",
+            "text": "<span class=\"comment-copy\">You could try to study malloc implementations on AVR, that's basically Harvard ARCH.</span>",
+            "time": null
+        },
+        {
+            "user": "InfectedPacket",
+            "text": "<span class=\"comment-copy\">When the COFF file is being made into the firmware, most of the information about symbols is removed. Interrupt services routines and vectors are also added. The interrupt vector is added at 0x0, followed by what I presume are the ISR. In any case, adding a COFF header doesn't simplify disassembly. I'll check for the AVR.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'd approach this problem as follows:</p>\n<ol>\n<li><p>Check for logging strings. Probably you'll find there something related to allocations which will solve the problem.</p></li>\n<li><p>Find all functions with 1 argument (size for <code>malloc()</code> and pointer for <code>free()</code>).</p></li>\n<li><p>Track results of these functions. <code>malloc()</code> result is usually checked against <code>NULL</code> after use and rarely used in math operations. In addition result of <code>malloc()</code> function is used in store operations or <code>memcpy()</code>.</p></li>\n<li><p>Free function argument is not used after calling it.</p></li>\n<li><p><code>malloc()</code> and <code>free()</code> should be located in close addresses.</p></li>\n</ol>\n<p>These heuristics should be enough to narrow down the number of possible candidates to observable. </p>\n<p>Good luck.</p>\n</div>",
+            "votes": "3",
+            "user": "perror",
+            "time": "Nov 3, 2015 at 8:35",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>From the TMS320C55x <a href=\"http://www.ti.com/lit/ug/spru280i/spru280i.pdf\" rel=\"nofollow noreferrer\">documentation</a> it's clear that the chip supports multiple memory modes. Therefore, a function such as <em>malloc</em> could have different definitions for each one. I think that the smartest thing to do is to identify the memory mode and figure out how a <em>malloc</em> can be implemented in that mode.</p>\n<p>Given that your binary file is fully stripped and most functions seem to be inlined, all you can do is pattern matching. If you want to be smart, figure out a way to build a <strong>CFG</strong> and try to identify where a <em>malloc</em> could be necessary and check if your target pattern is redundant enough.</p>\n<p>Hope this helps.</p>\n</div>",
+            "votes": "0",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

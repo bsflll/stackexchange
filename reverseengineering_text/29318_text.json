@@ -1,0 +1,24 @@
+{
+    "title": "BaseHTTPRequestHandler + ThreadingMixin = unclosed port",
+    "link": "https://reverseengineering.stackexchange.com/questions/29318/basehttprequesthandler-threadingmixin-unclosed-port",
+    "content": "In developing a RESTful API for IDA >= 7.5 [https://github.com/sfinktah/idarest75], I have observed that a standard threaded webserver does not release it's socket when IDA terminates, unless it is run as a plugin. This behaviour may extend to all threading, I have not tested.\nIf the code below is simply loaded as a script (or pasted into the CLI) it will actually cause IDA to invisibly hang when IDA is exited, i.e. IDA appears to close but can actually found to be still running in Task Explorer -> Details.\nIs there perhaps an IDA-specific <pre><code>atexit</code></pre> analog, as the builtin Python version certainly does not help.\nWhilst the finished project is capable of running either as a plugin or a stand-alone script, the lack of any way to unload a python plugin requires keeping a reference to the class instance in order to call <pre><code>.term()</code></pre>, which is contra-indicated if one actually expects destruction to occur correctly.\nSample code (paste, exit IDA, observe running tasks).\n<pre><code>def ida_issue():\n    from http.server import BaseHTTPRequestHandler, HTTPServer\n    from socketserver import ThreadingMixIn\n    import threading\n\n    class Handler(BaseHTTPRequestHandler):\n        def do_GET(self):\n            self.send_response(200)\n            self.end_headers()\n\n    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):\n        allow_reuse_address = True\n\n    class Worker(threading.Thread):\n        def __init__(self, host, port):\n            threading.Thread.__init__(self)\n            self.httpd = ThreadedHTTPServer((host, port), Handler)\n            self.host = host\n            self.port = port\n\n        def run(self):\n            self.httpd.serve_forever()\n\n        def stop(self):\n            self.httpd.shutdown()\n            self.httpd.server_close()\n\n    class Master:\n        def __init__(self):\n            self.worker = Worker('127.0.0.1', 28612)\n            self.worker.start()\n\n    def main():\n        master = Master()\n        return master\n\n    return main()\n\nserver = ida_issue()\n</code></pre>\nHow to re/unload [co-operative] IDAPython plugins.\n<pre><code>class idarest_plugin_t(IdaRestConfiguration, ida_idaapi.plugin_t):\n    flags = ida_idaapi.PLUGIN_UNL\n\n    def run(self, *args):\n        pass\n\ndef reload_idarest():\n    l = ida_loader.load_plugin(sys.modules['__plugins__idarest_plugin'].__file__)\n    ida_load.run_plugin(l, 0)\n    # pip install exectools (or ida_idaapi.require would probably suffice)\n    unload('idarest_plugin')\n    # reload plugin (or not)\n    l = ida_loader.load_plugin(sys.modules['__plugins__idarest_plugin'].__file__)\n</code></pre>\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "65",
+    "tags": [
+        "idapython"
+    ],
+    "user": "Orwellophile",
+    "time": "Sep 24, 2021 at 16:31",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "Some research into the <pre><code>atexit</code></pre> module provided a simple solution.  Create a plugin purely to trigger the <pre><code>atexit</code></pre> handlers when it receives a <pre><code>term</code></pre>.\n<pre><code>import atexit\nimport idc\nimport ida_idaapi\n\nclass ida_atexit(ida_idaapi.plugin_t):\n    flags = ida_idaapi.PLUGIN_UNL\n    comment = \"atexit\"\n    help = \"triggers atexit._run_exitfuncs() when ida halts plugins\"\n    wanted_name = \"\"\n    wanted_hotkey = \"\"\n\n    def init(self):\n        super(ida_atexit, self).__init__()\n        return ida_idaapi.PLUGIN_KEEP\n\n    def run(*args):\n        pass\n\n    def term(self):\n        idc.msg('[ida_atexit::term] calling atexit._run_exitfuncs()\n')\n        atexit._run_exitfuncs()\n\ndef PLUGIN_ENTRY():\n    globals()['instance'] = ida_atexit()\n    return globals()['instance']\n</code></pre>\n",
+            "votes": "2",
+            "user": "Orwellophile",
+            "time": "Oct 4, 2021 at 7:15",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

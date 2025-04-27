@@ -1,0 +1,40 @@
+{
+    "title": "How to get address or symbol of the usage of a constant located in rodata?",
+    "link": "https://reverseengineering.stackexchange.com/questions/25541/how-to-get-address-or-symbol-of-the-usage-of-a-constant-located-in-rodata",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I have an elf executable. I found a string (awesome string) in my <code>.rodata</code> section:</p>\n<pre><code>$ mb-readelf -p 10 a.out\n\nString dump of section '.rodata':\n  [     0]  Hello world\n...\n  [  ab12]  awesome string\n...\n</code></pre>\n<p>Here are the sections:</p>\n<pre><code>$ readelf -S a.out\nThere are 27 section headers, starting at offset 0x10150:\n\nSection Headers:\n  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al\n  [ 0]                   NULL            00000000 000000 000000 00      0   0  0\n...\n  [10] .rodata           PROGBITS        00004fc8 00a030 001394 00   A  0   0  4\n...\n</code></pre>\n<p>So the address of awesome string is <code>00004fc8 + ab12 = 14ada</code></p>\n<p>I want to know which functions are using this awesome string. How can I know who references the address 14ada?</p>\n</div>",
+    "votes": "0",
+    "answers": 2,
+    "views": "3k",
+    "tags": [
+        "objdump",
+        "address",
+        "section"
+    ],
+    "user": "betontalpfa",
+    "time": "Jul 25, 2020 at 7:54",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "<span class=\"comment-copy\">using what ? your code? / a decent disassembler /  how are you looking most decent disassembler will cross reference the string</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<h1>It cannot be solved in all cases.</h1>\n<p>Some string (start) is not referenced in the whole <code>text</code> at all, even if you turned on all optimizations. Let's see the following example.</p>\n<pre><code>#define _FILE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__\n</code></pre>\n<p><code>_FILE</code> will point the filename instead of the full path, however, the compiled <code>elf</code> will contain the whole <code>__FILE__</code> string (the whole path) (See more details <a href=\"https://stackoverflow.com/q/31050113/2506522\">here</a>.)</p>\n<p>In this case, <code>.rodata</code> will be seen like this:</p>\n<pre><code>$ readelf -p 10 a.out\n\nString dump of section '.rodata':\n  [     0]  Hello world\n...\n  [  ab12]  /your/build/folder/awesome.c\n...\n</code></pre>\n<p>While the <code>text</code> will <em>not</em> refer the <code>0xab12</code> anywhere, because <code>_FILE </code> points to <code>0xab25</code> (the start of the <code>awesome.c</code>) and the <code>text</code> will refer to this <code>0xab25</code> adress.</p>\n<p>A workaround can be that checking all offsets of a given string.</p>\n<hr/>\n<h1>Solution</h1>\n<p>The following solution works with MicroBlaze GCC, but the solution approach is general, so it can be applied to all architecture.</p>\n<p>Find a known string in <code>rodata</code>. (A string with known usage. For example print a Hello world message at the beginning of the main.) Check out the compiled assembly. MicroBlaze GCC uses the strings in <code>printf</code> as following:</p>\n<pre><code>00000100 &lt;main&gt;:\n...\n     1ec:       b0000000        imm     0\n     1f0:       30a09fc8        addik   r5, r0, -24632  // This is the HELLO WORLD\n     1f4:       31000004        addik   r8, r0, 4\n     1f8:       11330000        addk    r9, r19, r0\n     1fc:       b9f45a58        brlid   r15, 23128      // 6954 &lt;printf&gt;\n</code></pre>\n<p>So this compiler refers the addresses as 16 bit signed values.</p>\n<p>To get the referring code line, convert the <code>0xfada</code> (the absolute address of the <code>awesome string</code>) to 16 bit signed integer <code>-1318</code> and search (grep) for this value in the disassembled <code>text</code>.</p>\n</div>",
+            "votes": "1",
+            "user": "betontalpfa",
+            "time": "Jul 25, 2020 at 7:52",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As i commented a decent disassembler will already do this for you</p>\n<p>here  is sample output for a random awesome string  in a random binary using radare2</p>\n<pre><code>radare2 on cdb.exe from windbg in win7 x86 \n\ngrepping  for some awesome string \n[0x00416870]&gt; iz~deb\n006 0x00018280 0x00419080  12  26 (.data) utf16le debugger.chm  &lt;&lt;&lt;&lt; an awesome string \n\nprinting crossrefs\n\n[0x00416870]&gt; axg @0x419080\n- 0x00419080\n  - 0x00413cfe fcn 0x00413c6c fcn.00413c6c\n  - 0x00413c6c fcn 0x00413c6c fcn.00413c6c\n    - 0x00416755 ???\n  - 0x00413d17 fcn 0x00413c6c fcn.00413c6c\n  - 0x00413d2b fcn 0x00413c6c fcn.00413c6c\n  - 0x00413d38 fcn 0x00413c6c fcn.00413c6c\n \n looking at the listed cross refs\n[0x00416870]&gt; pd1@0x413cfe\n|           0x00413cfe      6880904100     push str.debugger.chm       ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]&gt; pd1@0x413d17\n|           0x00413d17      6880904100     push str.debugger.chm       ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]&gt; pd1@0x413d2b\n|           0x00413d2b      66a380904100   mov word str.debugger.chm, ax ; [0x419080:2]=100 ; u\"debugger.chm\"\n[0x00416870]&gt; pd1@0x413d38\n|           0x00413d38      b980904100     mov ecx, str.debugger.chm   ; 0x419080 ; u\"debugger.chm\"\n[0x00416870]&gt;\n</code></pre>\n</div>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Jul 24, 2020 at 17:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

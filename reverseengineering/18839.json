@@ -1,0 +1,57 @@
+{
+    "title": "How to Modify this Branch in ARM64?",
+    "link": "https://reverseengineering.stackexchange.com/questions/18839/how-to-modify-this-branch-in-arm64",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I try to modify the branch of this disassembly in a binary:</p>\n<pre><code>SUB             SP, SP, #0x60\nSTP             X26, X25, [SP,#0x50+var_40]\nSTP             X24, X23, [SP,#0x50+var_30]\nSTP             X22, X21, [SP,#0x50+var_20]\nSTP             X20, X19, [SP,#0x50+var_10]\nSTP             X29, X30, [SP,#0x50+var_s0]\nADD             X29, SP, #0x50\nMOV             X20, X0\nMOV             X0, X2\nBL              _objc_retain\nMOV             X19, X0\nADRP            X8, #selRef_shouldCheckForUpdate@PAGE\nLDR             X1, [X8,#selRef_shouldCheckForUpdate@PAGEOFF] ; char *\nMOV             X0, X20 ; void *\nBL              _objc_msgSend\nCBZ             W0, loc_ADCC\n</code></pre>\n<p>Basically, the binary are checking for update and will prompt if it should, and for the sake of learning, I wanted to achieve on how to:</p>\n<ol>\n<li><p>Always go to loc_ADCC and;</p></li>\n<li><p>Always ignore loc_ADCC (Skip from going to loc_ADCC)</p></li>\n</ol>\n<p>This ARM64 really got me confused, I could however understand it in 32bit, but not in 64bit. It's like a new world. You could see the screenshot <a href=\"https://i.sstatic.net/jmibr.jpg\" rel=\"nofollow noreferrer\">here</a> for a better visualization.</p>\n<p>Thanks in advance!</p>\n</div>",
+    "votes": "2",
+    "answers": 1,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "arm"
+    ],
+    "user": "Gregor Isack",
+    "time": "Jul 20, 2018 at 4:29",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">what does \"Always ignore loc_ADCC\" mean?</span>",
+            "time": null
+        },
+        {
+            "user": "Elian Kamal",
+            "text": "<span class=\"comment-copy\">@IgorSkochinsky I suppose it implies \"always skip branching to loc_ADCC\" (and the compare before it I think)</span>",
+            "time": null
+        },
+        {
+            "user": "Gregor Isack",
+            "text": "<span class=\"comment-copy\">You're right @ElianKamal</span>",
+            "time": null
+        },
+        {
+            "user": "w s",
+            "text": "<span class=\"comment-copy\">Just for reference: <a href=\"http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0489c/Cjaghefc.html\" rel=\"nofollow noreferrer\">infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0489c/…</a> - CBZ and CBNZ definition. Just NOP it out (put NOP(s) of the same size instead of it) to avoid jump.</span>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">by the way, thank you for putting disassembly as text and not just a screenshot! I hope those who downvoted the question leave a comment why they did it so it can be improved.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>So, there are these  options:</p>\n<ol>\n<li>to always take the branch, you need to convert <code>CBZ</code> (compare and branch if zero) to simple <code>B</code> (branch always). Let's have a look at the encodings of both:</li>\n</ol>\n<p><a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/b\" rel=\"noreferrer\">B:</a>\n<code>\n    31 30  29  28  27  26   25 .. 0\n     0  0  0   1   0   1    imm26\n</code></p>\n<p><a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/cbz\" rel=\"noreferrer\">CBZ:</a></p>\n<p><code>\n31  30  29  28  27  26  25  24  23..5 4..0\nsf  0   1   1   0   1   0   0   imm19 Rt\n</code></p>\n<p>To convert <code>CBZ</code> to <code>B</code>, you need to patch the opcode part (bits 31..26) and move the <code>imm19</code> field (branch offset) to the <code>imm26</code> field of the <code>B</code> opcode (bits 25..0). Since both opcodes interpret the offset in the same way (multiply by 4 and add to PC), you don't need to do any conversion besides sign extension. </p>\n<p>For example, let's take this instruction from a random sample I had:</p>\n<pre><code>05088 E0 01 00 34  CBZ W0, loc_50C4\n</code></pre>\n<p>Opcode as a 32-bit value: <code>0x340001E0</code> (AArch64 always uses little-endian instructions)</p>\n<p>In binary: <code>00110100000000000000000111100000</code>.</p>\n<p>Split by fields:</p>\n<p><code>\n0  0110100 0000000000000001111 00000\nsf op     imm19               Rt<br/>\n</code></p>\n<p>Let's assemble the <code>B</code> opcode (sign-extending imm19 to 26 bits):</p>\n<p><code>\n000101  00000000000000000000001111\nop      imm26\n</code></p>\n<p>Or, as hex: 0x1400000F</p>\n<p>After patching:</p>\n<pre><code>5088 0F 00 00 14                 B               loc_50C4\n</code></pre>\n<ol start=\"2\">\n<li>To skip the branch, you can patch <code>CBZ</code> to a <code>NOP</code> (no operation). The <code>NOP</code> encoding for ARM64 is 0xD503201F or <a href=\"https://developer.arm.com/products/architecture/a-profile/docs/ddi0596/latest/a64-base-instructions-alphabetic-order/nop\" rel=\"noreferrer\"><code>1F 20 03 D5</code></a></li>\n</ol>\n</div>",
+            "votes": "7",
+            "user": "Igor Skochinsky",
+            "time": "Jul 19, 2018 at 8:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Gregor Isack",
+                    "text": "<span class=\"comment-copy\">Thank you for the very detailed answer! It helps a lot! If you don't mind, I would like to read more about the explanation you did in 'Split by fields and assemble' section, could you point me a good learning head-start (basically how you split it and sign-extending)? :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,51 @@
+{
+    "title": "Invalid INDX entries for $I30 on NTFS harddisk",
+    "link": "https://reverseengineering.stackexchange.com/questions/15860/invalid-indx-entries-for-i30-on-ntfs-harddisk",
+    "content": "While parsing my NTFS formatted hard disk, I found some invalid entries of INDX while Windows is still able to list all the root directory contents!\nThe structure of the Index Record in NTFS 3.1 is clear (NTFS doc):\n<pre><code>Offset      Description\n-------------------------------------\n0x00        MFT Reference of the file\n0x08        Size of the index entry\n0x0A        Offset to the filename\n...\n0x52        Filename\n...\n</code></pre>\nHowever, I found some entries where their size is faulty as well as their MFT Reference (which is a bunch of zeros)!\nI enclose a screenshot that shows a part of INDX along side with their text representations where each line is of width <pre><code>0x20</code></pre>. I highlighted the faulty part.\n\nThe figure shows that entries were parsed rationally until the last correct entry at <pre><code>0x0628</code></pre>:\n\nMFT Reference (8 bytes): <pre><code>66 30 00 00 00 00 01 00</code></pre>\nSize of entry (2 bytes): <pre><code>70 00</code></pre>\nSo the entry ends at <pre><code>0x0697</code></pre>.\n\nThereafter, things got weird! Entries at <pre><code>0x0698</code></pre>:\n\nMFT Reference (8 bytes): <pre><code>00 00 00 00 00 00 00 00</code></pre> Seems invalid\nSize of entry (2 bytes): <pre><code>10 00</code></pre> Of course invalid because the size is less than the entry structure minimum size that includes the filename at <pre><code>0x52</code></pre> for instance.\n\nFor me, it seems that \"Buziol Games\" was a deleted folder on the root directory of the harddisk, I am not sure. Anyway, Windows explorer is not facing troubles on listing the contents.\nDo anybody understand how does it work? How do Windows continue parsing?\nEDIT: In addition, please find the hex dump as a pure text on pastebin\n",
+    "votes": "2",
+    "answers": 1,
+    "views": "486",
+    "tags": [
+        "windows",
+        "hex"
+    ],
+    "user": "Mohamad-Jaafar NEHME",
+    "time": "Jul 21, 2017 at 20:19",
+    "comments": [
+        {
+            "user": "blabb",
+            "text": "what have you highlighted the INDEX_RECORD_ENTRY should be preceded by INDEX_HEADER which should have a magic signature INDX  i don't see a INDX magic sign in your screen shot ?   8200a000  49 4e 44 58    offset to index entries @ 18 8200a010  0a 00 00 00 00 00 00 00-28 00 00 00  ie 0x28\n",
+            "time": null
+        },
+        {
+            "user": "Mohamad-Jaafar NEHME",
+            "text": "@blabb, indeed the INDEX_HEADER is at address zero. I already parsed several INDEX_RECORD_ENTRY (ies) without any problem. My question is about the invalid INDEX_RECORD_ENTRY at address 0x0698. Anyway, the whole INDX (including INDEX_HEADER) is found at the pastebin attached\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "if that was the last entry with an mft reference of 0 then size would be 10 is correct iirc it is mentioned in the pdf you linked somewhere  you cna also check this thread woodmann.com/forum/showthread.php?15188-NTFS-MFT-Internals/…\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "from your pastebin the size of index entries is 690 it matches with 620+70 =   690 so any reason to  parse further ? Offset(h) 00 01 02 03  0000001C  90 06 00 00  ....\n",
+            "time": null
+        },
+        {
+            "user": "blabb",
+            "text": "offset 58+52 $Attrdef  0xc0+52 $BadCluster 0x128+52 $bitmap 0x188+52 $boot  0x1e8+52 $extend 0x248+52 $logfile  0x2b0+52 $Mft  0x310+53 $MftMirr 0x378+52 $Secure  0x3d8+52 $upcase 0x438+52 $Volume  0x498+52 . (dot directory)  0x4f0+52 Ahmad 0x550+52 AutoExec.bat  5c0+52 boot.ini  and buziol games\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "The INDEX_RECORD_ENTRY should be preceded by INDEX_HEADER with the magic signature INDX \nwithout the header deciphering the INDEX_RECORD_ENTRIES is difficult as shown in your screen shot \nthe following observations are based on the pastebin dump you edited in later\ni converted the hex to binary with a bat file thus\n<pre><code>rem make a copy \ncopy %1 %2\nrem compare both\nfc %1 %2\nrem dump the first line for visualizing\nhead -1 %2\nrem strip the address,colon and space \nrem this is to make it compatible with xxd input\nsed s/.*:\\x20//g %2 > %3\nrem dump the ripped hex file first line \nhead -1 %3\nrem convert hex to binary \nxxd -r -p %3 > %4\nrem check the size and compare with word count\nrem both should be same \nls -l %4\nwc -w %3\n</code></pre>\nexecuting the bat file on the downloaded pastebin dump\n<pre><code>C:\\indx>converthextobin.bat indx_$i30_dump.txt indxhex.txt indxstripped.txt indxbin.bin\n\nC:\\indx>rem make a copy\nC:\\indx>copy indx_$i30_dump.txt indxhex.txt\n        1 file(s) copied.\n\nC:\\indx>rem compare both\nC:\\indx>fc indx_$i30_dump.txt indxhex.txt\nComparing files indx_$i30_dump.txt and INDXHEX.TXT\nFC: no differences encountered\n\nC:\\indx>rem dump the first line for visualizing\nC:\\indx>head -1 indxhex.txt\n0000: 49 4E 44 58 28 00 09 00 D2 92 87 08 00 00 00 00\n\nC:\\indx>rem strip the address,colon and space\nC:\\indx>rem this is to make it compatible with xxd input\nC:\\indx>sed s/.*:\\x20//g indxhex.txt  1>indxstripped.txt\n\nC:\\indx>rem dump the ripped hex file first line\nC:\\indx>head -1 indxstripped.txt\n49 4E 44 58 28 00 09 00 D2 92 87 08 00 00 00 00\n\nC:\\indx>rem convert hex to binary\nC:\\indx>xxd -r -p indxstripped.txt  1>indxbin.bin\n\nC:\\indx>rem check the size and compare with word count\nC:\\indx>rem both should be same\nC:\\indx>ls -l indxbin.bin\n-rw-rw-rw-  1 HP 0 6656 2017-07-22 15:20 indxbin.bin\nC:\\indx>wc -w indxstripped.txt\n6656 indxstripped.txt\n</code></pre>\nnow that we have a binary form we can start exploring \nlets dump the INDEX_HEADER and verify \n<pre><code>@echo off\nxxd -s00 -g4 -l4 indxbin.bin &^\nxxd -s04 -g2 -l2 indxbin.bin &^\nxxd -s06 -g2 -l2 indxbin.bin &^\nxxd -s08 -g8 -l8 indxbin.bin &^\nxxd -s16 -g8 -l8 indxbin.bin &^\nxxd -s24 -g4 -l4 indxbin.bin &^\nxxd -s28 -g4 -l4 indxbin.bin &^\nxxd -s32 -g4 -l4 indxbin.bin &^\nxxd -s36 -g1 -l1 indxbin.bin &^\nxxd -s37 -g3 -l3 indxbin.bin &^\nxxd -s40 -g2 -l2 indxbin.bin\n</code></pre>\nexecuted we get the INDEX_HEADER\n<pre><code>C:\\indx>dumpindxheader.bat\n0000000: 494e4458                             INDX\n0000004: 2800                                     (.\n0000006: 0900                                     ..\n0000000: 494e445828000900                   INDX(...\n0000010: 0000000000000000                   ........\n0000018: 40000000                             @...\n000001c: 90060000                             ....\n0000020: e80f0000                             ....\n0000024: 00\n0000025: 000000                                 ...\n0000028: 1e02                                     ..\n</code></pre>\nwe can see the INDEX_RECORD_ENTRY relative to HEADER_OFFSET is 0x40 (i haven't tried to control the Endiannes in xxd output)   \nso the INDEX_RECORD_ENTRY (terminology may be incorrect ) starts at 0x40+0x18 = 0x58\nit is a variable sized structure padded appropriately to boundaries    \ndumping the record entry\n<pre><code>@echo off\nxxd -s88 -g8 -l8 indxbin.bin &^\nxxd -s96 -g2 -l2 indxbin.bin &^\nxxd -s98 -g2 -l2 indxbin.bin &^\nxxd -s100 -g2 -l2 indxbin.bin &^\nxxd -s102 -g2 -l2 indxbin.bin &^\nxxd -c8 -s104 -g8 -l64 indxbin.bin &^\nxxd -s168 -g1 -l1 indxbin.bin &^\nxxd -s169 -g1 -l1 indxbin.bin &^\nxxd -s170 -g1 -l22 indxbin.bin\n</code></pre>\nexecuting the bat file \n<pre><code>C:\\indx>dumpindxrecordentry.bat\n0000058: 0400000000000400                   ........\n0000060: 6800                                     h.\n0000062: 5200                                     R.\n0000064: 0000                                     ..\n0000066: 0000                                     ..\n0000068: 0500000000000500  ........\n0000070: d07fa49ac58cd201  ........\n0000078: d07fa49ac58cd201  ........\n0000080: d07fa49ac58cd201  ........\n0000088: d07fa49ac58cd201  ........\n0000090: 0090000000000000  ........\n0000098: a08c000000000000  ........\n00000a0: 0600000000000000  ........\n00000a8: 08                                               .\n00000a9: 03                                               .\n00000aa: 24 00 41 00 74 00 74 00 72 00 44 00 65 00 66 00  $.A.t.t.r.D.e.f.\n00000ba: 00 00 00 00 00 00                                ......\n</code></pre>\nthe size 68 is relative to self so the next entry would be at \n0x58+0x68 == 0xc0 \nthe offset to file name is relative to self so file name would be at \n0x58+0x52 = 0xaa as dumped \nso you can now go ahead by dumping the next entry by providing the appropriate seek address to xxd viz 0xc0 or 0n192 \nthe last entry is at 0x628 whose size is 0x70 so it ends at 0x698 \nthe very last entry is 0x10 bytes long with an mft reference 0\n\nquoted from the pdf linked in your original post\n  last entry has a size of 0x10 (just large enough for the flags (and a\n  mft ref of zero)\n\n<pre><code>Offset(h) 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F\n\n00000690                          00 00 00 00 00 00 00 00          ........\n000006A0  10 00 00 00 02 00 00 00                          ........\n</code></pre>\n",
+            "votes": "2",
+            "user": "blabb",
+            "time": "Jul 22, 2017 at 11:11",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}

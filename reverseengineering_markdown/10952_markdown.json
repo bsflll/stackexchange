@@ -1,0 +1,39 @@
+{
+  "title": "How the dynamic linker determines which routine to call on Linux?",
+  "link": "https://reverseengineering.stackexchange.com/questions/10952/how-the-dynamic-linker-determines-which-routine-to-call-on-linux",
+  "content": "I have a question about dynamic linking on Linux. Consider the following disassembly of an ARM binary.\n\n```\n8300 <printf@plt-0x40>:\n    ....\n8320:   e28fc600    add ip, pc, #0, 12\n8324:   e28cca08    add ip, ip, #8, 20  ; 0x8000\n8328:   e5bcf344    ldr pc, [ip, #836]! ; 0x344\n  ....\n83fc <main>:\n  ....\n8424:   ebffffbd   bl  8320 <_init+0x2c>\n\n```\nthe main() function calls printf() at 8424: bl 8320. Where 8320 is an address in the .plt shown above. Now, the code in .plt makes call to dynamic linker to invoke printf() routine. \n\nMy question is how the dynamic linker will be able to say that it is a call to printf()?\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "elf",
+    "dynamic-linking"
+  ],
+  "user": "user13659",
+  "time": "Sep 25, 2015 at 10:56",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "The initial function being jumped to is the PLT0 stub which calls the glibc's _dl_runtime_resolve via pointer in GOT[2] (pre-filled by the dynamic loader):\n\n```\n.plt:00008530        STR             LR, [SP,#-4]!\n.plt:00008534        LDR             LR, =(_GLOBAL_OFFSET_TABLE_ - 0x8540)\n.plt:00008538        ADD             LR, PC, LR ; _GLOBAL_OFFSET_TABLE_\n.plt:0000853C        LDR             PC, [LR,#8]!\n\n```\nRelevant parts from the source:\n\n```\n    @ we get called with\n    @       stack[0] contains the return address from this call\n    @       ip contains &GOT[n+3] (pointer to function)\n    @       lr points to &GOT[2]\n    [...]\n    @ prepare to call _dl_fixup()\n    @ change &GOT[n+3] into 8*n        NOTE: reloc are 8 bytes each\n   sub     r1, ip, lr\n   sub     r1, r1, #4\n   add     r1, r1, r1\n\n   @ call fixup routine\n   bl      _dl_fixup\n\n```\nSo, glibc knows which function to resolve from the fact that the GOT pointer is in ip (R12). This way it can convert the address into the relocation table offet, and then dl_fixup can look up the relevant symbol in the symbol table and resolve it. You can see the source of dl_fixup in dl-runtime.c\n\nAdditional reading:\n\n",
+      "votes": "4",
+      "user": "Igor Skochinsky",
+      "time": "Sep 27, 2021 at 22:20",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "This is done using the standard relocation methods which have been in ELF since long before the invention of the plt (procedure linking table).\n\nLong ago (for some definition of long), external functions were called directly from within code. Which means, if your program called printf from 1000 different places, each of these 1000 places had to be adjusted to the new dynamic location of printf everytime the program was started. Each of these 1000 places was added to the relocation table, and starting a program included walking the relocation table and adjusting every position referenced in it. Needless to say, this made starting programs take much more time, especially when the number of dynamic libraries used in programs increased. \n\nThe plt was invented to improve this - instead of producing a call to  printf directly, the program got a new plt section. Each call to printf would be converted to a call to printf@plt - which could be done at link time, so it wouldn't affect program loading - and printf@plt did nothing but jump to printf. This still needs a relocation entry for printf@plt, but it's much faster to do this single relocation at load time than many of them. And it doesn't affect execution much, because unconditional jumps can be handled by the processor pipeline quite efficiently.\n\nSo what happens in your case is: the printf@plt does not make a call to the dynamic linker. The printf@plt makes a jump to a static address, and the dynamic linker adjusts the target of this static address when it loads the program. It uses the relocation table to find out where to adjust things, and which target address to adjust them to.\n\nIn your case, the jump is implemented by taking the original pc, adding 12, adding 8000, then doing an indirect jump (ldr pc, ... instead of b). I'd assume that the 12 and the 8000 get adjusted to the load address of the .so that's loaded (libc.so), and libc.so contains a jump at offset 0x344 to the real printf function. (However, i might be wrong here, i'd have to test on a real system, which i can't do conveniently right now)\n\n",
+      "votes": "2",
+      "user": "Guntram Blohm",
+      "time": "Sep 25, 2015 at 8:19",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Vasant K",
+          "text": "Thanks for your lucid explanation about .plt, and relocation. This helped my understanding a lot. But when you say \"dynamic linker adjusts the target of this static address when it loads the program\", how does the dynamic linker knows it is printf routine not any other to adjust the address?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

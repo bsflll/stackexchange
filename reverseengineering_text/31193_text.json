@@ -1,0 +1,50 @@
+{
+    "title": "Figuring out a (possibly 16-bit) CRC algorithm",
+    "link": "https://reverseengineering.stackexchange.com/questions/31193/figuring-out-a-possibly-16-bit-crc-algorithm",
+    "content": "So, I wanted repurpose some old boarding gate scanners and I'm trying to make use of their commands.\nNow, I have a dump from an actual boarding gate PC and I've noticed that the commands only work if I send them as they are on the dump. If I change even a single byte, the scanner rejects the command. After some Googling, I came across the term 'CRC' and now I understand why that is the case.\nI played around with some CRC calculators, but the scanner seems to have its own algorithm and I have trouble figuring it out.\nFor instance, the command that displays a message on the scanner's display is 'AD;MG#P#ATESTMESSAGE'.\nHere's an example from the dump:\n<pre><code>02 30 80 41  44 3B 4D 47   23 50 23 41  4E 4F 54 20  .0.AD;MG#P#ANOT\n49 4E 20 55  53 45 0D 42   0D FF 03 3A  12           IN USE.B...:.\n</code></pre>\nI noticed that the same exact command is sent in one more way that's slightly different:\n<pre><code>02 31 80 41  44 3B 4D 47   23 50 23 41  4E 4F 54 20  .1.AD;MG#P#ANOT\n49 4E 20 55  53 45 0D 42   0D FF 03 3B  92           IN USE.B...;.\n</code></pre>\nAlthough the message is the exact same, the difference in the command header seems to have an effect on the last two bytes.\nAll command headers either start with '02 30 80' or '02 31 80' depending on the response header of the scanner. Kind of like 'ping-pong' (I couldn't think of a better way to describe this).\nI have tried decompiling the scanner's firmware but I can't seem to locate the method where it checks for the CRC.\nHere's a few more command pairs in case they help.\nAny help is greatly appreciated!\nP.S: I'm a completely new to all this, in case you couldn't tell.\n",
+    "votes": "5",
+    "answers": 1,
+    "views": "156",
+    "tags": [
+        "crc"
+    ],
+    "user": "Gavouli",
+    "time": "Nov 28, 2022 at 15:28",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "These are simple XOR checksums.  Here's how they work using a short message as an example:\n<pre><code>STX |<------------- data -------------->|s1 |s2 \n\n 02  30  80  41  44  3b  43  57  ff  03  66  e4 \n</code></pre>\nThe values <pre><code>s1</code></pre> and <pre><code>s2</code></pre> are calculated separately over only the data portion; the start of text (STX) character is not used for the check bytes.  Here's pseudo-code with all quantities being 8-bit values.\n<pre><code>s1 = 0\ns2 = 0\nfor (each b in data)\n    s1 = s1 ^ b\n    s2 = ror(s2) ^ b\n</code></pre>\nThe <pre><code>ror</code></pre> here stands for \"rotate right\" which rotates the 8-bit quantity to the right by one bit:\n<pre><code>         +---+---+---+---+---+---+---+---+\nBefore:  | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |\n         +---+---+---+---+---+---+---+---+\n\n         +---+---+---+---+---+---+---+---+\nAfter:   | 0 | 7 | 6 | 5 | 4 | 3 | 2 | 1 |\n         +---+---+---+---+---+---+---+---+\n</code></pre>\nHow I figured it out\nI noticed that, ignoring the last two bytes, each pair of messages differed by a single bit, b0 (the low bit).  The <pre><code>s1</code></pre> byte also differed by only the low bit, so I guessed something like a sum or XOR.  Doing an XOR over all bytes except the first (<pre><code>02</code></pre>) and the last (<pre><code>s2</code></pre>) yielded 0 for all samples, so that was <pre><code>s1</code></pre> figured out.\nFor <pre><code>s2</code></pre>, the pairs of message also differed in only a single bit, but the position was different for each pair, so I assumed it was a linear operation and I guessed that there was some rotation happening that would shift the position of the changed bit depending on the length of the message.  After a few guesses, I hit upon the algorithm described above.\nAlso the changing bit <pre><code>30</code></pre> or <pre><code>31</code></pre> was probably a \"toggle bit.\"  Many serial protocols employ one.  The idea is that for each message sent, the bit changes so that way it's possible to tell whether the message is a duplicate or a new message.  Any retransmitted message would leave the bit unchanged; only new messages change the state.\nIn Java\nI don't much like Java, but if that's what you're using, this is an implementation that works.\n<pre><code>public class MyClass {\n    public static byte ror(byte c) {\n        return (byte)(((c >> 1) & 0x7f) | (c << 7));\n    }\n    public static byte[] getXOR(byte[] data) {\n        int s1 = 0;\n        int s2 = 0;\n        for (byte b : data) {\n            s1 = (s1 ^ b);\n            s2 = ror((byte)s2) ^ b;\n        }\n        return new byte[]{(byte)(s1), (byte)(s2)};\n    }\n    \n    public static void main(String args[]) {\n      byte[] data = new byte[]{0x31,(byte)(0x80),0x41,0x44,0x3B,0x43,0x57,(byte)(0xFF),0x03};\n      byte[] x = getXOR(data);\n\n      System.out.println(String.format(\"%x %x\", x[0], x[1]));\n    }\n}\n</code></pre>\n",
+            "votes": "4",
+            "user": "Edward",
+            "time": "Dec 1, 2022 at 17:53",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Gavouli",
+                    "text": "<span class=\"comment-copy\">Thank you so much for your response, Edward! I just made <a href=\"https://pastebin.com/6bD5SS7t\" rel=\"nofollow noreferrer\">this quick test function in Java</a>. I have been using data from the dump to test it and the s1 byte seems to always match the one in the dump. However, I'm not having that much luck with the <b>s2</b> byte. Any ideas as to what I'm doing wrong?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">Java uses 32-bit numbers, not 8-bit so your rotation is rotating through 32 bits instead of 8.  You will have to write your own function to do that.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Gavouli",
+                    "text": "<span class=\"comment-copy\">That would be a 'byte' in Java. <a href=\"https://pastebin.com/T3XZRYF6\" rel=\"nofollow noreferrer\">I tried shifting as a byte</a> but s2 still seems to be incorrect. Any more ideas?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Edward",
+                    "text": "<span class=\"comment-copy\">Java treats all numbers as signed, which is a design flaw IMHO.  You might be able to use <code>&gt;&gt;&gt;</code> instead of <code>&gt;&gt;</code> to make it do the right thing anyway.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Gavouli",
+                    "text": "<span class=\"comment-copy\">It works! Thank you ever so much for your help, Edward! I wasted my two-week annual leave trying to figure this out. I can't thank you enough! Best I can do <a href=\"https://imgur.com/IAARQzf\" rel=\"nofollow noreferrer\">is this</a>. &lt;3 Have a good one! :)</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

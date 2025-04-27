@@ -1,0 +1,59 @@
+{
+    "title": "Need to extend the list of libraries that a shared (.so) library uses",
+    "link": "https://reverseengineering.stackexchange.com/questions/4098/need-to-extend-the-list-of-libraries-that-a-shared-so-library-uses",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I have a number of shared libraries calling each other (\n  <code>\n   .so\n  </code>\n  , ARM, Android), binary-only.\n </p>\n <p>\n  I want to add logging to some functions,\n  <code>\n   funcA()\n  </code>\n  , ...,\n  <code>\n   funcZ()\n  </code>\n  defined in\n  <code>\n   libsomething.so\n  </code>\n  .\nThe functions are called from\n  <code>\n   libstuff1.so\n  </code>\n  , ...,\n  <code>\n   libstuffN.so\n  </code>\n  .\nI can rename a function in the original library (keeping the name in the same bucket is a bit tricky, but possible).\n </p>\n <p>\n  I want to either:\n </p>\n <ol>\n  <li>\n   Add an extra library to the dependency list of the calling library, that is,\n   <code>\n    libstuff1.so\n   </code>\n   originally referenced only\n   <code>\n    libsomething.so\n   </code>\n   , and I want it to reference both\n   <code>\n    libsomething.so\n   </code>\n   and\n   <code>\n    libOneMoreLib.so\n   </code>\n   .\n  </li>\n  <li>\n   Or, add an extra function to existing library, e.g. in\n   <code>\n    libsomething.so\n   </code>\n   , I rename\n   <code>\n    funcA()\n   </code>\n   to\n   <code>\n    funbQ()\n   </code>\n   and define (that is, add)\n   <code>\n    funcA()\n   </code>\n   to print logs and call\n   <code>\n    funbQ()\n   </code>\n   .\n  </li>\n </ol>\n <p>\n  How can I do any of these?\n </p>\n</div>\n</body></html>",
+    "votes": "3",
+    "answers": 3,
+    "views": "612",
+    "tags": [
+        "linux",
+        "android",
+        "arm",
+        "libraries"
+    ],
+    "user": "18446744073709551615",
+    "time": "Apr 21, 2014 at 6:57",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  The required shared libraries are stored as\n  <code>\n   DT_NEEDED\n  </code>\n  entries in the dynamic section of the executable. This entry, in turn, points into the dynamic string table. So, to add another library, you will need to do something like this:\n </p>\n <ol>\n  <li>\n   Parse the list of\n   <a href=\"http://www.sco.com/developers/gabi/latest/ch5.pheader.html\" rel=\"nofollow\">\n    <em>\n     program headers\n    </em>\n   </a>\n   and find the\n   <code>\n    PT_DYNAMIC\n   </code>\n   entry\n  </li>\n  <li>\n   Map its\n   <code>\n    p_vaddr\n   </code>\n   back to a file offset using the other\n   <code>\n    PT_LOAD\n   </code>\n   entries. (you could use the\n   <code>\n    p_offset\n   </code>\n   field of the\n   <code>\n    PT_DYNAMIC\n   </code>\n   entry itself but it's not guaranteed to be correct.)\n  </li>\n  <li>\n   Read and parse the\n   <a href=\"http://www.sco.com/developers/gabi/latest/ch5.dynamic.html#dynamic_section\" rel=\"nofollow\">\n    <em>\n     dynamic section\n    </em>\n   </a>\n   entries until you hit\n   <code>\n    DT_NULL\n   </code>\n   .\n  </li>\n  <li>\n   Remember address and size of the string table (\n   <code>\n    DT_STRTAB\n   </code>\n   /\n   <code>\n    DT_STRSZ\n   </code>\n   ). Note that it is a virtual address and needs to be mapped back to file offset using the\n   <code>\n    PT_LOAD\n   </code>\n   entries.\n  </li>\n  <li>\n   Extend the string table with your library's name. You will probably need to find some other place for it since there's unlikely to be enough space at the table's end. If so, you may need to add another\n   <code>\n    PT_LOAD\n   </code>\n   entry to make sure it ends up in the process memory. This will mean shifting all file offsets of other entries. But let's assume you've done it.\n  </li>\n  <li>\n   Go through the dynamic section again, and update all entries that point into the string table with the new addresses. Also update\n   <code>\n    DT_STRTAB\n   </code>\n   /\n   <code>\n    DT_STRSZ\n   </code>\n   .\n  </li>\n  <li>\n   Now you can finally add a new\n   <code>\n    DT_NEEDED\n   </code>\n   entry for your lib, and another\n   <code>\n    DT_NULL\n   </code>\n   terminator after it. And hope the new\n   <code>\n    DT_NULL\n   </code>\n   did not overwrite anything important :)\n  </li>\n </ol>\n</div>\n</body></html>",
+            "votes": "3",
+            "user": "Igor Skochinsky",
+            "time": "Apr 20, 2014 at 18:25",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "18446744073709551615",
+                    "text": "<span class=\"comment-copy\">Is there a library that can read the <code>.so</code> into memory, converting it into some data structures (like DOM parsers read XML), so that I could add one element to the list and write it back?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Haven't seen any.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Igor Skochinsky",
+                    "text": "<span class=\"comment-copy\">Update: it seems <a href=\"https://github.com/NixOS/patchelf\" rel=\"nofollow noreferrer\">PatchELF</a> implements at least some of the necessary functionality, so you can try extending it, or submit a feature request.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  A simple way there is.\n  <code>\n   readelf -d libxyz.so\n  </code>\n  all dependencies lists. One of these libraries extend or substitute you can.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "18446744073709551615",
+            "time": "Apr 24, 2014 at 12:22",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I know it's not a direct answer to your question, but would something like\n  <code>\n   LD_PRELOAD\n  </code>\n  mechanism allow you to achieve what you want?\n </p>\n <p>\n  With\n  <code>\n   LD_PRELOAD\n  </code>\n  you can specify your library which is to be loaded and functions from that library will be used instead of ones in the original library. This is a common and simple way of doing function hooking on Linux systems.\n </p>\n <p>\n  <a href=\"http://www.linuxjournal.com/article/7795\" rel=\"nofollow\">\n   Here is an example\n  </a>\n  of using\n  <code>\n   LD_PRELOAD\n  </code>\n  to hook functions.\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "perror",
+            "time": "Apr 25, 2014 at 15:38",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

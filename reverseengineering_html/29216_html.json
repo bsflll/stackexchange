@@ -1,0 +1,68 @@
+{
+    "title": "How to calculate the value needed to branch two points in IDA pro?",
+    "link": "https://reverseengineering.stackexchange.com/questions/29216/how-to-calculate-the-value-needed-to-branch-two-points-in-ida-pro",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I need to find how to get the value to make a branch between two points in IDA Pro, but I can’t figure it out. For more context: the instructions I’m following says “Calculate the value needed to do a branch from 176E4 to 1768C, which will be D2 E7”. How do they get D2 E7 from 176E4 and 1768C? Is there a math formula or is there somewhere in IDA where they find this? It's arm little endian.\nThank you\n </p>\n</div>\n</body></html>",
+    "votes": "0",
+    "answers": 2,
+    "views": "171",
+    "tags": [
+        "ida",
+        "arm",
+        "patching",
+        "ios",
+        "hex"
+    ],
+    "user": "t0astym4rsh",
+    "time": "Aug 27, 2021 at 18:50",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n who's \"they\"? also, which ARM?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "t0astym4rsh",
+            "text": "<html><body><span class=\"comment-copy\">\n “They” is whoever wrote the guide I referenced, and it’s arm little endian.\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "<html><body><span class=\"comment-copy\">\n got a link to the guide?\n</span>\n</body></html>",
+            "time": null
+        },
+        {
+            "user": "t0astym4rsh",
+            "text": "<html><body><span class=\"comment-copy\">\n <a href=\"https://www.theiphonewiki.com/wiki/Tutorial:Odysseus_Bundles#ASR_Patch\" rel=\"nofollow noreferrer\">\n  theiphonewiki.com/wiki/Tutorial:Odysseus_Bundles#ASR_Patch\n </a>\n Yes. The part I’m referencing is under asr patch\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  This is an unconditional branch (thumb)\n </p>\n <p>\n  It is encoded as\n  <code>\n   11100\n  </code>\n  |\n  <code>\n   signed 11-bit immediate offset\n  </code>\n </p>\n <pre><code>E    7    D    2  \n1110 0111 1101 0010\n</code></pre>\n <p>\n  so your 11-bit offset is 0b11111010010.  This is sign extended to -46\n </p>\n <p>\n  The operation is:\n  \n\n  <code>\n   PC = PC + (SignExtend(signed_immed_11) << 1)\n  </code>\n  \n\n  where the first PC contains the address of the branch plus 4.\n </p>\n <p>\n  0x176E4 + 4 + (-46 * 2) == 0x1768C\n </p>\n</div>\n</body></html>",
+            "votes": "1",
+            "user": "mumbel",
+            "time": "Aug 27, 2021 at 22:35",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "t0astym4rsh",
+                    "text": "<span class=\"comment-copy\">How do I get D2 E7 if I’m starting with 0x176E4 and 0x1768C?</span>",
+                    "time": null
+                },
+                {
+                    "user": "mumbel",
+                    "text": "<span class=\"comment-copy\">this is basic algebra at this point <code>SRC + 4 + (X * 2) == DEST</code> solve for X.  <code>(0x1768C - 0x176E4 - 4) / 2</code> is a signed 11-bit number prepended by <code>11100</code></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  PC = current Instruction pointer + instruction length\n  \n\n  PC = IP + 4\n  \n\n  PC = 0x176E4 + 4  == 176E8\n </p>\n <p>\n  destination = 0x1768C\n </p>\n <p>\n  offset is encoded as a signed number of ((destination - PC)>>1)\n </p>\n <pre><code>:\\>python -c \"print(hex((0x1768c-0x176e8)>>1))\n-0x2e\n</code></pre>\n <p>\n  unconditional jump B can be encoded from\n  <strong>\n   E0 00 to E7 FF\n  </strong>\n  ==> E + (0x0 to 0x7ff ) == 0b1110 + (0b00000000000 .. 0b11111111111\n </p>\n <p>\n  <strong>\n   E0 00 to E3 FF\n  </strong>\n  ARE FORWARD JUMPS FROM PC\n  \n\n  <strong>\n   E4 00 TO E7 FF\n  </strong>\n  ARE BACKWARD JUMPS FROM PC\n  \n\n  -0X2E IS A BACKWARD JUMP\n  \n\n  SO SUBTRACT\n  <strong>\n   0X2E FROM 0X800\n  </strong>\n  TO GET 0X7D2\n </p>\n <p>\n  using capstone and python\n </p>\n <pre><code>import capstone\ncs = capstone.Cs(capstone.CS_ARCH_ARM , capstone.CS_MODE_THUMB)\ncs.Detail = True\ninp = [b'\\x00\\xe0',b'\\x01\\xe0',b'\\x02\\xe0',b'\\xff\\xe3',b'\\x00\\xe4',b'\\xff\\xe7',b'\\xd2\\xe7']\nfor j in range(0,len(inp),1):\n    dis = cs.disasm( inp[j],  0x176e4)\n    for i in dis:\n        print(i.bytes ,(\"0x%x:\\t\" % i.address),(\"%s %s\" %(i.mnemonic, i.op_str)))\n</code></pre>\n <p>\n  executed\n </p>\n <pre><code>:\\>python arm.py\nbytearray(b'\\x00\\xe0') 0x176e4:  b #0x176e8\nbytearray(b'\\x01\\xe0') 0x176e4:  b #0x176ea\nbytearray(b'\\x02\\xe0') 0x176e4:  b #0x176ec\nbytearray(b'\\xff\\xe3') 0x176e4:  b #0x17ee6\nbytearray(b'\\x00\\xe4') 0x176e4:  b #0x16ee8\nbytearray(b'\\xff\\xe7') 0x176e4:  b #0x176e6\nbytearray(b'\\xd2\\xe7') 0x176e4:  b #0x1768c <<<<<<<<<<\n</code></pre>\n</div>\n</body></html>",
+            "votes": "0",
+            "user": "blabb",
+            "time": "Aug 28, 2021 at 21:40",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

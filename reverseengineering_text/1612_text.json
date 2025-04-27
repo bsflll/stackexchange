@@ -1,0 +1,70 @@
+{
+    "title": "How can I check I've moved outside the stack without triggering a protection fault?",
+    "link": "https://reverseengineering.stackexchange.com/questions/1612/how-can-i-check-ive-moved-outside-the-stack-without-triggering-a-protection-fau",
+    "content": "I'm adding a feature to my Linux debugger (I'm using Ptrace to manipulate the traced process as well as libbfd/libopcodes) to unwind the stack and determine if discrepancies exist between each CALL's allocated stack space and a statically derived local variable size, printing the address and local stack size of each frame along the way.\nMy general methodology is to take the address in the base pointer (EBP/RBP), increment the pointer to should should contain the stored frame pointer, dereference that address, examine it with PTRACE_PEEKDATA and repeat until I dereference an address occupying an area outside the stack.\nI know how to check code/data segment registers, but ideally I'd like a method to check if I'm still inside the callstack even if the segmentation has been changed by W^X memory pages or an otherwise nonexecutable stack.\nIn short, how can I check (in the general case) when I've moved outside the stack without triggering a general protection fault?\n(As as aside, I realize I'm operating on the assumption that checking an address's page segment is the ideal methodology here -- perhaps another simpler method exists to determine if an address is within the current process's stack space)\n",
+    "votes": "7",
+    "answers": 1,
+    "views": "437",
+    "tags": [
+        "debuggers",
+        "linux",
+        "x86",
+        "callstack",
+        "segmentation"
+    ],
+    "user": "zetavolt",
+    "time": "Jun 11, 2013 at 12:50",
+    "comments": [
+        {
+            "user": "perror",
+            "text": "I guess you are working under Linux. Specifying the OS is clearly needed here as it does set the stack base address (with an ASLR offset or not) before starting the process.\n",
+            "time": null
+        },
+        {
+            "user": "zetavolt",
+            "text": "Thank you, I've edited the answer to specify above -- It is indeed linux.\n",
+            "time": null
+        },
+        {
+            "user": "Igor Skochinsky",
+            "text": "Highly recommended reading on unwinding: part 1, part 2 (OS X oriented, but many things still apply).\n",
+            "time": null
+        },
+        {
+            "user": "Nick",
+            "text": "Given that you know the stack usage in intel/amd environments you know that the ebp value's would necessarily increase in value for each successive rollback (meaning, accessing the next parent). Also, given you're looking at a Linux environment you can (somewhat safely) assume the 8MB (per thread) stack size limitation. Furthermore, given that (most likely) 4KB pages are in use, you can safely read ebp values that are at a greater address than the current one UNTIL it reaches a different (and obviously higher) page entry. At this point, you can use mmap() to see if the page is there or not...\n",
+            "time": null
+        },
+        {
+            "user": "Nick",
+            "text": "Also, you can detect some forms of 'corrupted' EBP/RBP values by examining the lower 2 bits (32-bit) or lower 3 bits (64-bit) because the ESP/RSP and EBP/RSP values are 4-byte or 8-byte aligned, respectively.\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "So, it is totally untested but here is the result of a few Internet browsing.\nFirst the stack base address is present in <pre><code>/proc/<pid>/maps</code></pre>, then it must be accessible from user-space at some point.\nI looked at the code of the pstack command which is printing the content of the stack of a running process. This code is getting the base address from a <pre><code>link_map</code></pre> structure and store it inside the field <pre><code>l_addr</code></pre>. This field is set inside the function <pre><code>readLinkMap()</code></pre>:\n<pre><code>static void readLinkMap(int pid, ElfN_Addr base, struct link_map *lm, \n                        char *name, unsigned int namelen)\n{\n  /* base address */\n  lm->l_addr = (ElfN_Addr) ptrace(PTRACE_PEEKDATA, pid,\n                                  base + offsetof(struct link_map,l_addr), 0);\n  /* next element of link map chain */\n  if (-1 != (long) lm->l_addr || !errno)\n    lm->l_next = (struct link_map *) ptrace(PTRACE_PEEKDATA, pid,\n                                            base + offsetof(struct link_map, l_next), 0);\n  if ((-1 == (long) lm->l_addr || -1 == (long) lm->l_next) && errno) {\n    perror(\"ptrace\");\n    quit(\"can't read target.\");\n  }\n\n  loadString(pid, base + offsetof(struct link_map, l_name), name, namelen);\n}\n</code></pre>\nI guess this is the right way to go. So, I would advise you to take a look at the code of the <pre><code>pstack</code></pre> command (the file is not very long) and to get inspiration from it because it does something extremely similar to what you want (at least if I understand what you said correctly).\nHope this short note will help you a bit.\n",
+            "votes": "9",
+            "user": "perror",
+            "time": "Apr 5, 2013 at 16:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">Within the context of the users question, this seems adequate. If one wants to implement backtrace functionality, however, you'll probably need to use dwarf cfi if you want it to be reliable.</span>",
+                    "time": null
+                },
+                {
+                    "user": "perror",
+                    "text": "<span class=\"comment-copy\">@broadway: But, dwarf is not always present on all executable files. You can get some help looking at it, but, in my humble opinion, it would be a mistake to totally rely on it and nothing else.</span>",
+                    "time": null
+                },
+                {
+                    "user": "broadway",
+                    "text": "<span class=\"comment-copy\">yeah, you just have to accept the breakage in that case. The frames are often just not going to be there. You can maybe try to heuristically infer the registers in some common cases, though.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

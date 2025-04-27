@@ -1,0 +1,41 @@
+{
+    "title": "Launch pintool expecting user input from Powershell",
+    "link": "https://reverseengineering.stackexchange.com/questions/10914/launch-pintool-expecting-user-input-from-powershell",
+    "content": "I'm trying to bruteforce a password in a 32bit Windows application (this is challenge 9 of http://www.flare-on.com/files/2015_FLAREOn_Challenges.zip), using the <pre><code>inscount0</code></pre> pintool (https://software.intel.com/en-us/articles/pin-a-dynamic-binary-instrumentation-tool) and Powershell. This is possible because the password is actually checked letter by letter in the code. If a letter is correct, the program continues to the second letter (and so on), but if a letter is incorrect, the program terminates. The difficulty comes from the fact that the application is interactively prompting a password instead of passing it as an argument to the executable.\nI've been able to make it work with the following Powershell script:\n<pre><code>add-type -AssemblyName System.Windows.Forms\n\nfor($i=32; $i -le 126; $i++){\n\n  # \"I\" is the first known letter of password\n  $pass_guess = \"I\" + [char]$i + \"..........\"\n\n  # Launch pin\n  Start-Process -FilePath pin.exe -ArgumentList '-t inscount0.dll -- ch9.exe'\n\n  # send user input\n  start-sleep -Milliseconds 500\n  [System.Windows.Forms.SendKeys]::SendWait(\"$pass_guess{ENTER}\")\n\n  # Read content of count in file\n  start-sleep -Milliseconds 500\n  Write-Output $pass_guess\n  Get-Content .\\inscount.out\n\n}\n</code></pre>\nIt actually works fine and here is the output that confirmed the 1st letter of the password should by \"I\":\n<pre><code>PS C:\\pin> .\\myscript.ps1\n[removed]\nH..........\nCount 32890\nI..........\nCount 32852\nJ..........\nCount 32890\n[removed]\n</code></pre>\nIndeed, the check for \"I\" is performed by the program with a different number of instructions as with other letters.\nAnyway, if this script is working, it is obviously not optimized because the script is launching the program in a popup window for each occurrence in the loop.\nI would like to know how I could improve this script. Many thanks in advance for your help.\n",
+    "votes": "3",
+    "answers": 1,
+    "views": "166",
+    "tags": [
+        "pintool"
+    ],
+    "user": "Sebastien Damaye",
+    "time": "Sep 20, 2015 at 15:06",
+    "comments": [
+        {
+            "user": "Sebastien Damaye",
+            "text": "If you need more details, I've published my solution here: aldeid.com/wiki/The-FLARE-On-Challenge-2015/Challenge-9\n",
+            "time": null
+        },
+        {
+            "user": "Sebastien Damaye",
+            "text": "@blabb: it's working fine. I've successfully updated my script. Thx\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "in powershell use -NoNewWindow Switch if you do not want the new process to be started in a popup window\n<pre><code>Start-process -FilePath \".\\XXXXXXX\" -ArgumentList \"xxxx yyy ddd\" -NoNewWindow\n</code></pre>\nbtw i read your solution and it seems the challenge doesnt check just one character and proceeds to terminate itself on failure of first it seems to check all of the 41 characters \na simple windbg oneliner below\n<pre><code>cdb -c \"bp 401a9f \\\".printf \\\\\\\"%c\\\\\\\",@al;gc\\\";g;q\" flachal9.exe\n0:000> cdb: Reading initial command 'bp 401a9f \".printf \\\"%c\\\",@al;gc\";g;q'\nI have evolved since the first challenge. You have not. Bring it.\nEnter the password> abracadabragiligilichoobabygiligilichooyammayammabooo\nabracadabragiligilichoobabygiligilichooyaYou are failure\nquit:\n</code></pre>\nit xors each of the character with the corresponding bytes as below\n<pre><code>cdb -c \"bp 401ad5 \\\".printf \\\\\\\"%02x \\\\\\\",@ah;gc\\\";g;q\" flachal9.exe\n0:000> cdb: Reading initial command 'bp 401ad5 \".printf \\\"%02x \\\",@ah;gc\";g;q'\nI have evolved since the first challenge. You have not. Bring it.\nEnter the password> abracadabragiligilichoobabygiligilichooyammayammabooo\n\n46 15 f4 bd ff 4c ef 46 eb e6 b2 eb f1 c4 34 67 39 b5 8e ef 40 1b 74 0d 60 26 45\n a8 4a 96 c9 65 e2 32 60 64 8c 65 e3 8e 9f You are failure\nquit:\n</code></pre>\nand rotate-lefts(ROL)  the result with the bytes below\n<pre><code>cdb -c \"bp 401b14 \\\".printf \\\\\\\"%02x \\\\\\\",@cl;gc\\\";g;q\" flachal9.exe\n0:000> cdb: Reading initial command 'bp 401b14 \".printf \\\"%02x \\\",@cl;gc\";g;q'\nI have evolved since the first challenge. You have not. Bring it.\nEnter the password> abracadabragiligilichoobabygiligilichooyammayammabooo\n\n56 f5 ac 1b b5 93 7e b8 23 da 0a f2 01 61 5c c8 4c d6 16 55 67 b8 c1 f8 bc 11 fa\n 9b 6b f9 d4 75 87 ca ce be 4e 6e f1 b9 6e You are failure\nquit:\n</code></pre>\nand cmpexchg with the bytes below\n<pre><code>cdb -c \"bp 401b14 \\\".printf \\\\\\\"%02x \\\\\\\",by(@ebx+@esp+2c);gc\\\";g;q\" flachal9.exe\n0:000> cdb: Reading initial command 'bp 401b14 \".printf \\\"%02x \\\",by(@ebx+@esp+2c);gc\";g;q'\nI have evolved since the first challenge. You have not. Bring it.\nEnter the password> abracadabragiligilichoobabygiligilichooyammayammabooo\n\nc3 cc ba 4e f2 eb 27 19 c6 42 06 16 5d 53 55 0e 66 f4 f9 30 9a 77 56 6b f0 8e dc\n 2e 50 e1 5a 80 48 5d 53 c2 b8 d2 01 c3 bc You are failure\nquit:\n</code></pre>\nwith these three arrays it is possible to keygen the key\nkeygen src\n<pre><code>#include <stdio.h>\n#include <intrin.h>\nunsigned char xorseed[] = {\n   70, 21,244,189,255, 76,239, 70,235,230,178,235,241,196, 52,103, 57,181,142,239, 64,\n   27,116, 13, 96, 38, 69,168, 74,150,201,101,226, 50, 96,100,140,101,227,142,159,  0\n};\n//array contains original bytes  % 20\nunsigned char rolseed[] = {\n  22, 21, 12, 27, 21, 19, 30, 24,  3, 26, 10, 18,  1,  1, 28,  8, 12, 22, 22, 21,  7,\n  24,  1, 24, 28, 17, 26, 27, 11, 25, 20, 21,  7, 10, 14, 30, 14, 14, 17, 25, 14,  0  \n};\nunsigned char cmpseed[] = {\n  195,204,186, 78,242,235, 39, 25,198, 66, 06, 22, 93, 83, 85, 14,102,244,249, 48,154,\n  119, 86,107,240,142,220, 46, 80,225, 90,128, 72, 93, 83,194,184,210, 01,195,188,  0  \n};\nunsigned char key[50] ={0};\nint main (void) {\n  for(int i = 0; i<42;i++) {\n   key[i] = _rotr8(cmpseed[i],rolseed[i]) ^ xorseed[i];\n  printf(\"%c\",key[i]);\n  }\n  return 0;  \n}\n</code></pre>\n",
+            "votes": "3",
+            "user": "blabb",
+            "time": "Sep 21, 2015 at 20:25",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Sebastien Damaye",
+                    "text": "<span class=\"comment-copy\">Wow! That's impressive! Thank you for this very valuable input.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

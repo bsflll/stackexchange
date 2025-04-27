@@ -1,0 +1,40 @@
+{
+    "title": "0x09-0x0d not taken into account with scanf",
+    "link": "https://reverseengineering.stackexchange.com/questions/10595/0x09-0x0d-not-taken-into-account-with-scanf",
+    "content": "I've encountered something I can't explain. Here is the problem\n<pre><code>#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\nvoid ask()\n{\n    char name[64];\n    printf(\"What is your name ? \");\n    scanf(\"%s\",name);\n    printf(\"Hi %s\n\", name);\n}\n\nint main(int argc, char* argv[])\n{\n    ask();\n    return 0;\n}\n</code></pre>\nHere is disassembled version :\n<pre><code>gdb$ disas ask\nDump of assembler code for function ask:\n   0x0804846c <+0>: push   ebp\n   0x0804846d <+1>: mov    ebp,esp\n   0x0804846f <+3>: sub    esp,0x58\n   0x08048472 <+6>: mov    DWORD PTR [esp],0x8048550\n   0x08048479 <+13>:    call   0x8048340 <printf@plt>\n   0x0804847e <+18>:    lea    eax,[ebp-0x48]\n   0x08048481 <+21>:    mov    DWORD PTR [esp+0x4],eax\n   0x08048485 <+25>:    mov    DWORD PTR [esp],0x8048565\n   0x0804848c <+32>:    call   0x8048370 <__isoc99_scanf@plt>\n   0x08048491 <+37>:    lea    eax,[ebp-0x48]\n   0x08048494 <+40>:    mov    DWORD PTR [esp+0x4],eax\n   0x08048498 <+44>:    mov    DWORD PTR [esp],0x8048568\n   0x0804849f <+51>:    call   0x8048340 <printf@plt>\n   0x080484a4 <+56>:    leave  \n   0x080484a5 <+57>:    ret    \nEnd of assembler dump.\n</code></pre>\nWhen I run it into gdb, I break on the scanf instruction to get buffer address (2nd on the stack), then I execute scanf instruction, and examine buffer address : No trace of my <pre><code>0x0b</code></pre>\n<pre><code>(gdb) r < <(perl -e 'print \"\\x0bABCDE\"')\n--------------------------------------------------------------------------[regs]\n  EAX: 0x00000001  EBX: 0xB7FCDFF4  ECX: 0x00000001  EDX: 0xB7FCF354  o d I t s Z a P c \n  ESI: 0x00000000  EDI: 0x00000000  EBP: 0xBFFFF378  ESP: 0xBFFFF320  EIP: 0x08048491\n  CS: 0023  DS: 002B  ES: 002B  FS: 0000  GS: 0063  SS: 002B\n--------------------------------------------------------------------------[code]\n=> 0x8048491 <ask+37>:  lea    eax,[ebp-0x48]\n   0x8048494 <ask+40>:  mov    DWORD PTR [esp+0x4],eax\n   0x8048498 <ask+44>:  mov    DWORD PTR [esp],0x8048568\n   0x804849f <ask+51>:  call   0x8048340 <printf@plt>\n   0x80484a4 <ask+56>:  leave  \n   0x80484a5 <ask+57>:  ret    \n   0x80484a6 <main>: push   ebp\n   0x80484a7 <main+1>:  mov    ebp,esp\n--------------------------------------------------------------------------------\n\nBreakpoint 1, 0x08048491 in ask ()\ngdb$ x/4xw 0xbffff330\n0xbffff330: 0x44434241  0xb7e90045  0x0000002f  0xb7fcdff4\n</code></pre>\nAs you can see, there is my <pre><code>ABCDE</code></pre> followed by null byte <pre><code>0x00</code></pre> but <pre><code>\\x0b</code></pre> won't appear. I don't understand why it's not taken into account by scanf. Same goes for <pre><code>0x09</code></pre> to <pre><code>0x0c</code></pre>. But <pre><code>0x01</code></pre> to <pre><code>0x08</code></pre>, <pre><code>0x0e</code></pre> and above are working. I'm a bit lost.\nAny idea ?\nThanks a lot.\nPS : Reason I'm posting here is because I was in front of a binary, and when I sent him bytes like <pre><code>0x0b</code></pre>, its behavior wasn't what I expected. I reversed part of it and found that scanf was the bad guy here ... But if you think this is not appropriate for this forum, just tell me I'll move it wherever is more appropriate. Thanks !\n",
+    "votes": "3",
+    "answers": 2,
+    "views": "901",
+    "tags": [
+        "disassembly",
+        "memory",
+        "scanf"
+    ],
+    "user": "Hackndo",
+    "time": "Aug 10, 2015 at 9:29",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "The <pre><code>scanf</code></pre> function skips over leading whitespace, with whitespace being the set of characters for which the <pre><code>isspace</code></pre> macro/function returns true.\nIn the standard locale, this set of characters consists of <pre><code>\\t</code></pre> (0x09), <pre><code>\n</code></pre> (0x0a), <pre><code>\\v</code></pre> (0x0b), <pre><code>\\f</code></pre> (0x0c), and <pre><code>\\r</code></pre> (0x0d). And, of course, the blank character (0x20).\n",
+            "votes": "5",
+            "user": "Guntram Blohm",
+            "time": "Aug 10, 2015 at 9:56",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Hackndo",
+                    "text": "<span class=\"comment-copy\">Who, thanks for this ! I wouldn't have guessed. Perfect !</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "There is another interesting place in <pre><code>scanf</code></pre> library call when handling <pre><code>\\x09~\\0xd</code></pre>.\nYou just only put <pre><code>\\x0b</code></pre> at the head of input string. If you just put <pre><code>\\x0b</code></pre> in the middle of string, and there are valid ascii(not in \\x09~\\x0d) from head to the first <pre><code>\\x0b</code></pre>, like \n<pre><code>AAAAAA\\x0bBBBBB</code></pre>\nIf you execute your program again, you will find the following <pre><code>B</code></pre>s will be abandoned or the input string will be truncated by the second valid <pre><code>\\x0b</code></pre>.\n",
+            "votes": "1",
+            "user": "慕冬亮",
+            "time": "Mar 2, 2017 at 17:51",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

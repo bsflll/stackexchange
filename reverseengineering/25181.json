@@ -1,0 +1,102 @@
+{
+    "title": "Dealing with obfuscated PUSH PUSH RET instructions",
+    "link": "https://reverseengineering.stackexchange.com/questions/25181/dealing-with-obfuscated-push-push-ret-instructions",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I wanted to run an app on a VM but there are PUSH PUSH RETs stopping me from looking at their anti VM code. There is a messagebox when I run it on a VM. I set a breakpoint at <code>MessageBoxA</code> and it gets triggered as well as EAX is showing the message for the VM. It's all good until now.</p>\n<p><a href=\"https://i.sstatic.net/QO1IB.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/QO1IB.png\"/></a></p>\n<p>I'm using x64dbg and I opened <code>Call Stack</code> tab and double-clicked on the address after user32.MessageBoxA (basically 2nd record), so I could trace back the calls before the actual MessageBoxA. It landed me here:</p>\n<p><a href=\"https://i.sstatic.net/JGI1a.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/JGI1a.png\"/></a></p>\n<p>I heard that <code>PUSH RET</code> is like a <code>jmp</code>, <code>PUSH PUSH RET</code> is like a <code>call</code>. How do they work? Can they be deobfuscated with a tool/plugin or something?</p>\n<p>PUSH 0xC9DFBF leads me here:</p>\n<p><a href=\"https://i.sstatic.net/IdSFw.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/IdSFw.png\"/></a></p>\n<p>PUSH 0xA4DB49 leads me here:</p>\n<p><a href=\"https://i.sstatic.net/cnZq1.png\" rel=\"nofollow noreferrer\"><img alt=\"enter image description here\" src=\"https://i.sstatic.net/cnZq1.png\"/></a></p>\n<p>When I follow that jmp, it leads to similar code to <code>PUSH 0xC9DFBF</code>'s image which ends with a jmp to MessageBoxA.</p>\n<p>What could you recommend me to step into the code before the actual MessageBoxA call, so I can find their anti VM code and patch it? Do I need to step the instructions from the beginning one by one?</p>\n<p>Dumps: <a href=\"http://ufile.io/56c5b2z6\" rel=\"nofollow noreferrer\">http://ufile.io/56c5b2z6</a>. Rebase to 0x1270000 and find 0181E65C address. This address is in the executable file. I attached two dumped DLLs as well, because they were referenced.</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "assembly",
+        "x64dbg",
+        "deobfuscation"
+    ],
+    "user": "nop",
+    "time": "Jun 3, 2020 at 7:13",
+    "comments": [
+        {
+            "user": "0xC0000022L",
+            "text": "<span class=\"comment-copy\">Hi and welcome to RE.SE! Could you please post the code rather than screenshots. Screenshots make it impossible to search for any keywords, so it's worse for future visitors and also makes it - in general - harder to use your code as a template to explain things.</span>",
+            "time": null
+        },
+        {
+            "user": "nop",
+            "text": "<span class=\"comment-copy\">@0xC0000022L, thanks. ufile.io/56c5b2z6 - here are the dumps. Rebase to 0x1270000 and find 0181E65C address. That's the function which is executed before the MessageBoxA call. If there is a better way to provide the code, let me know.</span>",
+            "time": null
+        },
+        {
+            "user": "Jongware",
+            "text": "<span class=\"comment-copy\">Something went wrong, I still see only screenshots after your edit.</span>",
+            "time": null
+        },
+        {
+            "user": "nop",
+            "text": "<span class=\"comment-copy\">@usr2564301 even now?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Technically, </p>\n<pre><code>PUSH A\nRET\n</code></pre>\n<p>is equivalent to </p>\n<pre><code>JMP A\n</code></pre>\n<p>and</p>\n<pre><code>PUSH A\nPUSH B\nRET\n</code></pre>\n<p>is equivalent to </p>\n<pre><code>CALL B\nJMP A\n</code></pre>\n<p>You can write a x64dbg script which <a href=\"https://help.x64dbg.com/en/latest/commands/searching/find.html\" rel=\"nofollow noreferrer\">searches</a> for the above pattern and replaces it with the simplified assembly.</p>\n<hr/>\n<h2>Example</h2>\n<p><code>PUSH + RET</code> has the byte pattern</p>\n<pre><code>0:  68 44 33 22 11          push   0x11223344\n5:  c3                      ret \n</code></pre>\n<p>The following script replaces it with <code>JMP</code> and the remainder (if any) with <code>NOP</code>.</p>\n<pre><code>$base = 0x91e000\n$search_size = 0x100\n\nfindall $base, \"68 ?? ?? ?? ?? c3\", $search_size\n$count = $result\n\nnext:\n    dec $count\n    $addr = ref.addr($count)\n    $jmp_addr = dis.imm($addr)\n    asm $addr, \"jmp 0x{$jmp_addr}\"\n    $asm_size = $result\n    $remainder = 6 - $asm_size\n\n    fill_nop:\n        dec $remainder\n        asm $addr+$asm_size+$remainder, \"nop\"\n        test $remainder, $remainder\n        jnz fill_nop\n\n    test $count, $count\n    jnz next\n\nmsg \"Done\"\n</code></pre>\n<p>Similarly for <code>PUSH + PUSH + RET</code>,</p>\n<pre><code>0:  68 44 33 22 11          push   0x11223344\n5:  68 dd cc bb aa          push   0xaabbccdd\na:  c3                      ret \n</code></pre>\n<p>The following script replaces it with <code>CALL + JMP</code>.</p>\n<pre><code>$base = 0x91e000\n$search_size = 0x100\n\nfindall $base, \"68 ?? ?? ?? ?? 68 ?? ?? ?? ?? c3\", $search_size\n$count = $result\n\nnext:\n    dec $count\n    $addr = ref.addr($count)\n    $ret_addr = dis.imm($addr)\n    $call_addr = dis.imm($addr+5)\n    asm $addr, \"call 0x{$call_addr}\"\n    $asm_size = $result\n    asm $addr+$asm_size, \"jmp 0x{$ret_addr}\"\n    add $asm_size, $result\n    $remainder = 0xb - $asm_size\n\n    fill_nop:\n        dec $remainder\n        asm $addr+$asm_size+$remainder, \"nop\"\n        test $remainder, $remainder\n        jnz fill_nop\n\n    test $count, $count\n    jnz next\n\nmsg \"Done\"\n</code></pre>\n<hr/>\n<p>However there are some caveats with the above approach:</p>\n<ol>\n<li><p><code>PUSH + PUSH + RET</code> can be converted to <code>CALL + JMP</code> only if the callee uses <code>RET</code> instruction to return back to the caller (which is normal in cdecl). It won't work if it obfuscates the return using a <code>JMP</code> instruction. That is instead of <code>RET</code> there is </p>\n<pre><code>ADD ESP, 4\nJMP DWORD PTR [ESP-4]\n</code></pre></li>\n<li><p>Pattern search will work in most cases. However if parts of the code are encrypted it can return false positives and you may be inadvertently overwriting wrong data.</p></li>\n</ol>\n</div>",
+            "votes": "1",
+            "user": "0xec",
+            "time": "Jun 5, 2020 at 19:35",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "nop",
+                    "text": "<span class=\"comment-copy\">How does it work? I haven't used x64dbg scripts yet, only IDA scripts. I opened the executable in x64dbg, put a breakpoint at CreateProcessW because it creates some child processes and it decrypts the static encryption by that time. I then open Scripts tab and load the script from file (I changed $base to my Base Address as well). <a href=\"https://i.imgur.com/TvLi2f2.png\" rel=\"nofollow noreferrer\">i.imgur.com/TvLi2f2.png</a>. Then I put a breakpoint at MessageBoxA and Run until Anti VM message appears and then Call Stack tab to go back to the previous call and it's same as before: <a href=\"https://i.imgur.com/b4ue5Q5.png\" rel=\"nofollow noreferrer\">i.imgur.com/b4ue5Q5.png</a></span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">Base address should be the address of the page which contains the said instructions, not the executable load address.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@nop Also to replace all instructions you have to run it in a loop</span>",
+                    "time": null
+                },
+                {
+                    "user": "nop",
+                    "text": "<span class=\"comment-copy\">thanks! It worked but as you said, it needs a loop to replace all instructions. Mind sharing the solution with a loop because I have never made x64dbg scripts and there isn't much info about it?</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@nop Scripts updated. (Warning: untested). You can find info about x64db g scripts in the <a href=\"https://help.x64dbg.com/en/latest/index.html\" rel=\"nofollow noreferrer\">docs</a></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The <code>RET</code> instruction transfers control to the return address located on the stack. Normally this is used to go back from a function to where the function was called, as the address of the next instruction was pushed into the stack by the <code>CALL</code> instruction.</p>\n<p>However, <code>RET</code> can be misused: a <code>PUSH</code> before a <code>RET</code> instruction is a typical obfuscation technique. In this case, when executing the <code>RET</code>, instead of coming back to the caller function, it behaves like a jump to the previously pushed address. This is not something your decompiler expects, which may result in a jump to a memory zone that hasn't been decompiled or has been incorrectly decompiled.</p>\n<p><code>PUSH PUSH RET</code> can be used to implement a <code>CALL</code> as you mention. In that case, the first <code>PUSH</code> pushes the return address into the stack (the one after the <code>RET</code>). The second <code>PUSH</code> pushes the function address. The <code>RET</code> (as explained before) jumps to the function address (and removes this address from the stack). When the function address executes its <code>RET</code>, it jumps back to the address currently located on the stack (the one of the first <code>PUSH</code>), coming back to the caller of the function. Note though that this is not your case. In your case the first address pushed is not in the current function. This means that this is not implementing a <code>CALL</code>. Most likely this it is used as an obfuscation technique, making more complicated to follow the calls and maybe tricking your disassembly to show you the code incorrectly.</p>\n<p>Also, note that executing a <code>PUSH</code> doesn't lead you anywhere. It just pushes the address into the stack. It is the <code>RET</code> instruction which actually jumps to the last pushed address. This also means that the second pushed address is visited before the first one. This means that the code you are looking for is reached from <code>A4DB49</code> (the first address to which <code>RET</code> jumps) that is another <code>JUMP</code>.</p>\n<p>I recommend you to check the Anti-Disassembly chapter of the <a href=\"https://rads.stackoverflow.com/amzn/click/com/B007ED2XDS\" rel=\"nofollow noreferrer\">Practical Malware Analysis Book</a>, where this kind of techniques are covered in detail and with examples.</p>\n</div>",
+            "votes": "4",
+            "user": "Ana María Martínez Gómez",
+            "time": "Jun 2, 2020 at 19:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "nop",
+                    "text": "<span class=\"comment-copy\">First of all, thank you for your answer! That's correct. PUSH A PUSH B RET would be as same as CALL B JMP A. The thing is that I need to think about a solution which makes it more readable, because it's painful to be looking at it like that. I provided dumps in the previous comment.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ana María Martínez Gómez",
+                    "text": "<span class=\"comment-copy\">Not exactly. It would be a <code>CALL B</code> which returns to <code>A</code>. If you have understood how it works, then it is easy to follow the addresses it jumps to. Another (maybe easier) alternative is to use a debugger. Add a breakpoint at <code>A4DB49</code> and then execute every instruction to see where it is jumping. This is most likely self-written assembly code, so I don't think there is a way to write it in a much more readable way.</span>",
+                    "time": null
+                },
+                {
+                    "user": "nop",
+                    "text": "<span class=\"comment-copy\">I could manually follow the code but there are way too many PUSH RETs and JMPs which makes it almost untraceable backwards. Something like an IDA script would probably help. Something which converts those PUSH PUSH RETs instructions to CALLs</span>",
+                    "time": null
+                },
+                {
+                    "user": "Ana María Martínez Gómez",
+                    "text": "<span class=\"comment-copy\">You can't convert it to <code>CALL</code>. <code>CALL</code> pushes the next address into the stack and this is not what happens in your code.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

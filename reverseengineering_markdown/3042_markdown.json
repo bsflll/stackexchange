@@ -1,0 +1,85 @@
+{
+  "title": "Decoding a blob",
+  "link": "https://reverseengineering.stackexchange.com/questions/3042/decoding-a-blob",
+  "content": "I have a proprietary file format that is a compressed database file. This database file has a few dozen tables. Each of these tables only have a few records, many of them don't have any records at all. A few of these tables contain fields that are stored as blobs of hex data. These blobs account for 99% of the disk space of the overall database file.\n\nAs far as I can tell, these blobs are not compressed data (by using unix 'file' command). I have tried finding known values in these blobs by exporting values from the proprietary software, converting to hex and searching for that value in the database file. So far I haven't been able to find any matches. The problem is that the software can export in a myriad of formats and I'm not sure which one (if any) the data would be stored in.\n\nMost of the tables contain checksum fields, which I believe, are responsible for my inability to edit the blobs and see what changes in the proprietary software. This combined with the fact that I cannot directly change the values that I wish to extract from the proprietary files leaves me in a difficult position.\n\nDoes anybody know any tricks for trying to tease out time series data from binary data?\n\nEdit\nThis zip file contains 2 hex blobs (index and value) from the decompressed database and the same data as it is exported from the program.\n\n",
+  "votes": "2",
+  "answers": 2,
+  "views": "5k",
+  "tags": [
+    "binary-analysis"
+  ],
+  "user": "horriblyUnpythonic",
+  "time": "Nov 18, 2013 at 23:41",
+  "comments": [
+    {
+      "user": "Jongware",
+      "text": "If you change one single byte (character, number?) in a copy of your database and then compare it byte for byte with the original file, do you see a comparable change? (I.e., on only one or two positions, plus -- optionally -- the checksum.) If the file size changes, the database may be compressed. If the size is the same but lots of other data changes, it may be encrypted.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "Wait, you said \"I cannot directly change the values\". So this is not a database that is actively read/written, correct?",
+      "time": null
+    },
+    {
+      "user": "horriblyUnpythonic",
+      "text": "Yeah, the software is such that it can only get the values I care about from an actual run with real hardware. I haven't been able to find anything that will allow me to directly change those values.",
+      "time": null
+    },
+    {
+      "user": "Jongware",
+      "text": "Can you share any sample file? At the very least I could check if it contains anything I can recognize by eye.",
+      "time": null
+    },
+    {
+      "user": "horriblyUnpythonic",
+      "text": "I have added a link to the question.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "After seeing the test files (thanks!):\n\n... too easy :)\n\nIn value.hex, the first dword appears to be a total file length; the second dword the data length. The third and fourth dwords may be flags of some kind and do not appear to point to data. This lops off the first 16 bytes, hence my guess the 2nd dword is 'data length'.\n\nRight after this header comes that familiar pair 78 9C again, so I brought out my zlib decoder wrapper. Unpacking value.hex, starting at offset 0x10, and using TINFL_FLAG_PARSE_ZLIB_HEADER (as I am using miniz.c for eaze) gave me a correct unpacking result and a data file of 33,208 bytes long.\n\nInspecting this with 0xED shows this file consists entirely out of double values (8 bytes each); the first few are\n\n```\n0.991932\n0.991931\n0.991932\n0.991932\n0.991932\n0.991933\n\n```\n(okay, there appears to be a pattern here -- the devil is in the last few digits which 0xED doesn't show, they are not all the same values).\n\nThe second file, index.dat, also unpacks correctly and gives another long list of double values, this time clearly going up:\n\n```\n0.0000\n0.0082\n0.0163833\n0.0245667\n\n```\nI didn't cross-reference these values against the XLS file you provided, I assume you can work that out from here.\n\nI only unpacked until I got a positive result back, I did not check if there are more data packets (compressed or otherwise) following the first one and you should verify using the end result of your own favourite decompression routine.\n\nJust as I was heading to bed, it struck me that the 3rd and/or 4th dwords in the header (weren't they the same anyway?) may be the 'unpacked' length.\n\n",
+      "votes": "3",
+      "user": "Jongware",
+      "time": "Nov 19, 2013 at 0:30",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "horriblyUnpythonic",
+          "text": "Great! It took me a while to figure out what you meant in that second paragraph, but I think I've got it now. I've never seen/used the 78 9C magic number, so that was a lifesaver that you noticed it right off. I'm assuming that TINFL_FLAG_PARSE_ZLIB_HEADER is just a way to skip the first 16 DWORDs. Is that right? I'm using python so I got it from zlib.decompress(hexData[16:]) and then reading in little endian.",
+          "time": null
+        },
+        {
+          "user": "Jongware",
+          "text": "No, that flag was there to inform my unpacking routine it should expect a zlib header, and you indeed need to skip the first 16 bytes manually (4 dwords). For more info, see the comments in Where could one find a collection of mid-file binary signatures?",
+          "time": null
+        },
+        {
+          "user": "horriblyUnpythonic",
+          "text": "Cool, good to know. BTW, as far as I can tell, you were right about 3rd and 4th header DWORDs being the unpacked length.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Since you did not give any details of background, I'll attempt a wild guess. It depends greatly on your application field. For example in the medical field, most algorithms used are very well known, and therefore you can simply skipped a bunch of binary data to find well known algorithm such as zlib for meta-data and/or simple encoding such as RLE for images.\n\nWhat I would try is create a string such as \"super calli fredgulistic ex pe alli doschus is a cool word\". And then export the file in all possible format, then simply grep for that in all exported files. Eg:\n\n```\n$ grep \"super calli fredgulistic\" *\n\n```\nor if your strings is in 16bits little endian:\n\n```\n$ strings -e l output_format | grep \"super calli fredgulistic\"\n\n```\nYou'll find the format the most easy to deal with (well hopefully!).\n\n",
+      "votes": "2",
+      "user": "tibar",
+      "time": "Nov 18, 2013 at 11:21",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "horriblyUnpythonic",
+          "text": "I tried to say as much background that was applicable in those first three paragraphs, but I think I see where I left out information.",
+          "time": null
+        },
+        {
+          "user": "horriblyUnpythonic",
+          "text": "As far as I can tell, are no ways to change any raw data or strings that would get exported. The only thing that I can export is the raw data (numerical) in multiple ways, basically just changing the scales of the numbers (e.g. changing time from minutes to hours). I have been unsuccessful in finding any of these values in the uncompressed file.  \\P What do you mean by, \"therefore you can simply skipped a bunch of binary data,\" was that a typo?",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "title": "Hauwei E586 firmware",
+  "link": "https://reverseengineering.stackexchange.com/questions/2765/hauwei-e586-firmware",
+  "content": "I'm working on unpacking Hauwei E586 MiFi firmware. I downloaded firmware update pack which is available as Windows EXE, then used Hauwei Modem Flasher to unpack real firmware from installer.\n\nI've got 4 files:\n\n```\n01.bin: data\n02.bin: ELF 32-bit LSB executable, ARM, version 1, statically linked, not stripped\n03.bin: data\n04.bin: ELF 32-bit LSB executable, ARM, version 1, statically linked, not stripped\n\n```\nAs we can see 02 and 04 are executable files. 01 is probably some kind of bootloader (I assume it from string analysis). 03 is some kind of pseudo FS.\n\nI started from analyzing 03 (I posted it here):\n\nThere is header part\n\n```\n02 00 EE EE  50 BA 6E 00  20 00 00 00  D0 A2 02 00\n7B 02 00 00  00 00 00 00  00 00 00 00  00 00 00 00\n\n```\n7B 02 as 16 bits gives 635 which is number of files in binary (verified using strings). Then there are 635 parts describing each file (call it directory) and at the end there is content of files.\n\nThere is directory entry for first GIF file which I found. I choosed GIF because it's easy to identify (there is header GIF8X and footer 0x3B).\n\n```\n77 77 77 5C  75 6D 5C 70  75 62 6C 69  63 5F 73 79\n73 2D 72 65  73 6F 75 72  63 65 73 5C  42 75 74 74\n75 6E 5F 43  75 72 72 65  6E 74 2E 67  69 66 00 00\nlot of zeros\n18 22 11 00  10 02 00 00  00 00 00 00  00 00 FF EE\n\n```\nWe can see its name: www\\um\\public_sys-resources\\Buttun_Current.gif and in last line there is offset of file in binary and file size, but I'm not really sure how to interpret this values.\n\nI found first GIF after directory and extracted it manually (from header to footer) which gives me file of size 528 bytes, so reading 10 02 as 16 bit unsigned gives me that number. I tried to treat 18 22 as 16 bit unsigned to get offset, but it was different from offset that I manually read from file. Bu there was constant difference between offset and real offset of file of 1286864. So I created script for unpacking this binary (I'm getting offset and adding to it 1286864).\n\nScript worked only partially. It recreated directory structure, but was able only to extract files in one particular directory (directory with GIF which I was using as reference). After check on different part of file it seems that offset of offset in different subdirectories is another that in this GIF directory. So, my guess is that I'm interpreting offset wrong (but treating it as 32 bits gives nothing useful).\n\nThere is unpack script:\n\n```\nimport sys, struct, os\n\ndef main(args):\n    outdir = args[1]\n    f = open(args[0], 'rb')\n    f2 = open(args[0], 'rb')\n    header = f.read(32)\n    print(len(header[16:]))\n    number_of_files = struct.unpack(\"h\", header[16:18])[0]\n    print(number_of_files)\n\n    for i in range(number_of_files):\n        body = f.read(272)\n        file_, rest = body.split(b'\\x00', 1)\n        offset = struct.unpack(\"H\", body[256:258])[0] + 1286864\n        size = struct.unpack(\"H\", body[260:262])[0]\n        file_ = file_.decode(encoding='UTF-8').replace('\\\\', '/')\n        dirname = os.path.join(outdir, os.path.dirname(file_))\n        filename = os.path.basename(file_)\n        print(filename, size, offset, dirname)\n        try:\n            os.makedirs(dirname)\n        except OSError:\n            pass\n\n        outfile = open(os.path.join(dirname, filename), \"wb\")\n        f2.seek(offset)\n        outfile.write(f2.read(size))\n        outfile.close()\n\nif __name__=='__main__':\n    sys.exit(main(sys.argv[1:]))\n\n```\nUsage: ./script.py 03.bin output_directory\n\nSo my question is: what I'm doing wrong? Maybe I should read some another data type as offset/size? Which one?\n\n",
+  "votes": "9",
+  "answers": 3,
+  "views": "2k",
+  "tags": [
+    "file-format",
+    "firmware",
+    "embedded"
+  ],
+  "user": "pbm",
+  "time": "Sep 8, 2013 at 18:53",
+  "comments": [
+    {
+      "user": "pbm",
+      "text": "This file is partly similar to one which is described in article: devttys0.com/2011/06/mystery-file-system but files inside are not packed and I also cannot match offset and size in directory.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I managed to solve problem.\n\nFirst file in directory is ZSP.bin. It doesn't matter if offset of this file is 16 or 32 bit because in both cases is 0. As I know where directory ends and first file after directory should be ZSP.bin.\n\nBelow there is last two lines of last directory entry and first line of which I suspected should be ZSP.bin.\n\n```\n00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00 \nFC 94 6D 00  53 25 01 00  00 00 00 00  00 00 FF EE\n11 00 10 00  30 00 00 00  10 00 00 00  00 00 00 00\n\n```\nEach directory entry ends with FF EE, so I checked offset of next byte and assumed that it will be begin of ZSP.bin. Offset of it was 0x2a2d0. Then I checked size of ZSP.bin.\n\nI know that where it is, but I didn't know if it is 16 bits or 32 bits (B4 C3 or B4 C3 0C 00). When I added B4 C3 as 16 bits unsigned to my known offset 0x2a2d0 I landed at address 0x36684 which doesn't look like beginning of XML file (which is third in directory, but second one have 0 length). So I tried adding 0xcc3b4 (32 bits value) to my offset, which gives me 0xf6684 and at this address there was beginning of XML file... :)\n\nSo I modified my code:\n\n```\noffset = struct.unpack(\"I\", body[256:260])[0] + 172752\nsize = struct.unpack(\"I\", body[260:264])[0]\n\n```\nAfter manual check of some random not binary files all of them were ok (proper begins and ends of HTML and XML, GIFs identified as GIFs)...\n\nBTW, idea of checking first file in directory not this GIFs was first thought that got to my mind after I woke up... :)\n\n",
+      "votes": "5",
+      "user": "pbm",
+      "time": "Sep 8, 2013 at 7:42",
+      "is_accepted": true,
+      "comments": []
+    },
+    {
+      "content": "I couldn't get a comment to format right .. so forgive this being a new reply.\nHere is the header format:  \n\n```\noffset:length   description\n-------------   -----------\n0x00 : 4        unknown, probably 2 16-byte words for a version or file ID\n0x04 : 4        size of the data block containing file data\n0x08 : 4        unknown\n0x0C : 4        offset to the data block\n0x10 : 4        number of file entries\n0x14 : 12       unknown / padding\n\n```\nThe file header can be read using this:  \n\n```\nsize_of_data, offset_to_data, number_of_files = struct.unpack(\"< 4x L 4x L L 12x\", header)  \n\n```\nEach file entry looks like:  \n\n```\noffset:length   description\n-------------   -----------\n0x000 : 256     file path\n0x100 : 4       offset to file in data block\n0x104 : 4       size of file data\n0x108 : 8       unknown\n\n```\nThen for each file entry:  \n\n```\nfilepath, offset, size = struct.unpack(\"< 256s L L 8x\", body)  \n\n```\nThe final offset for a file is:\n\n```\noffset = offset + offset_to_data\n\n```\n",
+      "votes": "5",
+      "user": "David",
+      "time": "Sep 8, 2013 at 18:21",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "pbm",
+          "text": "Thanks for feedback. It should be reasonable to assume that there is offset of data block in header, I don't know why I haven't think of it. But when I found it I never looked at header again. About entries in directory: it is weird to me that at the end of every entry there is \"end mark\": FF EE, because all entries are have the same length. In fact you could calculate length of each directory entry from offset_to_data / number_of_files, so this separator is not needed... Thanks again. Your code will definitely help make my script more beautiful... :)",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I know this is an old thread, but I just wanted to add that your Hauwei E586 is probably based on the HiSierrra Chipset and Firmware. (That is, Huawei firmwares starting with \"21.\" when using the Huawei Modem Flasher. ) This is using an embedded linux server, unlike those MiFi's based on the Qualcomm chips with firmwares strting with \"11.\". Here is another interesting thread on reversing the firmware on one of these (E589). \n\nMy question is, did you also have to deal with a checksum for the entire binary? \n(Do you know how to calculate it, and where it's located?)\n\nPS. This was meant as a comment, but I still don't have the required Rep. to do that.\n\n",
+      "votes": "1",
+      "user": "not2qubit",
+      "time": "Mar 6, 2014 at 12:02",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "pbm",
+          "text": "My router wasn't Linux - it was VxWorks and I'm sure about it. I didn't changed anything in files so there was no need to recalculate checksum and I have no idea where it was located...",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

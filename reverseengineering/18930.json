@@ -1,0 +1,63 @@
+{
+    "title": "IDA function never called and only cross-referenced as data",
+    "link": "https://reverseengineering.stackexchange.com/questions/18930/ida-function-never-called-and-only-cross-referenced-as-data",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>When I press the  <kbd>X</kbd> key (list x-refs) on a function (<code>sub_xyz</code>) to see which functions call it, I only saw <code>dd offset sub_xyz</code> twice, with no <code>call sub_xyz</code> instructions.</p>\n<p>There is no another place that write <code>call sub_xyz</code></p>\n<p>How can I see which functions are calling <code>sub_xyz</code>?\nIs this just IDA being confused?</p>\n</div>",
+    "votes": "4",
+    "answers": 2,
+    "views": "1k",
+    "tags": [
+        "ida",
+        "disassembly",
+        "functions",
+        "control-flow-graph"
+    ],
+    "user": "Keystone",
+    "time": "Jul 30, 2018 at 20:32",
+    "comments": [
+        {
+            "user": "Avery3R",
+            "text": "<span class=\"comment-copy\">Can you take a screenshot of the area around the <code>dd sub_xyz</code> or provide the binary if possible?</span>",
+            "time": null
+        },
+        {
+            "user": "Keystone",
+            "text": "<span class=\"comment-copy\">That not possible.  What do I need to look there? Is that anti debugging?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Although Nirlzr's answer explains it pretty well, here's an example that considers C++ code and vtables are present. The code is taken from <a href=\"https://www.hackerearth.com/practice/notes/virtual-function-and-virtual-table-in-c/\" rel=\"nofollow noreferrer\">here</a></p>\n<pre><code>#include &lt;iostream&gt;\nusing namespace std;\nclass Vehicle {\npublic:\n  virtual void ApplyBreaks() { cout &lt;&lt; \"Vehicle Break\" &lt;&lt; endl; }\n  virtual void ApplyHorns() { cout &lt;&lt; \"Vehicle Horns\" &lt;&lt; endl; }\n};\n\nint main() {\n  Vehicle *v = new Vehicle();\n  v-&gt;ApplyBreaks(); // Calls vehicle ApplyBreak\n  v-&gt;ApplyHorns();  // Calls vehicle ApplyHorn\n}\n</code></pre>\n<p>Compiling with g++ and opening in IDA references to <code>ApplyBreaks</code> are such.</p>\n<p><a href=\"https://i.sstatic.net/SBR9c.png\" rel=\"nofollow noreferrer\"><img alt=\"References to ApplyBreaks\" src=\"https://i.sstatic.net/SBR9c.png\"/></a></p>\n<p>This is very common in C++ applications to have function references in vtables. Additionally while init in <code>Vehicle</code> this vtable is set in the object as you can see here.</p>\n<p><a href=\"https://i.sstatic.net/p6BTs.png\" rel=\"nofollow noreferrer\"><img alt=\"contructor\" src=\"https://i.sstatic.net/p6BTs.png\"/></a></p>\n<p>While calling member functions for this class in <code>main</code> the addresses are accessed like an array with offsets defined at compile time.</p>\n<p><a href=\"https://i.sstatic.net/KBsg7.png\" rel=\"nofollow noreferrer\"><img alt=\"gdb vtable dump\" src=\"https://i.sstatic.net/KBsg7.png\"/></a></p>\n<p>At <code>main+48</code> the first(0th) member <code>ApplyBreaks</code> is accessed and at <code>main+71</code> <code>ApplyHorns</code> is accessed which is next to <code>ApplyBreaks</code>.</p>\n</div>",
+            "votes": "4",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">Yeah, VTables are kind of a very common scenario this could happen in. Maybe I should have put more focus on that. Great answer, +1 :)</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>If there are no other references, this indicates there are no <code>call sub_xyz</code> (that IDA identified, at least). Instead, IDA only identified one cross-reference to <code>sub_xyz</code>, and that reference was a hardcoded offset in a data variable.</p>\n<p>Usually, there's a piece of code that accesses that data and indirectly calls the function, so you could search for cross-references to that data area. You should note the reference does not have to reference where the <code>sub_xyz</code>'s offset it. Instead, <code>sub_xyz</code>'s offset may be part of a bigger structure (or an array, or an array of structures), which may be enumerated. You'll need to search for references that point around that area (these could also be offsets to areas with higher addresses which are then being subtracted).</p>\n<h2>Lets have an example</h2>\n<p>Assume that when looking up cross-references to <code>sub_xyz</code> you've found only one, at address <code>00008540</code> depicted below.</p>\n<pre><code>unk_00008538\n    00008538    dd offset sub_foo\n    0000853c    dd aFuncionFoo      ; \"Function Foo\"\n    00008540    dd offset sub_xyz       &lt;- our sub_xyz reference\n    00008544    dd aFunctionXYZ     ; \"Function XYZ\"\n    00008548    dd offset sub_abc\n    0000854c    dd aFunctionABC     ; \"Function ABC\"\n</code></pre>\n<p>You can notice above <code>dd offset sub_xyz</code> (located at address <code>00008540</code>) you've got an offset to another subroutine, <code>sub_foo</code> (located at <code>00008538</code>), and that although there're no cross-references to <code>dd offset sub_xyz</code> (at <code>00008540</code>) there are cross-references to <code>dd offset sub_foo</code> (at <code>00008538</code>).</p>\n<p>You can also notice there's another subroutine offset at <code>00008548</code>, and that after every subroutine offset there's another offset, to a string that coincidentally has the function's name in it. This is obviously a relatively easy example and we can assume these are actually three instances of a structure with two members each, that may be define like that:</p>\n<pre><code>typedef struct FunctionDefinition\n{\n    void* func_addr;\n    char* func_name;\n} _FunctionDefinition;\n</code></pre>\n<p>We can also guess we found an array of three instances of the <code>FunctionDefinition</code> structure, and that some piece of code enumerates the array and traverses all the functions.</p>\n<p>A more sophisticated example can include, for example, an array of functions and their network message identifier, where a function handling a network command is dispatched depending on the type of message received, for example. You can also have found a global object of any class if you're dealing with C++, or perhaps even a function virtual table. The options are endless, and you'll need to figure it out using the specific scenario you encounter and and additional info you can gather (say, the code referencing that bigger structure or array).</p>\n</div>",
+            "votes": "2",
+            "user": "NirIzr",
+            "time": "Jul 30, 2018 at 20:28",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Keystone",
+                    "text": "<span class=\"comment-copy\">There is no <code>call sub_xyz</code> and I saw <code>dd sub_xyz</code> twice in xref, so you tell seach xref in the area of <code>sub_xyz</code> and looking call to there?</span>",
+                    "time": null
+                },
+                {
+                    "user": "NirIzr",
+                    "text": "<span class=\"comment-copy\">@Keystone I've added an example, i hope this will help you understand this better.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

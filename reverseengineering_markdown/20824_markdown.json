@@ -1,0 +1,38 @@
+{
+  "title": "x86-64 CALL opcode + disassembly",
+  "link": "https://reverseengineering.stackexchange.com/questions/20824/x86-64-call-opcode-disassembly",
+  "content": "Working a basic buffer overflow on a 64bit system and putting together some basic shellcode. The main program does a call to puts@plt. When I disassemble main in gdb, the opcodes show as:\n\n```\ne8 6b fe ff ff    0x555555554580 <puts@plt>\n\n```\nI looked at the call instruction set reference which says its a relative displacement from the next instruction. The next instruction is:\n\n```\n0x0000555555554715 b8 00 00 00 00 mov eax, 0x0\n\n```\nHow is \"6b fe ff ff\" displaced from \"0x555555554715\" to get the puts@plt address?\n\nI'm dropping my shellcode onto the stack, is it possible to call to puts@plt from there as a displacement from the next instruction? Or do I just need to setup the registers for a syscall?\n\n",
+  "votes": "2",
+  "answers": 1,
+  "views": "4k",
+  "tags": [
+    "assembly",
+    "binary-analysis",
+    "buffer-overflow",
+    "shellcode"
+  ],
+  "user": "gr0k",
+  "time": "Mar 9, 2019 at 14:19",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "relative address can be forward or backward from end of current instruction\nor start of next instruction   \n\nthat e8 00 00 00 00 will be call to the next immediate instruction\nforward  can be    e8 ( 00 00 00 00 .... 7f  ff ff ff )\nbackward can be    e8 ( ff ff ff ff .... 80 00 00 00 ) \n\nso your immediate here is 0xfffffe6b  that is == -0x195 \n\nnegative numbers have their sign bit (31st bit ) set  \n\n```\n0 & 0x80000000 == 0x80000000  will be False \nand\n0xffffffff & 0x80000000 == 0x80000000  will be True\n\nC:\\>python -c \"print((0xffffffff&0x80000000)==0x80000000);print((0x0&0x80000000)==0x80000000)\"\nTrue\nFalse\n\n```\nso we can find out negative and positive numbers \nnegative jumps backward \npositive jumps forward\n\npositive 1 is 0 + 1\npositive 2 is 0 + 2 and so on ......  \n\nnegative 1 is 0x10000000 - 1\nnegative 2 is 0x10000000 - 2 and so on .......   \n\n```\n>>> for i in range (1,20,1):\n...     print (  \"-%02d    ==    %x    +%02d    ==    %x\" %  (i,( 0x10000000-i) ,i,( 0 + i )) )\n...\n-01    ==    fffffff    +01    ==    1\n-02    ==    ffffffe    +02    ==    2\n-03    ==    ffffffd    +03    ==    3\n-04    ==    ffffffc    +04    ==    4\n-05    ==    ffffffb    +05    ==    5\n-06    ==    ffffffa    +06    ==    6\n-07    ==    ffffff9    +07    ==    7\n-08    ==    ffffff8    +08    ==    8\n-09    ==    ffffff7    +09    ==    9\n-10    ==    ffffff6    +10    ==    a\n-11    ==    ffffff5    +11    ==    b\n-12    ==    ffffff4    +12    ==    c\n-13    ==    ffffff3    +13    ==    d\n-14    ==    ffffff2    +14    ==    e\n-15    ==    ffffff1    +15    ==    f\n-16    ==    ffffff0    +16    ==    10\n-17    ==    fffffef    +17    ==    11\n-18    ==    fffffee    +18    ==    12\n-19    ==    fffffed    +19    ==    13\n\n```\nso i subtract 0xfffffe6b from 0x100000000\n\n```\nC:\\>python -c \"print hex(0xfffffe6b - 0x100000000)\"\n-0x195L\n\nC:\\>python -c \"print hex(0x0000555555554715 + (-0x195))\"\n0x555555554580L\n\n```\ndemo in radare2\n\n```\n[0x00000000]> w \\xe8\\x00\\x00\\x00\\x00 ; pd 1\n            0x00000000      e800000000     call 5\n[0x00000000]> w \\xe8\\x01\\x00\\x00\\x00 ; pd 1\n            0x00000000      e801000000     call 6\n[0x00000000]> w \\xe8\\x02\\x00\\x00\\x00 ; pd 1\n            0x00000000      e802000000     call 7\n[0x00000000]> w \\xe8\\x08\\x00\\x00\\x00 ; pd 1\n            0x00000000      e808000000     call 0xd\n[0x00000000]> w \\xe8\\xff\\xff\\xff\\xff ; pd 1\n            0x00000000      e8ffffffff     call 4\n[0x00000000]> w \\xe8\\xfe\\xff\\xff\\xff ; pd 1\n            0x00000000      e8feffffff     call 3\n[0x00000000]> w \\xe8\\x6b\\xff\\xff\\xff ; pd 1\n            0x00000000      e86bffffff     call 0xffffff70\n[0x00000000]> w \\xe8\\x6b\\xfe\\xff\\xff ; pd 1\n            0x00000000      e86bfeffff     call 0xfffffe70\n[0x00000000]>\n\n```\nsimulating an actual call opcodes \n\n```\nopening a random elf file \n:\\>radare2 elfie\n\ngetting the address of sym.puts\n[0x08048150]> ?v sym.puts\n0x8048de0\n\ncalculating relative address for force writing a call to sym.puts\n[0x08048150]> ?v sym.puts + 0x195 - 0x5\n0x8048f70\n\nseeking to target address\n[0x08048150]> s sym.puts + 0x195 - 0x5\n\nsetting cache = true for writing to memory (radare2 opens in read only mode)\n[0x08048f70]> e io.cache = true\n\nchecking the present disassembly\n[0x08048f70]> pd 1\n        `=< 0x08048f70      ebd7           jmp 0x8048f49\npatching a call to sym.puts in place \n\n[0x08048f70]> w \\xe8\\x6b\\xfe\\xff\\xff\n\nchecking disassembly again \n\n[0x08048f70]> pd 1\n            0x08048f70      e86bfeffff     call sym.puts\n\n```\n",
+      "votes": "5",
+      "user": "blabb",
+      "time": "Mar 9, 2019 at 21:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "gr0k",
+          "text": "I see how the -0x195 math works, but why the subtraction from 0x10000000? If forward can be 00 00 00 08 to ff ff ff ff and backward can be ff ff ff ff to 00 00 00 00, with the overlap, how do you know which direction the call is jumping?",
+          "time": null
+        },
+        {
+          "user": "blabb",
+          "text": "added further details  to answer btw there is no overlap it was typo corrected the range",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

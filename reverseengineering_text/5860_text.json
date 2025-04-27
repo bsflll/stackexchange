@@ -1,0 +1,56 @@
+{
+    "title": "Reverse Engineering program written in Python, compiled with \"freeze\"",
+    "link": "https://reverseengineering.stackexchange.com/questions/5860/reverse-engineering-program-written-in-python-compiled-with-freeze",
+    "content": "I am attempting to reverse engineer an EXE compiled using the utility \"Freeze\" or \"pfreeze\" that ships with Python (not to get confused with \"cx_freeze\"). Inside the EXE there is an array of memory called <pre><code>PyImport_FrozenModules</code></pre>. When the program starts up that array gets populated with the programs bytecode(aka .pyo/.pyc files). I have been researching this for a few months now and i'm at a bit of a standstill. I need to find a way to extract the bytecode out of that array. The program originally connected to a server so once the EXE is executed, it will run for about 10-20 seconds before crashing. To prolong the 10-20 seconds I need to suspend the program(this is easily done with \"Process Explorer\")\nWhat i need help on is actually dumping the <pre><code>PyImport_FrozenModules</code></pre>, so i can get the .pyc's and go on from there.\nI've been able to get it to this :\n\n\n link : http://gyazo.com/83bcde5240df7fb9ec34e7e3de7699ba \nby loading the exe in a debugger like ollydbg, finding the line of the import, and just setting them to NOP'S.\nSome people say i have to write a script for this, and others says it's easier than i think. I just have no clue where to start.\nAny help is appreciated. Thanks.\n",
+    "votes": "10",
+    "answers": 1,
+    "views": "10k",
+    "tags": [
+        "python"
+    ],
+    "user": "ThatOneGuy",
+    "time": "Jul 15, 2014 at 9:48",
+    "comments": [
+        {
+            "user": "Prince Frizzy",
+            "text": "I've learned you can easy find the functions in All Names. Also where, how, and when do you calculate a python magic number for a different version of python?\n",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "This is how you should proceed in such cases.\nStep 1 : Load the executable in a debugger like Ollydbg.\nStep 2 : In the memory dump window, navigate to <pre><code>PyImport_FrozenModules</code></pre> by pressing Ctrl + G\nStep 3 : <pre><code>PyImport_FrozenModules</code></pre> is a pointer which is initialized to point to an array of <pre><code>struct _frozen</code></pre> records. Follow this pointer in <pre><code>dump</code></pre>.\nStep 4 : Now you are at the position where there is an array of <pre><code>_frozen</code></pre> structures. This structure is defined as \n<pre><code>struct _frozen {\n    char *name;\n    unsigned char *code;\n    int size;\n};\n</code></pre>\nThe above array is terminated by a structure whose all of its members are null.\nStep 5 : In the above structure, the first member is the pointer to the name of the frozen module, the second member is a pointer to the bytecode of the module. (This is the thing which you are looking for). The last member will give you the size in bytes of the bytecode. Using the size, dump out the bytecode to a file.\nStep 6 : The bytecode which you have just dumped out does not contain the magic header value for pyc  files (for python 2.7 this is 03 F3 0D 0A, followed by a 4 byte timestamp)\nAdd the header and now the file should be decompile-able. \nTo automate the above process, you could also write a script.\n\nUPDATE\nHere is a PyCommand ( a immunity debugger script) to dump the frozen modules. You need to run the script after all frozen modules are loaded. For this you may set a breakpoint on \nthe function <pre><code>PyImport_ImportFrozenModule()</code></pre> so that you can track each frozen module as they are loaded. If you are new to Immunity Debugger see this and this\n<pre><code>import immlib\n\nDESC = 'PyCommand to dump frozen python modules'\nPYTHONMAGIC = '\\x03\\xF3\\x0D\\x0A\\x00\\x00\\x00\\x00' # Change this value according to the version of python used. The value given here is for Python 2.7\n\n'''\nRun this pycommand when all frozen modules are loaded.\nThis will dump each frozen module in a .pyc file in \nimmunity debugger installation directory\n'''\n\ndef main(args):\n    imm = immlib.Debugger()\n    addr = imm.getAddress('PyImport_FrozenModules')\n    structAddr = imm.readLong(addr)\n\n    while True:\n        ptrToName = imm.readLong(structAddr)\n        ptrToCode = imm.readLong(structAddr + 4)\n        sizeOfCode = imm.readLong(structAddr + 8)\n        structAddr += 12\n\n        # The array is terminated by a structure whose members are null\n        if ptrToName == 0 and ptrToCode == 0 and sizeOfCode == 0:\n            break\n\n        if sizeOfCode > 0 and sizeOfCode < 2147483647:            \n            moduleName = imm.readString(ptrToName)\n            moduleCode = imm.readMemory(ptrToCode, sizeOfCode)\n\n            # You can change the output path here\n            open(moduleName + '.pyc', 'wb').write(PYTHONMAGIC + moduleCode) \n\n    return '[*] Frozen modules dumped'\n</code></pre>\nAfter the frozen modules are dumped, use a decompiler on the resultant pyc files. You may use Easy Python Decompiler for that.\n",
+            "votes": "16",
+            "user": "0xec",
+            "time": "Jul 17, 2014 at 17:15",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "ThatOneGuy",
+                    "text": "<span class=\"comment-copy\">Thank you very much for the reply. I'm just stuck on getting to the array of \"struct_frozen\". Also, i'm not sure on what you mean when you said \"dump out the bytecode to a file\". Thanks.</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@ThatOneGuy I mean in Ollydbg memory dump window, select the  range containing the bytecode, next right click -&gt; Backup -&gt; Save data to file. This way you can dump the bytecode.</span>",
+                    "time": null
+                },
+                {
+                    "user": "ThatOneGuy",
+                    "text": "<span class=\"comment-copy\">I'm getting stuck on this, my bad. Tell me if this is right: I'll find this line in the dissasembler <a href=\"http://gyazo.com/f9e8c1db5bd63b314658cc901792a184\" rel=\"nofollow noreferrer\">gyazo.com/f9e8c1db5bd63b314658cc901792a184</a> Then, i right click and hit \"follow in dump\" and then i go on from there. Is that correct? I'm sorry about his, very new and nervous.</span>",
+                    "time": null
+                },
+                {
+                    "user": "ThatOneGuy",
+                    "text": "<span class=\"comment-copy\">For an example, i'll copy the byte from the dump after right clicking and hitting \"Follow in dump\" and only get Hex values like: 00401299  A1 C4 20 40 00</span>",
+                    "time": null
+                },
+                {
+                    "user": "0xec",
+                    "text": "<span class=\"comment-copy\">@ThatOneGuy The image you have posted in the comment is not at all right. You need to follow <b><code>PyImport_FrozenModules</code></b> in the <b>memory dump window</b></span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,66 @@
+{
+  "title": "No dynamic symbol table but resolution of method from shared libraries is working",
+  "link": "https://reverseengineering.stackexchange.com/questions/3823/no-dynamic-symbol-table-but-resolution-of-method-from-shared-libraries-is-workin",
+  "content": "I want to find how can I identify calls to shared libraries in GDB only. On a stripped binary, I cannot found the dynamic symbol table:\n\n```\n$> objdump -tT crackme-01\n\ncrackme-01:     file format elf32-i386\n\nobjdump: crackme-01: not a dynamic object\nSYMBOL TABLE:\nno symbols\n\nDYNAMIC SYMBOL TABLE:\nno symbols\n\n```\nBut still the dynamic library resolution is present, for instance before the call to strcmp:\n\n```\n0x08048330 in ?? ()\n...\n0xb7ff2420 in _dl_runtime_resolve () from /lib/ld-linux.so.2\n0xb7fec020 in _dl_fixup () from /lib/ld-linux.so.2\n0xb7ff6678 in __x86.get_pc_thunk.bx () from /lib/ld-linux.so.2\n0xb7fec033 in _dl_fixup () from /lib/ld-linux.so.2\n0xb7fe7600 in _dl_lookup_symbol_x () from /lib/ld-linux.so.2\n0xb7fe6df9 in do_lookup_x () from /lib/ld-linux.so.2\n0xb7fedb70 in _dl_name_match_p () from /lib/ld-linux.so.2\n...\n0xb7ff5d74 in strcmp () from /lib/ld-linux.so.2\n\n```\nMy question is how the symbol table is hidden from readelf but still be used during execution ?\n\n",
+  "votes": "7",
+  "answers": 3,
+  "views": "6k",
+  "tags": [
+    "elf"
+  ],
+  "user": "Kartoch",
+  "time": "Jun 7, 2014 at 12:57",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "In fact, they probably used the sstrip software from the package ElfKicker. According to the sstrip README file:\n\nIn fact, sstrip remove all section information from the executable and keep the executable still usable.\n\nBut let see the different levels is strip that we can reach.\n\nLet consider a program (similar to the one looked at in the question) with no stripping a all. \n\n```\n$> objdump -tT ./crackme\n\n./crackme:     file format elf32-i386\n\nSYMBOL TABLE:\n08048134 l    d  .interp            00000000              .interp\n08048148 l    d  .note.ABI-tag      00000000              .note.ABI-tag\n08048168 l    d  .note.gnu.build-id 00000000              .note.gnu.build-id\n0804818c l    d  .gnu.hash          00000000              .gnu.hash\n080481ac l    d  .dynsym            00000000              .dynsym\n0804822c l    d  .dynstr            00000000              .dynstr\n...\n080497dc g       .bss               00000000              _end\n08048390 g     F .text              00000000              _start\n080485f8 g     O .rodata            00000004              _fp_hw\n080497d8 g       .bss               00000000              __bss_start\n08048490 g     F .text              00000000              main\n00000000  w      *UND*              00000000              _Jv_RegisterClasses\n080497d8 g     O .data              00000000              .hidden __TMC_END__\n00000000  w      *UND*              00000000              _ITM_registerTMCloneTable\n080482f4 g     F .init              00000000              _init\n\nDYNAMIC SYMBOL TABLE:\n00000000      DF *UND*              00000000  GLIBC_2.0   strcmp\n00000000      DF *UND*              00000000  GLIBC_2.0   read\n00000000      DF *UND*              00000000  GLIBC_2.0   printf\n00000000      DF *UND*              00000000  GLIBC_2.0   system\n00000000  w   D  *UND*              00000000              __gmon_start__\n00000000      DF *UND*              00000000  GLIBC_2.0   __libc_start_main\n080485fc g    DO .rodata            00000004  Base        _IO_stdin_used\n\n```\n```\n$> strip ./crackme-striped\n$> objdump -tT ./crackme-striped \n\n./crackme-striped:     file format elf32-i386\n\nSYMBOL TABLE:\nno symbols\n\nDYNAMIC SYMBOL TABLE:\n00000000     DF *UND*   00000000  GLIBC_2.0   strcmp\n00000000     DF *UND*   00000000  GLIBC_2.0   read\n00000000     DF *UND*   00000000  GLIBC_2.0   printf\n00000000     DF *UND*   00000000  GLIBC_2.0   system\n00000000  w  D  *UND*   00000000              __gmon_start__\n00000000     DF *UND*   00000000  GLIBC_2.0   __libc_start_main\n080485fc g   DO .rodata 00000004  Base        _IO_stdin_used\n\n```\nAs you see, the dynamic symbols are still here when strip is applied. The rest is just removed cleanly.\n\nFinally, lets take a look at what happen when using sstrip.\n\n```\n$> sstrip ./crackme-sstriped\n$> objdump -tT ./crackme-sstriped \n\n./crackme-sstriped:     file format elf32-i386\n\nobjdump: ./crackme-sstriped: not a dynamic object\nSYMBOL TABLE:\nno symbols\n\nDYNAMIC SYMBOL TABLE:\nno symbols\n\n```\nAs you can notice, all symbols, including dynamic symbols have been removed. In fact, all the symbols pointing towards the PLT are removed and addresses are left as static addresses. Here is an example with the _start procedure preamble, first all the symbols:\n\n```\n 0x8048390 <_start>:    xor    %ebp,%ebp\n 0x8048392 <_start+2>:  pop    %esi\n 0x8048393 <_start+3>:  mov    %esp,%ecx\n 0x8048395 <_start+5>:  and    $0xfffffff0,%esp\n 0x8048398 <_start+8>:  push   %eax\n 0x8048399 <_start+9>:  push   %esp\n 0x804839a <_start+10>: push   %edx\n 0x804839b <_start+11>: push   $0x80485e0\n 0x80483a0 <_start+16>: push   $0x8048570\n 0x80483a5 <_start+21>: push   %ecx\n 0x80483a6 <_start+22>: push   %esi\n 0x80483a7 <_start+23>: push   $0x8048490\n 0x80483ac <_start+28>: call   0x8048380 <__libc_start_main@plt>\n 0x80483b1 <_start+33>: hlt    \n\n```\nAnd, then stripep:\n\n```\n0x8048390:  xor    %ebp,%ebp\n0x8048392:  pop    %esi\n0x8048393:  mov    %esp,%ecx\n0x8048395:  and    $0xfffffff0,%esp\n0x8048398:  push   %eax\n0x8048399:  push   %esp\n0x804839a:  push   %edx\n0x804839b:  push   $0x80485e0\n0x80483a0:  push   $0x8048570\n0x80483a5:  push   %ecx\n0x80483a6:  push   %esi\n0x80483a7:  push   $0x8048490\n0x80483ac:  call   0x8048380 <__libc_start_main@plt>\n0x80483b1:  hlt    \n\n```\nAnd, finally, the sstrip version:\n\n```\n0x8048390:  xor    %ebp,%ebp\n0x8048392:  pop    %esi\n0x8048393:  mov    %esp,%ecx\n0x8048395:  and    $0xfffffff0,%esp\n0x8048398:  push   %eax\n0x8048399:  push   %esp\n0x804839a:  push   %edx\n0x804839b:  push   $0x80485e0\n0x80483a0:  push   $0x8048570\n0x80483a5:  push   %ecx\n0x80483a6:  push   %esi\n0x80483a7:  push   $0x8048490\n0x80483ac:  call   0x8048380\n0x80483b1:  hlt    \n\n```\nSurprisingly the executable is still functional. Let's compare what ELF headers are left after strip and sstrip (as suggested Igor). First, after a strip:\n\n```\n$> readelf -l crackme-striped \n\nElf file type is EXEC (Executable file)\nEntry point 0x8048390\nThere are 8 program headers, starting at offset 52\n\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  PHDR           0x000034 0x08048034 0x08048034 0x00100 0x00100 RWE 0x4\n  INTERP         0x000134 0x08048134 0x08048134 0x00013 0x00013 RWE 0x1\n      [Requesting program interpreter: /lib/ld-linux.so.2]\n  LOAD           0x000000 0x08048000 0x08048000 0x006b4 0x006b4 RWE 0x1000\n  LOAD           0x0006b4 0x080496b4 0x080496b4 0x00124 0x00128 RWE 0x1000\n  DYNAMIC        0x0006c0 0x080496c0 0x080496c0 0x000e8 0x000e8 RWE 0x4\n  NOTE           0x000148 0x08048148 0x08048148 0x00044 0x00044 RWE 0x4\n  GNU_EH_FRAME   0x000600 0x08048600 0x08048600 0x00024 0x00024 RWE 0x4\n  GNU_STACK      0x000000 0x00000000 0x00000000 0x00000 0x00000 RWE 0x10\n\n Section to Segment mapping:\n   Segment Sections...\n   00     \n   01     .interp \n   02     .interp .note.ABI-tag .note.gnu.build-id .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rel.dyn .rel.plt .init .plt .text .fini .rodata .eh_frame_hdr .eh_frame \n   03     .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss \n   04     .dynamic \n   05     .note.ABI-tag .note.gnu.build-id \n   06     .eh_frame_hdr \n   07     \n\n```\nAnd, then the version that went through with sstrip:\n\n```\n$> readelf -l ./crackme-sstriped \n\nElf file type is EXEC (Executable file)\nEntry point 0x8048390\nThere are 8 program headers, starting at offset 52\n\nProgram Headers:\n  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align\n  PHDR           0x000034 0x08048034 0x08048034 0x00100 0x00100 RWE 0x4\n  INTERP         0x000134 0x08048134 0x08048134 0x00013 0x00013 RWE 0x1\n      [Requesting program interpreter: /lib/ld-linux.so.2]\n  LOAD           0x000000 0x08048000 0x08048000 0x006b4 0x006b4 RWE 0x1000\n  LOAD           0x0006b4 0x080496b4 0x080496b4 0x00124 0x00128 RWE 0x1000\n  DYNAMIC        0x0006c0 0x080496c0 0x080496c0 0x000e8 0x000e8 RWE 0x4\n  NOTE           0x000148 0x08048148 0x08048148 0x00044 0x00044 RWE 0x4\n  GNU_EH_FRAME   0x000600 0x08048600 0x08048600 0x00024 0x00024 RWE 0x4\n  GNU_STACK      0x000000 0x00000000 0x00000000 0x00000 0x00000 RWE 0x10\n\n```\nAs you can see, the name of the sections have also been removed (as announced in README file).\n\nNote that, applying sstrip on an executable that went through upx render the final executable unusable (I tried).\n\n",
+      "votes": "5",
+      "user": "perror",
+      "time": "Mar 8, 2014 at 20:05",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "Igor Skochinsky",
+          "text": "I don't think sstrip removes dynamic symbols.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "Does the last one even run? Can you do readelf -l on it?",
+          "time": null
+        },
+        {
+          "user": "perror",
+          "text": "In fact, I never took the time to look at how it work internally. But, it certainly worth to dig it.",
+          "time": null
+        },
+        {
+          "user": "Igor Skochinsky",
+          "text": "Okay, so it does retain the DYNAMIC entry with the symbols. But it seems objdump is too dumb (ha ha) to handle this.",
+          "time": null
+        },
+        {
+          "user": "Celelibi",
+          "text": "Sorry to contradict you @perror, but the dynamic symbols are not removed. The section table is removed, and objdump and readelf rely on the sections to find their way through the binary (be it through libbfd if so). But the sections are absolutely not needed and actually not used by the dynamic linker (usually something like ld.so). readelf -d would show a SYMTAB entry which points to the symbol table which can be sanely interpreted together with the DYNAMIC entries STRTAB, JMPREL and RELA.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "So it looks like your executable does use shared objects after all. I'll use my psychic powers and hazard a guess that it's been compressed with something like UPX.\n\nUPX takes an executable (either static or dynamic), compresses its header and segments and adds a small unpacking stub. The resulting executable looks like static to the OS.\n\nHowever, when it is run, the unpacker stub unpacks the segments and the header into memory, and loads the dynamic interpreter if it was required by the original program. So at runtime, the file does use dynamic symbols (via the interpreter).\n\nEDIT: as shown by perror, it's possible that the file is not actually packed but just had its section table stripped. While this does not affect its runnability it does break many tools, including, apparently, objdump and readelf. You may want to try our Extensive File Dumper (EFD) tool which can print the dynamic symbol table even if the section table has been stripped.\n\nEDIT2: it seems readelf can handle such files after all. Try running readelf -D -s <file.elf>. (I first tried --dyn-syms but it did not work.)\n\n",
+      "votes": "4",
+      "user": "Igor Skochinsky",
+      "time": "Mar 8, 2014 at 20:18",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "The difference is as follows:\n\nThe symbol table contains symbols for functions whose code is in the binary itself.\n\nThe second snippet of code you listed above shows names of functions whose code is outside of the binary, in shared libraries.\n\n",
+      "votes": "2",
+      "user": "Jason Geffner",
+      "time": "Mar 7, 2014 at 21:59",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

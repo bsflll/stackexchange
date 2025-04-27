@@ -1,0 +1,49 @@
+{
+    "title": "Seemingly useless instruction inside function body",
+    "link": "https://reverseengineering.stackexchange.com/questions/32925/seemingly-useless-instruction-inside-function-body",
+    "content": "I am trying to reverse RtlInitUnicodeStringEx from ntdll.dll as an exercise to myself. Here is dissambled version from x64dbg.\n\nI was able to produce almost exactly the same binary from my own code, except for the <pre><code>int3</code></pre> instruction in line <pre><code>0x00007FFDE53AA856</code></pre>.\nI have analysed the module using both ghidra and x64dbg but I was not able to find any jumps to that line. I also considered it is used to align, but next instruction is not aligned to any power of two boundary.\nMy search online led to <pre><code>__debugbreak</code></pre> intrinsic. According to Microsoft docs it \"Causes a breakpoint in your code, where the user will be prompted to run the debugger.\". However, It doesn't make sense that extra <pre><code>int3</code></pre> is caused by <pre><code>__debugbreak</code></pre> as it is in an unreachable position.\nI assume existence of that instruction means something is going on that I am not aware of, because compiler wouldn't have put it there if it weren't for a reason. So, what is the reason compiler would <pre><code>int3</code></pre> instruction at a unreachable position?\nI am using cl.exe version 19.30.30715 and compiling with <pre><code>/c /O2s</code></pre> flags. I am viewing the result by using <pre><code>dumpbin /disasm</code></pre> on .obj file. Also tried to create a .dll from <pre><code>cl.exe /LD /O2s</code></pre> but it didn't make any difference.\n",
+    "votes": "1",
+    "answers": 2,
+    "views": "172",
+    "tags": [
+        "msvc"
+    ],
+    "user": "yasar",
+    "time": "Apr 30, 2024 at 18:17",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "This instruction is inserted after the functions <pre><code>ret</code></pre>, it is normally unreachable.\nIn case the <pre><code>ret</code></pre> instruction caused a memory access violation (or some other exception) - the exception handler will be called and the current state saved.\nThe exception handler can return execution to the original state, that is, to the instruction after the one that threw the exception, which is after the function's end.\nIn this case the <pre><code>int3</code></pre> will run and either:\nCrash (if there is no debugger attached or available) or break to the debugger.\nThe debugger, in turn, can \"handle\" (ignore) the <pre><code>int3</code></pre> and continue, running the next instruction that effectively returns <pre><code>0xC0000106</code></pre>\n",
+            "votes": "2",
+            "user": "Yotamz",
+            "time": "Apr 30, 2024 at 19:00",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yasar",
+                    "text": "<span class=\"comment-copy\">Interesting, it doesn't appear on my version though, any idea what compiler flags I might be missing?</span>",
+                    "time": null
+                },
+                {
+                    "user": "Yotamz",
+                    "text": "<span class=\"comment-copy\"><code>int3</code> is added between functions code by compilers when compiling <code>debug</code> builds (as opposed to <code>release</code>builds). This code in <code>ntdll</code> specifically returns <code>STATUS_NAME_TOO_LONG</code> error value, that makes sense in this context, not something generic that a compiler would add automatically.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "If you look through other functions in <pre><code>NTDLL.DLL</code></pre> you will see the addition of <pre><code>int3</code></pre>s after <pre><code>ret</code></pre> instructions is common.\nThis would appear to be a mitigation for straight-line speculation vulnerabilities. Originally discovered on <pre><code>ARM</code></pre>, the <pre><code>x86</code></pre> architecture was also found to be vulnerable.\nFor more information see here\nThe <pre><code>-mharden-sls=all</code></pre> compiler option can be used in gcc and clang to include these extra int3 instructions.\nI'm not sure what MSVC's equivalent option is.\n",
+            "votes": "1",
+            "user": "Ian Cook",
+            "time": "May 2, 2024 at 8:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yasar",
+                    "text": "<span class=\"comment-copy\">Closest option I could find was /Qspectre-jmp that puts int3 after jmp instruction. There is no mention of any option that puts int3 after ret anywhere.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

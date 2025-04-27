@@ -1,0 +1,46 @@
+{
+    "title": "undname.exe: invalid undecorated names",
+    "link": "https://reverseengineering.stackexchange.com/questions/24663/undname-exe-invalid-undecorated-names",
+    "content": "I've discovered undname.exe today and tried it on several functions. I got some incorrect results and I'm wondering why. I see two main reasons that could do that:\n\nThe mangling can change between msvc versions and I should find the version of undname.exe that fit my target\nThe tool I use to extract the function names gives inaccurate results\n\nHere's an example of a wrong result: \n<pre><code>Undecoration of :- \"?GetClassNameW@User@@QAE?AVFName@@H@Z\"\nis :- \"public: class FName __thiscall User::GetClassNameW(int)\"\n</code></pre>\nAfter trying this signature and receiving a stack error, I looked at the disassembled code of <pre><code>GetClassNameW</code></pre> and realised the function signature actually was <pre><code>void(__thiscall* user_getClassNameW)(User*, FName*, int);</code></pre> \nI do not know the exact version of msvc used to compile the example and it seems that the only way to download undname.exe is to install visual studio, so I can't easily test this.\nAny idea where the problem could come from?\n",
+    "votes": "2",
+    "answers": 2,
+    "views": "397",
+    "tags": [
+        "c++",
+        "msvc",
+        "name-mangling"
+    ],
+    "user": "Stud",
+    "time": "Apr 9, 2020 at 17:34",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "As @blabb says undname is correct so it's your other tool that is 'incorrect'.\nHowever, it's worth looking at this in more detail as it's probably not as incorrect as you think.\nTo understand this though you have to delve a little into ABIs and think how a C++ function call works in practice.\nFirstly, a C++ member function is in some sense like a C function with a 'hidden' <pre><code>this</code></pre> pointer passed as the first parameter.  (This is what <pre><code>__thiscall</code></pre> is saying behind the scenes.)\n<pre><code>// this function\nvoid class::member();\n// is really\nvoid __thiscall class::member();\n\n// and works like\nvoid __stdcall class_member( Class* this );\n</code></pre>\nSecondly, the caller of function returning a ('complicated') struct/class is responsible for allocating the memory for the struct/class and passing the function a pointer to this memory.  The function can then write the relevant details there.  Hence -\n<pre><code>// this function\ncomplex_struct_return_type function();  \n\n// works like\nvoid function( complex_struct_return_type * );\n</code></pre>\nPutting these together (and ignoring accessiility specifiers)-\n<pre><code>// this function\nFName __thiscall User::GetClassNameW( int param );\n\n// works like\nvoid __stdcall User_GetClassNameW( User* this, FName* pointer_to_return_value, int param );\n</code></pre>\nYou will see this is very similar is essence to your other tool's output.\nI'd just observe that -\n\nit is still labelling the function as <pre><code>__thiscall</code></pre>.  This doesn't quite make sense but is probably being done to indicate that the first parameter has special treatment in 32-bit code.\nit is changing the case of the initial letters.  This again is strictly incorrect.\n\n\nHow these parameters get passed (by msvc) depends on whether it's compiled for 32 or 64-bit .\n\nFor 32-bit code, <pre><code>this</code></pre> has special treatment and is passed in <pre><code>ecx</code></pre> with the rest of the parameters on the stack.\nFor 64-bit code, <pre><code>this</code></pre> is treated as like the other parameters and hence, being the first of up to 4 parameters being passed in registers will be in <pre><code>rcx</code></pre>\n",
+            "votes": "2",
+            "user": "Ian Cook",
+            "time": "Apr 11, 2020 at 8:01",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Stud",
+                    "text": "<span class=\"comment-copy\">I didn't know about the complex struct return thingy. Intuitively I thought it would put the address in eax instead of on the stack. Thanks for your answer!</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "there are lot of external utilities that can demangle a decorated name\ntry looking for vc++filt /\nor some online demangler  like this\nor you can probably code one using dbghelp api UndecorateSymbolName() in python with ctype / pywin32\nalso undname isn't erring your second guess must be right \nI just prototyped a similar function and looked at its demangled name\nit is entirely different from your demangle name here is a src code and output  \n<pre><code>#include <windows.h>\n#include <dbghelp.h>\n#include <stdio.h>\nvoid uselessname(HWND hwnd,LPWSTR lpcname,int mcnt)\n{\n    printf(\"%p %ws %d\n\",hwnd,lpcname,mcnt);\n    printf(\"%s\n%s\n%s\n\",__FUNCTION__,__FUNCDNAME__,__FUNCSIG__);   \n\n}\nint main (void) \n{\n    HWND cwnd =NULL;\n    wchar_t cname[50] = {L\"MANGLE AND DEMANGLE\"};\n    int cnt = 50;\n    uselessname(cwnd,cname,cnt);\n    char ret[0x100] = {0};\n    UnDecorateSymbolName(\"?GetClassNameW@User@@QAE?AVFName@@H@Z\",ret,0x100,0);\n    printf(\"%s\n\",ret);\n    return 0;\n}\n</code></pre>\noutput\n<pre><code>gcw.exe\n0000000000000000 MANGLE AND DEMANGLE 50\nuselessname\n?uselessname@@YAXPEAUHWND__@@PEA_WH@Z   <<<<<<<<<<<<<<<<<<<<<<<<<< must be like this\nvoid __cdecl uselessname(struct HWND__ *,wchar_t *,int)\npublic: class FName __thiscall User::GetClassNameW(int) <<<<< result of yours \nwhich is ?GetClassNameW@User@@QAE?AVFName@@H@Z\n</code></pre>\n",
+            "votes": "1",
+            "user": "blabb",
+            "time": "Apr 9, 2020 at 20:14",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Stud",
+                    "text": "<span class=\"comment-copy\">Thank you for your detailed answer, I definitly learned from it!</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

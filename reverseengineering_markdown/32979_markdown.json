@@ -1,0 +1,39 @@
+{
+  "title": "How does Rohitab ApiMonitor capture API calls?",
+  "link": "https://reverseengineering.stackexchange.com/questions/32979/how-does-rohitab-apimonitor-capture-api-calls",
+  "content": "When I use EasyHook to hook API calls, the first bytes of the hooked API function are replaced with a so called \"trampoline\" which is a jump into EasyHook code.\n\nFor example this is TextOutW in Gdi32.dll disassembled:\n\n```\nOriginal code in Gdi32.dll for exported function TextOutW()   \n---------------------------------------------------------------\n7daceeb1 8b ff           MOV   EDI,EDI\n7daceeb3 55              PUSH  EBP\n7daceeb4 8b ec           MOV   EBP,ESP\n7daceeb6 53              PUSH  EBX\n7daceeb7 56              PUSH  ESI\n7daceeb8 57              PUSH  EDI\n7daceeb9 8b 7d 18        MOV   EDI,dword ptr [EBP + c]\n....\n\nCode modified by Easyhook:\n---------------------------------------------------------------\n7daceeb1 e9 82 2b 64 8d  JMP   LAB_0b111a38 \n7daceeb6 53              PUSH  EBX\n7daceeb7 56              PUSH  ESI\n7daceeb8 57              PUSH  EDI\n7daceeb9 8b 7d 18        MOV   EDI,dword ptr [EBP + c]\n....\n\n```\nHere you see that the first 5 bytes of the code in Gdi32.dll have been replaced with a JMP instruction.\nEach time TextOutW is called, EasyHook will forward the call to my hook function.\n\nBut when I use ApiMonitor nothing in the code in Gdi32.dll is modified.\n\nI found that ApiMonitor loads a DLL into the hooked process (Windows Calculator):\n\n\n\nThe file apimonitor-drv-x86.sys has the wrong file extension. It is not a driver.\nI used the API EnumDeviceDrivers() to enumerate all drivers in the system, but apimonitor-drv-x86.sys is not listed as driver.\n\nIt is an ordinary DLL as I can prove by loading it into DependencyWalker:\n\n\n\nIt has 4 exported functions with funny ordinals.\n\nSo my question is: How does ApiMonitor hook API calls without modifying the code in the hooked DLL? There must be any magic going on in apimonitor-drv-x86.sys\n\n",
+  "votes": "1",
+  "answers": 2,
+  "views": "114",
+  "tags": [
+    "api",
+    "hooking"
+  ],
+  "user": "Elmue",
+  "time": "May 26, 2024 at 3:12",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "It is likely that ApiMonitor does a EAT/IAT hook which wouldn't require to write to the function's code. If I were you, I would put a breakpoint in the WinApi function's code and I would inspect the callstack for an address in the ApiMonitor module. That way, it would be easy to understand how the flow is redirected.\n\n",
+      "votes": "1",
+      "user": "Ariel Gadbois Roy",
+      "time": "May 29, 2024 at 4:30",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "Elmue",
+          "text": "Your answer is correct. But it is only an assumption. What was missing is the proof. I added my own answer with the details that I would have expected from you.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I could confirm that the assumption of Ariel is correct.\nI wrote a small C++ Console application to prove that ApiMonitor manipulates the Import Address Table.\n\n```\nint _tmain(int argc, TCHAR* argv[], TCHAR* envp[])\n{\n    wprintf(L\"  \nPress a key...  \n\");\n    getch();\n\n    HMODULE h_Kernel    = GetModuleHandleA(\"Kernel32.dll\");\n    void* f_CreateFile  = GetProcAddress(h_Kernel, \"CreateFileW\");\n    void* f_GetProcAddr = GetProcAddress;\n    \n    wprintf(L\"Kernel32:    0x%X  \n\", h_Kernel);\n    wprintf(L\"GetProcAddr: 0x%X  \n\", f_GetProcAddr);\n    wprintf(L\"CreateFile:  0x%X  \n\", f_CreateFile);\n\n    wprintf(L\"Press a key...  \n\");\n    getch();\n    return 0;\n}\n\n```\nWhen I execute this without ApiMonitor I get:\n\n\n\nYou see that GetProcAddress is not inside Kernel32.dll. The  address 7400FFF6 is inside C:\\Windows\\SysWow64\\AppHelp.dll.\n\nWhen I attach ApiMonitor with hooking for CreateFileW enabled after the first \"Press a key...\" I get this:\n\n\n\nSo he does not only patch the IAT for CreateFileW, but also for GetProcAddress, so he can manipulate the return value and even monitor API calls that are not stored in the IAT.\n\n",
+      "votes": "1",
+      "user": "Elmue",
+      "time": "May 29, 2024 at 15:24",
+      "is_accepted": true,
+      "comments": []
+    }
+  ]
+}

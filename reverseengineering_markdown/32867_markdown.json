@@ -1,0 +1,43 @@
+{
+  "title": "Inject ELF with an entierly self-contained code section that can statically call standard library functions",
+  "link": "https://reverseengineering.stackexchange.com/questions/32867/inject-elf-with-an-entierly-self-contained-code-section-that-can-statically-call",
+  "content": "What I want to do is inject an existing ELF binary with additional code that runs before the original .text section and then transfers control back to it.\n\nNow, I have the following sorted:\n\nWhat I haven't been able to do is use GCC instead of NASM and use the standard library. Take the following example code:\n\n```\n#include <stdio.h>\n\nvoid foo() {\n    printf(\"hello world\");\n    // ignore the fact that this does not return control to the original ELF entry point\n}\n\n```\nIf I were to compile this with gcc -fPIC -c -o hello.o and then yank the .text section from the generated object file with objcopy -O binary -j .text hello.o hello.bin and try to use that as a new section, it simply won't work. hello.bin will contain the following instructions when inspected with objdump:\n\n```\nDisassembly of section .data:\n\n00000000 <.data>:\n   0:   55                      push   %rbp\n   1:   48 89 e5                mov    %rsp,%rbp\n   4:   48 8d 3d 00 00 00 00    lea    0x0(%rip),%rdi        # 0xb\n   b:   b8 00 00 00 00          mov    $0x0,%eax\n  10:   e8 00 00 00 00          callq  0x15\n  15:   90                      nop\n  16:   5d                      pop    %rbp\n  17:   c3                      retq\n\n```\nThe above code has a couple of issues. It was yanked from an object file that expects to be linked and relocated into an executable binary that will have .plt and .got sections. Through these PLT stubs it will be able to call printf that will be located in the standard shared library loaded by ld somewhere in memory.\n\nI want GCC to produce an entirely self-contained object file that has a .text section that does not expect to be relocated, already contains libc statically and is position independent. So that it can just be put anywhere and do its thing.\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "166",
+  "tags": [
+    "elf",
+    "gcc",
+    "instrumentation",
+    "nasm"
+  ],
+  "user": "PaperTsar",
+  "time": "Apr 4, 2024 at 21:44",
+  "comments": [
+    {
+      "user": "Ali Rizvi-Santiago",
+      "text": "This is not a real answer, but you're going to want to split up the way you think about it a bit. GCC will produce an object file, but it's not going to be self-contained. This is because certain symbol types it can emit literally requre knowing the address of a segment. Your linker (ld), however, is directly responsible for performing these calculations, determining the layout, and putting segments together. You can use a linker script to get most of the way there (applying relos and an elf), but some crt's require rt linking and you'll want a static crt/libc that's more compartmentalized.",
+      "time": null
+    },
+    {
+      "user": "Ali Rizvi-Santiago",
+      "text": "In summary, use the rt linker with its abilities to resolve symbols and apply relocations as suggested in the other answer. It'll likely be far easier for your needs and for your libc (depending on which one you're using). If you really want to do it the other way, you'll need to be aware of the segment address and stripping the relocations when copying out your segments.",
+      "time": null
+    },
+    {
+      "user": "Ali Rizvi-Santiago",
+      "text": "Actually...wrote a blogpost that contains an ld-script you can probably use as a base that is referenced at reddit.com/r/ReverseEngineering/comments/1bnljpl/…",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "I suggest to use the ELF constructor instead:\n\nYour function will be executed before the main function of the targeted executable. The ELF loader will take care of everything for you.\n\nAll your steps in \"What I can already do\" seems correct, but you probably don't have to add a new section, most (if not all) ELF loaders work with segments, not sections.\n\nThe problem with this line objcopy -O binary -j .text hello.o hello.bin is you only keep the program code: in your disassembly listing, you can see lea    0x0(%rip),%rdi is PIC but the actual data (\"hello world\" should in in .rodata) will be missing because it's not stored into the .text section.\n\nYou can use __attribute__((section(\".text\"))) to move data inside the .text section, but keep in mind that .text is R-X by default, you will have to patch the segment to be RWX if you need non-const data.\n\nThe last part is \"relocations\" (which on ELF include resolving external symbols), assuming you just need external symbols: you will have find or rewrite dlopen and dlfunc to resolve symbols at runtime and it's OS dependent.\n\n",
+      "votes": "0",
+      "user": "wisk",
+      "time": "Apr 4, 2024 at 23:23",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

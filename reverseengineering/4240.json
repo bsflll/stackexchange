@@ -1,0 +1,71 @@
+{
+    "title": "How to directly re-use the dumped content of `.rodata`, `.data` and `.bss` section?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4240/how-to-directly-re-use-the-dumped-content-of-rodata-data-and-bss-secti",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>OK, so basically I want to <strong>re-use</strong> the content from dumped <code>.rodata</code> <code>data</code> and <code>bss</code> section from ELF on Linux 32bit.</p>\n<p>The dump command:</p>\n<pre><code>objdump -s -j .text elf_binary\nobjdump -s -j .rodata elf_binary\nobjdump -s -j .data elf_binary\n</code></pre>\n<p>and for the <code>.bss</code> section, I am preparing to re-use a bunch of <code>00000000</code> which has the same size of the <code>bss</code> section.</p>\n<p>It works fine when I re-use it in <code>nasm</code> assembler in this way.</p>\n<pre><code>.section rodata\nS_label1: db 0x01\n         db 0x02\n         ....  \n.section data\n        db 0x01\nS_label2:  db 0x02\n         ....\n.section bss\nS_label3: db 0x00\n         db 0x00\n         ....\n\nnasm -f elf test.s\n</code></pre>\n<p>But basically my question is that:</p>\n<p>how to re-use these dumped sections in <code>gas</code> asssembler?</p>\n<p>Basically <code>gas</code> has a different assemble style, and apparently the data sections representations are different...</p>\n<p>I tried for several times and I still can not find the solution..</p>\n<p>Did I clearly demonstrate my question..? Could anyone give me some help?</p>\n<p>=======update==========</p>\n<p>So basically I want to re-use the <code>rodata</code> <code>data</code> and <code>bss</code> sections dumped from another binary.</p>\n<p>For example, here is the content of <code>rodata</code> section</p>\n<pre><code>03000000 01000200 0a0a556e 736f7274\n65642061 72726179 2069733a 20200020\n25642000 0a0a536f 72746564 20617272\n61792069 733a2020 00\n</code></pre>\n<p>and I can re-use it in this way:</p>\n<pre><code>label1: \ndb 0x03\ndb 0x00\ndb 0x00\ndb 0x00\nlabel2: \ndb 0x01\ndb 0x00\ndb 0x02\ndb 0x00\n.....\n\nmov eax, label1      // of course I will guarantee that I use it correctly\n....\n</code></pre>\n<p>Basically in <code>nasm</code>, I can easily re-use them in the above way, but my question is that , how can I re-use it in <code>gas</code> (or directly use <code>gcc</code>) in a similiar way?</p>\n<p>Is it possible?</p>\n</div>",
+    "votes": "6",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "disassembly",
+        "assembly",
+        "nasm"
+    ],
+    "user": "lllllllllllll",
+    "time": "Apr 28, 2017 at 12:55",
+    "comments": [
+        {
+            "user": "Igor Skochinsky",
+            "text": "<span class=\"comment-copy\">Reuse for what exactly? Please describe the overall problem you're trying to solve here.</span>",
+            "time": null
+        },
+        {
+            "user": "yaspr",
+            "text": "<span class=\"comment-copy\">I believe the poster is trying to reuse the content of these sections in an assembly program he/she's writing.</span>",
+            "time": null
+        },
+        {
+            "user": "lllllllllllll",
+            "text": "<span class=\"comment-copy\">@IgorSkochinsky Hi, I updated my question..</span>",
+            "time": null
+        },
+        {
+            "user": "lllllllllllll",
+            "text": "<span class=\"comment-copy\">@yaspr Hi, I modifyed my question... Is it clear now?</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>As an assembly programmer I would say that <code>gas</code> is rarely used to assemble external code. The task of calling <code>gas</code> is usually left to the compiler, and most of the assembly that <code>gas</code> has to handle in real life is either <code>inlined</code> inside <code>C</code> or <code>C++</code> code or comes from a compiler. But, I believe <a href=\"https://web.eecs.umich.edu/~prabal/teaching/eecs373-f11/readings/Assembler.pdf\" rel=\"nofollow\">this</a> document by <strong>Dean Elsner</strong>, <strong>Jay Fenlanson</strong> &amp; <strong>friends</strong> is by far the best reference I managed to rely on for quite sometime. It has been updated many times and it covers the 2.19.51 version.</p>\n<p>The easy way would be to use <strong>GCC</strong> I would say :</p>\n<pre><code>  //Just to avoid make a point :]\n  typedef unsigned char byte;\n\n  //\n  byte lbl1[] = { 0x03, 0x00, 0x00, 0x00, ... }, \n       lbl2[] = { 0x01, 0x00, 0x02, 0x00, ... };\n\n  //I prefer Intel syntax rather than AT&amp;T, it's somehow cleaner !\n  __asm__(\"intel_syntax noprefix                 ;\"\n          \"mov eax, %0                           ;\"\n          \"mov ebx, %1                           ;\"\n          \"att_syntax prefix                     ;\"\n          :                        //output\n          : \"r\" (lbl1), \"r\" (lbl2) //input\n          : \"%eax\", \"%ebx\");       //clobber\n</code></pre>\n<p>Well, this is a nice way if you want to concentrate on the assembly code (which is how I do it when I optimize code by hand). </p>\n<p>Now, let me explain it a bit. First, you have two arrays containing the retrieved data, nothing fancy. Then you get the assembly code. If you're not familiar with <code>inlined</code> assembly I would recommend you <a href=\"http://www.ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html\" rel=\"nofollow\">this</a> link, though I'll briefly go over my code.\nThe <code>__asm__</code> directive lets you insert assembly instructions anywhere in a code. At first I tell the assembler that I'll be using Intel's syntax (no % prefix for registers, ...), then I move the content of the register %0 in <code>eax</code>, and then the content of %1 in <code>ebx</code> (%0 is the pointer for <strong>lbl1</strong>, %1 is the pointer for <strong>lbl2</strong>). Then, I switch to AT&amp;T syntax for the rest of the parameters. After the first <strong>:</strong> you can specify output variables. After the second <strong>:</strong> you can specify inputs. In here I passed <strong>lbl1</strong> &amp; <strong>lbl2</strong> and I used <strong>\"r\"</strong> to let the compiler handle register allocation. You can specify the registers if you know what you're doing. After the last <strong>:</strong> you have to declare the registers used inside the code so that the compiler frees them &amp; uses them for the remaining code generation steps.  </p>\n</div>",
+            "votes": "4",
+            "user": "yaspr",
+            "time": "May 2, 2014 at 19:50",
+            "is_accepted": true,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>thanks @yaspr for his excellent answer.</p>\n<p>So in this post I was asking that </p>\n<p><strong>How to re-use <code>.rodata</code> <code>.data</code> and <code>.bss</code> sections' contents?</strong></p>\n<p>Here is my answer:</p>\n<p>you can quickly go this way once you dumped all the content of these sections, I use a hello world code to demostrate it:</p>\n<pre><code>.section .text\n.globl  main\nmain:\npush   %ebp\nmov    %esp,%ebp\nand    $0xfffffff0,%esp\nsub    $0x20,%esp\nfldl   S_80484f0     // lift the conceret address into symbol\nfstpl  0x18(%esp)\nfldl   0x18(%esp)\nfstpl  0x4(%esp)\nmovl   $S_80484e0,(%esp) // lift the conceret address into symbol\ncall   printf\nleave\nret\nnop\nnop\nnop\n\n.section .rodata\n\nS_80484e0:\n.long 0x6c6c6568\n.long 0x6f77206f\n.long 0x20642c72\n.long 0x000a6625\n\nS_80484f0:\n.long 0x00000000\n.long 0x40240000\n</code></pre>\n<p>To @yaspr about AT&amp;T vs. Intel style:</p>\n<p>It is obviously that Intel style is much more clear that AT&amp;T:)</p>\n<p>However, in the current project I am struggling on, I find it might not be very easy to use <code>nasm</code> inside a bunch of GNU tools(<code>objdump</code> <code>objcopy</code> <code>ld</code> and others...)  </p>\n<p>IMHO, Even though <code>objdump</code> can disassemble in <code>Intel</code> style, I still encounter a bunch of problems/unclear issues, especially after comparing the disassemble results between <code>objdump</code> and <code>IDAPro</code></p>\n</div>",
+            "votes": "1",
+            "user": "lllllllllllll",
+            "time": "May 2, 2014 at 21:44",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">Well, you have to keep in mind that IDA &amp; objdump do not perform disassembly the same way (not the same algorithms). <code>objdump</code> uses <code>linear sweep</code> which is a static disassembly technique that can give erroneous results. Especially if data is mixed up with instructions (shellcodes for example). You should trust none of tools you're using blindly, cross-reference their output if you want to efficient. Each one has its flaws &amp; its strengths. I can assure you that using <code>NASM</code> with <code>GNU</code> tools wouldn't affect your work, though it your final choice. And, using multiple tools is a good way to learn.</span>",
+                    "time": null
+                },
+                {
+                    "user": "lllllllllllll",
+                    "text": "<span class=\"comment-copy\">@yaspr Thank you for your reply! Yes, I know the difference in disassemble algorithm, so actually in the  current project, I was trying to use <code>IDAPro</code> because it is believed the best, however, even though it is an excellent tool, I still find some un-match between the goal we want to achieve and <code>IDAPro</code> can support (disassemble binary for analysis).</span>",
+                    "time": null
+                },
+                {
+                    "user": "yaspr",
+                    "text": "<span class=\"comment-copy\">There's no such thing as the \"best tool\". There are only sharp &amp; well documented users. <code>IDAPro</code> offers many features which can help you perform excellent analysis &amp; recover lots of information about the target binary file. The most interesting thing about <code>IDAPro</code> is that it's scriptable. And that is not the case of most other tools.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

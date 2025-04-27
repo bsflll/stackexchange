@@ -1,0 +1,55 @@
+{
+  "title": "Dump global datas to disk in assembly code",
+  "link": "https://reverseengineering.stackexchange.com/questions/9365/dump-global-datas-to-disk-in-assembly-code",
+  "content": "the experiment is on Linux, x86 32-bit. \n\nSo suppose in my assembly program, I need to periodically (for instance every time after executing 100000 basic blocks) dump an array in .bss section from memory to the disk.  The starting address and size of the array is fixed. The array records the executed basic block's address, the size is 16M right now.\n\nI tried to write some native code, to memcpy from .bss section to the stack,  and then write it back to disk. But it seems to me that it is very tedious and I am worried about the performance and memory consumption, say, every-time allocate a very large memory on the stack...\n\nSo here is my question, how can I dump the memory from global data sections in an efficient way? Am I clear enough? \n\n",
+  "votes": "1",
+  "answers": 3,
+  "views": "835",
+  "tags": [
+    "assembly",
+    "binary-analysis",
+    "linux",
+    "c",
+    "memory-dump"
+  ],
+  "user": "lllllllllllll",
+  "time": "Jul 16, 2015 at 15:24",
+  "comments": [],
+  "answers_data": [
+    {
+      "content": "In case of IdaPro being available - it works on Linux as well - you could consider using an Ida script, like this:\n\n```\n    static main()\n    {\n        DumpMem();\n    }\n\n\n    static DumpMem()\n    {\n        auto h;\n        auto ea;\n        auto eaStart = <here your start address>;\n        Message(\"dumping...\");\n        h = fopen(\"dumped.bin\", \"wb\");\n        for (ea=eaStart; ea<eaStart+0x100000; ea=ea+1)\n        {\n            fputc(Byte(ea), h);\n        }\n        fclose(h);\n        Message(\"done!  \n\");\n    }\n\n```\nThe use would be like this:\n\n",
+      "votes": "1",
+      "user": "josh",
+      "time": "Jul 16, 2015 at 16:35",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "lllllllllllll",
+          "text": "Thank you. But actually I didn't know at which point it would be triggered. Suppose I insert some instrumentation code at the beginning of every basic blocks. And I need to dump the memory when, say, 100000 basic blocks have been executed..",
+          "time": null
+        },
+        {
+          "user": "josh",
+          "text": "Sorry, the timeout prevented me from editing the last comment. In my understanding, you could write in your \"instrumentation code\" some logic like the one in my Ida script, enhancing it with a block counter and triggering the file write only when that counter reaches the requested value. A free memory area could hold the counter. I hope I understood you right.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "I don't see a reason why you shouldn't be able to dump a block to the disk from the stack directly.\n\nStarting with\n\n```\n#include <fcntl.h>\n\nchar *block;\n\nint main(void) {\n    int fd=open(\"/tmp/myfile\", O_WRONLY|O_APPEND|O_CREAT, 0666);\n    write(fd, block, 0x400000);\n    close(fd);\n}\n\n```\nand continuing with\n\n```\ngcc -m32 -S b.c\n\n```\nyou arrive at this b.s file\n\n```\n.LC0:\n    .string \"/tmp/myfile\"\n    .text\n.globl main\n    .type   main, @function\nmain:\n    pushl   %ebp\n    movl    %esp, %ebp\n    andl    $-16, %esp\n    subl    $32, %esp\n    movl    $438, 8(%esp)\n    movl    $1089, 4(%esp)\n    movl    $.LC0, (%esp)           <--- make sure this is the filename string\n    call    open\n    movl    %eax, 28(%esp)\n    movl    block, %eax             <--- and this is the address of your buffer\n    movl    $4194304, 8(%esp)\n    movl    %eax, 4(%esp)\n    movl    28(%esp), %eax\n    movl    %eax, (%esp)\n    call    write\n    movl    28(%esp), %eax\n    movl    %eax, (%esp)\n    call    close\n    leave\n    ret\n\n```\nwhich you could copy to your instrumentation with very few modifications. (You'll probably want to save a few registers and restore them on exit).\n\nOr, compile the program using gcc -static -m32 b.c and objdump -d the resulting executable to find out how the system calls are implemented, then replace the library calls with the direct system calls. This has the additional advantage that you don't have to mess with import lists if your instrumentation modifies a completed executable file.\n\n```\n<push registers you want to save>\nmov  $438, %edx\nmov  $1089, %ecx\nmov  filename, %ebx\nmov  $0x5, %eax      ;5 is system call # for open\ncall *0x80d66c4      ;this is the system call address pulled from objdump\nmov  %eax, %esi      ;save fd\nmov  $0x400000, %edx\nmov  block, %ecx     ;your buffer address\nmov  %eax, %ebx\nmov  $0x4, %eax      ;4 is system call # for write\ncall *0x80d66c4\nmov  %esi, %ebx\nmov  $0x6, eax       ;6 is system call # for close\ncall *0x80d66c4\n<pop registers>\n\n```\nThis doesn't do any error checking, but you should be ok if you put the file on a local hard disk that has enough space. Also, it appends to the file every time instead of creating it, so you'll have to rm the file before each run. \n\n",
+      "votes": "1",
+      "user": "Guntram Blohm",
+      "time": "Jul 16, 2015 at 19:05",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "with gdb you can define a canned sequence and execute it\na sample canned sequence could be   \n\na sample run on cygwin gdb over gdb \n\n```\n$ gdb gdb\nGNU gdb (GDB) Cygwin 7.9.1-1\n\n(gdb) define dumpy\nType commands for definition of \"dumpy\".\nEnd with a line saying just \"end\".\n>si 10000\n>append value ../../cygdrive/c/tmp/dumpy.txt $pc\n>append memory ../../cygdrive/c/tmp/dumpy.txt $pc $pc+4\n>end\n(gdb) break *0x401000\nBreakpoint 1 at 0x401000\n(gdb) r\nStarting program: /usr/bin/gdb\n[New Thread 3300.0xe20]\n\nBreakpoint 1, 0x00401000 in ?? ()\n(gdb) dumpy\n[New Thread 3300.0xbc0]\n0x610bf987 in auto_protect_for(void*) () from /usr/bin/cygwin1.dll\n\n(gdb) x/x $pc\n0x610bf987 <_ZL16auto_protect_forPv+135>:       0x05f6e572      \n\n(gdb) dumpy\n0x610f007b in sys_cp_wcstombs(int (*)(_reent*, char*, wchar_t, char const*, _mbstate_t*), char const*, char*, unsigned int, wchar_t const*, unsigned int) ()\n   from /usr/bin/cygwin1.dll\n\n\n(gdb) dumpy\n0x610f0028 in sys_cp_wcstombs(int (*)(_reent*, char*, wchar_t, char const*, _mbstate_t*), char const*, char*, unsigned int, wchar_t const*, unsigned int) ()\n   from /usr/bin/cygwin1.dll\n(gdb)\n\n```\nxxd doesnt convert endianness so i cooked a powershell script to dump the dumpy.txt\n\n```\n$file = gc -encoding byte $args[0]\n$j=0\nwhile($j-lt $file.length) {\n$i=$j;$a=\"\";($i+3)..($i+0)|%{$a+=(\"{0:x2}\" -f $file[$_])};$a+=\" \";\n$i=$i+4;($i+3)..($i+0)|%{$a+=(\"{0:x2}\" -f $file[$_])};\n$a\n$j+=8\n}\n\n```\ndumping the dumpy.txt as address , content pairs with the powershell script above you can see it matches gdb output\n\n```\nPS C:\\tmp> powxxd.ps1 .\\dumpy.txt\n610bf987 05f6e572\n610f007b f6851f74\n610f0028 2c24448b\n\n```\n",
+      "votes": "1",
+      "user": "blabb",
+      "time": "Jul 16, 2015 at 21:35",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

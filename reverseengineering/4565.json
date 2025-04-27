@@ -1,0 +1,47 @@
+{
+    "title": "Format of .chk firmware package on WGR614v7",
+    "link": "https://reverseengineering.stackexchange.com/questions/4565/format-of-chk-firmware-package-on-wgr614v7",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Note: I'm aware of the technical and legal implications of reverse-enginneering binaries.</p>\n<p>I have the firmware for a Netgear WGR614v7 router, in the form of a .chk file, coming from Netgear themselves, and I wish to unpack the file. My understanding is that a firmware .chk file is <a href=\"http://www.dd-wrt.com/wiki/index.php/WGR614_v8\" rel=\"nofollow\">a header</a> before a TRX image, and I've tried to untrx the ile I had sans header, or with header as well. Neither that nor <code>binwalk</code> succeeded. Two useful strings are seen very close to the beginning of the file:</p>\n<ul>\n<li>AH00I8</li>\n<li>U12H064T00_NETGEAR</li>\n</ul>\n<p>Inspecting the file in a hex editor, I'm unable to find the <a href=\"http://wiki.openwrt.org/doc/techref/header?s%5b%5d=trx\" rel=\"nofollow\">TRX file signature</a> (I was looking for ASCII <code>HDR0</code>). I also cannot find any sort of compression magic values, except fairly far into the file where they're not likely to signify the beginning of the actual content I'm looking for. </p>\n<p>Am I looking for the wrong filetypes? Is anything about this structure known that I haven't found yet?</p>\n<p><strong>Edit:</strong> The firmware has been downloaded from <a href=\"http://support.netgear.com/product/WGR614v7\" rel=\"nofollow\">Netgear's site</a>. I tried chopping off various lengths but cannot find a reasonably-located compression or TRX header. The characteristic <code>ff ff ff ff</code> of IMG images used as a method of preventing a repetitive boot firmware is also not existent.</p>\n<p><strong>Edit 2:</strong> I did some searching of my own, and found a <a href=\"http://ttf.mine.nu/techdocs.htm\" rel=\"nofollow\">decompression utility</a>. When I chopped the file such that <code>sqz</code> had been the first characters, that utility seemed to find valid Huffman structures but incur a size mismatch. A result of the decompression yielded 11 bytes, while the program warned me:</p>\n<blockquote>\n<pre><code>Warning: Unpacked file should be 7537274 bytes but is 396409921 bytes! at ./unpack.pl line 61, &lt;STDIN&gt; line 3.\n</code></pre>\n</blockquote>\n<p>Of course, it could be that many kinds of data that is corrupt might be partially readable as huffman giving me strange results as seen here.</p>\n</div>",
+    "votes": "5",
+    "answers": 1,
+    "views": "3k",
+    "tags": [
+        "file-format",
+        "firmware"
+    ],
+    "user": "nanofarad",
+    "time": "Jun 9, 2014 at 19:56",
+    "comments": [
+        {
+            "user": "nneonneo",
+            "text": "<span class=\"comment-copy\">Might be a newer or older version of the file format. Could you post a sample?</span>",
+            "time": null
+        },
+        {
+            "user": "nanofarad",
+            "text": "<span class=\"comment-copy\">@nneonneo I edited the post with that info,</span>",
+            "time": null
+        },
+        {
+            "user": "nneonneo",
+            "text": "<span class=\"comment-copy\">The SQZ utility you found does not appear to be for the same sort of SQZ file. The file format seems totally different.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>The file begins:</p>\n<pre><code>0000000: 4148 3030 4938 e66c 000e aa28 9835 0589  AH00I8.l...(.5..\n0000010: 3004 125a 1b39 65ff 47e4 b95c 0001 0014  0..Z.9e.G..\\....\n0000020: 5531 3248 3036 3454 3030 5f4e 4554 4745  U12H064T00_NETGE\n0000030: 4152 0000                                AR..\n</code></pre>\n<p>The reason for picking this size will soon become clear.</p>\n<p>The first four bytes (<code>AH00</code>) are probably file magic. Googling just that string brings up <a href=\"http://www.0xf8.org/2009/07/hacking-the-netgear-wg102-access-point/\" rel=\"nofollow\">this page</a>, which has a detailed breakdown of a different firmware file with a similar structure.</p>\n<p>The next four bytes are not described by the linked page. Reading them as a 32-bit big-endian value (BE32), though, you get 0x4938e66c = 1228465772, which is plausibly a recent UNIX timestamp (usually values from around 800,000,000 to 1,500,000,000). Indeed, it decodes to <code>Fri Dec  5 08:29:32 2008 GMT</code>, which is plausibly the build date of the hardware (and I note that the linked article has 0x481ac265 = <code>Fri May  2 07:27:33 2008 GMT</code>, which also seems plausible).</p>\n<p>The next four bytes read as a BE32 value give 961064. The total filesize is 961116 bytes, so this is likely the payload size, leaving 52 bytes for the header (and thus explaining why I chose to show the first 52 bytes here).</p>\n<p>The next 32 bytes are the MD5 sum of the payload as indicated by the linked page. I deleted the first 52 bytes and MD5 summed the result:</p>\n<pre><code>983505893004125a1b3965ff47e4b95c  /tmp/fw.sqz\n</code></pre>\n<p>which is exactly what the header contains.</p>\n<p>The next two bytes are unknown.</p>\n<p>The next two bytes are 0x0014, which is the length of the string that follows (including two padding NULs). While I'm not familiar with Netgear routers, I'm guessing this is a model/revision number for the hardware target.</p>\n<p>And there you go: that's the <code>.chk</code> file header.</p>\n<pre><code>char magic[4];\nuint32_t timestamp; // UNIX timestamp\nuint32_t payload_size;\nchar md5sum[32];\nuint16_t unknown; // = 1 on all files seen so far\nuint16_t model_size;\nchar model[model_size];\n</code></pre>\n<hr/>\n<p>In the original linked page, the payload was a plain ELF file. Unfortunately, in your firmware, the payload is some other kind of file, with the magic <code>sqz</code> (\"squeeze\"?). It's clearly compressed, but I can't tell what it's compressed with. For now, this will have to be an incomplete answer until someone figures out what the compression format is.</p>\n</div>",
+            "votes": "3",
+            "user": "nneonneo",
+            "time": "Jun 9, 2014 at 17:16",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "nanofarad",
+                    "text": "<span class=\"comment-copy\">I did some poking into the sqz format, could you please see edits?\\</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

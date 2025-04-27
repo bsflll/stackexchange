@@ -1,0 +1,75 @@
+{
+    "title": "How does cheat engine's \"dissect data structures\" work?",
+    "link": "https://reverseengineering.stackexchange.com/questions/27114/how-does-cheat-engines-dissect-data-structures-work",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In Cheat Engine there is function for analyse memory. The result of this analysis is types of memory bytes. I can't understand the algorithm of this analysis. How can it define that these bytes are float and these bytes are pointer?</p>\n</div>",
+    "votes": "-1",
+    "answers": 2,
+    "views": "956",
+    "tags": [
+        "memory",
+        "cheat-engine"
+    ],
+    "user": "Terri Erickson",
+    "time": "Feb 27, 2021 at 18:35",
+    "comments": [
+        {
+            "user": "morsisko",
+            "text": "<span class=\"comment-copy\">The Cheat Engine is just guessing basing on some heuristics, the results aren't 100% accurate, for example if the structure field contains value that is a valid memory address it marks it as pointer etc.</span>",
+            "time": null
+        },
+        {
+            "user": "Terri Erickson",
+            "text": "<span class=\"comment-copy\">@morsisko What kind of heuristics can be used for identify float numbers?</span>",
+            "time": null
+        },
+        {
+            "user": "pythonpython",
+            "text": "<span class=\"comment-copy\">Just a cursory glance, but it looks like Cheat Engine interprets data as potential floats, and relies on a human to look for either known-good values encoded as floats, or distributions which are in a compact range.</span>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Floats can be compared against known good values or ranges.</p>\n<p>Pointers can be identified as having values which are addressable memory in the context of program execution.</p>\n</div>",
+            "votes": "1",
+            "user": "pythonpython",
+            "time": "Feb 28, 2021 at 23:21",
+            "is_accepted": false,
+            "comments": []
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>Here's <strong>a</strong> way, it's not tremendously reliable, but it has the advantage of being purely bit math.</p>\n<p>In real life, I would recommend combining this with common sense checks like these:\n(pseudocode)</p>\n<p>Not a float:</p>\n<ol>\n<li>the rounded value of the floating point number is bigger than the integer version; or</li>\n<li>the floating point number always effectively 0; but is always changing; or</li>\n</ol>\n<p>Maybe a float:</p>\n<ol>\n<li>the observed range of floating point values extend from 0.0 to 1.0 (1000.0, 360.0, 90.0...) or -180.0 to 180.0... or anything else that would make sense for the context</li>\n<li>the observed floating point values are always rounded (e.g. 0.0, 1.0, -1.0, 2.0) -- though this can be confused with integer values for much larger values (see rule #1 of section #1).</li>\n</ol>\n<pre><code>namespace sfinktah::math {\n\n    constexpr uint32_t maskExponent = 0b01111111100000000000000000000000; // 0x7f800000, INFINITY\n    constexpr uint32_t maskMantissa = 0b00000000011111111111111111111111; // 0x007fffff\n    constexpr uint32_t maskSign     = 0b10000000000000000000000000000000; // 0x80000000\n    constexpr uint32_t maskBigExp   = 0b01100000000000000000000000000000; // numbers &gt; 3.6893488E19\n\n    constexpr bool constexpr_is_infinite(uint32_t f)\n        { return (f &amp; (maskExponent | maskSign)) == maskExponent; }\n    constexpr bool constexpr_is_nan(uint32_t f)\n        { return (f &amp; maskExponent) == maskExponent &amp;&amp; f &amp; maskMantissa; }\n    constexpr bool constexpr_is_finite(uint32_t f)\n        { return (f &amp; maskExponent) != maskExponent; }\n    constexpr bool constexpr_is_miniscule(uint32_t f)\n        { return (f &amp; maskExponent) == 0; }\n    constexpr bool constexpr_is_massive(uint32_t f)\n        { return (f &amp; maskBigExp) == maskBigExp; }\n    constexpr bool constexpr_is_float(uint32_t f)\n        { return (f &amp; maskExponent) &amp;&amp; constexpr_is_finite(f)\n            &amp;&amp; !constexpr_is_massive(f) &amp;&amp; !constexpr_is_miniscule(f); }\n}\n</code></pre>\n<p>Here is an IDAPython script (though except for one line, it could work without IDA) that demonstrates the difficulties (and in some cases ease) by which one can guess whether a number is a float.   Note that careful attention has to be paid to <code>0</code> which is <code>0</code> as an integer, and as a float.</p>\n<pre><code>import idc\nfrom underscore import _\n\nmaskExponent = 0b01111111100000000000000000000000; # 0x7f800000, INFINITY\nmaskMantissa = 0b00000000011111111111111111111111; # 0x007fffff\nmaskSign = 0b10000000000000000000000000000000;     # 0x80000000\nmaskBigExp = 0b01100000000000000000000000000000;   # numbers &gt; 3.6893488E19\n\ndef dword_as_float(f):\n    \"\"\" stolen from IDAPython's idc.py \"\"\"\n    tmp = struct.pack(\"I\", f)\n    return struct.unpack(\"f\", tmp)[0]\n\ndef is_infinite(f):  return (f &amp; (maskExponent | maskSign)) == maskExponent\ndef is_nan(f):       return (f &amp; maskExponent) == maskExponent and f &amp; maskMantissa\ndef is_miniscule(f): return (f &amp; maskExponent) == 0\ndef is_massive(f):   return (f &amp; maskBigExp) == maskBigExp\ndef hex8(f):         return \"0x{:08x}\".format(f)\n\ncheckfns   = [ hex8, dword_as_float, is_infinite, is_nan, is_miniscule, is_massive ]\nchecknames = [ 'hex', 'float', 'is_infinite', 'is_nan', 'is_miniscule', 'is_massive' ]\nchecks     = _.zipObject(checknames, checkfns)\n\ndef get_floats(start, count, stride = 4):\n    for i in range(count):\n        dword = idc.get_wide_dword(start + i * stride)\n        results = [(f[0], f[1](dword)) for f in checks.items()]\n        r = []\n        for t in results:\n            if not t[0].startswith('is_'): r.append(t[1])\n            elif not t[1]: continue\n            else: r.append(t[0])\n        print(r)\n</code></pre>\n<p>Partial output (source: a series of xmmword data definitions).</p>\n<pre><code>['0x3eb33333', 0.3499999940395355]\n['0x41000000', 8.0]\n['0x3eb33333', 0.3499999940395355]\n['0x3dcccccd', 0.10000000149011612]\n['0x00000000', 0.0, 'is_miniscule']\n['0x00000000', 0.0, 'is_miniscule']\n['0x00000000', 0.0, 'is_miniscule']\n['0x00000000', 0.0, 'is_miniscule']\n['0x3f4ccccd', 0.800000011920929]\n['0x3d4ccccd', 0.05000000074505806]\n['0x3d4ccccd', 0.05000000074505806]\n['0x43800000', 256.0]\n['0x3ea3d70a', 0.3199999928474426]\n['0x3dcccccd', 0.10000000149011612]\n['0xf7000000', -2.596148429267414e+33, 'is_massive']\n['0x705e61f2', 2.752963231901203e+29, 'is_massive']\n</code></pre>\n<p>Note: lines with flags like 'is_massive' or 'is_miniscule' would fail the basic bitwise float test, sometimes incorrectly.</p>\n</div>",
+            "votes": "-1",
+            "user": "Orwellophile",
+            "time": "Mar 10, 2021 at 11:02",
+            "is_accepted": false,
+            "comments": [
+                {
+                    "user": "pythonpython",
+                    "text": "<span class=\"comment-copy\">Please add some rationale behind these. Only Maybe #1 seems to have some basis.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Orwellophile",
+                    "text": "<span class=\"comment-copy\">@pythonpython Maybe #2 is related to the use of matrices for translation and transform of object in computer graphics, especially in games (which we can assume is a reasonable context given the use of cheat engine).   The others are observations made during many years reverse engineering games and observing memory in unknown structures, usually in ReClass (a project to which I contribute).  The C++ constexpr code is self-explanatory if one understands the basic principles, otherwise one is better consulting a friendly guide on how floating point numbers are structured.</span>",
+                    "time": null
+                },
+                {
+                    "user": "pythonpython",
+                    "text": "<span class=\"comment-copy\">Oh I'm well versed in IEEE 754 and understand the code. It's just that your approach will trigger on all sorts of field boundaries that normally occur . For example the LSB of a BE Integer, Followed by the top 3 MSB's of another BE Integer. I suppose if you know for certain the location of the value in memory and the extent.</span>",
+                    "time": null
+                },
+                {
+                    "user": "Orwellophile",
+                    "text": "<span class=\"comment-copy\">@pythonpython Oh, that constexpr method could not possible be worse than it is.  I took the 754 spec and turned it into code, and played with <a href=\"https://www.h-schmidt.net/FloatConverter/IEEE754.html\" rel=\"nofollow noreferrer\">h-schmidt.net/FloatConverter/IEEE754.html</a> (anyone looking to solve this problem should bookmark that site).  Though the final <code>is_float</code> was a failure, the individual building blocks should be useful.   Regarding BE ints or non-aligned storage, I think you have to limit the problem space in order to be even 50% accurate.  If you can't tell whether 3F800000 is 1.0 or a BE 32831  (and that's assuming perfect alignment), it's hopeless.</span>",
+                    "time": null
+                },
+                {
+                    "user": "pythonpython",
+                    "text": "<span class=\"comment-copy\">I think a good avenue would be to look at an analysis of significand bits to infer whether a rounding mode is being applied. That would rely on the percentage of values which were being approximated by the floating point representation, vs being exactly represented.</span>",
+                    "time": null
+                }
+            ]
+        }
+    ]
+}

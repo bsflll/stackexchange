@@ -1,0 +1,90 @@
+{
+  "title": "Assistance finding CGI files",
+  "link": "https://reverseengineering.stackexchange.com/questions/15363/assistance-finding-cgi-files",
+  "content": "I'm wondering if anyone can assist me. I'm reverse engineering netgear r6250 firmware just for practice. I've managed to unpack the firmware using binwalk and in the root directory exist the www directory. Looking at the html code I notice the forms references cgi files. However checking through the entire file system I can't seem to find any cgi files. I've read this blog article that mention that in some netgear router and I quote:\n\nSo I believe the cgi files might be embedded in the http binary which is located in /usr/sbin in my unpacked firmware version. I don't know if this indeed so. \n\nCan someone point me in the right direction so to know where I can find the cgi files or if they are indeed embedded in the httpd binary? Your assistance will without a doubt be appreciated.\n\nEdit\n\nThe below show the screenshot using the find command to search for cgi files and server settings file from the root directory with no results:\n\n\nThis below image shows the listing of files in the etc directory:\n\n\nIf you notice there are two symbolic links that are both dangling due to missing linked file. So this leads me to believe that the cgi files (and possibly other files) are created in memory upon boot. What makes it worse is using firmadyne to emulate the firmware doesn't work as I don't get a NIC device up and running with an IP, and I've already emulate another netgear firmware (albeit an old one) using firmadyne. In all defense to the creators of firmadyne they mention that if this occurs its a bug and to report it, which I haven't done as yet. Bottom line is I can't emulate the firmware to prove (or disprove) that maybe the files are created during run-time. Anyway I will keep on researching for now.\n\n",
+  "votes": "5",
+  "answers": 2,
+  "views": "2k",
+  "tags": [
+    "firmware"
+  ],
+  "user": "user1803784",
+  "time": "Jun 12, 2018 at 18:52",
+  "comments": [
+    {
+      "user": "Igor Skochinsky",
+      "text": "does the binary have .cgi names in it?",
+      "time": null
+    },
+    {
+      "user": "user1803784",
+      "text": "@IgorSkochinsky I will double check. I'm using radare2 to disassemble and I'm fairly new to it and new to ARM assembly (more familiar with x86) so will try again. It seems the binary has been stripped of its symbols but I believe you're telling to look for a \".cgi\" string so will check and update you. Thanks",
+      "time": null
+    },
+    {
+      "user": "user1803784",
+      "text": "@IgorSkochinsky Yup you were right I ran strings on httpd binary and found the cgi filenames in there thanks for the help.",
+      "time": null
+    },
+    {
+      "user": "user1803784",
+      "text": "Yea so i was wrong about the symbols too it does have them in there",
+      "time": null
+    },
+    {
+      "user": "0xC0000022L",
+      "text": "It would be fair to state which firmware version we're talking about. Do you mean R6250-V1.0.4.26_10.1.23.zip? grep -RPho '[^\"]+\\.cgi'|sort -u gives me 162 distinct mentions of files \"named\" .cgi whereas only a single genie.cgi exists in the overall rootfs. /usr/sbin/httpd looks like a treasure trove of strings. It's not an Apache, though. Looks more like homebrew. And guess what, a whole bunch of the .cgi names mentioned also in the HTML files inside /www. So you're in luck.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "While you don't give the necessary details in your question, I decided to give it a go with the R6250-V1.0.4.26_10.1.23.zip from the Netgear website. I don't know how close that is to whatever target you are currently looking at, but the environment look superficially rather similar (especially contents of /etc).\n\nFirst I used firmware-mod-kit to extract the .chk file inside the downloaded .zip:\n\n```\n$ extract-firmware.sh R6250-V1.0.4.26_10.1.23.chk \nFirmware Mod Kit (extract) 0.99, (c)2011-2013 Craig Heffner, Jeremy Collake\n\nScanning firmware...\n\nScan Time:     2018-06-13 17:23:43\nTarget File:   /home/user/netgear/R6250-V1.0.4.26_10.1.23.chk\nMD5 Checksum:  fbb0ddc095cbca7abebe90a19a1b39b7\nSignatures:    344\n\nDECIMAL       HEXADECIMAL     DESCRIPTION\n--------------------------------------------------------------------------------\n58            0x3A            TRX firmware header, little endian, image size: 19345408 bytes, CRC32: 0xE9FDE7D3, flags: 0x0, version: 1, header size: 28 bytes, loader offset: 0x1C, linux kernel offset: 0x23F01C, rootfs offset: 0x0\n86            0x56            LZMA compressed data, properties: 0x5D, dictionary size: 65536 bytes, uncompressed size: 5467936 bytes\n2355286       0x23F056        Squashfs filesystem, little endian, version 4.0, compression:xz, size: 16983563 bytes, 1244 inodes, blocksize: 131072 bytes, created: 2018-04-02 13:08:38\n\nExtracting 2355286 bytes of  header image at offset 0\nExtracting squashfs file system at offset 2355286\nExtracting squashfs files...\nFirmware extraction successful!\nFirmware parts can be found in '/home/user/netgear/fmk/*'\n\n```\nThen I started to explore the contents of fmk/rootfs using standard Linux tools. For example only a single .cgi file existed in the whole rootfs.\n\n```\n$ find -name '*.cgi'\n./www/cgi-bin/genie.cgi\n\n```\nWith grep -R \\.cgi www I was able to find a whole bunch of references to different \"files\" named .cgi used inside forms of the router's web interface.\n\nI then attempted to filter down the list a little further (inside fmk/rootfs/www):\n\n```\ngrep -RPho '[^\"]+\\.cgi'|sort -u\n\n```\nThere were some outliers in the resulting list, but the outcome was useful nevertheless.\n\nArmed with that knowledge I turned back to the rootfs in order to look for the web server. I could have used find -name httpd, as it turns out, but in reality I was looking through /bin, /usr/bin and /usr/sbin in that order and found a binary named httpd in the last one.\n\nUsing strings httpd from inside fmk/rootfs/usr/sbin gave me further clues and definitely proved that this was no Nginx or Apache. With strings httpd|grep \\.cgi I was also able to verify that the quote:\n\nappears to hold true.\n\nUsing readelf -d httpd I figured out the dependencies (excerpt):\n\n```\n$ readelf -d httpd\n\nDynamic section at offset 0xae00c contains 31 entries:\n  Tag        Type                         Name/Value\n 0x00000001 (NEEDED)                     Shared library: [libnat.so]\n 0x00000001 (NEEDED)                     Shared library: [libnvram.so]\n 0x00000001 (NEEDED)                     Shared library: [libacos_shared.so]\n 0x00000001 (NEEDED)                     Shared library: [libcrypt.so.0]\n 0x00000001 (NEEDED)                     Shared library: [libgcc_s.so.1]\n 0x00000001 (NEEDED)                     Shared library: [libssl.so.1.0.0]\n 0x00000001 (NEEDED)                     Shared library: [libcrypto.so.1.0.0]\n 0x00000001 (NEEDED)                     Shared library: [libc.so.0]\n\n```\nto know which libraries to look at, should the need come up.\n\nLast but not least I loaded the ELF file httpd into IDA Pro 7.1, turned to the Strings subview using Shift+F12 and started looking for the .cgi names. The apply.cgi you mentioned does not exist (verified by using strings on httpd and grep -R apply\\.cgi fmk/rootfs/www). So I needed to pick another CGI as an example.\n\nI went for userlogin.cgi, which was one of the first names to come up when searching for text .cgi from top down using Alt+T in IDA View-A.\n\nListing the cross-references (x) to the string containing userlogin.cgi:\n\n```\n.rodata:000823DC aUserloginCgi   DCB \"userlogin.cgi\",0\n\n```\nturned up several references to sub_F110 (.text:0000F110...text:0001289C), which - when following these cross-references - turned out to be one central \"mega-function\" for parsing HTTP requests and handling the requests to any number of hardcoded .cgi and .htm \"file names\". (NB: make sure to look for references to strings containing cgi-bin as well.)\n\nSo your suspicion, based on that quote, was true and with the sole exception of the genie.cgi found on the file system, all other .cgi \"files\" are handled directly by the massive 1.3 MiB httpd binary.\n\nThe binary contains strings aplenty and apparently even some assertion strings among them.\n\n",
+      "votes": "3",
+      "user": "0xC0000022L",
+      "time": "Jun 13, 2018 at 20:27",
+      "is_accepted": true,
+      "comments": [
+        {
+          "user": "user1803784",
+          "text": "Thanks for the detail explanation of your process of reverse engineering. I followed somewhat the similar path you did to discover that the cgi files were indeed embedded in the webserver as @IgorSkochinsky pointed out. However, the only difference I notice was between our information is that the webserver I found was one called goahead web server (embedthis.com/goahead). Mostly like our information differs due to my lack of detail on the firmware I was analyzing. None the less thanks again for you assistance.",
+          "time": null
+        }
+      ]
+    },
+    {
+      "content": "Check the web server's configuration files, if you haven't. Assuming it's a normal web server (like Apache or Nginx), everything you need will be in httpd.conf / nginx.conf or one of the files they load.\n\nYou might also want to try grepping for it - grep -ri filename.cgi filesystem/. That'll be slowwww, but you'll find anything that references that name.\n\n",
+      "votes": "-1",
+      "user": "0xC0000022L",
+      "time": "Jun 13, 2018 at 15:06",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "user1803784",
+          "text": "I already checked for a config file and unfortunately they weren't any :( ..I also already search the entire file system for files with the extension cgi. I will edit the post with my screenshots. Thanks for your suggestion none the less.",
+          "time": null
+        },
+        {
+          "user": "Ron Bowes",
+          "text": "Using grep will look inside files, not just filenames - it's slow, but it might lead you to whatever files point to these CGIs",
+          "time": null
+        },
+        {
+          "user": "user1803784",
+          "text": "I've done this and the files that shows up having a reference to cgi files are the same ones I'm referring to in the www directory in my original question. I will just have to keep looking bro",
+          "time": null
+        },
+        {
+          "user": "Ron Bowes",
+          "text": "Is it possible it's on another filesystem?",
+          "time": null
+        },
+        {
+          "user": "user1803784",
+          "text": "I ran strings on the binary and found the cgi file names in the output so I believe their code are in the binary itself maybe the httpd do a strcmp call and do the necessary code. I'm looking at it as we speak.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

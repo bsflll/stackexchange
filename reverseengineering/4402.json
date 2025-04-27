@@ -1,0 +1,40 @@
+{
+    "title": "What is operator new(unsigned int)?",
+    "link": "https://reverseengineering.stackexchange.com/questions/4402/what-is-operator-newunsigned-int",
+    "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>In the disassembler output (ARM) I see:</p>\n<pre><code>    BLX _Znwj\n</code></pre>\n<p>where <code>BLX</code> is ARM procedure call and <code>_Znwj</code> is demangled as</p>\n<pre><code>$ c++filt  _Znwj\noperator new(unsigned int)\n</code></pre>\n<p>What does that <code>operator new</code> do? Is it <code>new</code> or <code>new[]</code>?\nWhat type does it return?\nHow do I explicitly call it from C++, something in the <code>operator+(a,b)</code> style?</p>\n<p>(I know that it is possible to define <code>operator new</code> in a class, but this looks a bit different.)</p>\n</div>",
+    "votes": "3",
+    "answers": 2,
+    "views": "8k",
+    "tags": [
+        "disassembly",
+        "c++",
+        "gcc"
+    ],
+    "user": "18446744073709551615",
+    "time": "May 22, 2014 at 9:05",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>A runtime function does not necessarily convert to a C++ function. For example, on a processor that has no floating point hardware, a simple statement like</p>\n<pre><code>a=b+c;\n</code></pre>\n<p>with <code>a</code>, <code>b</code> and <code>c</code> being floats, will probably be converted to a function call that takes <code>b</code> and <code>c</code> as parameters and returns the results. The user is not supposed to call that function directly.</p>\n<p>In your case, consider that every <code>new</code> probably maps to something that allocates memory and calls a constructor function, and every <code>new[]</code> allocates memory for several elements and calls a constructor function on each element. The <code>new</code> <code>_Znwj</code> function is the memory allocator used internally by the <code>new</code> operator (at least if you're using <code>gcc</code>, which I assume), and it's not intended to be called directly from C++.</p>\n<p>This program:</p>\n<pre><code>    class Foo {\n            int bar;\n    };\n\n    int main(void) {\n            Foo *baz=new Foo();\n            Foo *var=new Foo[20];\n    }\n</code></pre>\n<p>Compiles to (try <code>gcc -S</code>):</p>\n<pre><code>    stmfd   sp!, {fp, lr}\n    .save {fp, lr}\n    .setfp fp, sp, #4\n    add     fp, sp, #4\n    .pad #8\n    sub     sp, sp, #8\n    mov     r0, #4                &lt;-- 4 bytes for single variable\n    bl      _Znwj\n    mov     r3, r0                &lt;-- r0 returns the pointer to the allocated memory\n    mov     r2, #0\n    str     r2, [r3]\n    str     r3, [fp, #-8]\n    mov     r0, #80               &lt;-- 80 bytes (20*4) for array\n    bl      _Znaj\n    mov     r3, r0                &lt;-- r0 returns the pointer to the allocated memory\n    str     r3, [fp, #-12]\n    mov     r3, #0\n    mov     r0, r3\n    sub     sp, fp, #4\n    @ sp needed\n    ldmfd   sp!, {fp, lr}\n    bx      lr\n</code></pre>\n<p>So, you see that the <code>_Znwj</code> resp. <code>_Znaj</code> are the allocator functions for a single class resp. an array of classes, both of them take the number of bytes required as parameter, and both of them return a pointer to the allocated memory as result.</p>\n<p>To answer your questions:</p>\n<ol>\n<li><p><strong>What does that operator <code>new</code> do ?</strong></p>\n<p>It allocates memory for a new class instance.</p>\n</li>\n<li><p><strong>Is it <code>new</code> or <code>new[]</code> ?</strong></p>\n<p><code>_Znwj</code> is <code>new</code>, and <code>_Znaj</code> is <code>new[]</code>.</p>\n</li>\n<li><p><strong>What type does it return ?</strong></p>\n<p>It returns the address of the newly allocated memory block. In C++, the closest match to resemble that would be a <code>void *</code>, but note it's supposed to point to a class structure.</p>\n</li>\n<li><p><strong>How do I explicitly call it from C++, something in the <code>operator+(a,b)</code> style ?</strong></p>\n<p>You're not supposed to do that. You use <code>new</code> or <code>new[]</code>. I assume the makers of <code>gcc</code> explicitly used a function name that cannot, normally, be called from a C++ program without a syntax error due to the name conflict.</p>\n</li>\n</ol>\n</div>",
+            "votes": "3",
+            "user": "Community",
+            "time": "Jun 17, 2020 at 9:54",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "18446744073709551615",
+                    "text": "<span class=\"comment-copy\">In fact, <code>void*x=operator new(4);</code> compiles and generates the same code as <code>int*x=new(int);</code></span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<div class=\"s-prose js-post-body\" itemprop=\"text\">\n<p>This is called \"placement <code>new</code>\" and was introduced in C++03.  The way it works is that one can have, say a C++ class around a set of hardware registers and then use <em>placement <code>new</code></em> to put the class exactly atop those hardware registers.  For example, if a hardware-based hardware Random Number Generator (RNG) is defined using 32-bit Control Register, Status Register and Data Register all starting at offset 0x50000600, you could define a class:</p>\n<pre><code>class RNG_class\n{\nprivate:\n  volatile uint32_t CR;  // set to 1 to enable\n  volatile uint32_t SR;  // low bit set when next num available\n  volatile uint32_t DR:\npublic;\n  RNG_class() : CR(1) {} \n  uint32_t next() { while (SR&amp;1 == 0); return DR; }\n};\n</code></pre>\n<p>Elsewhere, then one can instantiate this class as</p>\n<pre><code>RNG_class RNG* = new(0x50000600) RNG_class();\n</code></pre>\n<p>And one can use it as:</p>\n<pre><code>r = RNG-&gt;next();\n</code></pre>\n<p>See <a href=\"https://stackoverflow.com/questions/222557/what-uses-are-there-for-placement-new\">this question</a> for more information.</p>\n</div>",
+            "votes": "1",
+            "user": "Community",
+            "time": "May 23, 2017 at 12:37",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

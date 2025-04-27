@@ -1,0 +1,48 @@
+{
+    "title": "How to stop debugger right after the execution?",
+    "link": "https://reverseengineering.stackexchange.com/questions/9583/how-to-stop-debugger-right-after-the-execution",
+    "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  I'm using\n  <code>\n   /bin/true\n  </code>\n  as my sample binary (without available main method):\n </p>\n <pre><code>$ lldb /bin/true\n(lldb) target create \"/bin/true\"\nCurrent executable set to '/bin/true' (x86_64).\n(lldb) break main\ninvalid command 'breakpoint main'\n</code></pre>\n <p>\n  Is there any universal way to run the binary and stop the debugger right after the load, so appropriate symbols can be loaded? Something equivalent on breaking on the main method (first line of the code)? Or I need to calculate the entry point manually? If so, how?\n </p>\n</div>\n</body></html>",
+    "votes": "4",
+    "answers": 2,
+    "views": "4k",
+    "tags": [
+        "debugging",
+        "linux",
+        "gdb",
+        "lldb",
+        "breakpoint"
+    ],
+    "user": "kenorb",
+    "time": "Aug 8, 2015 at 13:08",
+    "comments": [
+        {
+            "user": "kenorb",
+            "text": "<html><body><span class=\"comment-copy\">\n For\n <code>\n  gdb\n </code>\n , see:\n <a href=\"http://stackoverflow.com/q/10483544/55075\">\n  Stopping at the first machine code instruction in gdb\n </a>\n at SO\n</span>\n</body></html>",
+            "time": null
+        }
+    ],
+    "answers_data": [
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  Binaries are usually\n  <a href=\"https://en.wikipedia.org/wiki/Strip_%28Unix%29\" rel=\"nofollow noreferrer\">\n   stripped\n  </a>\n  . For ELF binaries, you can check it with\n  <code>\n   file\n  </code>\n  command\n </p>\n <pre><code>$ file /bin/true\n/bin/true: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.26, BuildID[sha1]=0x73796652ea437df8ac7b3ba1864a7ac177e27600, stripped\n</code></pre>\n <p>\n  Notice the\n  <code>\n   stripped\n  </code>\n  at the end of file's result. It means, among other things, that symbols have been removed, so it won't find\n  <code>\n   main\n  </code>\n  function.\n </p>\n <p>\n  In order to run the binary and stop the debugger right after the load, there is some\n  <strong>\n   kind of\n  </strong>\n  universal method that should almost always work (kind of universal, not 100%)\n </p>\n <p>\n  You have to find the entry point, retreived by this command :\n </p>\n <pre><code>$ readelf -h /bin/true | grep \"Entry point\"\n  Entry point address:               0x401264\n</code></pre>\n <p>\n  Then load the binary into your favourite debugger (lldb, gdb, ...) and break on this address.\n </p>\n <p>\n  <strong>\n   lldb :\n  </strong>\n </p>\n <pre><code>$ lldb /bin/true\n(lldb) target create \"/bin/true\"\nCurrent executable set to '/bin/true' (x86_64).\n(lldb) br s -a 0x401264\nBreakpoint 1: address = 0x0000000000401264\n(lldb) r\n...\n(lldb)\n</code></pre>\n <p>\n  <strong>\n   gdb :\n  </strong>\n </p>\n <pre><code>$ gdb -q /bin/true\nReading symbols from /bin/true...(no debugging symbols found)...done.\ngdb$ b *0x401264\nBreakpoint 1 at 0x401264\ngdb$ r\nBreakpoint 1, 0x0000000000401264 in ?? ()\ngdb$\n</code></pre>\n <p>\n  Once you've loaded your binary and your breakpoint has been triggered, you can display following instructions that will be executed this way :\n </p>\n <p>\n  <strong>\n   lldb :\n  </strong>\n </p>\n <pre><code>(lldb) x -s4 -fi -c11 $pc\n-> 0x401264:    xor    ebp,ebp\n   0x401266:    mov    r9,rdx\n   0x401269:    pop    rsi\n   0x40126a:    mov    rdx,rsp\n   0x40126d:    and    rsp,0xfffffffffffffff0\n   0x401271:    push   rax\n   0x401272:    push   rsp\n   0x401273:    mov    r8,0x403560\n   0x40127a:    mov    rcx,0x403570\n   0x401281:    mov    rdi,0x4011c0\n   0x401288:    call   0x401060 <__libc_start_main@plt>\n</code></pre>\n <p>\n  <strong>\n   gdb :\n  </strong>\n </p>\n <pre><code>gdb$ x/11i $pc\n=> 0x401264:    xor    ebp,ebp\n   0x401266:    mov    r9,rdx\n   0x401269:    pop    rsi\n   0x40126a:    mov    rdx,rsp\n   0x40126d:    and    rsp,0xfffffffffffffff0\n   0x401271:    push   rax\n   0x401272:    push   rsp\n   0x401273:    mov    r8,0x403560\n   0x40127a:    mov    rcx,0x403570\n   0x401281:    mov    rdi,0x4011c0\n   0x401288:    call   0x401060 <__libc_start_main@plt>\n</code></pre>\n <p>\n  <code>\n   i\n  </code>\n  flag means\n  <strong>\n   i\n  </strong>\n  nstruction, and\n  <code>\n   $pc\n  </code>\n  means\n  <strong>\n   P\n  </strong>\n  rogram\n  <strong>\n   C\n  </strong>\n  ounter (equivalent of EIP/RIP for 32/64 bits architecures). You can see that\n  <a href=\"http://refspecs.linuxbase.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/baselib---libc-start-main-.html\" rel=\"nofollow noreferrer\">\n   __libc_start_main\n  </a>\n  will be called at address\n  <code>\n   0x401288\n  </code>\n  . Its man page indicates its first argument is a pointer to binary\n  <code>\n   main\n  </code>\n  function. 1st argument is here loaded in\n  <code>\n   rdi\n  </code>\n  register, meaning that\n  <code>\n   main\n  </code>\n  function is located at address\n  <code>\n   0x4011c0\n  </code>\n  .\n </p>\n <p>\n  You just have to finally place a breakpoint at this address (\n  <code>\n   0x4011c0\n  </code>\n  ) and you'll be at the beginning of your binary main function.\n </p>\n <p>\n  Further reading :\n  <a href=\"https://reverseengineering.stackexchange.com/questions/1935/how-to-handle-stripped-binaries-with-gdb-no-source-no-symbols-and-gdb-only-sho\">\n   How to handle stripped binaries with GDB? No source, no symbols and GDB only shows addresses?\n  </a>\n </p>\n <p>\n  Good luck and have fun !\n </p>\n</div>\n</body></html>",
+            "votes": "8",
+            "user": "Community",
+            "time": "Apr 13, 2017 at 12:49",
+            "is_accepted": true,
+            "comments": [
+                {
+                    "user": "Ruslan",
+                    "text": "<span class=\"comment-copy\">The easiest way starting with GDB 8.1 is the <code>starti</code> command. No need to manually look for entry point address.</span>",
+                    "time": null
+                }
+            ]
+        },
+        {
+            "content": "<html><body><div class=\"s-prose js-post-body\" itemprop=\"text\">\n <p>\n  From\n  <a href=\"http://lldb.llvm.org/tutorial.html\" rel=\"noreferrer\">\n   http://lldb.llvm.org/tutorial.html\n  </a>\n  :\n </p>\n <pre><code>(lldb) process launch --stop-at-entry -- -program_arg value\n</code></pre>\n <p>\n  Note your\n  <code>\n   break main\n  </code>\n  is a\n  <code>\n   gdb\n  </code>\n  command;\n  <code>\n   lldb\n  </code>\n  s error message isnt \"no such symbol\", it's \"invalid command\". To do the same in\n  <code>\n   lldb\n  </code>\n  , use\n </p>\n <pre><code>(lldb) breakpoint set --name main\n</code></pre>\n</div>\n</body></html>",
+            "votes": "7",
+            "user": "Guntram Blohm",
+            "time": "Aug 8, 2015 at 14:29",
+            "is_accepted": false,
+            "comments": []
+        }
+    ]
+}

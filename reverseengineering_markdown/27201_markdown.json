@@ -1,0 +1,65 @@
+{
+  "title": "Bypass USB key activation of a software",
+  "link": "https://reverseengineering.stackexchange.com/questions/27201/bypass-usb-key-activation-of-a-software",
+  "content": "(The software is Chinese and contains malware. I do not know if I could upload it here, so temporarily, please let me describe it)\n\nI am asked by a spa store to \"do something\" to make a software that looks like from 2003 for them to use, the name is \"Ehang skin analysis system\". The spa store gave me an usb key (a dongle usb), which they borrowed from another store, and they have to return it when they have a copy.\n\nI could not find any information about the software on google. Plus, the usb key does not appear anywhere on the computer, from emulators to rufus, not even on Linux, so that I do not figure out how to clone it, or find out if it is sentinel or HASP. So the only way is to reverse it. I am using x64dbg.\n\nThe software uses VMProtect, I passed it by using Scyllahide.\n\nBut I am stuck at this step, below is when I did not insert the USB key\n\nThe start of the software\n\n\nafter clicking \"play\" 3 times\n\n\nPlay 4 times, please note that the pointer is at another line, 00478E56 to 00474E91\n\n\nPlay 5 times\n\n\nAt the 6th play, a message appeared asks to insert USB key\n\n\nI restarted it and insert the USB key, and at the 6th play this time, at the same line 0047A868 just like the very above, but this time the code turned into:\n\n\nClick one more play and the software worked. Still at the same line 0047A868\n\n\nI have tried dozen times, but before and after inserting the USB key, everything just \"turned into\" other codes, not that they jump from code A to code B, popfd just turned into ret without any step. I have tried with step into and step over and animate. The pointer stand still at the same line but only the code is changed. So I do not know where to jump into the code that makes the software work.\n\nSo, how to make it turn into the working code without the USB key?\n\n",
+  "votes": "1",
+  "answers": 1,
+  "views": "7k",
+  "tags": [
+    "x64dbg",
+    "patching",
+    "usb",
+    "vmprotect",
+    "dongle"
+  ],
+  "user": "BlackXIII",
+  "time": "Jun 17, 2021 at 15:32",
+  "comments": [
+    {
+      "user": "Abdullah Mohamed",
+      "text": "Are you able to share a dump of the USB dongle image? So basically, you plugin the USB into the computer, and from a Linux OS, you just type into a terminal lsblk, it should map the USB to a device file (not necessarily mount it), say it's /dev/sdb, you now issue the dump command sudo dd if=/dev/sdb of=USBdump.bin and share with us in here the USBdump.bin file. Also, if it's possible to share as well the software (same version you are analyzing please)?",
+      "time": null
+    },
+    {
+      "user": "BlackXIII",
+      "text": "Sorry, the usb cannot be detected, even from linux. There are only sda (the OS partition) when I used lsblk, or fdisk -l. About the software, please download from this link. Please note that it contains virus/malware and is vmprotected, meaning before breaking the vmprotection, you cannot make it run directly on Virtual Machine or Sandbox. I am using Shadow Defender to run it.",
+      "time": null
+    },
+    {
+      "user": "Abdullah Mohamed",
+      "text": "So when the USB is plugged in into the computer with the Linux OS, it's not even detected using lsusb?",
+      "time": null
+    },
+    {
+      "user": "Abdullah Mohamed",
+      "text": "And the same USB is used and works fine when working on the Software right? That''s interesting, I'd start with analyzing the Driver.exe file to know how the USB interacts with the computer first then go to the Software.",
+      "time": null
+    },
+    {
+      "user": "BlackXIII",
+      "text": "Yes, the usb cannot be detected anywhere and only be used to make the software work, as far as I know. About the driver, I think it is for the skin scanning camera, not driver for the usb.",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "As expected, the USB was indeed detected but due that Linux has no idea how to deal with it without a proper driver, it only parses its hardware related parameters (Vendor and Product IDs) and stops there.\n\nHere are the USB device's entries in usb-devices and lsusb commands respectively:\n\n```\n# usb-devices\n[...]\nT:  Bus=01 Lev=02 Prnt=05 Port=00 Cnt=01 Dev#=  8 Spd=1.5 MxCh= 0\nD:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 8 #Cfgs=  1\nP:  Vendor=3689 ProdID=8762 Rev=02.00\nS:  Manufacturer=USBKey\nS:  Product=USBKey\nC:  #Ifs= 1 Cfg#= 1 Atr=80 MxPwr=50mA\nI:  If#= 0 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=01 Prot=00 Driver=usbhid\n[...]\n\n```\n```\n# lsusb\n[...]\nBus 001 Device 008: ID 3689:8762\n[...]\n\n```\nI came to the conclusion that this is the USB device because these are the only differences between the two files *with_usb* and *without_usb* using the commands lsusb and usb-devices.\n\nSo now, I would start sniffing the bytes sent from the USB to the OS as soon as the USB is plugged in, mostly won't be able to make any sense of them, but maybe writing a driver that emulates the device's communication behavior would be the quickest and easiest approach to bypass the mandatory protection policy of running the software with the USB device plugged in.\n\nFor the sniffing part, you can use anything based on libusb, or of course a wrapper for it in any scripting language. Myself, I'm a fan of Python, so here is a little script using Python's PyUSB library:\n\n```\n#!/usr/bin/env python3\ntry:\n    import usb.core\n    import usb.util\nexcept ImportError:\n    print(\"Couldn't find 'pyusb' library!\")\n    exit(-1)\n\n# The 'Vendor' and 'Product' IDs from 'lsusb' or 'usb-devices' entries\nvendorID  = 0x3689\nproductID = 0x8762\n\n# Assuming the first interface\nusbIF = 0\n\n# Find the USB device\n# The USB must be plugged in before running the script\ndevice = usb.core.find(idVendor=vendorID, idProduct=productID)\n\n# Check if device exists\nif device == None:\n    print(\"Device doesn't exist!\")\n    exit(0)\n\n# Check if device is attached, detach it\nif device.is_kernel_driver_active(usbIF):\n    device.detach_kernel_driver(usbIF)\n\n# Now you will want to fuzz a bit the USB endpoints\n(inputCmds, outputCmds) = device[0][usbIF,0].endpoints()\n\n\n```\nIf emulating the USB packets worked, that would be a much easier approach to work on the application without the USB device plugged in, without the need to reverse a VMProtect software.\n\n",
+      "votes": "1",
+      "user": "Abdullah Mohamed",
+      "time": "Mar 11, 2021 at 8:07",
+      "is_accepted": false,
+      "comments": [
+        {
+          "user": "BlackXIII",
+          "text": "Thank you very much for your solution and enthusiastic help. I really appreciate that. But alas, it is just a little too late. A few hours ago the USB's owner needed it and had taken it back. I am so sorry, but we could not see the result of your script until I have the USB again. I will try to get it as soon as possible. Thank you again.",
+          "time": null
+        },
+        {
+          "user": "Abdullah Mohamed",
+          "text": "No problem. Feel free to ping me anytime in the future if you've got your hands back to the USB.",
+          "time": null
+        }
+      ]
+    }
+  ]
+}

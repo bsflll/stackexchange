@@ -1,0 +1,41 @@
+{
+  "title": "Track execution of bytes in a Linux executable",
+  "link": "https://reverseengineering.stackexchange.com/questions/16573/track-execution-of-bytes-in-a-linux-executable",
+  "content": "Given a binary executable file (in this case, a compiled C file which finds the gcd of 2 numbers), is there a tool which profiles the execution of this file and could generate some sort of call graph of that execution, specifically the order of instructions/bytes being called/accessed (i.e. a list of positions of instructions/bytes within that file)?\n\nI know that ltrace and strace tools trace the library and system calls, respectively, but what I'm asking for is specifically the bytes located in the file itself.\n\nI tried using perf to sample the PC, but I didn't find a way to limit its sampling to the file itself or to have it track the exact bytes themselves. I also found that it couldn't sample it fast enough for such a short program. oprofile seemed to have a similar issue.\n\nI used \nradare2 to generate a call-graph of the executable, but that created the full call-graph and was independent of any arguments/execution, nor does it give exact positions of the instructions.\n\nI'd like to use this tool to compare the execution of two binaries i.e. show the difference in execution between ./gcd 5 10 and ./gcd 128 24\n\nDoes a tool like this exist?\n\n",
+  "votes": "3",
+  "answers": 2,
+  "views": "659",
+  "tags": [
+    "binary-analysis",
+    "executable",
+    "binary",
+    "call-graph"
+  ],
+  "user": "Revenant013",
+  "time": "Oct 17, 2017 at 15:06",
+  "comments": [
+    {
+      "user": "julian",
+      "text": "software.intel.com/sites/landingpage/pintool/docs/71313/Pin/…",
+      "time": null
+    }
+  ],
+  "answers_data": [
+    {
+      "content": "It seems what you need is an instruction tracer. PIN from Intel is one example of a framework which allows you to make tracing tools. It uses dynamic binary instrumentation to achieve reasonable speeds and you can likely use one of the examples shipped with the library with little or no modification. Many debuggers also support instruction trace recording (usually by software stepping every instruction which is rather slow but generally reliable). Some may even have support for differential debugging which records several executions and shows differences between them.\n\nIf you have a recent Intel CPU, you may be able to take advantage of Intel Processor Trace (PT) with perf.\n\n",
+      "votes": "1",
+      "user": "Igor Skochinsky",
+      "time": "Oct 18, 2017 at 9:37",
+      "is_accepted": false,
+      "comments": []
+    },
+    {
+      "content": "As @IgorSkochinsky suggests, you can use dynamic binary instrumentation (DBI).\n\nOne alternative to PIN is DynamoRIO.\n\n```\n$ ./drbuild.sh  # build script (below)\n$ gcc gcd.c -o gcd\n\n# run one\n$ $ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd 5 10\n5\n\n$ ls  # so we know which log is from our first run\ndrbuild.sh  drcov.gcd.18958.0000.proc.log  dynamorio  gcd  gcd.c\n\n# run two\n$ $ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd 128 24\n8\n\n```\nNow that we have built DynamoRIO with drbuild.sh, compiled gcd.c, run gcd, and generated drcov.gcd.18958.0000.proc.log and drcov.gcd.18960.0000.proc.log, we can compare the \"BB Table\" field between the logs for runs one (2177) and two (2183) to immediately see that more basic blocks (counting duplicity) were executed on the second run, as we should expect due to the while() in gcd_iter().\n\nBasic blocks are grouped by module and identified by their offsets into that module. For example, module 0 contains all basic blocks in the gcd binary. The line containing module[  0]: 0x0000043b means that the basic block at module 0 start (0x08048000) + 0x0000043b was encountered. From this cfg, we can see that 0x0804843b is the first basic block in the gcd_iter() function.\n\nIf the first argument to gcd_iter() is negative, execution falls through to 0x08048444, which negates that argument; otherwise, we jump to 0x8048447. The logs for the first two runs, in which all arguments are positive, align with this expectation.\n\n```\n$ grep -F 'module[  0]:' drcov.gcd.18958.0000.proc.log\n...\nmodule[  0]: 0x0000043b,   9\nmodule[  0]: 0x00000447,   6\n...\n\n```\nRunning gcd with a negative first argument shows how DynamoRIO's output is dynamic.\n\n```\n$ ./dynamorio/build/bin32/drrun -t drcov -dump_text -- ./gcd -5 10\n$ grep -F 'module[  0]:' drcov.gcd.18970.0000.proc.log\n...\nmodule[  0]: 0x0000043b,   9\nmodule[  0]: 0x00000444,   9\n...\n\n```\n",
+      "votes": "1",
+      "user": "devtty1er",
+      "time": "Feb 15, 2018 at 15:45",
+      "is_accepted": false,
+      "comments": []
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+    "title": "MSVC Generates Weird Code for Volatile Local Variable",
+    "link": "https://reverseengineering.stackexchange.com/questions/14689/msvc-generates-weird-code-for-volatile-local-variable",
+    "content": "I want to know how MSVC 2010 generates code for volatile local variable and have done a test. This simple test function uses a volatile local variable:\n<pre><code>int proc1(int a, int b) {\n    int volatile volvar=0;\n\n    int c=a;\n    if (b>a) \n        c=0;\n    return c;\n}\n</code></pre>\nThe initialization of the integer <pre><code>volvar</code></pre> should not be eliminated by the optimizer due to the <pre><code>volatile</code></pre> keyword. The generated 64bit assembly is like this:\n<pre><code>_TEXT   SEGMENT\nvolvar$ = 8\na$ = 8\nb$ = 16\n?proc1@@YAHHH@Z PROC                    ; proc1, COMDAT\n\n; 3    : int volatile volvar=0;\n\n    xor eax, eax\n\n; 4    : \n; 5    :    int c=a;\n; 6    :    if (b>a) \n\n    cmp edx, ecx\n    cmovg   ecx, eax\n    mov DWORD PTR volvar$[rsp], eax;<---what is 'mov DWORD PTR [8+rsp], eax'?\n\n; 7    :        c=0;\n; 8    :    return c;\n\n    mov eax, ecx\n\n; 9    : }\n\n    ret 0\n?proc1@@YAHHH@Z ENDP                    ; proc1\n_TEXT   ENDS\nEND\n</code></pre>\nNotice the symbol <pre><code>volvar$</code></pre> equals to 8, so the instruction generated for the volatile local variable assignment write to the address [8+rsp]. RSP wasn't modified so should point to the return address. But my understanding of the 64bit stack layout is that there is no longer any parameters above the return address. Instead, [8+rsp] should point to the RCX storage location for the CALLING FUNCTION which has nothing to do with our current function. Does that overwrite the stack of the calling function incorrectly?\nIs it a bug with the compiler?\n",
+    "votes": "0",
+    "answers": 1,
+    "views": "158",
+    "tags": [
+        "disassembly",
+        "c++",
+        "x86-64"
+    ],
+    "user": "JavaMan",
+    "time": "Feb 18, 2017 at 13:15",
+    "comments": [],
+    "answers_data": [
+        {
+            "content": "No, it's not a compiler bug.\nThe x64 calling convention on Windows says that the caller needs to allocate space on the stack for 4 register parameters even if the called function has less than 4 arguments.  Whilst, notionally, these are for the called function to spill the 1st four parameters (passed in registers RCX, RDX, R8 and R9) to, there is no requirement for it do so.\nIn fact, even if the called function has fewer than 4 parameters, these 4 stack locations are effectively owned by the called function, and may be used by the called function for other purposes besides saving parameter register values. \nSee Microsoft's documentation for details.\nIn your example, <pre><code>proc1</code></pre> doesn't need to spill any registers so the compiler can efficiently use this allocated space for your <pre><code>volvar</code></pre> local variable instead.\n",
+            "votes": "4",
+            "user": "Ian Cook",
+            "time": "Feb 18, 2017 at 22:20",
+            "is_accepted": true,
+            "comments": []
+        }
+    ]
+}
