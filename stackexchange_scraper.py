@@ -14,18 +14,7 @@ def scrape_stackexchange(start_page=1, end_page=197):
     all_questions = []
     existing_count = 0
     
-    # Load already scraped pages record
-    # try:
-    #     with open('scraped_pages.json', 'r', encoding='utf-8') as f:
-    #         scraped_pages = json.load(f)
-    # except (FileNotFoundError, json.JSONDecodeError):
-    #     scraped_pages = []
-    
     for page in range(start_page, end_page + 1):
-        # Skip already scraped pages
-        # if page in scraped_pages:
-        #     print(f"Page {page} already scraped, skipping...")
-        #     continue
             
         url = base_url + str(page)
         print(f"Scraping page {page}...")
@@ -75,11 +64,6 @@ def scrape_stackexchange(start_page=1, end_page=197):
             # Save data immediately after scraping each page
             with open('stackexchange_questions.json', 'w', encoding='utf-8') as f:
                 json.dump(all_questions, f, ensure_ascii=False, indent=4)
-            
-            # Record scraped page
-            # scraped_pages.append(page)
-            # with open('scraped_pages.json', 'w', encoding='utf-8') as f:
-            #     json.dump(scraped_pages, f, ensure_ascii=False, indent=4)
                 
             print(f"Page {page} data saved")
             

@@ -22,7 +22,7 @@ def scrape_single_question(url,user):
         print(f"File {json_filename} already exists, skipping")
         return
     
-    # try:
+    
     # Send HTTP request
     session = requests.Session()
     retry_strategy = requests.adapters.HTTPAdapter(
@@ -31,15 +31,7 @@ def scrape_single_question(url,user):
     session.mount('https://', retry_strategy)
     session.mount('http://', retry_strategy)
     
-    # try:
     response = session.get(url)
-    #     response.raise_for_status()
-    # except requests.exceptions.SSLError:
-    #     print(f"SSL verification failed for {url}, trying with verify=False")
-    #     response = session.get(url, verify=False)
-    #     response.raise_for_status()
-    
-     # Parse HTML content
     soup = BeautifulSoup(response.text, 'html.parser')
     
     # Extract question body
@@ -50,7 +42,6 @@ def scrape_single_question(url,user):
         print(f"First 100 characters of response content: {response.text[:100]}")
         print(f"Tried selectors: .question, .s-prose.js-post-body")
         return False
-     
 
 
     # Extract detailed question information
@@ -102,26 +93,9 @@ def scrape_single_question(url,user):
     with open(json_filename, 'w', encoding='utf-8') as f:
         json.dump(question_data, f, ensure_ascii=False, indent=4)
 
-    # Save as Markdown format (optional)
-    # md_filename = os.path.join(output_dir, url.split('/')[-2] + '.md')
-    # with open(md_filename, 'w', encoding='utf-8') as f:
-    #     md = MarkItDown()
-    #     f.write(md.convert(question_data['content']))
-    #     if question_data['answers_data']:
-    #         for answer in question_data['answers_data']:
-    #             f.write('\n\n---\n\n### Answer\n\n')
-    #             f.write(md.convert(answer['content']))
-    #             if answer['comments']:
-    #                 f.write('\n\n#### Comments\n\n')
-    #                 for comment in answer['comments']:
-    #                     f.write(f"*{comment['user']}* ({comment['time']}): ")
-    #                     f.write(md.convert(comment['text']) + '\n\n')
-        
     print(f"Question data saved to {json_filename}")
     return True
         
-    # except requests.exceptions.RequestException as e:
-    #     print(f"Request Page Error: {e}")
         
 def process_all_questions(json_file):
     """Process all question links in the JSON file
@@ -130,11 +104,6 @@ def process_all_questions(json_file):
     try:
         with open(json_file, 'r', encoding='utf-8') as f:
             questions = json.load(f)
-            
-        # questions = [{
-        #     'user': 'user',
-        #     'link': '/questions/33410/interpreting-binary-data-with-repeating-xxxx-xx40-structure'
-        # }]
         print(f"Found {len(questions)} questions, starting processing...")
         
         # Initialize error counter

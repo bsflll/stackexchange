@@ -7,76 +7,6 @@ from tqdm import tqdm
 import html
 from markdownify import markdownify as md
 
-# def decode_cfemail(cfemail):
-#     """Decode Cloudflare email obfuscation.
-    
-#     Args:
-#         cfemail (str): The encoded cfemail string
-        
-#     Returns:
-#         str: Decoded email address
-#     """
-#     encoded = cfemail
-#     r = int(encoded[:2], 16)
-#     email = ''.join([chr(int(encoded[i:i+2], 16) ^ r) 
-#                     for i in range(2, len(encoded), 2)])
-#     return email
-
-
-# def convert_html_to_markdown(str_html):
-#     soup = BeautifulSoup(str_html, 'html.parser')
-    
-#     # 处理代码块
-#     for code_block in soup.find_all('code'):
-#         # 解码代码块中的Cloudflare邮箱混淆
-#         for cf in code_block.select('.__cf_email__'):
-#             decoded = decode_cfemail(cf['data-cfemail'])
-#             cf.replace_with(decoded)
-#         # 保留code标签，仅处理内容
-#         code_block.string = "<pre><code>"+code_block.get_text()+"</code></pre>"
-    
-#     # 处理非代码块部分为纯文本
-#     for element in soup.find_all(True):
-#         if element.name != 'code':
-#             element.replace_with(element.get_text())
-
-#     code_content = soup.prettify()
-#     # 替换HTML换行为Markdown换行
-#     str_md = html.unescape(code_content).replace('<br/>', '\n').replace('<br>', '\n').replace('\\n', '\n')
-#     # str_md ='<html><body>'+str_md+'</body></html>'
-#     # print(str_md)
-#     # 返回处理后的内容
-#     return str_md
-
-# def process_string():
-#     from bs4 import BeautifulSoup
-#     import requests
-
-#     url = 'https://reverseengineering.stackexchange.com/questions/33410/interpreting-binary-data-with-repeating-xxxx-xx40-structure'
-   
-#     session = requests.Session()
-#     retry_strategy = requests.adapters.HTTPAdapter(
-#         max_retries=3
-#     )
-#     session.mount('https://', retry_strategy)
-#     session.mount('http://', retry_strategy)
-    
-#     response = session.get(url)
-#     soup = BeautifulSoup(response.text, 'html.parser')
-
-
-#     question = soup.select_one('.question')
-#     content = str(question.select_one('.s-prose.js-post-body'))
-#     import html
-
-#     content = convert_html_to_markdown(content)
-#     # content = content.replace('&gt;', '>')
-
-#     print(content)
-import json
-from bs4 import BeautifulSoup
-import re
-
 def html_to_markdown_clean(html_text):
     """Convert HTML content to Markdown while cleaning <a> inside <pre> and removing fake emails."""
     soup = BeautifulSoup(html_text, 'html.parser')
@@ -194,5 +124,5 @@ def merge_all_json(input_folder, output_file):
 if __name__ == "__main__":
     input_folder = 'reverseengineering'
     output_folder = 'reverseengineering_markdown'
-    process_all_json(input_folder, output_folder)
+    # process_all_json(input_folder, output_folder)
     merge_all_json(output_folder, 'reverseengineering_markdown.json')
